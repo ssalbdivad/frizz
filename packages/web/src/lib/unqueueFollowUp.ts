@@ -5,7 +5,7 @@ import type { Backend } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { removeQueuedMessage } from "../hooks.ts"
 import { showToast, store, threadBySlug } from "../store.ts"
-import { draftKey, draftStore, useProjectDir } from "./drafts.ts"
+import { draftKey, mergeIntoDraft, useProjectDir } from "./drafts.ts"
 
 // TAKING A SENT MESSAGE BACK.
 //
@@ -52,9 +52,7 @@ export type UnqueueOutcome = "unqueued" | "too-late" | "failed"
 // while their message was in flight, and silently replacing it would lose words they never sent.
 export function restoreDraft(projectDir: string | undefined, slug: string, sessionId: string | undefined, text: string): string {
   const key = draftKey.followUp(projectDir, slug, sessionId)
-  const existing = draftStore.get(key)
-  const next = existing ? `${text}\n\n${existing}` : text
-  draftStore.set(key, next)
+  mergeIntoDraft(key, text)
   return key
 }
 

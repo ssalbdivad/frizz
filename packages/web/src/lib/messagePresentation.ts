@@ -1,9 +1,12 @@
-import type { TranscriptMessage } from "@frizz/shared"
+import { userCommandDisplayText, type TranscriptMessage } from "@frizz/shared"
 
 // Rendering-only text choice. The server keeps a generated prompt's full `text` for transcript logic
-// and supplies `displayText` only when an exact presentation boundary was validated.
+// and supplies `displayText` only when an exact presentation boundary was validated. A USER COMMAND
+// reads as what was typed (`/commit fix the tests`), never as the prompt it expanded to — on every
+// backend and on the optimistic bubble alike, which is why this is read here and not per transcript.
 export function messagePresentationText(message: Pick<TranscriptMessage, "text" | "displayText">): string {
-  return message.displayText ?? message.text
+  const text = message.displayText ?? message.text
+  return userCommandDisplayText(text) ?? text
 }
 
 // The CURRENT ASK: the most recent user turn the HUMAN is actually waiting on an answer to. It

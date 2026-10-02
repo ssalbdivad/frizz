@@ -281,12 +281,20 @@ async function runClaudeUsage(claudeBin: string): Promise<string> {
 
 // One live refresh: the endpoint first, the CLI only for what the raw token can't do. Returns ONLY a
 // healthy quota; every failure shape throws so the callers' stale-serving catch handles them uniformly.
-async function refreshQuota(claudeBin: string, deps: ClaudeQuotaDeps, now: number): Promise<ProviderQuota> {
+//
+// `endpoint: false` skips straight to the CLI: the manual recheck's path while the endpoint's refusal
+// stands (see readClaudeQuota).
+async function refreshQuota(
+  claudeBin: string,
+  deps: ClaudeQuotaDeps,
+  now: number,
+  { endpoint = true }: { endpoint?: boolean } = {},
+): Promise<ProviderQuota> {
   const doFetch = deps.fetchImpl ?? fetch
   const readToken = deps.readToken ?? readAccessToken
   let token: string | undefined
   try {
-    token = await readToken(claudeConfigDir())
+    token = endpoint ? await readToken(claudeConfigDir()) : undefined
   } catch {
     token = undefined
   }
@@ -307,8 +315,8 @@ async function refreshQuota(claudeBin: string, deps: ClaudeQuotaDeps, now: numbe
         const quota = parseClaudeUsage(body, planType)
         if (quota.status === "ok") return quota
       } else if (res.status === 429 || res.status === 529) {
-        // The endpoint asked us to back off. The CLI would just hit the same wall from inside a whole
-        // spawned process — fail this refresh and let the cached reading ride.
+        // The endpoint asked us to back off. Automatic refreshes honor that and let the cached reading
+        // ride; only a manual recheck spends a CLI process on it (readClaudeQuota).
         throw new UsageRateLimited(res.status, retryAtFrom(res, now))
       }
       // 401/403 (stale token the CLI can refresh), 5xx, or a malformed body → try the CLI below.
@@ -519,7 +527,7 @@ export async function refreshClaudeQuotaInBackground(claudeBin = "claude", deps:
 // returned immediately and the refresh happens in the background. The poll must never block on the
 // CLI + cross-process lock (~27s worst case) — responses that slow straddle dev-server restarts and
 // leave the browser's fetch hung, which is exactly how the chip froze into an em dash. Only `force`
-// (the popover's explicit recheck) waits for a live refresh.
+// (the popover's refresh button) waits for a live refresh.
 export async function readClaudeQuota(
   claudeBin = "claude",
   deps: ClaudeQuotaDeps = {},
@@ -551,24 +559,35 @@ export async function readClaudeQuota(
     return { ...initial.quota, detail: `Refreshing · last updated ${Math.round(ageMs / 60_000)}m ago` }
   }
 
-  // A forced recheck inside the refusal window cannot succeed; asking anyway only buys another 429.
-  if (rateLimited(initial, now)) return serveRateLimited(initial, now)
-
+  // A FORCED recheck is the human pressing refresh, and inside the endpoint's refusal window it goes
+  // through the `claude -p /usage` CLI instead of serving the cached reading. Measured 2026-10-02: with
+  // the endpoint refusing for another 32m, the CLI answered in ~8s — and the reading it replaced was 89m
+  // old and had missed a weekly reset (41% used cached, 0% live). The endpoint's deadline is KEPT
+  // beside the fresh reading, so the heartbeat still leaves the endpoint alone until it passes; only a
+  // manual recheck ever pays for a CLI process.
+  let retryAt = rateLimited(initial, now) ? initial.retryAt : undefined
   let release: (() => Promise<void>) | undefined
   try {
     release = await acquireLock(paths.lock)
     const afterLock = await readShared(paths.data)
-    if (rateLimited(afterLock, now)) return serveRateLimited(afterLock, now)
+    if (rateLimited(afterLock, now)) retryAt = afterLock.retryAt
     // Another Frizz process may have completed the requested refresh while this process waited.
     if (afterLock && afterLock.at !== initial?.at && now - afterLock.at < OK_TTL_MS) return afterLock.quota
 
-    const quota = await refreshQuota(claudeBin, deps, now)
-    await writeShared(paths.data, { at: now, quota }).catch(() => {})
+    let quota: ProviderQuota
+    try {
+      quota = await refreshQuota(claudeBin, deps, now, { endpoint: retryAt === undefined })
+    } catch (err) {
+      if (!(err instanceof UsageRateLimited)) throw err
+      retryAt = err.retryAt
+      quota = await refreshQuota(claudeBin, deps, now, { endpoint: false })
+    }
+    await writeShared(paths.data, { at: now, quota, ...(retryAt === undefined ? {} : { retryAt }) }).catch(() => {})
     return quota
   } catch (err) {
     const fallback = await readShared(paths.data)
-    if (err instanceof UsageRateLimited) {
-      const refused = { ...(fallback ?? { at: now, quota: UNAVAILABLE }), retryAt: err.retryAt }
+    if (retryAt !== undefined) {
+      const refused = { ...(fallback ?? { at: now, quota: UNAVAILABLE }), retryAt }
       await writeShared(paths.data, refused).catch(() => {})
       return serveRateLimited(refused, now)
     }

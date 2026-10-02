@@ -14,6 +14,7 @@ import { DrawerInitialScrollCoordinator } from "../lib/drawerInitialScroll.ts"
 import { PANE_HEADER_HEIGHT_CLASS } from "../lib/paneHeaderHeight.ts"
 import { ThreadView } from "./ChatView.tsx"
 import { isToastPointer } from "./Toaster.tsx"
+import { useIsMobile } from "../lib/mobile.ts"
 
 // One THREAD layer of the side-drawer stack: a right sheet (same slide/backdrop family as settings)
 // showing a thread's FULL view as an OVERLAY — the queue (and any layers below) keep their scroll and
@@ -36,6 +37,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
   const isTopDrawer = useIsTopDrawer(id)
   const holdsScrollLock = useHoldsScrollLock(id)
   const narrow = useNarrowDrawer()
+  const isMobile = useIsMobile()
   // Sheets are store/route-mounted rather than opened by RadixDialog.Trigger. Preserve the focused
   // row/button (or the control in the layer below) so closing this stack layer restores it exactly.
   const openerRef = useRef<HTMLElement | null>(
@@ -71,6 +73,15 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
     rpc.threadSeen({ slug }).catch(() => {})
   }, [slug, atRestNow, activityAt])
 
+  // THE PHONE LANDS A RESTED THREAD ON ITS LAST MESSAGE, NOT ITS TAIL. The transcript does that itself
+  // (VirtualizedThreadTranscript's `openAtLastMessage`, which ChatView sets for exactly this case), so
+  // the tail-settling below must stand down or it would haul the reader back to the bottom on every
+  // layout change for the first few hundred milliseconds. Decided once, at open, like the landing is.
+  const phoneOpensAtMessageRef = useRef<boolean | null>(null)
+  if (phoneOpensAtMessageRef.current === null && t) {
+    phoneOpensAtMessageRef.current = isMobile && t.runtime !== "running" && t.runtime !== "spawning"
+  }
+
   // Initial tail focus is a one-shot settling phase. The sheet's direct flex child stays viewport-
   // height even while its scrollHeight grows, so observing that child misses async transcript render.
   // Observe the transcript surface itself plus subtree commits, and yield permanently on user intent.
@@ -88,7 +99,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
         scroller.scrollTop = scroller.scrollHeight
         return true
       },
-      preserveAnchor: () => location.hash.length > 1,
+      preserveAnchor: () => location.hash.length > 1 || phoneOpensAtMessageRef.current === true,
     })
     initialScrollRef.current = coordinator
 

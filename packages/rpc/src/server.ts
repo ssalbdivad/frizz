@@ -86,9 +86,18 @@ function validationMessage(error: z.ZodError): string {
 // contention gate before it could take any effect, so the caller may send the identical request again
 // instead of surfacing the failure. It rides the envelope as a separate boolean precisely because
 // `error` itself must stay a plain readable string.
-function errorEnvelope(err: any): { error: string; retryable?: true } {
+//
+// `kept` is the other half of a failed follow-up: the server recorded the message in its delivery
+// ledger (server/src/delivery-ledger.ts, the write-ahead entry) before the failure, and still holds it
+// as a failed send the operator can retry or edit. The client then leaves the words where the server
+// keeps them instead of also pushing them back into the prompt box.
+function errorEnvelope(err: any): { error: string; retryable?: true; kept?: true } {
   const error = err?.message ?? "Internal server error"
-  return err?.retryableDelivery === true ? { error, retryable: true } : { error }
+  return {
+    error,
+    ...(err?.retryableDelivery === true ? { retryable: true as const } : {}),
+    ...(err?.deliveryKept === true ? { kept: true as const } : {}),
+  }
 }
 
 // ---- Mount router onto Hono ----

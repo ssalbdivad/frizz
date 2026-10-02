@@ -1,6 +1,7 @@
 import { futureSnoozedUntil, type ThreadView } from "@frizz/shared"
 import type { SessionIndicatorKind } from "../groups.ts"
 import { hintGloss } from "./awaitingPresentation.ts"
+import { toolActivityLabel } from "./toolActivity.ts"
 
 // THE PHONE BOARD ROW'S SECOND LINE — what the thread wants, in one line.
 //
@@ -10,13 +11,13 @@ import { hintGloss } from "./awaitingPresentation.ts"
 // without a browser and the component stays a layout.
 //
 // WHAT THE ROW HAS TO WORK WITH. The ThreadView carries the registered questions whole (`questions`),
-// the native ask's questions (`pendingAsk`), the worker's gerund (`activity`, legacy thread files only),
-// and `lastAssistant` — a preview of the newest assistant text, whitespace-collapsed and capped at ~200
-// chars by the tailer (tailer.ts previewText). The collapse means the handoff's real FIRST LINE is not recoverable: its
-// newlines are already spaces. What survives is its opening, which is where the house style puts the
-// verdict ("Fixed —", "Needs you —"), and `handoffLine` approximates the line by stopping where the
-// next block (a bullet, a fence, a heading) would have begun. An exact first line would need the server
-// to keep the newline, or ship a first-line field — noted, not added here.
+// the native ask's questions (`pendingAsk`), the newest tool call still awaiting its result (`liveTool`,
+// Claude session threads — tailer.ts trackLiveTools), the worker's gerund (`activity`, legacy thread
+// files only), and two readings of the newest assistant text: `lastAssistantLine`, its real first line
+// with the markdown intact, and `lastAssistant`, a whitespace-collapsed ~200-char preview. The handoff
+// line reads the first; the preview is only the fallback for a view without it, and there `handoffLine`
+// approximates the line by stopping where the next block (a bullet, a fence, a heading) would have
+// begun, because the preview's newlines are already spaces.
 
 /** One line of text, with an optional leading verdict the row draws in the foreground weight. */
 export type RowLine = { lead?: string; text: string }
@@ -40,11 +41,12 @@ const HEAD_MARKERS = /^(?:```[\w-]*\s*|#{1,6}\s+|>\s*|[-*+]\s+|\d+[.)]\s+)+/
  *  the text still has one, wins. */
 const NEXT_BLOCK = /\n|\s(?:```|[-*+]\s|\d+[.)]\s|#{1,6}\s|>\s)/
 
-/** The opening of a message, approximating its first line: block markers at its head go, the text stops
- *  where the next block would have begun, and a bold phrase that leads it becomes the line's verdict. */
-export function handoffLine(text: string | undefined): RowLine | null {
+/** A message's first line as the row draws it: block markers at its head go, and a bold phrase that leads
+ *  it becomes the line's verdict. `exact` says the text already IS one line (`lastAssistantLine`); without
+ *  it the text is the collapsed preview, and the line is cut where the next block would have begun. */
+export function handoffLine(text: string | undefined, exact = false): RowLine | null {
   let s = (text ?? "").trim().replace(HEAD_MARKERS, "")
-  const cut = NEXT_BLOCK.exec(s)
+  const cut = exact ? null : NEXT_BLOCK.exec(s)
   if (cut) s = s.slice(0, cut.index)
   if (!s.trim()) return null
   const bold = /^(\*\*|__)(.{1,60}?)\1\s*/.exec(s)
@@ -107,8 +109,16 @@ export function agentSuffix(count: number): string {
  * `inMotion` is the row's own reading of "still going" (the same one that suppresses its rest age), so
  * a row that shows no age shows its activity and a row that shows an age shows its handoff.
  */
-export function rowSecondLine(t: ThreadView, kind: SessionIndicatorKind, inMotion: boolean, nowMs = Date.now()): RowLine | null {
-  const handoff = () => handoffLine(t.lastAssistant)
+export function rowSecondLine(
+  t: ThreadView,
+  kind: SessionIndicatorKind,
+  inMotion: boolean,
+  nowMs = Date.now(),
+  projectDir?: string,
+): RowLine | null {
+  // The real first line when the server sent one; a line that is only a fence opener or a bare heading
+  // mark strips to nothing, and then the preview's approximation is still better than no line.
+  const handoff = () => handoffLine(t.lastAssistantLine, true) ?? handoffLine(t.lastAssistant)
   if (kind === "needs-input") {
     const registered = questionsLine((t.questions ?? []).map((q) => q.spec.question))
     if (registered) return { text: registered }
@@ -118,10 +128,15 @@ export function rowSecondLine(t: ThreadView, kind: SessionIndicatorKind, inMotio
     const gloss = t.lastFence?.kind === "awaiting" ? hintGloss(t.lastFence.hints) : null
     return gloss ? { text: gloss } : handoff()
   }
-  // `activity` is the worker's gerund, but only a legacy `.frizz` thread file carries one (frizz.ts):
-  // a session thread's view never has it. What a running session thread DOES carry is the newest thing
-  // its agent said, so that is the live line when there is no gerund.
-  if (inMotion) return t.activity ? { text: t.activity } : handoff()
+  // The live line is the call the agent is waiting on, labelled exactly as the chat's working indicator
+  // labels it (toolActivityLabel: the Bash call's own description, else "Reading <path>", "Searching for
+  // <pattern>", …), paths made project-relative the same way. Between calls there is none, and the line
+  // is the newest thing the agent said. `activity` is the legacy `.frizz` thread file's gerund (frizz.ts);
+  // no session thread's view carries it.
+  if (inMotion) {
+    if (t.liveTool) return { text: toolActivityLabel(t.liveTool, projectDir) }
+    return t.activity ? { text: t.activity } : handoff()
+  }
   if (kind === "snoozed" && futureSnoozedUntil(t, nowMs) !== undefined) return { text: "Snoozed by you" }
   const gloss = t.lastFence?.kind === "awaiting" ? hintGloss(t.lastFence.hints) : null
   if (gloss) return { text: gloss }

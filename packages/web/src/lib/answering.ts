@@ -294,7 +294,7 @@ export function useLiveAnswering(
       const submitted = followUp.submit(text, {
         ...callbacks,
         scrollToBottom,
-        onRollback: () => { callbacks.onRollback?.(); onSendFailedRef.current?.() },
+        onRollback: (failure) => { callbacks.onRollback?.(failure); onSendFailedRef.current?.() },
       })
       if (submitted) onSentRef.current?.()
     },

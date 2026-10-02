@@ -32,9 +32,10 @@ test("a message root never joins the pagination-anchor attribute", () => {
 test("every rendered message variant still carries its own data-frizz-msg handle", () => {
   const sources = [chatView(), wakeDivider(), answersCard()]
   // assistant turn, user bubble, event line, reasoning block, and the line for a message from another
-  // Claude session (PeerSessionMessageLine, 2026-09-28) — plus the wake divider (WakeDivider.tsx) and the
+  // Claude session (PeerSessionMessageLine, 2026-09-28), a slash command's output block (CommandOutputBlock,
+  // 2026-10-02) — plus the wake divider (WakeDivider.tsx) and the
   // answers card, which moved to its own module on 2026-08-27 when the registered-question path needed
   // to draw the human's answer while it was still in flight to the worker.
   const hosts = sources.reduce((n, source) => n + [...source.matchAll(/data-frizz-msg=\{(?:m\.)?sourceId\}/g)].length, 0)
-  assert.equal(hosts, 7, "each rendered message variant must stamp its own sourceId")
+  assert.equal(hosts, 8, "each rendered message variant must stamp its own sourceId")
 })

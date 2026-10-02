@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useRef, type ReactNode } from "react"
 import { scanInputFences, type InputFenceRun } from "../lib/inputCodeFences.ts"
-import { highlightToHtml } from "../lib/syntaxHighlight.ts"
+import { highlightToHtml, type FenceLanguage } from "../lib/syntaxHighlight.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 
 // One fenced-code run of a textarea mirror, painted. The delimiter lines go muted; a body goes through
 // the same highlight.js pipeline the transcript's fences use, inside `.hljs` so the shared token palette
@@ -11,7 +12,18 @@ export function renderInputFenceRun(text: string, run: InputFenceRun, key: numbe
   const slice = text.slice(run.start, run.end)
   if (run.kind === "prose") return slice
   if (run.kind === "fence") return <span key={key} className="text-muted">{slice}</span>
-  return <span key={key} className="hljs input-hljs" dangerouslySetInnerHTML={{ __html: highlightToHtml(slice, run.language) }} />
+  return <FenceCodeSpan key={key} code={slice} language={run.language} className="input-hljs" />
+}
+
+// A highlighted fence body as an inline `<span class="hljs …">` — the prompt box mirrors here and the
+// sent bubble (LinkifiedText) both paint fence bodies through it. It is a component, not inline JSX, so
+// the injected markup goes through useInnerHtml (lib/innerHtml.ts): a mirror re-renders on every
+// keystroke, and an inline `{ __html }` literal makes React rewrite every fence's innerHTML each time —
+// re-running highlight.js and rebuilding the subtree from identical markup for fences the keystroke
+// never touched. Memoized on the code, an untouched fence is left alone.
+export function FenceCodeSpan({ code, language, className }: { code: string; language: FenceLanguage; className: string }) {
+  const inner = useInnerHtml(useMemo(() => highlightToHtml(code, language), [code, language]))
+  return <span className={`hljs ${className}`} dangerouslySetInnerHTML={inner} />
 }
 
 // The typography a mirror must share with its textarea for every glyph to land on the same pixel.

@@ -21,6 +21,7 @@ import { isReplyWait } from "./thread-mentions.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
+import { firstTextLine } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
 import { githubStatusKey, parkExpiresAt, parkIsHonoured, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
@@ -690,6 +691,7 @@ export function signoffNudgeVerdict(
     replyWaitArmed: () => boolean
     threadMessageInFlight?: () => boolean
   },
+  nowMs = Date.now(),
 ): SignoffNudgeVerdict {
   if (!tele || tele.turn !== "idle") return "ineligible"
   const spokeAt = tele.lastAssistantAt
@@ -706,10 +708,62 @@ export function signoffNudgeVerdict(
     facts.replyWaitArmed() ||
     facts.threadMessageInFlight?.() === true
   ) return "signed-off"
+  // A RUNNING CHILD ALREADY PARKS, so there is no sign-off to ask for (2026-10-02). The queue rule excuses
+  // a fenceless rest behind a direct sub-agent — a `Workflow` run is one — because its return re-invokes
+  // the parent within minutes, and the worker contract tells it as much ("a sub-agent needs neither,
+  // because a running child parks you on its own"). This guard used to be missing, so the nudge told a
+  // worker the contract had just excused that it rested without a fence, about a rest that was never in
+  // the queue; ~20 of 46 nudges over 2026-09-29..10-01 went to a worker waiting on a shell, sub-agent or
+  // Workflow. Ineligible, not signed-off: a child is not a sign-off, so it gives no allowance back, and
+  // the rest the child comes back to is judged on its own. A shell does NOT get this — see
+  // signoffWaitingNudgeMessage in @frizz/shared for why it is asked instead.
+  //
+  // EXCEPT ON A THREAD WITH A GOAL ARMED AT REST. A child parks the thread out of the QUEUE, but the Goal
+  // deliberately ignores children (scheduler evalRestPrompts, maintainer 2026-08-02) and stands down only
+  // for an ```awaiting fence or for this reminder taking the rest. With the reminder silent here, every
+  // fenceless rest behind a Workflow got the operator's "keep going" with nothing telling the worker how
+  // to quiet it — reproduced by the 2026-10-02 review: five rests, five Goal prompts, where main sent the
+  // reminder first and the fence it taught held the Goal. So a Goal thread is still asked, in the short
+  // waiting form, with the child's `agents:` fence written out (signoffWaitingNudgeMessage).
+  if (hasLiveBackgroundWork(tele) && !restGoalArmed(row)) return "ineligible"
+  // A CHILD THAT JUST RETURNED IS ABOUT TO WAKE ITS PARENT, so the rest it interrupted is not bare either.
+  // The fold retires the child on the `queue-operation` record that enqueues its <task-notification> —
+  // metadata, so `turn` stays idle and `lastUserAt` does not move — and the USER record that actually
+  // wakes the parent lands a beat later. In that window the guard above has gone false and every other
+  // guard still reads a fenceless rest, so the nudge was minted for the OLD rest and landed after the
+  // worker's own reply to the child, even after a ```done (2026-10-02 review: 1 of 25 real returns,
+  // a 47s child, the nudge's delivery row created 232ms after the enqueue record). Bounded, so a notification that never wakes
+  // the parent still leaves its rest to be asked about.
+  if (childJustReturned(tele, spokeAt, nowMs)) return "ineligible"
   if (tele.pendingAsk || tele.permPrompt) return "ineligible"
   if (tele.lastAssistantAllDone) return "ineligible"
   if ((row.signoff_nudges ?? 0) >= SIGNOFF_NUDGE_MAX) return "ineligible"
   return "nudge"
+}
+
+/** Does this row carry a Goal armed to fire at rest? The same reading answersInFlight is handed above,
+ *  and the same gate the scheduler's evalRestPrompts fires on (armedRest), minus the armed-at stamp the
+ *  verdict's row slice does not carry — a prompt flagged on-rest with no stamp is a row mid-write. */
+function restGoalArmed(row: Pick<SessionRow, "recurring_on_rest" | "recurring_prompt">): boolean {
+  return row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())
+}
+
+/** How long after a direct child retires its parent's rest is treated as about to be woken by it. The
+ *  wake normally lands within a second (the enqueue and the user record are written back to back); the
+ *  bound is for a notification that never wakes the parent, so its rest is not shielded for ever. */
+export const CHILD_RETURN_WAKE_MS = 60_000
+
+/** Did a direct child of this thread retire AFTER its last rest, recently enough that the notification
+ *  waking the parent is still on its way? Read by the verdict above and by the scheduler at send, so a
+ *  nudge minted for the rest behind a running child (a Goal thread) is dropped once that child returns
+ *  rather than landing after the parent's own reply to it. The retired ring holds direct children only. */
+export function childJustReturned(tele: Pick<SessionTelemetry, "retiredSubAgents"> | undefined, spokeAt: string | undefined, nowMs = Date.now()): boolean {
+  const rested = Date.parse(spokeAt ?? "")
+  if (!Number.isFinite(rested)) return false
+  return (tele?.retiredSubAgents ?? []).some((r) => {
+    const finished = Date.parse(r.finishedAt ?? "")
+    return Number.isFinite(finished) && finished >= rested && nowMs - finished < CHILD_RETURN_WAKE_MS
+  })
 }
 
 /** How long a rest the sign-off nudge is about to take stays out of the queue. The scheduler mints the
@@ -1242,8 +1296,10 @@ export function fenceWatchViews(
 // A follow-up frizz has delivered but the transcript has not yet reflected: it lives in the delivery
 // ledger as `pending` (injected, no JSONL evidence yet), `enqueued` (positively receipted by Claude
 // Code's own queue) or `delivered` (the transport's receipt proved it went straight into a turn). All
-// three mean the human's message is handled and in flight. `unconfirmed` is NOT fresh — frizz could not
-// confirm that send, so it must stay visible for the human to re-drive.
+// three mean the human's message is handled and in flight, and so does the write-ahead `sending` (the
+// transport is being called right now; it settles or fails within SENDING_STALL_MS). `unconfirmed` is
+// NOT fresh — frizz could not confirm that send, so it must stay visible for the human to re-drive — and
+// `failed` is not either: the words never reached the worker, so the thread is still waiting on them.
 //
 // `processGone` is what keeps "in flight" honest, and it is the whole reason this reads a second
 // argument. Both live states are claims about a process HOLDING the message: `pending` says a process
@@ -1271,7 +1327,7 @@ export function fenceWatchViews(
 function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
 }
 
 /** How long a message on its way to the worker keeps its row SPINNING (see deriveDeliveryInFlight). A
@@ -1302,7 +1358,7 @@ export function deriveDeliveryInFlight(
   if (deliveryProcessGone) return false
   // A spinoff request is not the human's message to THIS thread (see hasFreshDelivery), so it spins nothing.
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined &&
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined &&
     nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
   )
 }
@@ -2050,7 +2106,8 @@ function sessionThreadView(
   const failedTele: SessionTelemetry | undefined = nativeFailure ? {
     subAgents: [], bgShells: [], ...rawTele,
     turn: "idle", permPrompt: false, pendingQuestion: false, pendingAsk: undefined, apiFault: true, providerError,
-    lastAssistant: providerError?.message, lastAssistantAt: providerError?.at,
+    lastAssistant: providerError?.message, lastAssistantLine: firstTextLine(providerError?.message), lastAssistantAt: providerError?.at,
+    liveTool: undefined,
     lastFence: undefined, lastAssistantAllDone: false,
   } : rawTele
   const done = supersededDone || providerError ? undefined : registeredDoneFence(registries.done.get(row.slug), rawTele?.lastUserAt, rawTele?.lastToolCallAt, rawTele)
@@ -2110,7 +2167,7 @@ function sessionThreadView(
     done: () => registries.done.get(row.slug),
     armedWatchCount: () => armedWatches.length,
     replyWaitArmed: () => armedTimers.some((t) => isReplyWait(t.prompt)),
-  }), rawTele, nowMs)
+  }, nowMs), rawTele, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
   // WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a wait on automation, like a
@@ -2169,6 +2226,8 @@ function sessionThreadView(
     unread: row.unread === 1,
     archived,
     lastAssistant: tele?.lastAssistant,
+    lastAssistantLine: tele?.lastAssistantLine,
+    liveTool: tele?.liveTool,
     spawnedAt: row.spawned_at,
     lastActivityAt: tele?.lastActivityAt,
     lastAssistantAt: tele?.lastAssistantAt,
@@ -2362,6 +2421,7 @@ function foreignThreadView(sessionId: string, tele: SessionTelemetry, backend: "
     unread: false,
     archived: false,
     lastAssistant: tele.lastAssistant,
+    lastAssistantLine: tele.lastAssistantLine,
     lastActivityAt: tele.lastActivityAt,
     lastAssistantAt: tele.lastAssistantAt,
     lastUserAt: tele.lastUserAt,

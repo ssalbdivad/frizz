@@ -72,6 +72,8 @@ test("the markdown sanitizer keeps authored meaning and blocks every scripted es
     assert.equal(seen.xss["x-jsurl"].text, "click")
     assert.equal(seen.xss["x-olstart"].html.includes("start="), false, "a non-numeric start is dropped")
     assert.equal(seen.xss["x-tdalign"].html.includes("align="), false, "a bogus align is dropped")
+    assert.equal(seen.xss["x-span-style"].html.includes("style="), false, "only an ansi fence's bare hex colour is a style")
+    assert.equal(seen.xss["x-span-style"].text, "styled fixed para")
 
     // --- authored meaning survives ---
     assert.deepEqual(seen.taskBoxes, ["md-task md-task-checked", "md-task"], "checked state must be visible")

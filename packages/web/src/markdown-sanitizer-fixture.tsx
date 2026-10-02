@@ -36,6 +36,8 @@ export const XSS: [string, string][] = [
   ["x-olstart", '<ol start="javascript:1"><li>a</li></ol>'],
   ["x-tdalign", '<table><tr><td align="x" onclick="window.__pwned=\'td\'">cell</td></tr></table>'],
   ["x-form", '<form action="/x"><input name="pw" type="password"></form>after'],
+  // A span may carry an inline style — an ```ansi fence's hex colour — but ONLY that exact shape.
+  ["x-span-style", '<span style="background:url(javascript:window.__pwned=\'css\')">styled</span> <span style="color:#ff0000;position:fixed;inset:0">fixed</span> <p style="color:#ff0000">para</p>'],
 ]
 
 createRoot(document.getElementById("root")!).render(

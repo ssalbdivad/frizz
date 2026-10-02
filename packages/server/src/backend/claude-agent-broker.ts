@@ -6,22 +6,24 @@
 // small typed socket protocol (claude-broker-client.ts), never the SDK directly.
 //
 // Wire protocol — newline-delimited JSON frames:
-//   frizz -> broker:  {t:"input", message} | {t:"permission", requestId, decision} | {t:"interrupt", ifQueued?} | {t:"set-mode", mode}
+//   frizz -> broker:  {t:"input", message, requestId?} | {t:"permission", requestId, decision} | {t:"interrupt", ifQueued?} | {t:"set-mode", mode}
 //                  | {t:"cancel-input", requestId, id} | {t:"stop-task", requestId, taskId}
 //                  | {t:"reload-plugins", requestId} | {t:"rename", requestId, description} | {t:"list-skills", requestId}
 //   broker -> frizz:  {t:"hello", sessionId, generation} | {t:"event", event} | {t:"permission-request", requestId, request} | {t:"diagnostic", diagnostic}
+//                  | {t:"input-result", requestId, error?}   (only for an input that carried a requestId)
 //                  | {t:"cancel-result", requestId, cancelled, error?} | {t:"stop-result", requestId, error?}
 //                  | {t:"reload-result", requestId, reloaded?, error?} | {t:"rename-result", requestId, title?, error?} | {t:"skills-result", requestId, skills?, error?}
 //
 // Control actions that make a user-visible promise are REQUEST/RESPONSE pairs: `cancel-input` carries
 // the CLI's verdict about whether a message will still run, and `stop-task` returns only after the SDK
-// accepted or rejected the task stop. "We wrote a socket frame" is not either answer.
+// accepted or rejected the task stop. "We wrote a socket frame" is not either answer. Since
+// `input-ack-v1` the same holds for an input: see CLAUDE_BROKER_CAPABILITY_INPUT_ACK.
 //
 // Lifecycle mirrors codex-app-server-daemon.ts (record-after-listen, owner-checked cleanup, idle
 // exit, reachability self-collection). The recovered session-broker daemon's NAIVE unconditional
 // cleanup is exactly the corpse-deletes-successor bug this guards against.
 import net from "node:net"
-import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
+import { readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
@@ -31,7 +33,7 @@ import { daemonBirthMarker } from "./daemon-identity.ts"
 import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { WORKER_DISALLOWED_TOOLS, claudeCompactionWindowOf } from "./types.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
-import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
+import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_INPUT_ACK, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 import type {
   ClaudeDiagnostic,
   ClaudeInputMessage,
@@ -111,7 +113,7 @@ export interface BrokerRecord {
 // of a VALUE from here — rather than an `import type` — initializes this module inside the server
 // process, where the entry-point check is satisfied by the bundle's own path and the guard fires. That
 // took down the whole control plane on the artifact while dev source (separate files) stayed green.
-const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS]
+const BROKER_CAPABILITIES = [CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_INPUT_ACK]
 
 const IDLE_EXIT_MS = 6 * 60 * 60 * 1000
 const REACHABILITY_CHECK_MS = 30_000
@@ -339,6 +341,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
         if (msg.t === "input") {
           const message = msg.message as ClaudeInputMessage
           inputsReceived += 1
+          // Present only when the bridge asked for an acknowledgement (input-ack-v1). Answered on `sock`,
+          // the connection that asked, for the same reason cancel-input is.
+          const requestId = typeof msg.requestId === "string" ? msg.requestId : undefined
           // Record RECEIPT, not only failure. The drop path below fires ONLY when `handle.send`
           // REJECTS; a send that simply never completes — the agent wedged before it drains stdin — is
           // identically silent, so from this log the two were indistinguishable. That cost a whole
@@ -353,7 +358,8 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
             message: `input received: id=${message?.id ?? "?"} chars=${typeof message?.text === "string" ? message.text.length : 0}${message?.parentToolUseId ? ` addressed=${message.parentToolUseId}` : ""}`,
             truncated: false,
           })
-          // NEVER swallow this. The `input` frame carries no reply, so this catch was the only place a
+          // NEVER swallow this. The `input` frame carried no reply (and still carries none to a bridge
+          // that asks for no acknowledgement), so this catch was the only place a
           // refused send existed at all — and it threw the evidence away. frizz had already answered the
           // operator's RPC with success and opened an `enqueued` ledger item that by design never times
           // out, so the message rendered as delivered forever while the agent never saw a byte of it.
@@ -361,8 +367,15 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
           // message gone. The bridge now validates before the frame so the common refusals fail the
           // operator's own send; this reports the residue (a duplicate uuid, a full input queue, a handle
           // closing under the frame) on the same diagnostic channel every other drop site here uses.
-          void handle.send(message).catch((error: unknown) => {
+          // The acknowledgement is sent once `handle.send` SETTLES, not on receipt: `send` is where the
+          // session takes the message into its input queue or refuses it (a replayed uuid, a full
+          // queue, a closing handle), so this is the one point that can tell the operator which of
+          // the two happened. It settles at once — it validates and pushes, it never waits on a turn.
+          void handle.send(message).then(() => {
+            if (requestId) write(sock, { t: "input-result", requestId })
+          }, (error: unknown) => {
             const detail = error instanceof Error ? error.message : String(error)
+            if (requestId) write(sock, { t: "input-result", requestId, error: detail })
             // NAME THE MESSAGE. The prefix alone told frizz that *something* was thrown away, which is
             // one grep better than silence but still leaves the ledger unable to act: it cannot tombstone
             // a row it cannot identify, so a refused send sat at `enqueued` for the full hour
@@ -459,6 +472,20 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     sock.on("error", () => {})
   })
 
+  // WHICH socket file this daemon bound, by identity rather than by name. The name is shared: every
+  // daemon ever forked for this session binds the same path, and a second one unlinks the first's file
+  // before binding its own (see the sweep before `listen` below). So "the path exists" says nothing
+  // about whether it still leads HERE — only the inode does. Null until listen succeeds, and on Windows,
+  // where a named pipe has no inode to compare and nothing unlinks it by name.
+  let socketIdentity: { dev: number; ino: number } | null = null
+  const socketPathIsOurs = (): boolean => {
+    if (!socketIdentity) return true // unknown ⇒ the pre-identity behaviour, which assumed ours
+    try {
+      const now = statSync(config.socketPath)
+      return now.dev === socketIdentity.dev && now.ino === socketIdentity.ino
+    } catch { return false } // deleted: nothing leads here any more
+  }
+
   const recordOwner = (): number | null => {
     if (!config.recordPath) return null
     try { return (JSON.parse(readFileSync(config.recordPath, "utf8")) as BrokerRecord).daemonPid } catch { return null }
@@ -477,23 +504,48 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     // already overwritten must leave the live daemon's socket alone.
     const owner = recordOwner()
     if (config.recordPath && owner === process.pid) { try { unlinkSync(config.recordPath) } catch {} }
-    if (!(published && owner !== null && owner !== process.pid) && published && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
+    // The SOCKET is checked by inode, not by the record, and `server.close()` is gated on the same
+    // answer — because closing a unix-socket server UNLINKS ITS PATH. libuv does it on close
+    // (uv__pipe_close), by name, whoever's file that name leads to now. So the owner check that used to
+    // guard only the explicit unlink below guarded nothing: the corpse skipped the unlink and then
+    // `server.close()` performed it anyway. That is the 2026-09-30 loss on `we-ve-got-to-start-working`:
+    // two daemons were forked for one session, the second took the record and the path, and when the
+    // first self-collected a minute later its close deleted the SURVIVOR's socket file. The survivor ran
+    // on, recorded and unreachable, and every follow-up bound a client to a path that no longer existed.
+    // (Reproduced in scripts/verify-broker-resume-race.mjs.)
+    //
+    // So a daemon that does not own the path never closes its server: the standalone daemon exits a few
+    // lines below and the OS reclaims the listening fd without touching the filesystem. Only the
+    // embedded (test) form, which does not exit, is left holding an unref'd listener in that case.
+    const pathIsSomeoneElses = published && process.platform !== "win32" && !socketPathIsOurs()
+    if (published && !pathIsSomeoneElses && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
     try { client?.destroy() } catch {}
     try { (server as { closeAllConnections?: () => void }).closeAllConnections?.() } catch {}
-    try { server.close() } catch {}
+    if (pathIsSomeoneElses) { try { server.unref() } catch {} }
+    else { try { server.close() } catch {} }
     await handle.close().catch(() => {})
     if (config.recordPath) process.exit(code) // standalone daemon
   }
 
-  // Reachability self-collection: if UNATTACHED and the record no longer names this pid (a successor
-  // stole it, or it vanished), strike out and exit — so a claude process can't leak forever.
+  // Reachability self-collection: if UNATTACHED and either the record no longer names this pid (a
+  // successor stole it, or it vanished) or the socket path no longer leads here, strike out and exit —
+  // so a claude process can't leak forever.
+  //
+  // The socket half is the one that was missing. A daemon whose socket FILE is gone — deleted by a
+  // sibling's teardown (see shutdown), a $TMPDIR cleaner, a sweep — still owns the record, so every
+  // later attach ADOPTS it and binds a client to a path nothing listens on. It was the worst possible
+  // corpse: alive, recorded, and unreachable by anyone, eating every follow-up until something else
+  // happened to kill it (on 2026-09-30, hibernation, eight minutes later). Collecting it hands the
+  // session back to the next attach, which cold-resumes from the transcript. An ATTACHED daemon is
+  // left alone either way: its connection does not need the path, and it is not undiscoverable.
   const reach = setInterval(() => {
     if (client || !config.recordPath) { strikes = 0; return }
     const owner = recordOwner()
-    if (owner === process.pid) { strikes = 0; return }
-    // Undiscoverable and unattached: a successor stole the record, or a sweep removed it. If a turn was
-    // mid-flight this is where it dies, and this reason is the fingerprint of that class of loss.
-    if (++strikes >= REACHABILITY_STRIKES) void shutdown(0, "self-collected-record-reassigned")
+    const socketLost = published && !socketPathIsOurs()
+    if (owner === process.pid && !socketLost) { strikes = 0; return }
+    // Undiscoverable and unattached. If a turn was mid-flight this is where it dies, and the reason is
+    // the fingerprint of which half of discoverability went.
+    if (++strikes >= REACHABILITY_STRIKES) void shutdown(0, owner === process.pid ? "self-collected-socket-lost" : "self-collected-record-reassigned")
   }, REACHABILITY_CHECK_MS)
   if (reach.unref) reach.unref()
 
@@ -510,6 +562,9 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   try { unlinkSync(config.socketPath) } catch {} // sweep a stale unix socket before binding
   server.listen(config.socketPath, () => {
     published = true
+    if (process.platform !== "win32") {
+      try { const bound = statSync(config.socketPath); socketIdentity = { dev: bound.dev, ino: bound.ino } } catch {}
+    }
     if (config.recordPath) {
       const processStart = daemonBirthMarker() // see daemon-identity.ts
       const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv), ...(processStart ? { processStart } : {}) }

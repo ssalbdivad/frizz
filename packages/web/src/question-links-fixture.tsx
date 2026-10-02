@@ -2,10 +2,11 @@ import { useEffect, useState } from "react"
 import { createRoot } from "react-dom/client"
 import "./styles.css"
 import { QuestionBlockCard } from "./components/QuestionBlockCard.tsx"
+import { installCodeCopyInterceptor } from "./lib/copy-code.ts"
 import { setGithubRepo } from "./lib/githubAutolink.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { setLocalPathBase } from "./lib/localPathBase.ts"
-import type { BlockAnswer } from "./lib/questionBlocks.ts"
+import type { BlockAnswer, ParsedQuestion } from "./lib/questionBlocks.ts"
 import { store } from "./store.ts"
 
 // A ```question card carrying every live reference a worker writes into one — the "usual set of
@@ -41,12 +42,14 @@ const REAL: Record<string, string> = {
 
 type FixtureWindow = Window & {
   __chips?: number[]
+  __codeChips?: number[]
   __opened?: string[]
   __drawers?: () => { kind: string; path?: string }[]
   __resolveCalls?: string[][]
 }
 const w = window as FixtureWindow
 w.__chips = []
+w.__codeChips = []
 w.__opened = []
 w.__resolveCalls = []
 w.__drawers = () => store.drawers.map((d) => ({ kind: d.kind, path: d.path }))
@@ -70,6 +73,7 @@ window.fetch = async (input, init) => {
 }
 
 installLocalFileLinkInterceptor()
+installCodeCopyInterceptor()
 setLocalPathBase(BASE_DIR, "/fixture/home")
 
 function Live() {
@@ -93,6 +97,36 @@ function Live() {
   )
 }
 
+// An option whose BODY carries a fenced block (a registered ask's multi-line description). The block is
+// raised above the stretched button so it can h-scroll; its copy button has to ride above the block in
+// turn, or a click on the copy glyph lands on the `pre` and picks the option instead of copying.
+const CODE_QUESTION: ParsedQuestion = {
+  kind: "question",
+  danger: false,
+  contextMd: "Which command should the worker run?",
+  options: ["A. Rebuild", "B. Leave it"],
+  optionBodies: ["```sh\nnub run build && nub run test\n```", undefined],
+  recommendedIdx: 0,
+}
+
+function CodeOption() {
+  const [answer, setAnswer] = useState<BlockAnswer>({ chosen: null, chosenSet: [], text: "" })
+  return (
+    <QuestionBlockCard
+      question={CODE_QUESTION}
+      interactive={{
+        answer,
+        onChip: (i) => {
+          w.__codeChips!.push(i)
+          setAnswer((a) => ({ ...a, chosen: a.chosen === i ? null : i }))
+        },
+        onText: (text) => setAnswer(() => ({ chosen: null, text })),
+        onSubmit: () => {},
+      }}
+    />
+  )
+}
+
 function Fixture() {
   // A frame later, exactly as the board's keyframe does — never during the first render.
   useEffect(() => {
@@ -108,6 +142,9 @@ function Fixture() {
       {/* The same card as a PAST question: options are inert, the references in them are not. */}
       <div data-case="readonly">
         <QuestionBlockCard raw={RAW} questionKind="question" />
+      </div>
+      <div data-case="code" className="mt-6">
+        <CodeOption />
       </div>
     </main>
   )

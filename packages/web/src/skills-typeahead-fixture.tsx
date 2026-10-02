@@ -26,6 +26,8 @@ const SKILLS: ThreadSkill[] = [
   // A SHORT description, so the source column has to hold its own next to a row that never truncates.
   { name: "todo", description: "Parse status-tagged todo lines", source: "user" },
   { name: "visual-review", description: "Judge and dial in the visual correctness of a UI change by measuring glyph ink" },
+  // A built-in COMMAND: offered and tinted only as the draft's first token, where Claude runs it.
+  { name: "context", description: "Show current context usage", source: "builtin", command: true },
 ]
 
 // Test hooks: how many times the composer asked for the list (must stay 1 across re-triggers), and

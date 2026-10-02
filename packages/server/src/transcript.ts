@@ -46,7 +46,7 @@ import { CODEX_FIRST_FINAL_TITLE_TRANSPORT, CODEX_LEGACY_FIRST_FINAL_TITLE_TRANS
 import { projectAcpTranscript, readAcpTranscriptFile } from "./backend/acp-transcript.ts"
 import { discoverTranscriptDir, discoverTranscriptId, DISCOVERY_GRACE_MS } from "./discover.ts"
 import { isClaudeAuthErrorText, MONITOR_END_RE, parseSignalFence } from "./tailer.ts"
-import { redactCredentialStructure, redactCredentialSyntax } from "./credential-redaction.ts"
+import { ENCRYPTED_PAYLOAD, redactCredentialStructure, redactToolPayload } from "./credential-redaction.ts"
 import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-background.mjs"
 import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
@@ -435,6 +435,26 @@ export function commandEnvelopeQueuedKey(deliveredText: string): string | undefi
   const args = COMMAND_ARGS_RE.exec(deliveredText)?.[1]?.trim()
   return args ? `${name} ${args}` : name
 }
+// The envelope ALONE — the record the CLI writes for a typed command, and nothing a human wrote around
+// it. Anchored at both ends: prose that quotes `<command-name>` is still prose.
+const COMMAND_ENVELOPE_ONLY = /^(?:\s*<(command-(?:name|message|args))>[\s\S]*?<\/\1>\s*)+$/
+export function isCommandEnvelopeOnly(text: string): boolean {
+  return COMMAND_NAME_RE.test(text) && COMMAND_ENVELOPE_ONLY.test(text)
+}
+
+// A LOCAL command's output — `/context`, `/usage`, `/mcp` and every other command the CLI answers
+// itself rather than handing to the model. Claude Code records it straight after the command's envelope,
+// as a `system`/`local_command` record (2.1.285, every command probed) or, for `/compact`, a user record;
+// both wrap it in `<local-command-stdout>` or `<local-command-stderr>`. Undefined for anything else. The
+// body is plain text or Markdown (the SDK path renders `/context` as a Markdown table); ANSI is stripped
+// because a chat surface cannot draw it and a stray escape reads as garbage.
+const ANSI_ESCAPE_RE = /\x1b(?:\][^\x07]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~])/g
+export function localCommandOutput(text: string): { stream: "stdout" | "stderr"; body: string } | undefined {
+  const trimmed = text.trim()
+  const match = /^<local-command-(stdout|stderr)>([\s\S]*)<\/local-command-\1>$/.exec(trimmed)
+  if (!match) return undefined
+  return { stream: match[1] as "stdout" | "stderr", body: match[2].replace(ANSI_ESCAPE_RE, "").trim() }
+}
 
 // SHAPE 3 — a message from a PEER Claude session. Claude Code delivers it as an isMeta user record that
 // wraps the enqueued text in a fixed preamble plus trailing handling guidance, so the isMeta splice below
@@ -645,6 +665,19 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   let deliveredDedupe: string | null = null
   // Set by a `/compact` command envelope, consumed by the output receipt that follows it (see below).
   let compactCommandOpen = false
+  // The command the latest envelope named ("/context"), consumed by the output record that answers it so
+  // the output block can say what it is the output OF. Null once consumed, or after anything else.
+  let lastCommandName: string | null = null
+  // A command's output, drawn as its own block under the human's `/name` bubble — never as the agent
+  // speaking, and never as the human: the CLI produced it. Rides `kind:"event"` so a client that predates
+  // `commandOutput` still shows the text as a quiet line instead of failing the whole page.
+  function pushCommandOutput(sourceId: string, at: string | undefined, output: { stream: "stdout" | "stderr"; body: string }): void {
+    const command = lastCommandName
+    lastCommandName = null
+    if (!output.body) return
+    out.push({ sourceId, role: "assistant", kind: "event", text: output.body, commandOutput: { ...(command ? { command } : {}), stream: output.stream }, tools: [], parts: [], at })
+    lastAssistantId = null
+  }
   // The rest divider (see restMessage) for a turn that has ended, held back until we know the resting
   // message is really finished. It is DEFERRED rather than pushed on the spot because one assistant
   // MESSAGE can be split across several records and `stop_reason:"end_turn"` rides EVERY one of them —
@@ -815,6 +848,16 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       if (inner) out.push({ sourceId, role: "assistant", kind: "event", text: inner, tools: [], parts: [], at: thisTs })
       lastAssistantId = null
       return
+    }
+
+    // Every OTHER local command's answer (`/context`, `/usage`, …): its own output block, under the
+    // `/name` bubble the human typed.
+    if (rec.type === "system" && rec.subtype === "local_command" && typeof rec.content === "string" && rec.isSidechain !== true) {
+      const output = localCommandOutput(rec.content)
+      if (output) {
+        pushCommandOutput(sourceId, thisTs, output)
+        return
+      }
     }
 
     // A QUEUED human follow-up's enqueue/removal (the completion <task-notification> queue-operations were
@@ -1100,10 +1143,25 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // bubble carrying what the human actually typed, and drop the envelope — rendering it would show
         // raw `<command-name>` markup underneath a permanently-gray "/effort".
         const commandKey = commandEnvelopeQueuedKey(text)
+        lastCommandName = commandKey === undefined ? null : COMMAND_NAME_RE.exec(text)![1].trim()
         if (commandKey !== undefined && resolveQueued(commandKey)) {
           compactCommandOpen = commandKey === "/compact"
           lastAssistantId = null
           return
+        }
+        // …typed under an ALIAS. The envelope names the command's canonical name, so `/cost` arrives as
+        // `<command-name>/usage</command-name>` and the byte key misses — the bubble sat gray forever with
+        // the raw envelope drawn under it (measured 2026-10-02, claude 2.1.285). The queue drains FIFO, so
+        // the envelope belongs to the OLDEST still-gray `/`-led message with the same arguments.
+        if (commandKey !== undefined) {
+          const args = COMMAND_ARGS_RE.exec(text)?.[1]?.trim() ?? ""
+          const aliased = queuedPending.find((e) => e.message.queued && /^\/\S+$/.test(e.key.split(" ")[0]) && e.key.slice(e.key.split(" ")[0].length).trim() === args)
+          if (aliased) {
+            resolveEntry(aliased)
+            compactCommandOpen = lastCommandName === "/compact"
+            lastAssistantId = null
+            return
+          }
         }
         // Belt-and-suspenders: a normal user record that echoes a JUST-delivered queued message would
         // otherwise render it twice. Skip the immediately-following identical text. (Unobserved in the
@@ -1131,6 +1189,19 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           return
         }
         compactCommandOpen = false
+        // Another local command's output in its user-record shape: its own block, like the system one.
+        const output = localCommandOutput(text)
+        if (output) {
+          pushCommandOutput(sourceId, rec.timestamp, output)
+          return
+        }
+        // A command envelope nothing queued — a command in a session Frizz did not deliver into, or one
+        // whose enqueue scrolled out of the window. Draw what the human TYPED, never the markup.
+        if (isCommandEnvelopeOnly(text)) {
+          pushUserRecord(out, sourceId, commandEnvelopeQueuedKey(text)!, rec.timestamp, dropCorrection, !drewEvents)
+          lastAssistantId = null
+          return
+        }
         // The first user message is the composed dispatch prompt (scratchpad orientation + project
         // instructions + banner + TASK). Only what sits below the banner is the human's words — that
         // narrowing is a DISPLAY projection (userDisplayText), never a rewrite of the stored text.
@@ -1358,29 +1429,8 @@ function userText(rec: Raw): string | null {
 const EDIT_CAP = 4000
 const TRUNC_MARKER = "\n… (truncated)"
 
-// Tool payloads can contain copied credentials (shell exports/output, file excerpts, MCP arguments)
-// or Codex collaboration's opaque encrypted `message` blobs. The transcript is a broad UI surface,
-// so redact common secret forms before any payload is retained or summarized. This is deliberately
-// presentation-only: the raw JSONL remains untouched.
-// What a redacted Fernet token becomes. Shared so codexPeerMessageCall can recognise an encrypted
-// inter-agent body by the marker this redactor mints, instead of keeping a rival copy of the pattern.
-const ENCRYPTED_PAYLOAD = "[encrypted payload]"
-
-function redactToolPayload(s: string): string {
-  return redactCredentialSyntax(s)
-    // Fernet payloads commonly end in base64 padding. A trailing word-boundary left that padding
-    // behind (`[encrypted payload]==`) and made the redaction visibly incomplete.
-    .replace(/gAAAA[A-Za-z0-9_-]{40,}={0,2}/g, ENCRYPTED_PAYLOAD)
-    .replace(/-----BEGIN [^-\r\n]*PRIVATE KEY-----[\s\S]*?-----END [^-\r\n]*PRIVATE KEY-----/gi, "[redacted private key]")
-    .replace(/\b(?:eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}|(?:AKIA|ASIA)[A-Z0-9]{16}|xox[baprs]-[A-Za-z0-9-]{16,}|sk_live_[A-Za-z0-9]{16,}|sk-(?:proj-)?[A-Za-z0-9_-]{16,}|github_pat_[A-Za-z0-9_]{16,}|gh[pousr]_[A-Za-z0-9_]{16,})\b/g, "[redacted]")
-    // Inputs are usually JSON, so the key's closing quote sits between the word and colon. Accept it
-    // here (and a quoted value) rather than protecting only shell-style `Authorization=...` forms.
-    .replace(/(\bAuthorization\b["']?\s*[:=]\s*)(?:"(?:Bearer\s+)?[^"]*"|'(?:Bearer\s+)?[^']*'|(?:Bearer\s+)?[^\s,;]+)/gi, "$1[redacted]")
-    .replace(
-      /(\b(?:[a-z][a-z0-9_]*(?:_api_key|_token|_secret|_password|_passwd)|api[_-]?key|access[_-]?token|auth[_-]?token|token|credential|secret|password|passwd|cookie)\b["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;}\]]+)/gi,
-      "$1[redacted]",
-    )
-}
+// Tool payloads are redacted before any is retained or summarized — see redactToolPayload, which moved
+// to credential-redaction.ts so the tailer's board live line redacts with the same rules.
 
 // The line count of one side of an edit, on the RAW string — the capped transport copy undercounts.
 // "" is zero lines (a Write's old side, an empty new file), anything else counts its newlines + 1.

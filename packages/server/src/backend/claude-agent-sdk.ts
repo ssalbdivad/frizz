@@ -13,6 +13,7 @@ import {
 } from "@frizz/claude-agent-sdk-runtime"
 import { claudeUltracodeSettings, resolveClaudeEffort } from "./claude-effort.ts"
 import { resolveClaudeLaunchModel } from "./claude-context-window.ts"
+import { writeMcpConfigFile } from "../session-files.ts"
 import {
   CLAUDE_AGENT_SDK_MAX_DIAGNOSTIC_BYTES,
   CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES,
@@ -521,17 +522,25 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   // it names only those two of the four roots, and the same regex false-positives on descriptions that
   // legitimately end in a parenthetical (`/deep-research` ends "(dynamic workflow)", `/clear`
   // "(resumable with /resume)", `/fast` "(Opus 4.8)"). A wrong label is worse than none.
+  //
+  // The BUILT-IN commands ride along too (2026-10-02): the initialize list is the SDK's own answer to
+  // "what can this session run", and a typed `/context` or `/usage` works through Frizz exactly as it does
+  // in the CLI, its output drawn under the command in the transcript. What is left out is the handful a
+  // Frizz thread must not run (see FRIZZ_EXCLUDED_COMMANDS) and the CLI's own retired and internal rows.
+  // A built-in is tagged `builtin` when claude names no source for it, which is what it is.
   async listSkills(): Promise<ClaudeSkillInfo[]> {
     const initialization = await this.initializationResult()
     const sources = await this.skillSources()
     const skillNames = new Set(this.initSkills)
     const skills: ClaudeSkillInfo[] = []
     for (const command of initialization.commands) {
-      if (!command.name || !skillNames.has(command.name)) continue
-      const source = sources.get(command.name)
+      if (!command.name) continue
+      const isSkill = skillNames.has(command.name)
+      if (!isSkill && !offeredBuiltinCommand(command)) continue
+      const source = sources.get(command.name) ?? (isSkill ? undefined : "builtin")
       // The wire cap for a typeahead row is tighter than the 4KB the initialize mapper allows a
       // command description — the shared ThreadSkill schema rejects anything past 1024.
-      skills.push({ name: command.name, description: withoutRedundantSource(command.description, source).slice(0, 1024), source })
+      skills.push({ name: command.name, description: withoutRedundantSource(command.description, source).slice(0, 1024), source, ...(isSkill ? {} : { command: true as const }) })
     }
     return skills
   }
@@ -1005,8 +1014,13 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // empty allowlist is not the same as handing it none. The project's own `.mcp.json` servers arrive
       // INSIDE `mcpServers` — the broker daemon merges them (project-mcp-servers.ts) — because
       // `strictMcpConfig` stops the CLI discovering any MCP scope by itself.
+      // They reach the CLI as a FILE (`extraArgs`), never through the SDK's own `mcpServers` option: the
+      // SDK renders that one as inline `--mcp-config <json>` on the CLI's argv, and the config carries the
+      // operator's credentials — so every worker published its bearer tokens to `ps` (writeMcpConfigFile).
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
-      ...(options.mcpServers && Object.keys(options.mcpServers).length > 0 ? { mcpServers: options.mcpServers } : {}),
+      ...(options.mcpServers && Object.keys(options.mcpServers).length > 0
+        ? { extraArgs: { "mcp-config": writeMcpConfigFile(sessionId, options.mcpServers) } }
+        : {}),
       ...(options.strictMcpConfig ? { strictMcpConfig: true } : {}),
       ...(options.allowedTools?.length ? { allowedTools: options.allowedTools } : {}),
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
@@ -2000,4 +2014,22 @@ function boundedArray(value: unknown, label: string, maxItems: number): unknown[
 function objectValue(value: unknown, label: string): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ClaudeAgentSdkProtocolError(`${label} must be an object`)
   return value as Record<string, unknown>
+}
+
+// Built-in commands the composer's `/` menu never offers on a Frizz thread. Each one fights something
+// Frizz owns, so offering it would invite the operator to break their own thread:
+// - `clear` starts a NEW session, and a Frizz thread is bound to the one it was dispatched as.
+// - `model`, `effort`, `fast` change the live profile behind the thread's own model and effort control,
+//   which then reads a setting the session no longer runs.
+// - `rename` has Frizz's own title editor; `color`, `focus` and `heapdump` drive or dump the CLI's own
+//   terminal UI, which a Frizz thread does not have.
+// Typing one is still sent as written — this filters the MENU, never the message.
+const FRIZZ_EXCLUDED_COMMANDS: ReadonlySet<string> = new Set(["clear", "model", "effort", "fast", "rename", "color", "focus", "heapdump"])
+export function offeredBuiltinCommand(command: { name: string; description: string }): boolean {
+  if (FRIZZ_EXCLUDED_COMMANDS.has(command.name)) return false
+  // The CLI's internal plumbing (`__remote-workflow`, `workflow-launch-exec`) and the rows it keeps only
+  // to point at a successor ("(removed) …", "Renamed to /usage-credits").
+  if (command.name.startsWith("_") || command.name === "workflow-launch-exec") return false
+  if (/^\(removed\)|^Renamed to /.test(command.description)) return false
+  return true
 }

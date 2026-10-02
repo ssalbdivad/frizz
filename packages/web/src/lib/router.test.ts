@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { BoardSnapshot } from "@frizz/shared"
 import { markDrawerClosing, noteStandaloneThreadRender, resolveRoutedThread, store } from "../store.ts"
-import { applyLocation, noteRouterTransition, primeReturnFromFullscreen, primeRoute, startRouter } from "./router.ts"
+import { applyLocation, appPushedCurrentEntry, noteRouterTransition, primeReturnFromFullscreen, primeRoute, startRouter } from "./router.ts"
 
 function resetStore(): void {
   store.drawers = []
@@ -441,4 +441,15 @@ test("the store → URL writer waits out react-router's view transition", async 
     globals.location = previous
     resetStore()
   }
+})
+
+// The phone thread header's ← pops history only when the entry under the thread is ours. react-router
+// numbers its entries from 0 at document load, so 0 (or no router state at all) is a cold link.
+test("appPushedCurrentEntry: only an entry the router pushed above the document's first counts", () => {
+  assert.equal(appPushedCurrentEntry({ usr: null, key: "a", idx: 1 }), true)
+  assert.equal(appPushedCurrentEntry({ usr: null, key: "b", idx: 4, frizzLayer: 9 }), true)
+  assert.equal(appPushedCurrentEntry({ idx: 0 }), false)
+  assert.equal(appPushedCurrentEntry({ usr: null, key: "c" }), false)
+  assert.equal(appPushedCurrentEntry(null), false)
+  assert.equal(appPushedCurrentEntry("not-an-object"), false)
 })

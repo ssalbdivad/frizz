@@ -21,7 +21,7 @@ import { setTimeout as delay } from "node:timers/promises"
 import { fileURLToPath } from "node:url"
 import { appPath, classifyNavigation, startAddress } from "./navigation.ts"
 import { errorPage, loadingPage, projectPickerPage } from "./pages.ts"
-import { frizzPaths, type FrizzPaths } from "@frizz/server/frizz-paths"
+import { frizzPathsNow, type FrizzPaths } from "@frizz/server/frizz-paths"
 import { locateServer, startServer, type StartOutcome } from "./server.ts"
 import { loginShellEnvironment } from "./shell-env.ts"
 
@@ -184,7 +184,7 @@ async function resolveServer(cwd: string): Promise<StartOutcome> {
   const env = await loginShellEnvironment()
   // The launcher resolves Frizz's roots from THIS environment, and a login shell can move them (an
   // XDG_STATE_HOME exported in an rc file), so look there too before starting a second server.
-  const roots = frizzPaths({ env })
+  const roots = frizzPathsNow({ env })
   found = await waitForRunningServer(roots)
   if (found === "starting") return inProgress
   if (found) return { kind: "ready", origin: found }

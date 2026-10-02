@@ -94,7 +94,7 @@ test("typing `/` opens the menu once fetched, filters as the name grows, and a s
   await open()
   await page!.type(BOX, "/")
   await page!.waitForSelector(MENU)
-  assert.equal((await menuRows()).length, 7, "a bare slash offers the whole list")
+  assert.equal((await menuRows()).length, 8, "a bare slash opening the draft offers the whole list, commands included")
 
   await page!.type(BOX, "fr")
   // Prefix matches lead; the namespaced `frizz:gh` is still reachable this way.
@@ -119,7 +119,7 @@ test("each suggestion names its source, in one column that every row shares", {
   await page!.type(BOX, "/")
   await page!.waitForSelector(MENU)
   const cells = await menuSources()
-  assert.deepEqual(cells.map((cell) => cell?.label), ["project", "plugin", "project", "global", "built-in", "global", ""],
+  assert.deepEqual(cells.map((cell) => cell?.label), ["project", "plugin", "project", "global", "built-in", "global", "", "built-in"],
     "the harness's own scopes, in frizz's vocabulary — and an empty cell where it reported none")
   const lefts = new Set(cells.map((cell) => cell!.left))
   const rights = new Set(cells.map((cell) => cell!.right))
@@ -189,4 +189,58 @@ test("Escape dismisses without blurring and stays dismissed until the draft chan
   await page!.waitForSelector(MENU)
   assert.deepEqual(await menuRows(), ["/visual-review"], "typing again reopens the menu")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+// THE SAME MECHANISM AS `@` (maintainer 2026-10-02): a `/` at any word boundary opens the menu with the
+// caret in its token, a row completes that token IN PLACE, and a finished name the thread can run is
+// tinted in the prompt box — in its own colour, never the mention accent. A built-in command runs only
+// as the draft's first token, so mid-sentence it is neither offered nor tinted.
+test("a `/` mid-sentence offers skills, completes in place, and tints the name in its own colour", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  await page!.type(BOX, "then run /")
+  await page!.waitForSelector(MENU)
+  const rows = await menuRows()
+  assert.equal(rows.length, 7, "every skill, and no command")
+  assert.ok(!rows.includes("/context"), "a command mid-sentence would be plain text to Claude")
+
+  await page!.type(BOX, "fri")
+  assert.deepEqual(await menuRows(), ["/frizz-stack", "/frizz:gh"])
+  await page!.keyboard.press("Enter")
+  await waitForCaretAtEnd()
+  assert.equal(await boxValue(), "then run /frizz-stack ", "completed in place, the prose before it kept")
+  assert.deepEqual((await hooks()).submitted, [], "Enter accepted the row; nothing was sent")
+
+  const tint = await page!.evaluate(() => {
+    // The mention tint's colour, read off a probe wearing its class, so the two are compared as rendered.
+    const probe = document.body.appendChild(Object.assign(document.createElement("span"), { className: "text-accent" }))
+    const mention = getComputedStyle(probe).color
+    probe.remove()
+    return [...document.querySelectorAll("[data-composer-command]")].map((el) => ({ text: el.textContent, color: getComputedStyle(el).color, mention }))
+  })
+  assert.equal(tint.length, 1)
+  assert.equal(tint[0]!.text, "/frizz-stack")
+  assert.notEqual(tint[0]!.color, tint[0]!.mention, "its own colour, not the @ mention's")
+
+  // A path is never a name, and an unknown name stays plain.
+  await page!.type(BOX, "in /tmp/x and /nope ")
+  assert.deepEqual(await page!.evaluate(() => [...document.querySelectorAll("[data-composer-command]")].map((el) => el.textContent)), ["/frizz-stack"])
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+test("a built-in command is tinted where it runs — opening the draft — and nowhere else", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  await page!.type(BOX, "/context ")
+  const tinted = () => page!.evaluate(() => [...document.querySelectorAll("[data-composer-command]")].map((el) => el.textContent))
+  assert.deepEqual(await tinted(), ["/context"])
+  await page!.keyboard.down("Shift")
+  await page!.keyboard.press("Home")
+  await page!.keyboard.up("Shift")
+  await page!.type(BOX, "show me /context ")
+  assert.deepEqual(await tinted(), [], "mid-sentence it is plain text")
 })

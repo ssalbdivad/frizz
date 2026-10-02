@@ -33,6 +33,30 @@ import { decodeDeliveryMarkers, deliveryTag, stripDeliveryMarkers } from "./deli
 // bubble (sourceId `delivery:<id>`) so the queued affordance is server truth — reload-safe, and consumed
 // by the client's optimistic bubble via deliveryId rather than text.
 //
+// ── WRITE-AHEAD: the server owns the text from the instant it receives a send ──────────────────────────
+// Every state above is written only once the transport RETURNED — so a delivery that threw or hung left
+// the server holding nothing, and the only copy of the operator's words was the browser's: the optimistic
+// bubble (removed on failure) and a rolled-back draft in sessionStorage. A browser restart wiped that,
+// and a ~4,000-character dictated steer was lost (2026-09-30; recovered only by scraping Chrome's
+// tab-restore file). So the router now opens the entry BEFORE it touches any transport:
+//
+//   followUp(deliveryId) ──▶ sending ──(transport returns)──▶ pending / enqueued / delivered, as above
+//                            sending ──(transport throws)────▶ failed (text + error kept)
+//                            sending ──(no answer for SENDING_STALL_MS: a hung call, or a server that
+//                                       restarted mid-send)──▶ failed
+//
+// `failed` is the operator's, not the machine's. It never ages, is never retried automatically — a
+// failure is usually AMBIGUOUS (the text may have reached the worker before the throw), and a machine
+// retry after one can double-send — and leaves the ledger only three ways: the operator dismisses it,
+// re-sends it (the new send `supersedes` it in the same write that opens its own entry), or the
+// transcript turns out to carry it after all (the correlator's ordinary evidence, below). Its own
+// eviction cap keeps a run of ordinary sends from ever pushing one out.
+//
+// The one failure that is NOT ambiguous is a RetryableDeliveryError, raised strictly upstream of any
+// write to the worker; the client replays those with the SAME deliveryId within seconds. That item
+// stays `sending` (flagged `retryable`) so the replay may re-open it, and only ages to `failed` if the
+// replays stop — see beginDelivery and ageDeliveries.
+//
 // An enqueue record is positive evidence Claude Code holds the message in its own queue, and a mid-turn
 // queue legitimately lasts as long as the turn does — so `enqueued` outlives the pending timeout. It is
 // not IMMORTAL, though, and both of its escape hatches exist because a missed correlation left one
@@ -50,6 +74,20 @@ export const MAX_LEDGER_ITEMS = 20
 // cancellation — reachable in an afternoon on a busy thread, not a remote edge. They still need a
 // bound (the row holds each message's text), so they get their own, and the oldest goes first.
 export const MAX_CANCELLED_ITEMS = 12
+// A failed send is the only copy of words the operator believes are lost, so it is capped on its own
+// for the same reason a tombstone is: twenty ordinary follow-ups must never evict one. The bound still
+// exists because the row holds each message's text; past it the oldest failure goes first.
+export const MAX_FAILED_ITEMS = 20
+// How long a write-ahead `sending` entry may wait for its transport before it reads as failed. It
+// matches the client's own send deadline (DELIVERY_SEND_TIMEOUT_MS, 120s) plus a tick of slack, so the
+// server never calls a send failed while the browser that made it is still waiting on it. It is the
+// backstop for the two cases no catch block sees: a transport call that never settles, and a server that
+// restarted with the call in flight.
+export const SENDING_STALL_MS = 130_000
+// A `retryable` refusal is replayed by the client within ~6.5s (DELIVERY_RETRY_BACKOFF_MS); this is how
+// long the entry waits for that replay before it reads as failed.
+export const RETRYABLE_SEND_GRACE_MS = 15_000
+export const SENDING_STALL_ERROR = "No answer after 2m. It may still arrive, so check the thread before you retry."
 
 // `cancelled` is not a delivery state at all — it is a TOMBSTONE, and the only one that outlives its
 // own message. The other three describe a send making its way to the agent; this one records a send the
@@ -69,7 +107,8 @@ export const MAX_CANCELLED_ITEMS = 12
 // Left alone the enqueue bubble therefore outlives the cancellation, and the FIFO backstop in transcript.ts eventually
 // UN-GRAYS it when a later message delivers — rendering a message the agent provably never read as a
 // message the human sent it. So frizz has to remember the cancellation itself.
-export type DeliveryState = "pending" | "enqueued" | "delivered" | "unconfirmed" | "cancelled"
+export type DeliveryState = "sending" | "pending" | "enqueued" | "delivered" | "unconfirmed" | "failed" | "cancelled"
+const DELIVERY_STATES: readonly DeliveryState[] = ["sending", "pending", "enqueued", "delivered", "unconfirmed", "failed", "cancelled"]
 
 export interface DeliveryLedgerItem {
   id: string
@@ -84,6 +123,12 @@ export interface DeliveryLedgerItem {
   // went with the rest of the terminal-control apparatus (8a57e29), and a broker send has no keystroke
   // to re-send. Kept on the type as the record of what an old persisted row may still carry.
   submitAttempts?: number
+  // Why the transport refused or dropped this send — set on `failed`, and on a `sending` item a
+  // RetryableDeliveryError left behind. Shown to the operator under the failed bubble, verbatim.
+  error?: string
+  // The refusal was raised strictly upstream of any write to the worker, so a replay of the SAME
+  // deliveryId provably cannot double-send and may re-open the entry (beginDelivery).
+  retryable?: boolean
 }
 
 // The form every text comparison in this module runs in.
@@ -126,7 +171,7 @@ function isItem(v: unknown): v is DeliveryLedgerItem {
   if (!v || typeof v !== "object") return false
   const i = v as Partial<DeliveryLedgerItem>
   return typeof i.id === "string" && typeof i.text === "string" && typeof i.at === "string" &&
-    typeof i.updatedAt === "string" && (["pending", "enqueued", "delivered", "unconfirmed", "cancelled"] as const).includes(i.state as DeliveryState)
+    typeof i.updatedAt === "string" && DELIVERY_STATES.includes(i.state as DeliveryState)
 }
 
 export function parseDeliveryLedger(json: string | null | undefined): DeliveryLedgerItem[] {
@@ -155,22 +200,27 @@ export function serializeDeliveryLedger(items: DeliveryLedgerItem[]): string | n
 // ordinary follow-ups can never evict a cancellation. Order is otherwise preserved: matchComposedText
 // consumes items in send order, so a reshuffle here would silently change how a coalesced record is
 // attributed.
+// Failed sends are a third bucket with a cap of their own (MAX_FAILED_ITEMS), for the same reason.
 export function trimLedger(items: DeliveryLedgerItem[]): DeliveryLedgerItem[] {
-  const overLive = items.filter((i) => i.state !== "cancelled").length - MAX_LEDGER_ITEMS
-  const overCancelled = items.filter((i) => i.state === "cancelled").length - MAX_CANCELLED_ITEMS
-  if (overLive <= 0 && overCancelled <= 0) return items
-  let dropLive = Math.max(0, overLive)
-  let dropCancelledCount = Math.max(0, overCancelled)
+  const bucket = (item: DeliveryLedgerItem): "cancelled" | "failed" | "live" =>
+    item.state === "cancelled" ? "cancelled" : item.state === "failed" ? "failed" : "live"
+  const caps = { cancelled: MAX_CANCELLED_ITEMS, failed: MAX_FAILED_ITEMS, live: MAX_LEDGER_ITEMS }
+  const over = { cancelled: -caps.cancelled, failed: -caps.failed, live: -caps.live }
+  for (const item of items) over[bucket(item)]++
+  if (over.cancelled <= 0 && over.failed <= 0 && over.live <= 0) return items
   return items.filter((item) => {
-    if (item.state === "cancelled") {
-      if (dropCancelledCount > 0) { dropCancelledCount--; return false }
-      return true
-    }
-    if (dropLive > 0) { dropLive--; return false }
+    const b = bucket(item)
+    if (over[b] > 0) { over[b]--; return false }
     return true
   })
 }
 
+//
+// It is also how a write-ahead entry SETTLES: an existing `sending` (or `failed` — a call that stalled
+// past SENDING_STALL_MS and then answered after all) item takes the receipt's state in place, keeping its
+// `at`, so the bubble never moves. Any other existing item is left alone (the idempotent replay case).
+// An item that is simply gone — dismissed, superseded or already correlated while the call was out — is
+// appended as before: the transport says it landed, and the bubble says so until the transcript does.
 export function appendDelivery(
   storage: Storage,
   slug: string,
@@ -179,19 +229,117 @@ export function appendDelivery(
   const row = storage.getSession(slug)
   if (!row) return
   const items = parseDeliveryLedger(row.delivery_ledger)
-  if (items.some((existing) => existing.id === item.id)) return
-  const at = new Date(item.now ?? Date.now()).toISOString()
-  items.push({ id: item.id, text: item.text, state: item.state ?? "pending", at, updatedAt: at })
+  const now = new Date(item.now ?? Date.now()).toISOString()
+  const state = item.state ?? "pending"
+  const index = items.findIndex((existing) => existing.id === item.id)
+  if (index >= 0) {
+    const existing = items[index]
+    if (existing.state !== "sending" && existing.state !== "failed") return
+    const { error: _error, retryable: _retryable, ...rest } = existing
+    items[index] = { ...rest, state, updatedAt: now }
+    storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
+    return
+  }
+  items.push({ id: item.id, text: item.text, state, at: now, updatedAt: now })
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
 }
 
-// Has this exact send already been recorded as delivered? The entry is written only once
-// `resumeThread` returns, so a hit is positive evidence the text crossed into the worker. This makes a
-// replayed deliveryId a no-op — defense-in-depth against a replay from any source (a stale tab, an
-// at-least-once transport). It is NOT what makes the client retry safe: because the append trails the
-// injection, a hit only ever exists for an ALREADY-delivered send, never for the pre-injection refusals
-// the client actually replays. Keeping every retryable throw upstream of the first write is the real
-// guarantee; a miss here proves nothing.
+/**
+ * Open the WRITE-AHEAD entry for a send, before any transport is touched — the moment from which the
+ * server, not the browser, holds the operator's words. Returns "begin" when the caller should go on and
+ * deliver, "duplicate" when this deliveryId is already accounted for and delivering again could only
+ * double-send.
+ *
+ *  • no entry → open one as `sending`; if `supersedes` names a failed (or still-`sending`) entry, drop
+ *    it in the same write (the operator's Retry: the new send replaces the failed bubble instead of
+ *    standing beside it).
+ *  • a `retryable` entry (sending or failed) → re-open it: its last attempt was refused strictly before
+ *    any write to the worker, so this replay cannot duplicate anything.
+ *  • anything else → "duplicate". An accepted state proves the text already crossed (the old
+ *    hasDelivery guard); a `sending` one is a call still in flight; a non-retryable `failed` one is an
+ *    AMBIGUOUS failure, which is never replayed under the same id — the operator's Retry mints a new one.
+ */
+export function beginDelivery(
+  storage: Storage,
+  slug: string,
+  send: { id: string; text: string; supersedes?: string; now?: number },
+): "begin" | "duplicate" {
+  const row = storage.getSession(slug)
+  if (!row) return "begin" // nothing to record against; the caller's own guards decide the rest
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const now = new Date(send.now ?? Date.now()).toISOString()
+  const index = items.findIndex((existing) => existing.id === send.id)
+  if (index >= 0) {
+    const existing = items[index]
+    if (!existing.retryable || (existing.state !== "sending" && existing.state !== "failed")) return "duplicate"
+    items[index] = { ...existing, state: "sending", updatedAt: now }
+    storage.setDeliveryLedger(slug, serializeDeliveryLedger(items))
+    return "begin"
+  }
+  // A superseded `sending` entry goes too: that is a send the browser already gave up on (its deadline
+  // passed) and the operator has now re-sent. If the old call lands after all, appendDelivery records it
+  // as delivered — the truth — and if it fails, there is no bubble left to fail, which is what the
+  // operator asked for by re-sending.
+  const kept = send.supersedes
+    ? items.filter((existing) => !(existing.id === send.supersedes && (existing.state === "failed" || existing.state === "sending")))
+    : items
+  kept.push({ id: send.id, text: send.text, state: "sending", at: now, updatedAt: now })
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(kept)))
+  return "begin"
+}
+
+/**
+ * The transport THREW on a send whose write-ahead entry is open: keep the words, and say why. A
+ * `retryable` refusal stays `sending` for the client's same-id replay (see the header); everything else
+ * is `failed` at once. An entry that is already gone is not re-created — the only things that remove a
+ * `sending` item are the operator (dismiss, supersede) and the transcript proving it landed, and both
+ * outrank a late error.
+ */
+export function recordDeliveryFailure(
+  storage: Storage,
+  slug: string,
+  id: string,
+  failure: { error: string; retryable: boolean; now?: number },
+): boolean {
+  const row = storage.getSession(slug)
+  if (!row) return false
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const index = items.findIndex((existing) => existing.id === id)
+  if (index < 0 || (items[index].state !== "sending" && items[index].state !== "failed")) return false
+  const now = new Date(failure.now ?? Date.now()).toISOString()
+  items[index] = {
+    ...items[index],
+    state: failure.retryable ? "sending" : "failed",
+    error: deliveryErrorLine(failure.error),
+    ...(failure.retryable ? { retryable: true } : {}),
+    updatedAt: now,
+  }
+  if (!failure.retryable) delete items[index].retryable
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
+  return true
+}
+
+// What the operator reads under the failed bubble: the error's FIRST line, bounded. A broker that died
+// during a cold resume reports its daemon's whole stack trace (measured: ~1.2KB, eight frames of file
+// paths), and the row holds this for as long as the failure stands. The first line carries the cause.
+export const DELIVERY_ERROR_MAX_CHARS = 300
+export function deliveryErrorLine(error: string): string {
+  const line = error.split("\n", 1)[0].trim() || "Delivery failed"
+  return line.length > DELIVERY_ERROR_MAX_CHARS ? `${line.slice(0, DELIVERY_ERROR_MAX_CHARS - 1)}…` : line
+}
+
+/** The operator dismissed a failed send (or took its text back into the prompt box). Only a `failed`
+ *  entry can be dismissed: every other state is a send still owned by its transport. */
+export function dismissFailedDelivery(storage: Storage, slug: string, id: string): boolean {
+  const row = storage.getSession(slug)
+  if (!row) return false
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const next = items.filter((item) => !(item.id === id && item.state === "failed"))
+  if (next.length === items.length) return false
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(next))
+  return true
+}
+
 // Turn an outstanding send into a cancellation TOMBSTONE — called only once the provider has positively
 // confirmed the message left its queue. Returns the item's text (what the operator gets back in their
 // prompt box) or null when there is no such outstanding item.
@@ -282,10 +430,15 @@ export function deliveryItem(storage: Storage, slug: string, id: string): Delive
   return parseDeliveryLedger(row.delivery_ledger).find((item) => item.id === id) ?? null
 }
 
+// Has this exact send already been ACCEPTED by its transport? A hit is positive evidence the text
+// crossed into the worker, which made a replayed deliveryId a no-op. The router no longer calls this —
+// beginDelivery answers the same question as part of opening the write-ahead entry — but a write-ahead
+// `sending` or `failed` entry is exactly NOT that evidence, so they are excluded here rather than left to
+// read as "delivered" to any future caller.
 export function hasDelivery(storage: Storage, slug: string, id: string): boolean {
   const row = storage.getSession(slug)
   if (!row) return false
-  return parseDeliveryLedger(row.delivery_ledger).some((item) => item.id === id)
+  return parseDeliveryLedger(row.delivery_ledger).some((item) => item.id === id && item.state !== "sending" && item.state !== "failed")
 }
 
 // The text of a `queued_command` attachment's prompt. A typed follow-up carries a bare string; one the
@@ -399,9 +552,14 @@ export function correlateDeliveryRecord(
     // its own enqueue record folds in behind the receipt: on the SDK path an idle submit still writes
     // enqueue → dequeue → user in that order, and the receipt already proved the message went straight
     // into the turn.
-    return items.map((item, index) =>
-      matched.has(index) && (item.state === "pending" || item.state === "unconfirmed") ? { ...item, state: "enqueued", updatedAt: nowIso } : item,
-    )
+    // A write-ahead item (`sending`, or a `failed` one whose transport threw AFTER the provider took the
+    // text) upgrades too: this record is the provider's own receipt, and it outranks the error.
+    return items.map((item, index) => {
+      if (!matched.has(index)) return item
+      if (item.state !== "pending" && item.state !== "unconfirmed" && item.state !== "sending" && item.state !== "failed") return item
+      const { error: _error, retryable: _retryable, ...rest } = item
+      return { ...rest, state: "enqueued" as const, updatedAt: nowIso }
+    })
   }
 
   // DEQUEUE — Claude Code taking the message back OUT of its own queue and into the turn.
@@ -634,6 +792,26 @@ export function ageDeliveries(items: DeliveryLedgerItem[], nowMs: number, observ
     // hour later. It is bounded the other way instead: MAX_LEDGER_ITEMS evicts the oldest rows as new
     // sends arrive, by which point the orphaned enqueue is far up in settled history.
     if (item.state === "cancelled") { next.push(item); continue }
+    // Nor does a FAILED send: it is the operator's to retry, edit or dismiss, and aging it out would be
+    // exactly the silent loss the write-ahead exists to prevent. It is also exempt from the user-turn
+    // rule below, because that rule's premise — the provider's queue is FIFO, so a later user turn means
+    // the queue moved past this send — says nothing about a send that never reached the queue.
+    if (item.state === "failed") { next.push(item); continue }
+    // A write-ahead item whose transport has not answered. Same exemption from the user-turn rule (a
+    // scheduler wake can land while a cold resume is still in flight); it reads as failed once it has
+    // waited longer than the browser that sent it would (see SENDING_STALL_MS). A `retryable` one is
+    // waiting only on the client's own same-id replay, so it gets the short grace instead.
+    if (item.state === "sending") {
+      const since = Date.parse(item.updatedAt)
+      const limit = item.retryable ? RETRYABLE_SEND_GRACE_MS : SENDING_STALL_MS
+      if (Number.isFinite(since) && nowMs - since > limit) {
+        next.push({ ...item, state: "failed", error: item.error ?? SENDING_STALL_ERROR, updatedAt: new Date(nowMs).toISOString() })
+        changed = true
+        continue
+      }
+      next.push(item)
+      continue
+    }
     // Delivered, on the transcript's own evidence — see `supersededByUserTurn`. Applies to `unconfirmed`
     // as well: that state's amber "no receipt from the worker" warning is a claim about a send nobody read, and a
     // later user turn falsifies it just as squarely as it does a live one.
@@ -746,7 +924,9 @@ function dropCancelled(
 //    (the client's optimistic copy consumes by id) and don't double-render — un-graying it first when
 //    the item says `delivered`;
 //  • a delivered copy already renders (correlation prune races a read by ≤1 tick) → skip entirely;
-//  • otherwise append a bubble at the tail, where a just-sent follow-up belongs.
+//  • otherwise append a bubble at the tail, where a just-sent follow-up belongs — including a `sending`
+//    one (gray, like any send not yet read) and a `failed` one (not gray; it carries `deliveryError`, and
+//    the client draws the failure line and its Retry / Edit / Dismiss actions from it).
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
   const cancelled = dropCancelled(messages, items)
@@ -768,17 +948,25 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
     for (let i = messages.length - 1; i >= 0; i--) {
       const m = messages[i]
       if (m.role !== "user" || claimed.has(i)) continue
+      // A write-ahead item has no receipt to vouch for it, so only a CONTEMPORANEOUS rendering may stand
+      // in for it. Without this bound, a failed "continue" matched the operator's own "continue" from an
+      // hour earlier, took that bubble as "already delivered", and projected nothing — hiding the one
+      // failure the operator must see.
+      if ((item.state === "sending" || item.state === "failed") && m.at) {
+        const at = Date.parse(m.at)
+        if (Number.isFinite(at) && at < Date.parse(item.at) - 5_000) continue
+      }
       // Same order as correlation: identity if the rendered copy still carries our marker, text
       // otherwise. Transcript text is stripped for display before it reaches here, so in practice this
       // is the text compare — the tag check costs nothing and covers any surface that keeps the raw.
       if (!decodeDeliveryMarkers(m.text).includes(tag) && renderMatchKey(m.text) !== text) continue
       if (m.queued) {
-        if (item.state === "delivered") {
+        if (item.state === "delivered" || item.state === "failed") {
           // The provider took this send straight into a turn, but the fold has only seen its enqueue
           // record so far (SDK order on an idle submit: enqueue → dequeue → user). Un-gray the fold's
           // bubble COPY-ON-WRITE — the object is owned by the retained fold, and the fold's own
           // delivery match must still find it queued and resolve it in place.
-          messages[i] = { ...m, queued: false, deliveryId: item.id, deliveryState: item.state }
+          messages[i] = { ...m, queued: false, deliveryId: item.id, deliveryState: item.state, ...(item.error ? { deliveryError: item.error } : {}) }
         } else {
           m.deliveryId = item.id
           m.deliveryState = item.state
@@ -798,10 +986,12 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
       parts: [],
       at: item.at,
       // A `delivered` send is already inside a turn — it renders as an ordinary user bubble. Only a
-      // send still waiting to be read wears the gray queued styling.
-      queued: item.state !== "delivered",
+      // send still waiting to be read wears the gray queued styling. A `failed` one is not waiting on
+      // anything: it is the operator's, and the client draws it with its own failure row and actions.
+      queued: item.state !== "delivered" && item.state !== "failed",
       deliveryId: item.id,
       deliveryState: item.state,
+      ...(item.state === "failed" && item.error ? { deliveryError: item.error } : {}),
     })
   }
   return messages

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict"
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, utimesSync, writeFileSync } from "node:fs"
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, readlinkSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
@@ -95,6 +95,28 @@ test("the level threshold drops quieter records everywhere, including on disk", 
     assert.equal(written.includes("a debug record"), false)
     assert.equal(written.includes("an info record"), false)
     assert.equal(written.includes("a warning record"), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+// latest.log dangles whenever retention prunes the run it named (a launch after RETAINED_DAYS idle). On
+// Node 25.0–25.3, rmSync looked through the link (nodejs/node#61040), found nothing, and `force` swallowed
+// that: the link stayed, symlinkSync failed EEXIST, and the plain-file fallback wrote THROUGH the link —
+// recreating the pruned log with this run's path in it while latest.log still named the old run.
+test("an owner repoints a DANGLING latest.log, and never writes through it", () => {
+  const dir = scratch()
+  try {
+    const logs = join(dir, "logs")
+    mkdirSync(logs, { recursive: true })
+    const pruned = join(logs, "frizz-pruned.log")
+    symlinkSync(pruned, latestLogPath(logs))
+    assert.ok(lstatSync(latestLogPath(logs)).isSymbolicLink() && !existsSync(pruned), "the fixture link dangles")
+
+    const run = join(logs, "frizz-new.log")
+    createLogger({ file: run }).info("launcher", "hello")
+    assert.equal(existsSync(pruned), false, "the pruned run must not be recreated through the stale link")
+    assert.equal(readlinkSync(latestLogPath(logs)), run, "latest.log names this run")
   } finally {
     rmSync(dir, { recursive: true, force: true })
   }

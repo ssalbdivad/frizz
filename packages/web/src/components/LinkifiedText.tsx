@@ -4,7 +4,7 @@ import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { useGithubRepoForLinks } from "../lib/useMarkdown.ts"
 import { MentionLink, useMentionSegments } from "./MentionLinks.tsx"
 import { scanInputFences } from "../lib/inputCodeFences.ts"
-import { highlightToHtml } from "../lib/syntaxHighlight.ts"
+import { FenceCodeSpan } from "./TextareaCodeFences.tsx"
 
 // Plain user text with the link-shaped runs made clickable — the render half of lib/plainLinks.ts.
 // For the surfaces that show a human's words verbatim (the user bubble, an answers-card reply) where
@@ -25,7 +25,7 @@ export function LinkifiedText({ text }: { text: string }) {
         if (run.kind === "prose") return <LinkedRun key={i} text={slice} />
         if (run.kind === "fence") return <span key={i} className="font-mono-keep text-[0.9em] opacity-55">{slice}</span>
         // `highlightToHtml` escapes everything it is given; its only markup is hljs's token spans.
-        return <span key={i} className="hljs font-mono-keep text-[0.9em]" dangerouslySetInnerHTML={{ __html: highlightToHtml(slice, run.language) }} />
+        return <FenceCodeSpan key={i} code={slice} language={run.language} className="font-mono-keep text-[0.9em]" />
       })}
     </>
   )

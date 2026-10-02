@@ -1,7 +1,7 @@
 import { createRequire } from "node:module"
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs"
+import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
-import { delimiter, dirname, join } from "node:path"
+import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -228,21 +228,22 @@ test("host runtime injection is stripped whatever case the OS spells its variabl
   }
 })
 
-test("listSkills intersects the initialize command list with the init frame's skills array", { timeout: 10_000 }, async () => {
+test("listSkills offers the skills and the built-in commands a Frizz thread can run", { timeout: 10_000 }, async () => {
   const harness = startHarness("basic")
   try {
     await withTimeout(harness.handle.ready(), "session init")
-    // The fixture's initialize response carries THREE commands ("review", "compact", "explore") and
-    // its init frame names only "review" and "explore" as skills: the built-in stand-in must not
-    // surface as a skill. Each carries the source `get_context_usage` reported for it — "review" from
-    // a root frizz maps, "explore" from an invented one that must degrade to no label rather than a
-    // wrong one. "compact" has a source too and still must not appear.
+    // The fixture's initialize response carries "review", "compact", "explore" and three built-ins
+    // that must stay out ("clear", "__remote-workflow", "extra-usage"); its init frame names only
+    // "review" and "explore" as skills. Each carries the source `get_context_usage` reported for it —
+    // "review" from a root frizz maps, "explore" from an invented one that must degrade to no label
+    // rather than a wrong one, and the built-in "compact" from claude's own "built-in".
     const skills = await withTimeout(harness.handle.listSkills(), "skill listing")
     assert.deepEqual(skills, [
       // "review" arrives as "Review changes (project)" and loses the suffix, because the column is
       // about to say the same thing. "explore" keeps "(dynamic workflow)": it is a parenthetical, not
       // a source, and nothing frizz renders would contradict it.
       { name: "review", description: "Review changes", source: "project" },
+      { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
     // The source map is memoized: a second listing must not re-ask for the context usage, which is a
@@ -265,6 +266,8 @@ test("listSkills still answers when the harness cannot report where its skills c
       // With no source to render, "(project)" is the only thing telling the operator where this came
       // from — so it stays. The suffix is only redundant next to a column that repeats it.
       { name: "review", description: "Review changes (project)", source: undefined },
+      // A built-in with no reported source is still a built-in.
+      { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
     ])
   } finally {
@@ -1585,10 +1588,11 @@ test("mapTask bounds the background_tasks_changed level set", () => {
   assert.equal(huge.tasks, undefined)
 })
 
-test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers ride --mcp-config", { timeout: 10_000 }, async () => {
+test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers ride an owner-only --mcp-config FILE", { timeout: 10_000 }, async () => {
+  const token = "Bearer napi_secret_token_for_the_argv_test"
   const harness = startHarness("strict-mcp", {}, {}, { kind: "new", sessionId: SESSION_ID }, {
     strictMcpConfig: true,
-    mcpServers: { frizz: { command: process.execPath, args: ["/abs/frizz-mcp.mjs"] }, Neon: { type: "http", url: "https://mcp.example/mcp" } },
+    mcpServers: { frizz: { command: process.execPath, args: ["/abs/frizz-mcp.mjs"] }, Neon: { type: "http", url: "https://mcp.example/mcp", headers: { Authorization: token } } },
   })
   try {
     await harness.handle.ready()
@@ -1596,10 +1600,17 @@ test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers
     const argv = (records.find((row) => row.kind === "startup") as CaptureRecord).argv as string[]
     // The flag is the whole point: with it the CLI discovers no `.mcp.json` and no user-scope server.
     assert.ok(argv.includes("--strict-mcp-config"), `argv had: ${argv.join(" ")}`)
-    // The SDK may pass the config inline or as a file it wrote; either way the servers we mounted are in it.
-    const value = argv[argv.indexOf("--mcp-config") + 1]!
-    const cfg = JSON.parse(value.trimStart().startsWith("{") ? value : readFileSync(value, "utf8"))
+    // A FILE, not inline JSON: the config carries credentials, and an argv is readable through `ps` by
+    // every local process. Exactly one --mcp-config — the SDK's own inline rendering must not ride too.
+    assert.equal(argv.filter((arg) => arg === "--mcp-config").length, 1, `argv had: ${argv.join(" ")}`)
+    assert.ok(!argv.some((arg) => arg.includes(token)), "no credential on the CLI argv")
+    const path = argv[argv.indexOf("--mcp-config") + 1]!
+    assert.ok(isAbsolute(path), `--mcp-config is a path, not JSON: ${path}`)
+    assert.equal(statSync(path).mode & 0o777, 0o600)
+    assert.equal(statSync(dirname(path)).mode & 0o777, 0o700)
+    const cfg = JSON.parse(readFileSync(path, "utf8"))
     assert.deepEqual(Object.keys(cfg.mcpServers).sort(), ["Neon", "frizz"])
+    assert.equal(cfg.mcpServers.Neon.headers.Authorization, token)
   } finally {
     await harness.close()
   }

@@ -134,7 +134,8 @@ export interface WakeDeliveryStore {
   deferFailure(id: string, owner: string, now: number, retryAt: number, error: string): boolean
   recoverExpired(id: string, now: number, retryAt: number, maxAttempts: number, error: string): WakeDelivery | undefined
   acknowledge(id: string, owner: string, now: number): boolean
-  /** SENT, NOT DELIVERED. The transport accepted the wake (a socket frame with no reply), and whether the
+  /** SENT, NOT DELIVERED. The transport accepted the wake (for a broker thread, a socket frame the daemon
+   *  acknowledged — or, from a daemon older than input-ack-v1, merely wrote), and whether the
    *  worker ever reads it is decided later — by the token showing up in its transcript, or by its
    *  process outliving `confirmUntil`. The row stays leased to the owner until then, so a dead process
    *  can send it round again instead of filing a lost wake as done. */

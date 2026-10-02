@@ -10,9 +10,6 @@ const shots = process.env.FRIZZ_FILE_STACK_SHOTS
 
 test("full-screen file links push readers and Escape restores the reader underneath", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { default: puppeteer } = await import("puppeteer")
-  const { createRpcClient } = await import("../../../../scripts/lib/rpc-client.mjs")
-  const api = createRpcClient(baseUrl!)
-  const settings = await api.query("settingsGet")
   const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] })
   try {
     const page = await browser.newPage()
@@ -31,11 +28,11 @@ test("full-screen file links push readers and Escape restores the reader underne
       await page.waitForFunction((count) => document.querySelectorAll("[data-file-viewer-slot]").length === count, {}, count)
       await page.waitForFunction(() => [...document.querySelectorAll("[data-file-viewer-slot]")].every((el) => el.getAnimations().length === 0 && getComputedStyle(el).translate === "0px"))
     }
-    for (const [width, font] of [[1440, "sans"], [1200, "mono"]] as const) {
-      await api.mutate("settingsSet", { ...settings, font })
+    // The prose font is no longer a setting (index.html pins `data-font="sans"`, 2026-09-19), so the
+    // run varies only the width.
+    for (const width of [1440, 1200]) {
       await page.setViewport({ width, height: 900 })
       await page.goto(`${baseUrl}/thread/file-panel-stack/full`, { waitUntil: "networkidle2" })
-      await page.waitForFunction((font) => document.documentElement.dataset.font === font && getComputedStyle(document.body).fontFamily.includes(font === "mono" ? "ui-monospace" : "system-ui"), {}, font)
       const firstLink = 'main[data-standalone-thread] [data-local-path$="/first.md"]'
       await page.waitForSelector(firstLink)
       await page.click(firstLink)
@@ -92,7 +89,7 @@ test("full-screen file links push readers and Escape restores the reader underne
       assert.equal(await page.$eval(`${top} [aria-label="File view"] button:last-child`, (el) => el.getAttribute("aria-pressed")), "true")
       if (shots) {
         mkdirSync(shots, { recursive: true })
-        await page.screenshot({ path: `${shots}/file-stack-${width}-${font}.png` })
+        await page.screenshot({ path: `${shots}/file-stack-${width}.png` })
       }
       await page.keyboard.press("Escape")
       await waitCount(1)
@@ -108,7 +105,7 @@ test("full-screen file links push readers and Escape restores the reader underne
       await page.waitForFunction(() => document.querySelectorAll(".frizz-sheet-panel").length === 2)
       await page.keyboard.press("Escape")
       await page.waitForFunction(() => document.querySelectorAll(".frizz-sheet-panel").length === 1)
-      if (shots) await page.screenshot({ path: `${shots}/file-stack-narrow-${font}.png` })
+      if (shots) await page.screenshot({ path: `${shots}/file-stack-narrow-${width}.png` })
       await page.keyboard.press("Escape")
       await page.waitForFunction(() => !document.querySelector(".frizz-sheet-panel"))
       assert.equal(await page.$$eval(slot, (els) => els.length), 1, "drawers unwind before split readers")
@@ -133,6 +130,5 @@ test("full-screen file links push readers and Escape restores the reader underne
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()
-    await api.mutate("settingsSet", settings)
   }
 })

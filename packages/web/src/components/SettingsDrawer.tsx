@@ -24,6 +24,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
+import { SlashCommandsField } from "./SlashCommandsField.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -140,6 +141,9 @@ export function SettingsDrawer() {
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
+
+            {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
+            <SlashCommandsField />
 
             <SettingsField label="Home folder" help={SETTINGS_HELP.homeFolder}>
               <HomeFolderField

@@ -369,8 +369,12 @@ how you break it. Take the first exit that fits:
    Do not park it in the handoff as "one thing to carry forward".
 
 A bare rest is the residual, not a plan — legitimate only when nothing above fits, and frizz will ask
-you twice for a fence before it gives up. A mid-conversation turn carries NO fence. Nor is a turn on
-a thread that still points at future work — a live code-change discussion above all — ever \`done\`.`
+you twice for a fence before it gives up. Behind a running sub-agent it does not ask at all (the child
+parks you) unless a Goal is armed, which only a fence holds; behind a running background shell it asks
+briefly, naming the shell and handing you its \`awaiting\` fence ready to copy — a live shell never
+parks you on its own, because a forgotten dev server would hide your thread for good. A
+mid-conversation turn carries NO fence. Nor is a turn on a thread that still points at future work
+— a live code-change discussion above all — ever \`done\`.`
 
 const AGENT_COMPLETION = `## Agent completion invariant
 
@@ -1045,8 +1049,8 @@ done rather than idling inside it, and read the newest human message first when 
 
 // Backend-neutral: frizz injects the ONE unified `frizz` MCP server into BOTH claude and codex workers,
 // so the tool and its usage are identical. Kept as one shared section (not a per-kind record) — there
-// is nothing backend-specific to say about it. The two backends MOUNT it differently — claude via an
-// inline `--mcp-config` on the worker argv (dispatch.ts), codex via process-level `-c` overrides on
+// is nothing backend-specific to say about it. The two backends MOUNT it differently — claude via a
+// `--mcp-config` file named on the worker argv (dispatch.ts), codex via process-level `-c` overrides on
 // the app-server (backend/codex-mcp.ts) — and for a long time this comment described a codex half
 // that did not exist, so codex workers were told about a tool they did not have. If you change either
 // mounting, re-run `_live_codex_mcp_inject.mts` rather than trusting this paragraph.

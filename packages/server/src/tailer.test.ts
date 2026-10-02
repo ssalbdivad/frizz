@@ -229,6 +229,58 @@ test("applyRecord: caps preview at 200 chars with an ellipsis", () => {
   assert.ok(s.lastAssistant?.endsWith("…"))
 })
 
+// The phone board's rested row draws the handoff's FIRST LINE, which the flat preview cannot give back.
+test("applyRecord: lastAssistantLine is the first non-empty line, markdown intact; the preview stays flat", () => {
+  const s = newTailState("t", "sid", "/x")
+  const text = "\n\n**Fixed** — the rail no longer  drops a row - see `ws.ts`.\n\n- Added a test.\n```done\nok\n```"
+  applyRecord(s, { type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text }] } })
+  assert.equal(s.lastAssistantLine, "**Fixed** — the rail no longer drops a row - see `ws.ts`.")
+  assert.equal(s.lastAssistant, "**Fixed** — the rail no longer drops a row - see `ws.ts`. - Added a test. ```done ok ```", "every existing reader keeps the flat preview")
+  // An empty text leaves BOTH on the prior message, so the two never describe different messages.
+  applyRecord(s, { type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "   " }] } })
+  assert.equal(s.lastAssistantLine, "**Fixed** — the rail no longer drops a row - see `ws.ts`.")
+  applyRecord(s, { type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "y".repeat(500) }] } })
+  assert.equal(s.lastAssistantLine?.length, 241, "capped, with an ellipsis")
+})
+
+test("applyEvent: a codex final answer and a provider error set lastAssistantLine too", () => {
+  const s = newTailState("t", "sid", "/x")
+  applyEvent(s, { kind: "turn-end", at: "2026-07-01T00:00:01.000Z", finalText: "Landed it.\n\nDetails below." } as NormalizedEvent)
+  assert.equal(s.lastAssistantLine, "Landed it.")
+  applyEvent(s, { kind: "provider-error", at: "2026-07-01T00:00:02.000Z", error: { message: "Context window exceeded\nretry later", retrying: false } } as NormalizedEvent)
+  assert.equal(s.lastAssistantLine, "Context window exceeded")
+})
+
+// The phone board's running row names the call the agent is waiting on (web toolActivityLabel).
+test("applyRecord: liveTools holds each call until its result, and a prompt or end of turn clears it", () => {
+  const s = newTailState("t", "sid", "/x")
+  const call = (id: string, name: string, input: object) =>
+    applyRecord(s, { type: "assistant", message: { stop_reason: "tool_use", content: [{ type: "tool_use", id, name, input }] } })
+  const result = (id: string) => applyRecord(s, { type: "user", message: { content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } })
+  const newest = () => [...(s.liveTools?.values() ?? [])].at(-1)
+  call("b1", "Bash", { command: "nub --test src/a.test.ts\necho done", description: "Running the focused tests" })
+  assert.deepEqual(newest(), { name: "Bash", desc: "Running the focused tests", detail: "nub --test src/a.test.ts" })
+  call("r1", "Read", { file_path: "/repo/.github/workflows/ci.yml" })
+  assert.deepEqual(newest(), { name: "Read", detail: "/repo/.github/workflows/ci.yml" }, "the newest call wins")
+  call("g1", "Grep", { pattern: "liveTool", path: "packages" })
+  assert.deepEqual(newest(), { name: "Grep", detail: "liveTool · packages" })
+  result("g1")
+  result("r1")
+  assert.equal(newest()?.name, "Bash", "an answered call leaves; the one still running is the line again")
+  result("b1")
+  assert.equal(newest(), undefined, "between calls there is no live tool")
+  // Credentials in the input never reach the board.
+  call("b2", "Bash", { command: "curl -H 'Authorization: Bearer sk-abcdefghijklmnopqrstuv' https://x", description: "Probe the API" })
+  assert.ok(!JSON.stringify(newest()).includes("sk-abcdefghijklmnopqrstuv"), JSON.stringify(newest()))
+  // A real prompt cuts off whatever never got a result…
+  applyRecord(s, { type: "user", message: { content: "stop, do this instead" } })
+  assert.equal(s.liveTools?.size, 0)
+  // …and so does a message that ends the turn.
+  call("b3", "Bash", { command: "ls" })
+  applyRecord(s, { type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "done" }] } })
+  assert.equal(s.liveTools?.size, 0)
+})
+
 test("computeTurn: end_turn=idle, tool_use=in-flight, user=in-flight", () => {
   const now = Date.parse("2026-07-01T00:00:10.000Z")
 
@@ -2560,6 +2612,24 @@ test("tailer rejects a stale row snapshot without name-dead checks", () => {
   assert.equal(t.get(stale.slug), undefined, "cached telemetry for stale A is never exposed under replacement B")
 })
 
+test("tailer: the telemetry carries the live tool while a call runs, and the handoff's first line at rest", () => {
+  const h = harness()
+  h.storage.upsertSession(row({ backend: "claude" }))
+  const bash = JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:01.000Z", message: { stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_1", name: "Bash", input: { command: "nub --test", description: "Running the focused tests" } }] } })
+  fixture(h.logDir, "sid", [IN_FLIGHT, bash])
+  const t = makeTailer(h)
+  t.tick()
+  assert.deepEqual(t.get("t")?.liveTool, { name: "Bash", desc: "Running the focused tests", detail: "nub --test" })
+  appendFileSync(join(h.logDir, "sid.jsonl"), [
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:02.000Z", message: { content: [{ type: "tool_result", tool_use_id: "toolu_1", content: "ok" }] } }),
+    JSON.stringify({ type: "assistant", timestamp: "2026-07-01T00:00:03.000Z", message: { stop_reason: "end_turn", content: [{ type: "text", text: "**Fixed** — green.\n\n- one\n- two" }] } }),
+  ].join("\n") + "\n")
+  t.tick()
+  assert.equal(t.get("t")?.liveTool, undefined)
+  assert.equal(t.get("t")?.lastAssistantLine, "**Fixed** — green.")
+  assert.equal(t.get("t")?.lastAssistant, "**Fixed** — green. - one - two")
+})
+
 test("tailer: Claude permission mode initializes from the transcript", () => {
   const h = harness()
   h.storage.upsertSession(row({ backend: "claude", permission_mode: null }))
@@ -4623,8 +4693,16 @@ test("tailer: the real shell probe is async — the verdict lands on the NEXT ti
     t.tick()
     // The read is what queues the probe — `shellIsGone` is reached through assembly, not through tick.
     const first = t.get("t")?.bgShells[0]?.state
-    // Let the batched probe run and land in the cache, then read it again.
-    await new Promise((r) => setTimeout(r, 2000))
+    // Wait for the batched probe to land, then read it again. It announces itself: a batch that came
+    // back with any verdict calls onChange, and nothing else in this harness changes after the tick.
+    // This used to be a fixed 2s sleep, which lost the race under the full suite's load — lsof walks
+    // every process (0.53s idle on the maintainer's WSL box, 2026-10-02) and it failed there with the
+    // verdict still in flight. The deadline sits past the probe's own 8s exec timeout, so a probe that
+    // never answers still fails here rather than hanging.
+    const changes = h.changes.n
+    const deadline = Date.now() + 10_000
+    while (h.changes.n === changes && Date.now() < deadline) await new Promise((r) => setTimeout(r, 25))
+    assert.notEqual(h.changes.n, changes, "the batched probe never reported a verdict")
     return { first, second: t.get("t")?.bgShells[0]?.state }
   }
 

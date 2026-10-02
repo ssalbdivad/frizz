@@ -43,7 +43,8 @@ import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
-import { QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
+import { LimitPauseNotice, QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
+import { isLimitPaused } from "../lib/limitPause.ts"
 import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { registeredDoneBody, showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
@@ -478,6 +479,10 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               )}
               {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
                   all, and its notice is about the process, not the message (showsRestedCard). */}
+              {/* A USAGE-LIMIT PAUSE draws the drawer's own pause card (ChatView LimitPauseNotice), so every
+                  paused thread looks the same wherever it is read. Until 2026-10-02 the card drew none: it
+                  showed whatever line the agent wrote last, and the pause was only a mark on the rail. */}
+              {isLimitPaused(thread) && thread.limitPause && <QueueLimitPause project={project} thread={thread} pause={thread.limitPause} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
               {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
               {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
               {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen under its
@@ -631,6 +636,25 @@ function RetryButton({ project, thread, onSent, onLanded, onFailed }: { project:
       </button>
     </Tooltip>
   )
+}
+
+/** The pause card's "Continue now", sent into the CARD's project — the drawer's own would address the page's. */
+function QueueLimitPause({ project, thread, pause, onSent, onLanded, onFailed }: { project: QueuesProject; thread: ThreadView; pause: NonNullable<ThreadView["limitPause"]>; onSent: () => void; onLanded: () => void; onFailed: () => void }) {
+  const queryClient = useQueryClient()
+  const resume = useMutation({
+    mutationFn: () => deliverFollowUp(project, thread, STALLED_RETRY_MESSAGE),
+    onMutate: onSent,
+    onSuccess: () => {
+      onLanded()
+      showToast("Continuing…")
+      void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    },
+    onError: (error) => {
+      onFailed()
+      showToast(`Continue failed: ${(error instanceof Error ? error.message : "unknown error").slice(0, 80)}`)
+    },
+  })
+  return <LimitPauseNotice pause={pause} onContinue={() => resume.mutate()} continuing={resume.isPending || !thread.sessionId} />
 }
 
 /**

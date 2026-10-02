@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto"
-import { existsSync } from "node:fs"
+import { existsSync, realpathSync } from "node:fs"
 import { homedir, tmpdir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 
@@ -72,7 +72,11 @@ export interface FrizzPathOptions {
   env?: NodeJS.ProcessEnv
   platform?: NodeJS.Platform
   home?: string
-  /** Injected so the whole resolution matrix is testable without touching a filesystem. */
+  /**
+   * Injected so the whole resolution matrix is testable without touching a filesystem. Passing one —
+   * even `existsSync` itself — also BYPASSES the per-process memo below, which is how a test that
+   * reshapes a real temp home between two calls asks for a fresh answer each time.
+   */
   exists?: (path: string) => boolean
 }
 
@@ -212,62 +216,236 @@ function xdgRoots(env: NodeJS.ProcessEnv, home: string): Omit<FrizzPaths, "legac
 }
 
 /**
- * Resolve Frizz's global roots.
+ * Every DECISION this process has made — legacy `~/.frizz` or not — by the inputs it was made from.
+ * Unbounded on purpose: a server sees one or two keys for its whole life (its own home, and the real
+ * home a sandbox resolves runtimes under), and a test file one per temp home — a few hundred short
+ * strings at worst.
+ *
+ * The decision is the only thing that reads the disk, so it is the only thing memoised: given it, the
+ * three roots follow from home, platform and environment alone (`layout`, below). That is what lets the
+ * key use the CANONICAL home while the answer keeps the caller's own spelling. Production asks under
+ * both — `registryPath(homedir())` and `globalLaunchLockPath`'s `canonicalHome(home)` — and a key on the
+ * raw string gave a symlinked or trailing-slash home two independent decisions, the second made fresh
+ * whenever it was first asked, so after a stray write (review of 2026-10-02, reproduced in a scratch
+ * home: `<link>/.local/share/frizz` for one spelling, `<real>/.frizz` for the other).
+ */
+const decisions = new Map<string, boolean>()
+/** Raw home spelling -> its realpath, so the key costs one realpath per spelling rather than per call. */
+const canonicalHomes = new Map<string, string>()
+
+function canonicalHome(home: string): string {
+  let canonical = canonicalHomes.get(home)
+  if (canonical === undefined) {
+    try {
+      canonical = realpathSync(home)
+    } catch {
+      canonical = resolve(home)
+    }
+    canonicalHomes.set(home, canonical)
+  }
+  return canonical
+}
+
+/**
+ * The key is EXACTLY the decision's inputs: which home, on which platform, and where that platform puts
+ * the data root (an explicit XDG_DATA_HOME anywhere; %LOCALAPPDATA% on win32). XDG_STATE_HOME and
+ * XDG_CACHE_HOME are deliberately absent — they move only their own roots, which `layout` reads from
+ * the caller's env on every call, and never the decision. Keying on them would only give the same home
+ * a second, independently-timed decision whenever a caller passed a different cache root, which is the
+ * mid-run flip again by another door. Values go in normalised the way resolution reads them (`xdg`
+ * drops a relative value), so two spellings of "unset" share one decision.
+ */
+function memoKey(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string): string {
+  return JSON.stringify([
+    platform,
+    canonicalHome(home),
+    xdg(env, "XDG_DATA_HOME") ?? null,
+    platform === "win32" ? env.LOCALAPPDATA ?? null : null,
+  ])
+}
+
+/**
+ * THE PIN: a decision a supervising process hands every child it forks, so the roots survive a
+ * restart of the SERVER and change only with a restart of the whole process tree.
+ *
+ * Memoising inside one process was not enough on its own (review of 2026-10-02, reproduced against a
+ * real `nub src/dev.ts`): the dev supervisor — which is what the maintainer's live board is, and what
+ * the production launcher runs too (src/production.ts `startDevSupervisor`) — forks a FRESH server
+ * child on every source edit, every crash and every Update & Restart. That child resolved again at its
+ * own boot, so once a stray `~/.frizz/registry.json` existed, the next landed commit restarted the
+ * board onto it: 404 on 10/10 board reads after a child restart, against 200 on 10/10 without the stray
+ * file. With agents landing on `main` continuously, "next restart" is minutes.
+ *
+ * So the supervisor puts its own decision into the environment it hands the child and the re-exec of
+ * itself (dev-supervisor.ts), and a process honors it in place of reading the disk — but ONLY for the
+ * exact key it was made for. A harness that isolates itself by changing HOME or an XDG root is a
+ * different key and resolves on its own; a mismatched or malformed pin is ignored, never trusted, so
+ * the failure mode of a wrong pin is the old behavior rather than a wrong root.
+ */
+export const ROOTS_PIN_ENV = "FRIZZ_ROOTS_PIN"
+
+interface RootsPin {
+  key: string
+  legacy: boolean
+}
+
+function pinnedDecision(env: NodeJS.ProcessEnv, key: string): boolean | undefined {
+  const raw = env[ROOTS_PIN_ENV]
+  if (!raw) return undefined
+  try {
+    const pin = JSON.parse(raw) as Partial<RootsPin>
+    return pin.key === key && typeof pin.legacy === "boolean" ? pin.legacy : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** The home `homedir()` would report in a process started with `env`. */
+function homeIn(env: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+  return (platform === "win32" ? env.USERPROFILE : env.HOME) || homedir()
+}
+
+/**
+ * `env` plus this process's decision for the home and roots a child started with `env` will resolve.
+ * The decision is this process's own memoised one (made, or itself inherited, at its boot), so every
+ * generation of child sees the same roots however the disk has changed since.
+ */
+export function withRootsPin(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const platform = process.platform
+  const home = homeIn(env, platform)
+  const { legacy } = frizzPaths({ env, platform, home })
+  const pin: RootsPin = { key: memoKey(env, platform, home), legacy }
+  return { ...env, [ROOTS_PIN_ENV]: JSON.stringify(pin) }
+}
+
+/**
+ * Resolve Frizz's global roots — ONCE per process for any given home and environment.
  *
  * An explicitly SET XDG variable wins on every platform, including macOS and Windows — a developer
  * who has configured XDG has asked for it and should get it. Everything else follows the platform.
+ *
+ * WHY THE ANSWER IS MEMOISED, and why that is a correctness rule rather than a speed-up. Resolution
+ * reads the FILESYSTEM (does `~/.frizz` exist, does it hold a registry, does the platform root), and
+ * production asks for these paths on every registry lookup — `registryPath(home = homedir())` lands
+ * here per call, and the server's tenant router reads the registry on every `/_frizz/<project>/…`
+ * request. Re-resolving each time meant a running server's data root was whatever the disk said at
+ * that instant. On 2026-10-02 a test harness wrote a `registry.json` into a debris `~/.frizz`; the
+ * live server's very next lookup took that file for a legacy install, moved its data root onto it,
+ * found none of its own projects there, and answered 404 to every worker's `/_frizz/<project>/rpc/…`
+ * call. ad124bae stopped the harness choosing that directory; this stops ANY later write from moving a
+ * process that has already chosen, and the pin above carries the choice across a server restart. A
+ * Frizz moves between roots only when its whole process tree restarts, which is also the only point at
+ * which every daemon, descriptor and env var it handed out is re-derived together.
+ *
+ * The memo is KEYED on every input the decision depends on (memoKey) — never a single process-wide
+ * slot, because a process legitimately resolves more than one home: `prepareSandbox` (src/launcher.ts) swaps $HOME before first use and still resolves
+ * the operator's real cache under the real home; tests resolve a fresh temp home per case. Each of
+ * those is its own key and gets its own answer, frozen from the first time that key was asked.
+ *
+ * Caching "no install yet" cannot strand a fresh machine's first launch. With no `~/.frizz`, the
+ * answer is the platform roots whether or not they exist yet (their existence is only ever consulted
+ * to OVERRULE a `~/.frizz`, in supersededByInstall), so the memo holds exactly the directories the
+ * launch is about to create. The only thing a later disk change could do is make `~/.frizz` appear —
+ * the debris case this exists to ignore — and the next process, seeing the registry this one wrote
+ * under the platform root, resolves the same platform root (supersededByInstall again). That reasoning
+ * holds for a process that WRITES the install. A process that only LOOKS for a server — the VS Code
+ * extension host, the desktop app's main process — has no install of its own to stay consistent with,
+ * and a frozen answer strands it when the server it is looking for chose differently (a reader that
+ * resolved on a fresh machine before debris and the first server appeared found nothing, where the
+ * unmemoised code found the server). Those use `frizzPathsNow`.
+ *
+ * An injected `exists` bypasses the memo: it is a test asking about a hypothetical filesystem, and
+ * an answer about one imaginary disk must never be served for a real one, or vice versa.
  */
 export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
   const env = options.env ?? process.env
   const platform = options.platform ?? process.platform
   const home = options.home ?? homedir()
-  const exists = options.exists ?? existsSync
+  if (options.exists) return resolveFrizzPaths(env, platform, home, options.exists)
+  const key = memoKey(env, platform, home)
+  let legacy = decisions.get(key)
+  if (legacy === undefined) {
+    legacy = pinnedDecision(env, key) ?? resolveFrizzPaths(env, platform, home, existsSync).legacy
+    decisions.set(key, legacy)
+  }
+  return Object.freeze(layout(env, platform, home, legacy))
+}
 
-  const explicit = {
-    data: xdg(env, "XDG_DATA_HOME"),
-    state: xdg(env, "XDG_STATE_HOME"),
-    cache: xdg(env, "XDG_CACHE_HOME"),
+/**
+ * What a process starting NOW would resolve: the disk as it is at this instant, no memo, no pin.
+ *
+ * For processes that only DISCOVER a server and own no Frizz data — the VS Code extension host, the
+ * desktop app's main process. They live for days, and the server they look for can restart onto other
+ * roots (a deliberate move, or a first launch on a fresh machine that picked `~/.frizz`), so each
+ * lookup follows the rule a freshly started server follows. Never use it for anything that WRITES
+ * Frizz state: that is exactly the mid-run flip `frizzPaths` exists to prevent.
+ */
+export function frizzPathsNow(options: Omit<FrizzPathOptions, "exists"> = {}): FrizzPaths {
+  return frizzPaths({ ...options, exists: existsSync })
+}
+
+/** The roots a decision implies — pure, no filesystem. */
+function layout(env: NodeJS.ProcessEnv, platform: NodeJS.Platform, home: string, legacy: boolean): FrizzPaths {
+  if (legacy) {
+    const root = legacyFrizzRoot(home)
+    return { data: root, state: root, cache: root, legacy: true }
   }
   const platformRoots = platform === "win32"
     ? windowsRoots(env, home)
     : platform === "darwin"
       ? darwinRoots(home)
       : xdgRoots(env, home)
-
-  const resolved = {
+  const explicit = {
+    data: xdg(env, "XDG_DATA_HOME"),
+    state: xdg(env, "XDG_STATE_HOME"),
+    cache: xdg(env, "XDG_CACHE_HOME"),
+  }
+  return {
     data: explicit.data ? join(explicit.data, "frizz") : platformRoots.data,
     state: explicit.state ? join(explicit.state, "frizz") : platformRoots.state,
     cache: explicit.cache ? join(explicit.cache, "frizz") : platformRoots.cache,
     legacy: false,
   }
+}
 
+function resolveFrizzPaths(
+  env: NodeJS.ProcessEnv,
+  platform: NodeJS.Platform,
+  home: string,
+  exists: (path: string) => boolean,
+): FrizzPaths {
+  const resolved = layout(env, platform, home, false)
   const legacyRoot = legacyFrizzRoot(home)
   if (
     exists(legacyRoot) &&
     !isStrayBoard(legacyRoot, exists) &&
     !supersededByInstall(legacyRoot, resolved.data, exists) &&
-    !yieldsToExplicitData(legacyRoot, explicit.data, exists)
+    !yieldsToExplicitData(legacyRoot, xdg(env, "XDG_DATA_HOME"), exists)
   ) {
-    return { data: legacyRoot, state: legacyRoot, cache: legacyRoot, legacy: true }
+    return layout(env, platform, home, true)
   }
   return resolved
 }
 
 /**
- * The roots, resolved once per process.
+ * The roots for this process's own home and environment.
  *
- * Deliberately cached: resolution stats the legacy directory, and a launch asks for these paths from
- * dozens of call sites. More importantly it must not CHANGE mid-process — a run that resolved
- * `~/.frizz` at boot and something else later would split one project's state across two trees.
+ * Once a single process-wide slot that kept the FIRST answer whatever $HOME said later, while
+ * `frizzPaths({ home })` beside it re-resolved on every call — so a process could hold two different
+ * opinions of its data root at once. Both now go through the one keyed memo above: stable for a given
+ * home, and a home swapped in before first use (`prepareSandbox`) is simply a different key.
  */
-let cached: FrizzPaths | undefined
 export function frizzRoots(): FrizzPaths {
-  return (cached ??= frizzPaths())
+  return frizzPaths()
 }
 
-/** Test-only: drop the memo so a case can resolve under a different HOME or platform. */
+/**
+ * Test-only: forget every memoised answer, so a case that RESHAPES a home it already resolved (creates
+ * `~/.frizz`, writes a registry) can watch a fresh resolution — what a restarted process would see.
+ */
 export function resetFrizzRoots(): void {
-  cached = undefined
+  decisions.clear()
+  canonicalHomes.clear()
 }
 
 /**

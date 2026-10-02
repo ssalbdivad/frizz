@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react"
 import { useQueryClient, type QueryClient } from "@tanstack/react-query"
-import { isRetryableRpcError, rpc, rpcAtBase } from "../api/rpc.ts"
+import { isKeptDeliveryError, isRetryableRpcError, rpc, rpcAtBase } from "../api/rpc.ts"
 import { appendQueuedMessage, removeQueuedMessage } from "../hooks.ts"
 import { showToast, store, threadBySlug } from "../store.ts"
 import { apiBase } from "./base-path.ts"
@@ -19,12 +19,19 @@ function newDeliveryId(): string {
 // The message surfaces all obey the same ordering: make the local UI truthful before beginning
 // network work.  In particular, `onOptimistic` clears the controlled draft before the mutation
 // starts, so an Enter cannot feel gated on an RPC round-trip.  Failure reverses that local work and
-// lets the caller restore its exact draft (without overwriting any newer text).
+// lets the caller restore its exact draft — merged with, never dropped for, any newer text.
+//
+// `onRollback` says which send failed and whether the SERVER kept it (`kept` — it is now a failed
+// bubble in the thread, see lib/failedDelivery.ts). A caller may ignore both; the composer uses them to
+// make its next send of the restored words replace that bubble rather than stand beside it.
+export type SendFailure = { deliveryId: string; text: string; kept: boolean }
 export type EagerFollowUpCallbacks = {
   onOptimistic?: () => void
   onSuccess?: () => void
-  onRollback?: () => void
+  onRollback?: (failure: SendFailure) => void
   scrollToBottom?: boolean
+  // The deliveryId of a failed send this one re-sends (FollowUpInput.supersedes).
+  supersedes?: string
 }
 
 export function beginEagerSubmission({
@@ -176,6 +183,7 @@ export function sendFollowUpAttempt(
   interrupt?: boolean,
   timeoutMs: number = DELIVERY_SEND_TIMEOUT_MS,
   target: SendTarget = sendTarget(slug),
+  supersedes?: string,
 ): Promise<void> {
   const controller = new AbortController()
   const timer = setTimeout(() => controller.abort(new Error("Frizz did not answer this send")), timeoutMs)
@@ -183,14 +191,14 @@ export function sendFollowUpAttempt(
   // its CURRENT session, and the guarded followUp is what turns a stale id into a clean refusal instead
   // of a misdelivery. The PROJECT is the one the send was committed in (see SendTarget).
   return (rpcAtBase(target.base).followUp(
-    { slug, sessionId: sessionIdFor(target, slug), message, deliveryId, freshProcess, interrupt },
+    { slug, sessionId: sessionIdFor(target, slug), message, deliveryId, freshProcess, interrupt, ...(supersedes ? { supersedes } : {}) },
     { signal: controller.signal },
   ) as Promise<void>).finally(() => clearTimeout(timer))
 }
 
-function deliverFollowUp(target: SendTarget, slug: string, message: string, deliveryId: string, freshProcess?: boolean, interrupt?: boolean): Promise<void> {
+function deliverFollowUp(target: SendTarget, slug: string, message: string, deliveryId: string, freshProcess?: boolean, interrupt?: boolean, supersedes?: string): Promise<void> {
   return withDeliveryRetry(
-    () => sendFollowUpAttempt(slug, message, deliveryId, freshProcess, interrupt, DELIVERY_SEND_TIMEOUT_MS, target),
+    () => sendFollowUpAttempt(slug, message, deliveryId, freshProcess, interrupt, DELIVERY_SEND_TIMEOUT_MS, target, supersedes),
     // The steering hint is the page's, keyed by slug: only while the page is still the send's project.
     () => { if (apiBase() === target.base) markSteered(slug) },
   )
@@ -235,16 +243,19 @@ export function sendEagerFollowUp(
     // Resolve the session id at SEND time from the live board (not render time), so a re-dispatch
     // between mount and send still binds the guarded followUp to the current session. Contention
     // refusals are retried in place — the composer only gets the message back once they are exhausted.
-    request: () => enqueueThreadSend(slug, () => deliverFollowUp(target, slug, message, deliveryId, callbacks.freshProcess, callbacks.interrupt), target.base),
+    request: () => enqueueThreadSend(slug, () => deliverFollowUp(target, slug, message, deliveryId, callbacks.freshProcess, callbacks.interrupt, callbacks.supersedes), target.base),
     success: () => { pendingSends.remove(deliveryId); callbacks.onSuccess?.() },
     failure: (error) => {
       // A reload aborting the request is not a failure: the entry stays for the next page to replay.
       if (pageUnloading()) return
       // The draft rollback below (drafts persist) is what carries a failed send across a reload.
       pendingSends.remove(deliveryId)
+      // The optimistic copy goes either way. When the server KEPT the send, its own failed bubble (same
+      // deliveryId) is what the thread shows from here; when it did not, nothing should claim the
+      // message is on its way.
       removeQueuedMessage(queryClient, slug, message, deliveryId)
       clearSteered(slug)
-      callbacks.onRollback?.()
+      callbacks.onRollback?.({ deliveryId, text: message, kept: isKeptDeliveryError(error) })
       // A transport rejection is not enough evidence to expose terminal-recovery machinery.
       // Restore the draft and leave the provider untouched.
       showToast(callbacks.failureToast?.(error.message) ?? `Steer failed — ${error.message.slice(0, 160)}`)
@@ -271,7 +282,7 @@ export function useEagerFollowUp(slug: string): {
       // never touches it and every started send is balanced by exactly one settle.
       onOptimistic: () => { setPending((n) => n + 1); callbacks.onOptimistic?.() },
       onSuccess: () => { setPending((n) => Math.max(0, n - 1)); callbacks.onSuccess?.() },
-      onRollback: () => { setPending((n) => Math.max(0, n - 1)); callbacks.onRollback?.() },
+      onRollback: (failure) => { setPending((n) => Math.max(0, n - 1)); callbacks.onRollback?.(failure) },
     }), [queryClient, slug])
 
   return { submit, pending: pending > 0 }

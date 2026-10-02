@@ -26,8 +26,8 @@
 // declares it in the project's `.mcp.json`: that is the scope that means "this repo's sessions".
 //
 // `${VAR}` and `${VAR:-default}` in command/args/env/url/headers are expanded HERE against the worker's
-// environment: under strict mode the CLI receives these servers inline, and frizz should not depend on
-// whether it expands an inline config the way it expands a discovered file. A reference with no value
+// environment: under strict mode the CLI receives these servers in a config file frizz writes, and frizz should
+// not depend on whether it expands that config the way it expands a discovered file. A reference with no value
 // and no default drops that server, which is what the CLI does with a discovered one.
 //
 // Every read fails OPEN to "no servers": a missing or malformed file is an empty one and never blocks a
