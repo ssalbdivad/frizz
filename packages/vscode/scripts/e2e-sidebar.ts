@@ -21,7 +21,8 @@
 //
 // THE CHECKS (each one PASS/FAIL with its evidence in results.json, and a screenshot where it is visible):
 //   c1 the Frizz icon in the activity bar, side and top, dark and light: its mask file loads, and its ink
-//      is a line drawing the weight of the codicons beside it — not a blank, not a solid square
+//      is a line drawing the weight of the codicons beside it (within the bar's own spread of their mean)
+//      — not a blank, not a solid square
 //   c2 the view frames the real page, which says frizz:ready and draws no header and no lone ⌨ row; VS
 //      Code's title row reads Frizz, its buttons follow the page's view, the badge's tooltip carries the
 //      counts, and each button, clicked, does its thing in the page
@@ -726,7 +727,8 @@ try {
             const rects = items.map((label) => {
               const r = label.getBoundingClientRect()
               const cs = getComputedStyle(label)
-              return { label: label.getAttribute("aria-label") ?? "", x: r.x, y: r.y, w: r.width, h: r.height, mask: cs.webkitMaskImage || cs.maskImage || "" }
+              // The active item wears VS Code's indicator bar beside its glyph, which is not glyph ink.
+              return { label: label.getAttribute("aria-label") ?? "", x: r.x, y: r.y, w: r.width, h: r.height, mask: cs.webkitMaskImage || cs.maskImage || "", active: label.closest(".action-item")?.classList.contains("checked") ?? false }
             })
             return {
               top: !!bar?.closest(".part.sidebar, .part.auxiliarybar") || !bar?.closest(".part.activitybar"),
@@ -773,12 +775,23 @@ try {
         await sleep(100)
         const mine = await big(frizz, "frizz")
         const theirs = await big(explorer, "search")
+        // Every codicon at rest in the bar (Search, Source Control, Run and Debug, Extensions; Explorer is
+        // the active one), unsaved.
+        const neighbours: Record<string, number> = {}
+        for (const item of strip.items.filter((candidate) => !candidate.label.startsWith("Frizz") && !candidate.active)) {
+          neighbours[item.label] = inkOf(decodePng(await capture("", { x: item.x, y: item.y, width: item.w, height: item.h }, 8)), 8).mass
+        }
         await unbadge.evaluate((el) => el.remove())
         rmSync(theirs.file)
         shots.splice(shots.indexOf(theirs.file), 1)
-        const ink = { frizz: mine.ink, search: theirs.ink, box: [frizz.w, frizz.h] }
+        const masses = Object.values(neighbours)
+        const mean = masses.reduce((sum, mass) => sum + mass, 0) / Math.max(1, masses.length)
+        const ink = { frizz: mine.ink, search: theirs.ink, box: [frizz.w, frizz.h], neighbours, ofMean: Math.round((mine.ink.mass / mean) * 100) / 100, ofSearch: Math.round((mine.ink.mass / theirs.ink.mass) * 100) / 100 }
         expect("c1", `${layout.name}: the icon draws a line mark — not blank, not a filled square`, mine.ink.peak >= 0.6 * theirs.ink.peak && mine.ink.fill < 0.5 && mine.ink.box[0] >= 10 && mine.ink.box[1] >= 10, ink)
-        expect("c1", `${layout.name}: its ink is the weight of the codicons beside it (mass within 0.5–2x Search's)`, mine.ink.mass >= 0.5 * theirs.ink.mass && mine.ink.mass <= 2 * theirs.ink.mass, ink)
+        // The bound is the bar's own spread: against the mean of the four at rest, Explorer's glyph is
+        // ~1.38x and Search's ~0.7x (headless Chrome over codicon.ttf, 2026-10-02). The mark at a codicon's
+        // pen read ~1.9x that mean; at 0.7 of it, ~1.34x (media/frizz.svg).
+        expect("c1", `${layout.name}: its ink is the weight of the codicons beside it (mass within 0.5–1.5x the mean of those at rest)`, masses.length > 0 && mine.ink.mass >= 0.5 * mean && mine.ink.mass <= 1.5 * mean, ink)
         if (layout.name === "top-dark" && before && existsSync(before)) {
           // BEFORE over AFTER, the same framing, for the eye.
           const compare = join(out, `${version}-c1-icon-top-dark-BEFORE-vs-now-at6.png`)
