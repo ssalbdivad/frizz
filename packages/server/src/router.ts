@@ -230,7 +230,7 @@ import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
-import { EditorComposeInputSchema, EditorSnapshotSchema, type EditorKind, type FilePosition } from "@frizz/shared"
+import { EditorComposeInputSchema, EditorSnapshotSchema, type EditorKind, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -787,6 +787,7 @@ function requestedPosition(input: { line?: number; column?: number; endLine?: nu
 // these values itself — and rpc-contract.ts pins each to the type contract.ts declares.
 const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean() })
 const EditorComposeItemOutput = EditorComposeInputSchema.extend({ id: z.string(), app: z.string(), at: z.string() })
+const EditorStateCheckoutOutput = z.object({ dir: z.string(), root: z.string(), kind: z.enum(["worktree", "folder"]) })
 const EditorStateOutput = z.object({
   windows: z.array(z.object({
     app: z.string(),
@@ -798,6 +799,7 @@ const EditorStateOutput = z.object({
   })),
   connected: z.number(),
   elsewhere: z.array(z.object({ app: z.string(), folders: z.array(z.string()) })),
+  checkout: EditorStateCheckoutOutput.optional(),
 })
 
 /**
@@ -1398,6 +1400,27 @@ export function createRouter(ctx: AppContext) {
       for (const dir of removed) frizzLog.info("worktree", `removed ${dir} (thread ${slug} marked done)`)
       for (const { path: dir, reason } of kept) frizzLog.info("worktree", `kept ${dir} (thread ${slug}): ${reason}`)
     })().catch((error) => frizzLog.warn("worktree", `cleanup for ${slug} failed: ${String(error)}`))
+  }
+
+  /**
+   * The checkout `slug` works in when it is not the project root, for the `editor` tool (EditorStateCheckout):
+   * the thread's own reading (threadWorkingDir — the tailer's, else its transcript's), spelled through the
+   * project folder when it lies inside it. The reading is a REAL path (thread-cwd.ts liftWorkingDir) while an
+   * editor reports paths in its workspace folder's spelling, which is usually the project folder's; a
+   * `/tmp` project on macOS is `/private/tmp` to realpath and `/tmp` to the window. Undefined for an
+   * unknown slug and for a thread at the root.
+   */
+  function editorCheckoutOf(slug: string): EditorStateCheckout | undefined {
+    if (!ctx.storage.getSession(slug)) return undefined
+    const reading = threadWorkingDir(slug)
+    if (reading.kind === "root") return undefined
+    let dir = reading.dir
+    try {
+      const realRoot = realpathSync(workDir)
+      const rel = relative(realRoot, dir)
+      if (rel && !rel.startsWith("..") && !isAbsolute(rel)) dir = join(workDir, rel)
+    } catch {}
+    return { dir, root: workDir, kind: reading.kind === "worktree" ? "worktree" : "folder" }
   }
 
   /** The worktrees Done would consider removing for `slug`: the ones its Bash calls added, and the one it
@@ -4519,10 +4542,21 @@ export function createRouter(ctx: AppContext) {
     // windows are connected at all, so "no editor has this project open" can be told from "no editor".
     // Project-scoped by the URL prefix like every worker call. A mutation only because the worker's MCP
     // server POSTs every procedure it calls; it changes nothing.
+    //
+    // `slug` is the CALLING thread (the worker's MCP server stamps its own, FRIZZ_THREAD_SLUG; a model never
+    // names it). When that thread works in a checkout of its own — a worktree — the answer says where
+    // (`checkout`), so the tool can tell the worker that the file the human has selected is the main
+    // checkout's copy and name its own; and a window opened on that checkout counts as this project's even
+    // when the checkout sits outside the project folder. An older MCP server sends `{}`, and this answers
+    // it as before. Not `.strict()`: an older SERVER must keep answering a newer MCP server's `slug`.
     editorState: mutation({
-      input: z.object({}),
+      input: z.object({ slug: ThreadSlug.optional() }),
       output: EditorStateOutput,
-      handler: async () => ctx.editors?.editorState(workDir) ?? { windows: [], connected: 0, elsewhere: [] },
+      handler: async ({ input }) => {
+        const checkout = input.slug ? editorCheckoutOf(input.slug) : undefined
+        const state = ctx.editors?.editorState(workDir, checkout ? [checkout.dir] : []) ?? { windows: [], connected: 0, elsewhere: [] }
+        return checkout ? { ...state, checkout } : state
+      },
     }),
 
     // Claim what an editor sent to the prompt box (`compose-pending` announced it on every open

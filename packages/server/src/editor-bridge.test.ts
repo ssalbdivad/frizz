@@ -507,6 +507,22 @@ test("editor state: kept per window, answered for the windows that have the proj
   assert.deepEqual(h.bridge.editorState(join(dirs.root, "gone")).windows, [])
 })
 
+// A thread's checkout outside the project folder (a sibling worktree, `~/repo-perf`): a window opened on it
+// is that thread's window, so the worker asking from that thread reads it rather than "none has this
+// project open". Only when the caller names the folder — every other project's worker still sees it elsewhere.
+test("editor state: a folder passed beside the project counts as the project's", async (t) => {
+  const h = await harness(t)
+  const dirs = tree(t)
+  const onOther = await editor(h.port, { folders: [dirs.other], focused: true })
+  onOther.send(snapshot(dirs.outside))
+  await until(() => h.bridge.editorState(dirs.mono, [dirs.other]).windows.some((w) => w.editor), "the window's state")
+  assert.deepEqual(h.bridge.editorState(dirs.mono, [dirs.other]).windows.map((w) => w.folders), [[dirs.other]])
+  assert.deepEqual(h.bridge.editorState(dirs.mono, [dirs.other]).elsewhere, [])
+  assert.deepEqual(h.bridge.editorState(dirs.mono).windows, [], "without it, the window is another project's")
+  assert.deepEqual(h.bridge.editorState(dirs.mono).elsewhere, [{ app: "Visual Studio Code", folders: [dirs.other] }])
+  assert.deepEqual(h.bridge.editorState(dirs.mono, [join(dirs.root, "gone")]).windows, [], "a folder that does not exist adds nothing")
+})
+
 // What Done asks before it removes a thread's worktree (router.ts assertNoUnsavedWorktreeFiles): a file
 // the human edited and has not saved is invisible to git, so only the editor can say it is there.
 test("unsaved files: the dirty file in front and dirty tabs under the folders asked, once each, never an untitled buffer or a window that stopped sharing", async (t) => {

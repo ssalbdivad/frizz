@@ -311,6 +311,22 @@ export interface EditorStateWindow {
   editor?: Omit<EditorSnapshot, "t"> & { reportedAgoMs: number }
 }
 
+/**
+ * Where the CALLING thread works when that is not the project's own checkout — a worktree, most often
+ * (`.frizz/worktrees/<slug>`, about one thread in seven). The human's editor usually shows the main
+ * checkout, so the file they have selected there is THEIR copy; the same relative path under `dir` is the
+ * worker's, and the two can differ. Absent: the thread works at the project root, or the caller named no
+ * thread.
+ */
+export interface EditorStateCheckout {
+  /** The thread's checkout, spelled through the project folder when it lies inside it. */
+  dir: string
+  /** The project's own folder (`workDirOf`), which a main-checkout window shows. */
+  root: string
+  /** "worktree": a linked git worktree. "folder": another folder entirely. */
+  kind: "worktree" | "folder"
+}
+
 /** The `editorState` RPC: the editor windows that have this project open, the one the human was in last first. */
 export interface EditorStateResult {
   windows: EditorStateWindow[]
@@ -318,4 +334,6 @@ export interface EditorStateResult {
   connected: number
   /** The connected windows that do NOT have this project open: their app and folders, so a worker can say what is open instead. */
   elsewhere: { app: string; folders: string[] }[]
+  /** The calling thread's own checkout, when it is not the project root (EditorStateCheckout). */
+  checkout?: EditorStateCheckout
 }

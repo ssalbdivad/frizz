@@ -349,7 +349,7 @@ export interface Api {
   composeTake(input: { id?: string }): Promise<{ item: EditorComposeItem | null }>
   // What the editor windows that have this project open show: file in front, selection, tabs, problems.
   // The workers' `mcp__frizz__editor` reads it; the page does not.
-  editorState(input: Record<never, never>): Promise<EditorStateResult>
+  editorState(input: { slug?: string }): Promise<EditorStateResult>
   markComplete(input: { slug: string }): Promise<void>
   setThreadStatus(input: { slug: string; status: "active" | "planning" | "planned" | "needs-human" | "blocked" | "done" | "dismissed" }): Promise<void>
   dismissThread(input: { slug: string }): Promise<void>

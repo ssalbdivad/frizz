@@ -1,6 +1,7 @@
 import { test, type TestContext } from "node:test"
 import assert from "node:assert/strict"
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs"
+import { execFileSync } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { EditorComposeItem, EditorKind, FilePosition, LocalFileOpener } from "@frizz/shared"
@@ -171,6 +172,43 @@ test("editorState asks the bridge about the folder the project's agents work in,
   await home.editorState.handler({ input: {} })
   assert.deepEqual(asked, ["/work/alpha", "/home/me"])
   assert.deepEqual(await router("/work/alpha", "vscode").editorState.handler({ input: {} }), { windows: [], connected: 0, elsewhere: [] })
+})
+
+// A worker in its own worktree asks for the editor: the answer says where that thread works, in the
+// project folder's spelling, and a window opened on the worktree counts as this project's even when the
+// worktree sits outside the project folder. A real repository and a real `git worktree add`, because the
+// reading is the tailer's lift of a real folder (thread-cwd.ts), which checks `.git` on disk.
+test("editorState names the calling thread's own checkout, and only when it is not the project root", { skip: process.platform === "win32" }, async (t) => {
+  const base = realpathSync(mkdtempSync(join(tmpdir(), "frizz-router-checkout-")))
+  t.after(() => rmSync(base, { recursive: true, force: true }))
+  const repo = join(base, "repo")
+  const git = (...args: string[]) => execFileSync("git", ["-C", repo, ...args], { stdio: "ignore" })
+  execFileSync("git", ["init", "-q", "-b", "main", repo])
+  git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init")
+  const inside = join(repo, ".frizz", "worktrees", "tidy")
+  const sibling = join(base, "repo-perf")
+  git("worktree", "add", "-q", inside, "-b", "tidy")
+  git("worktree", "add", "-q", sibling, "-b", "perf")
+  const working: Record<string, string> = { tidy: inside, perf: sibling, rooted: repo }
+  const asked: [string, readonly string[] | undefined][] = []
+  const editors: Partial<EditorBridge> = { editorState: (dir, also) => (asked.push([dir, also]), { windows: [], connected: 1, elsewhere: [] }) }
+  const r = createRouter({
+    project: { dir: repo, stateDir: repo, id: "p", name: "p", label: "p", cwdSlug: "p" },
+    storage: { getSession: (slug: string) => (slug in working ? { slug } : undefined) },
+    board: {},
+    tailer: { get: (slug: string) => (slug in working ? { workingDir: working[slug] } : undefined) },
+    getSettings: () => ({}),
+    editors,
+  } as unknown as AppContext)
+  assert.deepEqual(await r.editorState.handler({ input: { slug: "tidy" } }), { windows: [], connected: 1, elsewhere: [], checkout: { dir: inside, root: repo, kind: "worktree" } })
+  assert.deepEqual(await r.editorState.handler({ input: { slug: "perf" } }), { windows: [], connected: 1, elsewhere: [], checkout: { dir: sibling, root: repo, kind: "worktree" } })
+  // At the root, unknown, or not named: no checkout, and the windows are matched by the project alone.
+  for (const input of [{ slug: "rooted" }, { slug: "nobody" }, {}]) {
+    assert.deepEqual(await r.editorState.handler({ input }), { windows: [], connected: 1, elsewhere: [] }, JSON.stringify(input))
+  }
+  assert.deepEqual(asked, [[repo, [inside]], [repo, [sibling]], [repo, []], [repo, []], [repo, []]])
+  // An older MCP server sends `{}`; a newer one's `slug` must not be refused by this server's input.
+  assert.equal(r.editorState.input.safeParse({ slug: "tidy", extra: 1 }).success, true)
 })
 
 test("openLocalFile takes a position only as positive whole numbers, and still nothing else", () => {

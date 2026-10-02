@@ -115,9 +115,10 @@ export interface EditorBridge {
    * problems — the one the human was in last first; and how many windows are connected at all. A window
    * "has" the project when a workspace folder of it holds the project folder or sits inside it (a
    * package of a monorepo, a thread's worktree opened with "Open in editor"), or when its file in front
-   * is under the project folder.
+   * is under the project folder. `also` are more folders that count the same way — a thread's checkout
+   * outside the project folder (a sibling worktree), so a window opened on it is the thread's window.
    */
-  editorState(dir: string): EditorStateResult
+  editorState(dir: string, also?: readonly string[]): EditorStateResult
   /**
    * The files an editor window shows with UNSAVED changes that lie under any of `dirs` (realpath
    * containment), each once, from every window whose last `editor` frame shared its state. What Done asks
@@ -622,8 +623,11 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder }).catch(() => false)
     },
 
-    editorState(dir) {
-      const realDir = closing ? undefined : realpathOrUndefined(dir)
+    editorState(dir, also = []) {
+      const targets = closing ? [] : [dir, ...also].flatMap((folder) => {
+        const real = realpathOrUndefined(folder)
+        return real ? [{ folder, real }] : []
+      })
       const at = now()
       const matched: Connection[] = []
       const elsewhere: EditorStateResult["elsewhere"] = []
@@ -632,7 +636,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
         const window = conn.window
         if (!window) continue
         connected++
-        if (realDir && holdsProject(window, dir, realDir)) matched.push(conn)
+        if (targets.some((target) => holdsProject(window, target.folder, target.real))) matched.push(conn)
         else elsewhere.push({ app: window.app, folders: window.folders })
       }
       matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
