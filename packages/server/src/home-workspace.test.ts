@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join, relative } from "node:path"
 import { test } from "node:test"
 import { workerScratchPath } from "./dispatch.ts"
-import { frizzPaths, legacyFrizzRoot, projectStateDir } from "./frizz-paths.ts"
+import { frizzPathsNow, legacyFrizzRoot, projectStateDir } from "./frizz-paths.ts"
 import {
   findWorkspaceById,
   findWorkspaceBySegment,
@@ -45,7 +45,8 @@ function project(home: string, rel: string, id: string): string {
 /** The invariant every case ends on: nothing created the home folder's board, and the layout did not flip. */
 function assertNoHomeBoard(home: string): void {
   assert.equal(existsSync(legacyFrizzRoot(home)), false, "Home must never create <home>/.frizz")
-  assert.equal(frizzPaths({ home }).legacy, false)
+  // Afresh, as the next boot would: this process's memo would answer from before the case ran.
+  assert.equal(frizzPathsNow({ home }).legacy, false)
 }
 
 test("Home's slug is `home`, and a project already registered under it keeps it", () => {
