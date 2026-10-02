@@ -6,9 +6,10 @@
 # with `{}`. Starting node was the whole cost — p50 67ms, p95 346ms, max 4.9s per call, 62 minutes over
 # 36k calls in three days of worker transcripts (2026-09-29..10-01), with `node trivial.mjs` within noise
 # of the real hook. This file answers `{}` only where it can PROVE node would, and in pure POSIX sh with
-# no subprocess, so a skipped call costs one `sh` exec instead of a node start. Over 125k distinct real
-# Bash inputs it answers 93% itself; replayed through `/bin/sh -c` on this repo's WSL box under load,
-# the hook went from p50 166ms to 8ms (2026-10-02; the numbers and their conditions are in the commit).
+# no subprocess, so a skipped call costs one `sh` start instead of a node start. Over 127k distinct real
+# Bash inputs it answers 93% itself; replayed through `/bin/sh -c` on this repo's WSL box (loadavg ~6),
+# the hook went from p50 85-88ms to 4.4ms, and the time over 1,000 calls from 90s to 11s (2026-10-02;
+# the conditions are in the commit). A call handed to node pays ~3ms more than before.
 #
 # THE PROOF — read it against bash-background.mjs and worktree.mjs before changing either. Node emits
 # something other than `{}` only through one of these, and each is ruled out by a check below:
@@ -56,8 +57,9 @@
 # EVERY CHECK IS A `case` PATTERN, never a loop or a `${var#*pattern}` cut. Cutting is quadratic in
 # every shell measured: `${x#*'"tool_input":'}` with the marker 60KB in took 4.7s in dash and 12s in
 # bash, and an earlier per-`&` loop took 21s on a 9.6KB command holding 2,400 of them. A `case` match
-# is linear, so the worst real input (73KB, the largest of 125k corpus calls) is decided in
-# milliseconds.
+# stays bounded: 64KB inputs built to make it backtrack (runs of `a && `, `2>&1 `, `worktree_`) are
+# decided in 21-80ms under dash, bash and busybox, a real-shaped 62KB one in 27-50ms. What stays slow is `read`, a byte per syscall
+# on a pipe: the largest real input (90KB, so over the cap) spends 50-75ms being read before node gets it.
 # packages/server/src/bash-background-prefilter.test.ts checks every one of these against node on real
 # transcript inputs and on adversarial ones; scripts/bash-prefilter-corpus.ts re-derives its fixture.
 #
