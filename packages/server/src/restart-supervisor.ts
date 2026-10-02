@@ -38,6 +38,11 @@ export const SUPERVISOR_SESSIONS_PATH = `${SUPERVISOR_CONTROL_PREFIX}/sessions`
  * SUPERVISOR_SESSIONS_PATH: see handleControl for why this one is safe to expose.
  */
 export const SUPERVISOR_SIGN_OUT_PATH = `${SUPERVISOR_CONTROL_PREFIX}/sign-out`
+/**
+ * Settings → Remote access: read (GET) or change (POST) how the board is reached from outside.
+ * LOOPBACK ONLY, like minting a link — see handleControl.
+ */
+export const SUPERVISOR_REMOTE_PATH = `${SUPERVISOR_CONTROL_PREFIX}/remote`
 export const SUPERVISOR_CONTROL_PROTOCOL = 1
 
 /**
@@ -55,6 +60,22 @@ export type SignOutThisDeviceResult =
   | { protocol: 1; result: "no-remote-session" }
 
 export type RestartControlState = "ready" | "restarting" | "failed"
+
+export interface RemoteControlReply {
+  status: number
+  body: unknown
+}
+
+/**
+ * The launcher's remote-access setup, offered to the browser. It lives in the LAUNCHER (src/remote-setup.ts),
+ * which owns the transport — a relay socket or a cloudflared child — so the proxy only routes to it. A
+ * launch that wires none (`pnpm dev`, which runs no transport at all) answers 404, and the browser shows
+ * nothing.
+ */
+export interface RemoteControlHandler {
+  get(): Promise<RemoteControlReply>
+  post(body: unknown): Promise<RemoteControlReply>
+}
 
 export interface RestartResult {
   // A durable update must acknowledge before it begins draining/re-execing the process which owns
@@ -192,6 +213,7 @@ function isControlRequest(req: IncomingMessage): boolean {
     || url.pathname === SUPERVISOR_ACCESS_CODE_PATH
     || url.pathname === SUPERVISOR_SESSIONS_PATH
     || url.pathname === SUPERVISOR_SIGN_OUT_PATH
+    || url.pathname === SUPERVISOR_REMOTE_PATH
 }
 
 // `/_frizz/local-image` AND `/_frizz/<project>/local-image` — the client builds it from `apiBase()`,
@@ -249,6 +271,7 @@ export class RestartSupervisorProxy {
   private policy: LocalAuthorityPolicy
   /** The origin a tunnel or proxy serves this board at; undefined while loopback-only. Live: see setPublicOrigin. */
   private publicOrigin: string | undefined
+  private remoteControl: RemoteControlHandler | null = null
   /**
    * Codes and sessions for the public origin, or null when no public origin is declared (loopback-only
    * boards are never gated, so there is nothing to store).
@@ -276,6 +299,11 @@ export class RestartSupervisorProxy {
    * clears a remote setup. Requests already in flight finish under the policy they started with; the
    * next one is judged by the new origin. Sessions survive the change.
    */
+  /** Offer (or withdraw) the launcher's remote-access setup at SUPERVISOR_REMOTE_PATH. */
+  setRemoteControl(handler: RemoteControlHandler | null): void {
+    this.remoteControl = handler
+  }
+
   setPublicOrigin(origin: string | undefined): void {
     this.publicOrigin = origin
     this.policy = this.buildPolicy()
@@ -469,7 +497,10 @@ export class RestartSupervisorProxy {
       return
     }
     const sameOrigin = req.headers["sec-fetch-site"] === "same-origin" || this.vouchesSameOrigin(req)
-    const allowMissingOrigin = pathname === SUPERVISOR_STATUS_PATH && req.method === "GET" && sameOrigin
+    // A browser sends no Origin on a GET, so the two READS accept Fetch Metadata in its place. Every
+    // POST still has to name this board in its Origin.
+    const allowMissingOrigin = (pathname === SUPERVISOR_STATUS_PATH || pathname === SUPERVISOR_REMOTE_PATH)
+      && req.method === "GET" && sameOrigin
     if (!this.authorityAccepted(req, allowMissingOrigin)) {
       res.writeHead(403)
       res.end("Forbidden")
@@ -537,6 +568,35 @@ export class RestartSupervisorProxy {
         return
       }
       responseJson(res, 200, { signedOut: 1 })
+      return
+    }
+    if (pathname === SUPERVISOR_REMOTE_PATH) {
+      // LOOPBACK ONLY, and for reads too. Choosing how the board is reached decides who can reach it,
+      // so it needs presence on the machine, like minting a link: a session through the tunnel could
+      // otherwise point the board at a name of its own choosing, or turn remote access off and strand
+      // the phone that did it. Reads are refused as well because they carry the machine's GitHub login
+      // and tailnet name, which a phone has no use for.
+      if (this.arrivedPublicly(req)) {
+        res.writeHead(403)
+        res.end("Forbidden")
+        return
+      }
+      const handler = this.remoteControl
+      if (!handler) {
+        responseJson(res, 404, { protocol: SUPERVISOR_CONTROL_PROTOCOL, error: "this launch cannot change remote access" })
+        return
+      }
+      if (req.method !== "GET" && req.method !== "POST") {
+        res.writeHead(405, { allow: "GET, POST" })
+        res.end()
+        return
+      }
+      try {
+        const reply = req.method === "GET" ? await handler.get() : await handler.post(await readJsonBody(req))
+        responseJson(res, reply.status, reply.body)
+      } catch (error) {
+        responseJson(res, 500, { protocol: SUPERVISOR_CONTROL_PROTOCOL, error: error instanceof Error ? error.message : String(error) })
+      }
       return
     }
     if (pathname === SUPERVISOR_SIGN_OUT_PATH) {

@@ -642,6 +642,16 @@ a[href] {
     transform: translateY(0) scale(1);
   }
 }
+/* PendingThreadSheet's slide-in: the drawer family's 200ms translate, as an animation so it starts on the
+   frame's first paint without a second render (see that component). */
+@keyframes frizz-sheet-in {
+  from {
+    transform: translateX(100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
 @keyframes overlay-in {
   from {
     opacity: 0;
@@ -1054,6 +1064,15 @@ a[href] {
   position: relative;
   z-index: 1;
 }
+/* The fence's copy button is the `pre`'s SIBLING, absolutely positioned over its corner at z-index auto
+   — so the rule above lifted the `pre` OVER it: the button showed through the `pre`'s translucent fill
+   but every click landed on the `pre`, which picked the option on an open card and did nothing on an
+   answered one (maintainer 2026-10-01: "once a question is answered the copy button doesnt work"). It
+   rides one layer above the `pre`; lib/copy-code.ts's document listener then takes the click, and the
+   chip's own onClick skips it because the target is a button. */
+[data-question-option] .md-body .md-code-copy {
+  z-index: 2;
+}
 /* Block chrome INSIDE an answer chip sits on a bg that changes with the chip's state — the card's own
    panel-2 when neutral, accent/10 when selected, elevated on hover — so the prose surface's OPAQUE
    fills fail in both directions: a panel-2 code chip or table header is invisible on the neutral chip
@@ -1306,6 +1325,14 @@ a[href] {
 .hljs .hljs-deletion {
   color: var(--code-del);
   background: var(--code-del-bg);
+}
+/* Fenced code typed into a textarea, painted on its mirror (components/TextareaCodeFences.tsx). The
+   mirror has to keep every advance width identical to the textarea's own glyphs, so the palette's
+   italic comments and bold `**strong**` give way: colour only, never a slant or a weight. */
+.hljs.input-hljs,
+.hljs.input-hljs * {
+  font-style: inherit;
+  font-weight: inherit;
 }
 /* The `cat -n` line numbers a Read excerpt carries. They are not source and must never compete with
    it: the same tone the rendered diff gives its own gutter, and unselectable-looking but still

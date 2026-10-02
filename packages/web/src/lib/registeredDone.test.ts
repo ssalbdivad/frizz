@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { showsRegisteredDoneCard } from "./registeredDone.ts"
+import { registeredDoneBody, showsRegisteredDoneCard } from "./registeredDone.ts"
 
 // The card this predicate gates exists for ONE case: a completion the worker registered by tool, which
 // no message carries and so nothing else on the page draws. Every other shape of lastFence already has
@@ -30,4 +30,9 @@ test("no fence, an awaiting fence, or no thread draws nothing", () => {
   assert.equal(showsRegisteredDoneCard(undefined, "text"), false)
   assert.equal(showsRegisteredDoneCard({ lastFence: undefined }, "text"), false)
   assert.equal(showsRegisteredDoneCard({ lastFence: { kind: "awaiting", body: "", hints: [], registered: true } }, "text"), false)
+})
+
+test("a done the human has written past draws without its ledger", () => {
+  assert.equal(registeredDoneBody({ body: "- **Fixed** it" }), "- **Fixed** it")
+  assert.equal(registeredDoneBody({ body: "- **Fixed** it", spokenPast: true }), "")
 })

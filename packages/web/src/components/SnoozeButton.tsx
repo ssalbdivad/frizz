@@ -22,6 +22,7 @@ import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { useCommandHandler, useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 export function SnoozeButton({
   thread,
@@ -297,6 +298,7 @@ export function SnoozeButton({
             }}
             className="w-full resize-y rounded-md border border-border bg-bg px-2.5 py-2 text-[13px] leading-5 text-fg outline-none placeholder:text-muted-40 focus:border-accent"
           />
+          <TextareaCodeFences value={promptValue} />
           <p className="min-h-4 text-[10.5px] text-muted-65">
             {promptValue.trim()
               ? "frizz will resume this thread with the prompt at the wake time."

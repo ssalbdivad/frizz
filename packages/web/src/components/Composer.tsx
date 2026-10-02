@@ -1,12 +1,14 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, X } from "lucide-react"
+import { ArrowUp, FileText, Loader2, Paperclip, Snail, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
+import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
+import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
 import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -95,9 +97,25 @@ const MENU_ROW_INSET = "pl-3.5 pr-1.5"
 const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
 
 // Auto-grow: reset to auto, then snap to content height clamped at maxHeight.
+//
+// BATCHED across every composer on the page (2026-10-01). Each snap writes `height` and then reads
+// `scrollHeight`, which forces a layout of the whole page — and the queue mounts one composer per card
+// in a single commit, so N composers forced N full layouts of a page that grows with N. On a 247-card
+// mirror of a busy machine that was 1.5s of a 20s profile of the page, plus 1.1s more in the cards' own
+// clamp measurements, which read layout between the composers' writes and so paid a fresh layout each.
+// Requests made in one turn are flushed together in a microtask — still before the browser paints —
+// as all the writes, then all the reads (one layout), then all the writes.
+const pendingSnaps = new Map<HTMLTextAreaElement, number>()
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
-  el.style.height = "auto"
-  el.style.height = `${Math.min(el.scrollHeight, maxHeight)}px`
+  if (pendingSnaps.size === 0) queueMicrotask(flushSnaps)
+  pendingSnaps.set(el, maxHeight)
+}
+function flushSnaps(): void {
+  const batch = [...pendingSnaps]
+  pendingSnaps.clear()
+  for (const [el] of batch) el.style.height = "auto"
+  const heights = batch.map(([el, maxHeight]) => Math.min(el.scrollHeight, maxHeight))
+  batch.forEach(([el], i) => { el.style.height = `${heights[i]}px` })
 }
 
 export function Composer({
@@ -192,9 +210,9 @@ export function Composer({
   // the caller owns the "is a follow-up actually queued behind a running turn" check, so with nothing
   // queued it returns false and the keypress keeps its default.
   onPushQueued?: () => boolean
-  // SAVE AS A LAZY THREAD — the new-thread box only (plans/lazy-threads.md). ⌘/Ctrl-Shift-Enter, and the quiet
-  // "add as lazy thread" hint in the footer while there is a draft, write the prompt down as a thread with no
-  // agent behind it instead of starting one.
+  // SAVE AS A LAZY THREAD — the new-thread box only (plans/lazy-threads.md). ⌘/Ctrl-Shift-Enter, or the
+  // snail glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
+  // starting one. (A footer text hint did this job until 2026-10-01; the maintainer wanted it gone.)
   onSaveLazy?: () => void
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
@@ -369,7 +387,14 @@ export function Composer({
     let hasMention = false
     let hasToken = false
     const out: React.ReactNode[] = []
+    // Fenced code is a third kind of painted run (lib/inputCodeFences.ts): its body highlighted, its
+    // delimiters muted, and no mention tinting inside it. Fences are found on the WHOLE prose — a
+    // block spans lines a token split knows nothing about — then clipped to each run below.
+    const fences = scanInputFences(prose)
+    let offset = 0
     for (const run of splitProseByTokens(prose, stagedTokens)) {
+      const runStart = offset
+      offset += run.text.length
       if (run.token) {
         hasToken = true
         // The vertical pad is free (vertical padding on an inline box never moves layout); the
@@ -381,20 +406,30 @@ export function Composer({
         )
         continue
       }
-      for (const seg of mentionSegments(run.text, allMentions)) {
-        if (seg.kind === "text") {
-          out.push(seg.text)
+      const pieces = fences
+        ? clipFenceRuns(fences, runStart, offset)
+        : [{ kind: "prose" as const, start: runStart, end: offset }]
+      for (const piece of pieces) {
+        if (piece.kind !== "prose") {
+          out.push(renderInputFenceRun(prose, piece, out.length))
           continue
         }
-        hasMention = true
-        out.push(
-          <span key={out.length} data-composer-mention className="rounded-[3px] bg-accent/10 py-px -mx-px px-px text-accent">
-            {seg.text}
-          </span>,
-        )
+        for (const seg of mentionSegments(prose.slice(piece.start, piece.end), allMentions)) {
+          if (seg.kind === "text") {
+            out.push(seg.text)
+            continue
+          }
+          hasMention = true
+          out.push(
+            <span key={out.length} data-composer-mention className="rounded-[3px] bg-accent/10 py-px -mx-px px-px text-accent">
+              {seg.text}
+            </span>,
+          )
+        }
       }
     }
-    return hasMention || hasToken ? { segments: out, paintsText: hasMention } : null
+    const paintsText = hasMention || fences !== null
+    return paintsText || hasToken ? { segments: out, paintsText } : null
   }, [prose, stagedTokens, allMentions])
   const backdropSegments = backdrop?.segments
 
@@ -570,6 +605,15 @@ export function Composer({
   // (the dispatch composer's GitHub picker); interrupt-and-send gave up its button here and kept only
   // ⌘/Ctrl-Enter — see the `onInterruptSubmit` prop doc.
   const railAction = leftAction ?? null
+  // The lazy-save glyph (new-thread box only) takes the slot beside Send and pushes the rest of the rail
+  // one slot left, so the reserve and the left-hand offsets all follow it.
+  const railReserve = onSaveLazy
+    ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
+    : railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
+  const railActionOffset = onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
+  const paperclipOffset = onSaveLazy
+    ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
+    : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget
@@ -819,9 +863,12 @@ export function Composer({
             ref={contextRef}
             aria-hidden
             data-composer-context-backdrop
-            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? `text-fg ${busy ? "opacity-60" : ""}` : "text-transparent"}`}
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? `text-fg ${busy ? "opacity-60" : ""}` : "text-transparent"}`}
           >
             {backdropSegments}
+            {/* A textarea gives a trailing newline its own empty line and a div does not; without
+                this the mirror is a line short and stops panning before the textarea does. */}
+            {prose.endsWith("\n") && " "}
           </div>
         )}
         <textarea
@@ -868,7 +915,7 @@ export function Composer({
           // out of every line). Without a footer the box is a single compact row and the right padding is
           // what keeps text from sliding under the floating paperclip/send buttons. `relative` keeps the
           // caret and text painting above the marker backdrop behind it.
-          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? "text-transparent caret-fg" : "text-fg"} outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
+          className={`relative block w-full resize-none bg-transparent px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed ${backdrop?.paintsText ? "text-transparent caret-fg" : "text-fg"} outline-none placeholder:text-muted scrollbar-none disabled:opacity-60`}
         />
       </div>
       {/* Attachment chips along the bottom row — one square tile per attached file (image thumbnail or
@@ -876,7 +923,7 @@ export function Composer({
           instead of the raw absolute-path text. Reserve the right rail so tiles never slip under the
           paperclip/send buttons on the last row. */}
       {attachments.length > 0 && (
-        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>
+        <div className={`flex flex-wrap gap-1.5 px-3 pb-2 ${railReserve}`}>
           {attachments.map((a, i) => (
             <AttachmentChip
               key={`${a.path}-${i}`}
@@ -895,7 +942,7 @@ export function Composer({
       {/* Reserve the right-side action rail. Without this, three shrinkable readouts can extend under
           the absolutely positioned GitHub/send buttons on narrow composers. */}
       {footer && (
-        <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN}`}>
+        <div className={`flex min-w-0 flex-wrap items-center gap-1 pl-1.5 pb-1.5 ${railReserve}`}>
           {footer}
           {/* The forced chord's one visible trace: only while a draft exists AND the turn it would cut
               short is running (`onInterruptSubmit` is set exactly then), so an idle box stays quiet.
@@ -905,28 +952,10 @@ export function Composer({
               {interruptChord} to interrupt
             </span>
           )}
-          {/* The lazy thread chord's visible trace, in the same slot and the same quiet type as the interrupt
-              hint (the two never share a box: one is the new-thread composer's, the other a running
-              thread's). It is a button as well as a hint, so the act is reachable without the chord. */}
-          {onSaveLazy && hasContent && !busy && (
-            <button
-              type="button"
-              data-composer-lazy-hint
-              onMouseDown={(e) => e.preventDefault()}
-              onClick={onSaveLazy}
-              disabled={uploading}
-              title="Save this as a lazy thread without starting an agent"
-              // `max-w-full truncate`: wrapped onto its own line and still wider than the line — the
-              // New thread sheet in a 300px editor sidebar — it ran on under the paperclip and send.
-              className="ml-auto max-w-full shrink-0 truncate rounded text-[11px] text-muted-70 transition-colors hover:text-fg disabled:opacity-50"
-            >
-              {lazyChord} add as lazy thread
-            </button>
-          )}
         </div>
       )}
       {/* Outlined controls keep 8px between edges; prose reserves the same clearance. */}
-      {railAction && <div className={`absolute bottom-2 ${RAIL_ACTION_OFFSET} flex items-center`}>{railAction}</div>}
+      {railAction && <div className={`absolute bottom-2 ${railActionOffset} flex items-center`}>{railAction}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any railAction), so it never overlaps the mode/model footer or the send
           affordance. Accept is the shared extension allowlist; the /attach route re-validates. */}
@@ -949,10 +978,26 @@ export function Composer({
         aria-label="Attach files"
         // With no rail action the paperclip TAKES the rail-action slot — at its OWN offset, not the
         // rail action’s, because it paints 1px less dead space on that side (lib/iconRhythm.ts).
-        className={`icon-hover-outline absolute bottom-2 ${railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        className={`icon-hover-outline absolute bottom-2 ${paperclipOffset} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
+      {/* SAVE AS A LAZY THREAD, beside Send so the act is discoverable without its chord. Muted like the
+          paperclip: it is the secondary submit, and Send stays the one filled button. */}
+      {onSaveLazy && (
+        <button
+          type="button"
+          data-composer-lazy
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSaveLazy}
+          disabled={!hasContent || busy || uploading}
+          title={`Add as lazy thread, without starting an agent (${lazyChord})`}
+          aria-label="Add as lazy thread"
+          className={`icon-hover-outline absolute bottom-2 ${RAIL_LAZY_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+        >
+          <Snail size={15} strokeWidth={2} />
+        </button>
+      )}
       <button
         type="button"
         // Prevent the mousedown default so clicking Send never blurs the textarea (the repo's idiom for

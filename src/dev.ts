@@ -1,0 +1,33 @@
+// `nub run dev`: the source dev board (packages/server/src/dev.ts — Vite HMR, a supervisor that
+// recycles the control plane on server edits) with remote access attached, so a phone can reach it
+// exactly as it reaches `frizz-dev` or a published `frizz`: the saved setup is served at boot,
+// Settings → Remote access works from this machine, and R / L work in this terminal.
+//
+// The wiring lives here, not in the server package, because the transports it drives (the frizz.sh
+// relay, cloudflared) belong to the launcher package, which depends on the server and not the reverse.
+import { runDev } from "@frizz/server/dev";
+import { wireRemote } from "./remote-wiring.ts";
+
+// `nub run dev -- --port 9400` runs a second board beside the usual one.
+const portFlag = process.argv.indexOf("--port");
+const port = portFlag > 0 ? Number(process.argv[portFlag + 1]) : undefined;
+if (port !== undefined && !(Number.isInteger(port) && port > 0 && port < 65_536)) throw new Error("--port needs a port number");
+
+await runDev({
+  port,
+  attach: async ({ supervisor, port, logger }) => {
+    const wiring = await wireRemote({
+      supervisor,
+      port,
+      log: logger,
+      say: (message) => console.error(`[frizz] ${message}`),
+    });
+    const origin = wiring.remote.origin();
+    if (origin) console.log(`[frizz] reachable at ${origin}${wiring.paneHost ? " — press L for a phone sign-in link" : ""}`);
+    else if (wiring.paneHost) console.log("[frizz] press R to reach this board from your phone");
+    return {
+      onCodeConsumed: () => wiring.accessPane.markConsumed(),
+      dispose: () => wiring.dispose(),
+    };
+  },
+});

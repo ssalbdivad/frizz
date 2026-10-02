@@ -110,30 +110,58 @@ const RESOLVE_BATCH = 128
 //
 // `space` and `api` travel together and are resolved by the CALLER, before any await: `api` is the client
 // of the project whose files these are, and `space` is the cache partition for that project.
-export async function resolveUnknown(paths: string[], space: string, api: Pick<Api, "resolveLocalPaths"> = rpc): Promise<void> {
+//
+// COALESCED per turn (2026-10-01). Every prose surface asks from its own layout effect, and a page mounts
+// many at once — the queue renders one handoff per card in a single commit. Asked one by one, each
+// surface's answer bumped `version` on its own, and every bump re-rendered and re-scanned EVERY mounted
+// surface: N surfaces, N bumps, N² scans. On a 247-card mirror of a busy machine that decoration was the
+// largest item left in a 20s profile of the page (~1.0s). Requests made in one turn now go out together,
+// one batch per space, and land as ONE bump.
+const queued = new Map<string, { paths: Set<string>; api: Pick<Api, "resolveLocalPaths">; waiters: (() => void)[] }>()
+export function resolveUnknown(paths: string[], space: string, api: Pick<Api, "resolveLocalPaths"> = rpc): Promise<void> {
   const wanted = [...new Set(paths)].filter((p) => !cache.has(cacheKey(space, p)) && !inflight.has(cacheKey(space, p)))
-  if (!wanted.length) return
-  for (const p of wanted) inflight.add(cacheKey(space, p))
-  const chunks: string[][] = []
-  for (let i = 0; i < wanted.length; i += RESOLVE_BATCH) chunks.push(wanted.slice(i, i + RESOLVE_BATCH))
-  const batches = await Promise.all(chunks.map(async (chunk) => {
-    try {
-      return (await api.resolveLocalPaths({ paths: chunk })).resolved
-    } catch {
-      return chunk.map((input) => ({ input, path: null }))
-    }
-  }))
-  let changed = false
-  for (const resolved of batches) {
-    for (const r of resolved) {
-      const key = cacheKey(space, r.input)
-      if (!cache.has(key)) { cache.set(key, r.path); changed = true }
-    }
+  if (!wanted.length) return Promise.resolve()
+  if (queued.size === 0) queueMicrotask(() => void flushQueued())
+  let entry = queued.get(space)
+  // One client per space: every caller asking for a space asks the same project, so the first one's
+  // client speaks for the batch.
+  if (!entry) queued.set(space, (entry = { paths: new Set(), api, waiters: [] }))
+  for (const p of wanted) {
+    inflight.add(cacheKey(space, p))
+    entry.paths.add(p)
   }
-  for (const p of wanted) inflight.delete(cacheKey(space, p))
-  if (!changed) return
-  version += 1
-  for (const listener of listeners) listener()
+  const waiting = entry
+  return new Promise((resolve) => { waiting.waiters.push(resolve) })
+}
+
+async function flushQueued(): Promise<void> {
+  const batch = [...queued]
+  queued.clear()
+  let changed = false
+  await Promise.all(batch.map(async ([space, { paths, api }]) => {
+    const wanted = [...paths]
+    const chunks: string[][] = []
+    for (let i = 0; i < wanted.length; i += RESOLVE_BATCH) chunks.push(wanted.slice(i, i + RESOLVE_BATCH))
+    const batches = await Promise.all(chunks.map(async (chunk) => {
+      try {
+        return (await api.resolveLocalPaths({ paths: chunk })).resolved
+      } catch {
+        return chunk.map((input) => ({ input, path: null }))
+      }
+    }))
+    for (const resolved of batches) {
+      for (const r of resolved) {
+        const key = cacheKey(space, r.input)
+        if (!cache.has(key)) { cache.set(key, r.path); changed = true }
+      }
+    }
+    for (const p of wanted) inflight.delete(cacheKey(space, p))
+  }))
+  if (changed) {
+    version += 1
+    for (const listener of listeners) listener()
+  }
+  for (const [, { waiters }] of batch) for (const resolve of waiters) resolve()
 }
 
 function decorate(code: Element, openPath: string, position: FilePosition | undefined): void {

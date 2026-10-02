@@ -1,6 +1,10 @@
 import { formatCompactElapsed } from "./durationLabels.ts"
 
-// A BACKGROUND SHELL'S REMAINING BUDGET, as a row reads it — "45m left", "over budget".
+// A BACKGROUND SHELL'S REMAINING BUDGET, as a row reads it — "times out in 45m", "past timeout".
+//
+// It is a CEILING, never an estimate: the agent picks a generous timeout and the job usually finishes far
+// sooner. It read "54m left" until 2026-10-01, which an operator took for a prediction of when the work
+// would be done (maintainer: don't say "54 minutes left" if that's a timeout, not an estimate).
 //
 // A shell ends on a clock only when one was DECLARED (server shell-budget.ts, 2026-09-29): its Bash
 // `timeout`, an `extend_shell`, held later by an armed `watch`. The server resolves all three into ONE
@@ -9,17 +13,17 @@ import { formatCompactElapsed } from "./durationLabels.ts"
 // default to show, and "no budget" on every dev-server row would be a column of noise. Its age, beside
 // it on the row, is what makes a forgotten one visible.
 //
-// OVER BUDGET is its own word, not "0s left": past the instant the agent has been warned and Frizz
+// PAST TIMEOUT is its own reading, not "times out in 0s": past the instant the agent has been warned and Frizz
 // stops the shell ten minutes later unless it is extended — a state the operator may want to act on.
 export function shellBudgetLabel(budgetEndsAt: string | undefined, nowMs: number): string | undefined {
   const ends = Date.parse(budgetEndsAt ?? "")
   if (!Number.isFinite(ends)) return undefined
   const left = ends - nowMs
-  if (left <= 0) return "over budget"
+  if (left <= 0) return "past timeout"
   // Minutes, never seconds: the rows re-render on the shared 30s clock (useNowMs), so a seconds reading
-  // would sit stale for up to half a minute — "4s left" still on screen 25s after it ran out.
-  if (left < 60_000) return "<1m left"
-  return `${formatCompactElapsed(left)} left`
+  // would sit stale for up to half a minute — "4s" still on screen 25s after it ran out.
+  if (left < 60_000) return "times out in <1m"
+  return `times out in ${formatCompactElapsed(left)}`
 }
 
 /** The row's tooltip for that reading — when the clock runs out and what happens then. */

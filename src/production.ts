@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import type { RemoteController } from "./remote-controller.ts";
+import { wireRemote } from "./remote-wiring.ts";
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 // The registry launcher is intentionally separate from index.ts. `frizz-dev` follows mutable
 // checkout source; `frizz` runs the package that npm resolved and never turns an npx cache into a
@@ -12,15 +14,9 @@ import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/acce
 import { renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
-import { createAccessPane, type AccessPane } from "./access-pane.ts";
-import { installPaneHost, type PaneHost } from "./pane-host.ts";
-import { createRemoteController, type RemoteController } from "./remote-controller.ts";
-import { probeCloudflared, probeGithub, probeTailscale } from "./remote-detect.ts";
-import { createRemotePane } from "./remote-pane.ts";
+import type { AccessPane } from "./access-pane.ts";
+import type { PaneHost } from "./pane-host.ts";
 import { LOOPBACK_BIND_HOST } from "@frizz/server/local-origin";
-import {
-  establishCloudConfig,
-} from "./cloud.ts";
 import { noticeOnlyReadout, Readout, renderSupervisorActivity, tildePath } from "./readout.ts";
 import {
   appendCrashRecord,
@@ -585,32 +581,12 @@ async function runSupervisor(port: number, token: string, onPrepared: () => void
   // The first single-use link, minted now that the board can redeem it. The old `?frizz_token=` this
   // replaced was a STANDING secret: it never expired and never rotated, so anything that saw it once
   // — a screenshot, scrollback, a chat log — kept working forever.
-  remote = createRemoteController({ host: supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`) });
-  try {
-    await remote.serveSaved();
-  } catch (error) {
-    // A saved setup that cannot come up must not take the board down with it: the board still serves
-    // loopback, the readout says so, and R offers the setup again.
-    const message = error instanceof Error ? error.message : String(error);
-    logger.error("remote", message);
-    console.error(`frizz: the saved remote setup could not start: ${message}`);
-  }
-  activeAccessLink = remote.origin() ? supervisor.issueAccessLink() : null;
-
-  // "Press L for a fresh link" — the only way to reissue without restarting. Null when stdout is not
-  // a terminal, which leaves the plain records path untouched.
-  accessPane = createAccessPane({ issue: () => supervisor.issueAccessLink() });
-  const remotePane = createRemotePane({
-    port,
-    current: () => remote?.current() ?? null,
-    apply: (next, applyOptions) => remote!.apply(next, applyOptions),
-    claim: (name) => establishCloudConfig(name, port),
-    issueLink: () => supervisor.issueAccessLink(),
-    probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
-    onChanged: (config) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
-    sandbox: sandbox !== null,
-  });
-  paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });
+  // Serve the saved setup, offer Settings → Remote access, and bind L and R (remote-wiring.ts).
+  const wiring = await wireRemote({ supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`), sandbox: sandbox !== null });
+  remote = wiring.remote;
+  activeAccessLink = wiring.firstLink;
+  accessPane = wiring.accessPane;
+  paneHost = wiring.paneHost;
 
   const stop = createSupervisorShutdownHandler({
     close: () => supervisor.close(),

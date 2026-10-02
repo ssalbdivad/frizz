@@ -53,6 +53,7 @@ import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { interactionQuestionValues, interactionQuestions } from "../lib/interactionQuestion.ts"
 import type { BlockAnswer } from "../lib/questionBlocks.ts"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : "The request could not be updated."
@@ -907,21 +908,24 @@ function InteractionFieldControl({
     control = <div className="mt-1 text-[11px] text-attention-soft-70">Use the secure fallback below.</div>
   } else if (field.input === "multiline") {
     control = (
-      <textarea
-        id={baseId}
-        name={field.id}
-        data-1p-ignore
-        value={typeof value === "string" ? value : ""}
-        onChange={(event) => setValue(event.target.value)}
-        required={field.required}
-        minLength={field.minLength}
-        maxLength={field.maxLength}
-        aria-describedby={describedBy}
-        aria-invalid={Boolean(error)}
-        autoFocus={autoFocus}
-        rows={4}
-        className={`${commonClass} resize-y`}
-      />
+      <>
+        <textarea
+          id={baseId}
+          name={field.id}
+          data-1p-ignore
+          value={typeof value === "string" ? value : ""}
+          onChange={(event) => setValue(event.target.value)}
+          required={field.required}
+          minLength={field.minLength}
+          maxLength={field.maxLength}
+          aria-describedby={describedBy}
+          aria-invalid={Boolean(error)}
+          autoFocus={autoFocus}
+          rows={4}
+          className={`${commonClass} resize-y`}
+        />
+        <TextareaCodeFences value={typeof value === "string" ? value : ""} />
+      </>
     )
   } else if (field.input === "text") {
     const type = field.format === "email" ? "email" : field.format === "uri" ? "url" : field.format === "date" ? "date" : "text"

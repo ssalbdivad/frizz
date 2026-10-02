@@ -1,8 +1,8 @@
 import { useRef, useState } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Code, Copy, Ellipsis, FileText, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
+import { Code, Copy, Ellipsis, FileText, Folder, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
-import type { Api } from "../api/contract.ts"
+import type { Api, ThreadFolderChoice } from "../api/contract.ts"
 import { captureFullscreenEnterAnchor, rememberFullscreenOrigin } from "../lib/fullscreenHandoff.ts"
 import { armFullscreenMorph } from "../lib/fullscreenMorph.ts"
 import { spaNavigate } from "../lib/router.ts"
@@ -10,7 +10,7 @@ import { prefersReducedMotion } from "../lib/sheet.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
-import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 import { displayTitle } from "../groups.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
@@ -20,7 +20,7 @@ import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { closeDrawersById, showToast, store } from "../store.ts"
-import { runExternalOpen } from "../lib/externalOpen.ts"
+import { baseName, runExternalOpen } from "../lib/externalOpen.ts"
 import { embedded } from "../lib/embed.ts"
 import { openInHostEditor } from "../lib/local-file-links.ts"
 import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/workerMaintenance.ts"
@@ -96,15 +96,21 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 }
 
 /** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
- *  The server resolves the folder, the same one a terminal on the thread starts in.
+ *  The server resolves the folder, the same one a terminal on the thread starts in. When the thread's
+ *  sub-agents work in another checkout it opens nothing and hands back the folders, and `choose` puts
+ *  them in front of the human (the ⋯ menu, in its folder mode); the pick comes back as `path`.
  *
  *  IN AN EDITOR'S SIDEBAR the editor is the one the human is sitting in, so the folder goes there, as a
  *  code-file link does (lib/local-file-links.ts openInHostEditor): the extension reveals it in this
  *  window's Explorer. Through the External app it opened a file manager or another window, or — with
  *  System default, or Copy path and no $EDITOR — said "Set External app to an editor in Settings" to a
- *  human already in one (sweep 2026-10-01). */
-function openInEditor(api: Api, slug: string): void {
+ *  human already in one (sweep 2026-10-01). A folder picked from the choices goes the same way. */
+function openInEditor(api: Api, slug: string, choose: (choices: ThreadFolderChoice[]) => void, path?: string): void {
   if (embedded()) {
+    if (path !== undefined) {
+      openInHostEditor(path)
+      return
+    }
     api.threadWorkingDir({ slug }).then(
       ({ dir }) => openInHostEditor(dir),
       (cause: unknown) => showToast("Couldn't find this thread's folder", { detail: (cause instanceof Error ? cause.message : String(cause)).slice(0, 100) }),
@@ -112,12 +118,19 @@ function openInEditor(api: Api, slug: string): void {
     return
   }
   void runExternalOpen(
-    `editor:${slug}`,
+    path === undefined ? `editor:${slug}` : `editor:${slug}:${path}`,
     "Opening in editor…",
-    () => api.openThreadFolder({ slug }),
-    () => {},
+    () => api.openThreadFolder(path === undefined ? { slug } : { slug, path }),
+    (result) => { if (result.choices) choose(result.choices) },
     (message) => `Could not open an editor: ${message}`,
   )
+}
+
+/** Who works in a folder, for its row in the choice: the thread itself, its sub-agents, or both. */
+function folderWorkers(choice: ThreadFolderChoice): string {
+  const agents = choice.agents === 1 ? "1 sub-agent" : `${choice.agents} sub-agents`
+  if (choice.thread) return choice.agents > 0 ? `This thread and ${agents}` : "This thread"
+  return agents
 }
 
 // THE HEADER'S ⋯ MENU: the rarer verbs. It carried "Open fullscreen" and owned `f` until 2026-09-29, when
@@ -136,14 +149,24 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
   const [open, setOpen] = useState(false)
+  // THE FOLDER CHOICE: when "Open in editor" finds the thread and its sub-agents in different checkouts,
+  // this same menu reopens listing them instead of its actions — anchored where the human already looks,
+  // and keyboard-driven by the menu itself (arrows, Enter, Escape, type-ahead on the folder name).
+  const [folders, setFolders] = useState<ThreadFolderChoice[] | null>(null)
   const onOpenChange = (next: boolean) => {
     setOpen(next)
+    if (!next) setFolders(null)
     if (next && ownSession) terminalCommand.prefetch()
   }
+  const chooseFolder = (choices: ThreadFolderChoice[]) => {
+    setFolders(choices)
+    setOpen(true)
+  }
+  const editor = () => openInEditor(api, slug, chooseFolder)
   // The items' keys work without opening the menu: an item exists only while its menu is open, so the
   // trigger — the surface's one always-rendered anchor — carries their commands beside its own `m`.
-  useCommandHandler(trigger, () => onOpenChange(true), "menu")
-  useCommandHandler(trigger, () => { if (ownSession) openInEditor(api, slug) }, "editor")
+  useCommandHandler(trigger, () => { setFolders(null); onOpenChange(true) }, "menu")
+  useCommandHandler(trigger, () => { if (ownSession) editor() }, "editor")
   useCommandHandler(trigger, () => { if (ownSession) terminalCommand.copy() }, "copyCommand")
   const editorKeys = useShortcutLabel("thread.editor")
   const copyKeys = useShortcutLabel("thread.copyCommand")
@@ -169,13 +192,26 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
         </button>
       </MenuTrigger>
       <MenuContent align="end">
+        {folders ? (
+          <>
+            <MenuLabel>Open in editor</MenuLabel>
+            {folders.map((choice) => (
+              <MenuItem key={choice.dir} value={choice.dir} onSelect={() => openInEditor(api, slug, chooseFolder, choice.dir)} icon={<Folder size={12} aria-hidden />}>
+                <span className="flex min-w-0 flex-col" title={choice.dir}>
+                  <span className="truncate text-fg">{baseName(choice.dir)}</span>
+                  <span className="truncate text-[11px] text-muted-55">{folderWorkers(choice)}</span>
+                </span>
+              </MenuItem>
+            ))}
+          </>
+        ) : (<>
         {onDoc && (
           <MenuItem value="doc" onSelect={onDoc} icon={<FileText size={12} aria-hidden />}>
             Frizz document
           </MenuItem>
         )}
         {ownSession && (
-          <MenuItem value="open-in-editor" onSelect={() => openInEditor(api, slug)} icon={<Code size={12} aria-hidden />} shortcut={editorKeys}>
+          <MenuItem value="open-in-editor" onSelect={editor} icon={<Code size={12} aria-hidden />} shortcut={editorKeys}>
             Open in editor
           </MenuItem>
         )}
@@ -202,6 +238,7 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
             </MenuItem>
           </>
         )}
+        </>)}
       </MenuContent>
     </Menu>
     {deleting && <DeleteThreadDialog thread={thread} onClose={() => setDeleting(false)} />}

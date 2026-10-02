@@ -150,6 +150,16 @@ export interface RpcCallOpts {
   signal?: AbortSignal
 }
 
+/** One folder "Open in editor" can offer (server router.ts threadFolderChoices): the thread's own, or a
+ *  checkout its recent sub-agents work in. `agents` counts the recent sub-agents there; `newest` is the
+ *  newest one's description. */
+export interface ThreadFolderChoice {
+  dir: string
+  thread: boolean
+  agents: number
+  newest?: string
+}
+
 export interface Api {
   board(): Promise<BoardSnapshot>
   threadBody(input: { slug: string }): Promise<{ markdown: string }>
@@ -320,7 +330,9 @@ export interface Api {
   // window (the editor bridge, packages/vscode) when the app is one, else its CLI's `-g path:line:col`.
   openLocalFile(input: { path: string; image?: boolean; line?: number; column?: number; endLine?: number }): Promise<{ action: "opened" | "copy"; path: string }>
   // "Open in editor": the thread's working folder, in the External app when it is an editor, else $EDITOR.
-  openThreadFolder(input: { slug: string }): Promise<{ path: string }>
+  // When its sub-agents work in other checkouts it opens nothing and answers `choices`; the pick comes
+  // back as `path`, which must be one of them.
+  openThreadFolder(input: { slug: string; path?: string }): Promise<{ path?: string; choices?: ThreadFolderChoice[] }>
   // The same for the project's own folder — `e` with no thread in front of the human.
   openProjectFolder(input: Record<never, never>): Promise<{ path: string }>
   // A disk-local Markdown file's source, for the built-in reader drawer. Openable-root gated and

@@ -49,9 +49,15 @@ const MACHINE_WIDE = new Set(["projectsList", "projectsQueues", "ofProject", "th
 
 /** The `queryKeyHashFn` for this app's QueryClient. Nothing else should need to call it. */
 export function projectScopedQueryKeyHash(key: readonly unknown[]): string {
-  const head = key[0]
-  if (typeof head === "string" && MACHINE_WIDE.has(head)) return hashKey(key)
   // The page's own project, or "" for the unprefixed launching project — which is a REAL project and
   // must therefore be a stable scope of its own, not an absence of one.
-  return hashKey([`project:${projectSlug() ?? ""}`, ...key])
+  return projectQueryKeyHash(projectSlug() ?? "", key)
+}
+
+/** The hash `key` takes on a page bound to project `slug` — for an entry written BEFORE the page moves
+ *  there (hooks.ts prefetchProjectTranscript). */
+export function projectQueryKeyHash(slug: string, key: readonly unknown[]): string {
+  const head = key[0]
+  if (typeof head === "string" && MACHINE_WIDE.has(head)) return hashKey(key)
+  return hashKey([`project:${slug}`, ...key])
 }

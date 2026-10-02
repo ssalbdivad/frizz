@@ -21,6 +21,7 @@ import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 export interface BlockInteractive {
   answer: BlockAnswer
@@ -266,65 +267,68 @@ export function QuestionBlockCard({
               below the multi-column options, and is an auto-growing textarea (see taRef effect above)
               rather than a one-line input, so a long "something else…" answer stays fully visible. */}
           {interactive && (
-            <textarea
-              ref={taRef}
-              data-1p-ignore
-              rows={1}
-              // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
-              // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same
-              // semantics as the shared Composer) and stops here rather than reaching App's window
-              // handler. NOTE (verified in the real app 2026-07-26): stopping it does NOT keep an
-              // enclosing thread drawer open — Radix's DismissableLayer takes Escape on the document
-              // in the CAPTURE phase, so it has already dismissed the sheet before this bubble-phase
-              // handler runs. The typed answer survives that (it lives in the draft store), but the
-              // "Escape climbs out of the box first" intent only holds on the queue card.
-              data-surface="questionAnswer"
-              value={freetext}
-              onChange={(e) => interactive.onText(e.target.value)}
-              onKeyDown={(e) => {
-                e.stopPropagation()
-                if (e.key === "Escape") {
-                  e.preventDefault()
-                  e.currentTarget.blur()
-                  return
+            <>
+              <textarea
+                ref={taRef}
+                data-1p-ignore
+                rows={1}
+                // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
+                // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same
+                // semantics as the shared Composer) and stops here rather than reaching App's window
+                // handler. NOTE (verified in the real app 2026-07-26): stopping it does NOT keep an
+                // enclosing thread drawer open — Radix's DismissableLayer takes Escape on the document
+                // in the CAPTURE phase, so it has already dismissed the sheet before this bubble-phase
+                // handler runs. The typed answer survives that (it lives in the draft store), but the
+                // "Escape climbs out of the box first" intent only holds on the queue card.
+                data-surface="questionAnswer"
+                value={freetext}
+                onChange={(e) => interactive.onText(e.target.value)}
+                onKeyDown={(e) => {
+                  e.stopPropagation()
+                  if (e.key === "Escape") {
+                    e.preventDefault()
+                    e.currentTarget.blur()
+                    return
+                  }
+                  // Enter (or ⌘/Ctrl-Enter) sends the staged answers; Shift/Option-Enter write a
+                  // NEWLINE (the browser default) — the three Enter keys every box shares since
+                  // 2026-08-26. See shouldSubmitStagedEnter.
+                  if (shouldSubmitStagedEnter({
+                    key: e.key,
+                    altKey: e.altKey,
+                    ctrlKey: e.ctrlKey,
+                    metaKey: e.metaKey,
+                    shiftKey: e.shiftKey,
+                    isComposing: e.nativeEvent.isComposing,
+                    keyCode: e.nativeEvent.keyCode,
+                  })) {
+                    e.preventDefault()
+                    if (gridRef.current && interactive.onEnter) interactive.onEnter(gridRef.current)
+                    else if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
+                    else interactive.onSubmit()
+                  }
+                }}
+                // SINGLE: clicking into the input MOVES the selection here — any chosen chip deselects (its
+                // accent border must not linger once the user commits to typing). MULTI keeps its toggled
+                // set (the freetext only appends color), so don't disturb it on focus. Keeps typed text.
+                onFocus={() => {
+                  if (!isMulti && chosen !== null) interactive.onText(freetext)
+                }}
+                placeholder={
+                  isMulti ? "Add a note…" : parsed.options.length ? `${nextOptionId(parsed.options)} Something else…` : "Type your answer…"
                 }
-                // Enter (or ⌘/Ctrl-Enter) sends the staged answers; Shift/Option-Enter write a
-                // NEWLINE (the browser default) — the three Enter keys every box shares since
-                // 2026-08-26. See shouldSubmitStagedEnter.
-                if (shouldSubmitStagedEnter({
-                  key: e.key,
-                  altKey: e.altKey,
-                  ctrlKey: e.ctrlKey,
-                  metaKey: e.metaKey,
-                  shiftKey: e.shiftKey,
-                  isComposing: e.nativeEvent.isComposing,
-                  keyCode: e.nativeEvent.keyCode,
-                })) {
-                  e.preventDefault()
-                  if (gridRef.current && interactive.onEnter) interactive.onEnter(gridRef.current)
-                  else if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
-                  else interactive.onSubmit()
-                }
-              }}
-              // SINGLE: clicking into the input MOVES the selection here — any chosen chip deselects (its
-              // accent border must not linger once the user commits to typing). MULTI keeps its toggled
-              // set (the freetext only appends color), so don't disturb it on focus. Keeps typed text.
-              onFocus={() => {
-                if (!isMulti && chosen !== null) interactive.onText(freetext)
-              }}
-              placeholder={
-                isMulti ? "Add a note…" : parsed.options.length ? `${nextOptionId(parsed.options)} Something else…` : "Type your answer…"
-              }
-              // Styled as the FINAL option row (same shape as a chip) that SPANS both grid columns.
-              // resize-none + overflow-hidden hand height control to the auto-grow effect (no manual
-              // drag handle, no inner scrollbar). The tinted bg marks the EFFECTIVE answer: content
-              // with no chip chosen (a chosen chip beats the text, so text beside one is an unselected
-              // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
-              // accent border — the selection moves here the moment the box is entered.
-              className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
-                freetext.trim() && (isMulti || chosen === null) ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
-              }`}
-            />
+                // Styled as the FINAL option row (same shape as a chip) that SPANS both grid columns.
+                // resize-none + overflow-hidden hand height control to the auto-grow effect (no manual
+                // drag handle, no inner scrollbar). The tinted bg marks the EFFECTIVE answer: content
+                // with no chip chosen (a chosen chip beats the text, so text beside one is an unselected
+                // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
+                // accent border — the selection moves here the moment the box is entered.
+                className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
+                  freetext.trim() && (isMulti || chosen === null) ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
+                }`}
+              />
+              <TextareaCodeFences value={freetext} />
+            </>
           )}
         </div>
       )}

@@ -92,3 +92,16 @@ export const RAIL_PAPERCLIP_PLAIN_OFFSET = "right-[44px]"
 /** Reserve the leftmost button's edge (99px with GitHub, 72px without), plus 8px for prose. */
 export const RAIL_RESERVE_WITH_ACTION = "pr-[6.6875rem]"
 export const RAIL_RESERVE_PLAIN = "pr-20"
+
+/** The new-thread box's lazy-save glyph (`Snail`) takes the slot directly left of Send, and every slot
+ *  further left moves over by one 28px pitch. The snail's ink is wider than the other bare glyphs', so
+ *  at the rail action's own `right-[43px]` it read 13.5px from Send; it sits 1px further out instead.
+ *  Measured with scripts/ink-gaps.mjs on composer-icons-fixture `?lazy` (dark): 14.25 · 14.25 · 14.5
+ *  with GitHub, 14.25 · 14.5 without, against 14.25 / 14.75 on the strip without the snail. The
+ *  reserves grow by the same 28px. */
+export const RAIL_LAZY_OFFSET = "right-[44px]"
+export const RAIL_LAZY_ACTION_OFFSET = "right-[71px]"
+export const RAIL_LAZY_PAPERCLIP_OFFSET = "right-[99px]"
+export const RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET = "right-[72px]"
+export const RAIL_LAZY_RESERVE_WITH_ACTION = "pr-[8.4375rem]"
+export const RAIL_LAZY_RESERVE_PLAIN = "pr-[6.75rem]"

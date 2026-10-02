@@ -80,7 +80,7 @@ test("a row carries what its surfaces read: the checkout, the budget, the monito
     bgShells: [shell({ id: "m", monitor: true, cwd: "/repo", budgetEndsAt: at("45") })],
   }, [], { now: NOW })
   assert.equal(agent!.monitor, true)
-  assert.equal(agent!.budget?.text, "15m left")
+  assert.equal(agent!.budget?.text, "times out in 15m")
   assert.equal(agent!.checkout, undefined, "the root carries no checkout")
   assert.deepEqual(human!.checkout, { dir: "/repo/.frizz/worktrees/x", kind: "worktree" })
 })

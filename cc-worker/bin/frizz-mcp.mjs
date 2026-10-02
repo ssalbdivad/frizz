@@ -788,8 +788,8 @@ const DONE = {
       body: {
         type: "string",
         description:
-          "THE CARD, as markdown. One to three sentences, then a bullet per deliverable, each opening " +
-          "with a bolded verb phrase naming what shipped and where. Backtick every path, identifier and " +
+          "THE CARD, as markdown, read at a glance — keep it SHORT. At most one sentence, then one " +
+          "ONE-LINE bullet per deliverable (no sub-bullets), each opening with a bolded verb phrase naming what shipped and where. Backtick every path, identifier and " +
           "command, and make file references real links. It is a LEDGER, not a summary: reasoning, " +
           "caveats and anything the human must do belong in your final message instead, because a " +
           "sentence that would read the same in both places belongs in exactly one of them. Nothing " +
@@ -1370,29 +1370,7 @@ async function spawnThread(args) {
     body.spinoffFrom = threadSlug()
   }
 
-  const port = serverLockPort()
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
-  let res
-  try {
-    res = await fetch(`http://127.0.0.1:${port}${rpcPath("dispatch")}`, {
-      method: "POST",
-      // No Origin header (undici omits it for non-browser fetch); `sec-fetch-site: same-origin`
-      // satisfies the server's loopback-origin gate (app.ts isTrustedLocalHttpRequest).
-      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-  } catch (err) {
-    throw new Error(`dispatch request failed: ${err instanceof Error ? err.message : err}`)
-  } finally {
-    clearTimeout(timer)
-  }
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "")
-    throw new Error(`dispatch returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`)
-  }
-  const payload = await res.json().catch(() => null)
+  const payload = await postToFrizz("dispatch", rpcPath("dispatch"), body)
   const slug = payload?.result?.slug
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
   // The result OPENS with the same sentence either way, and the server depends on it: a spinoff whose
@@ -1422,9 +1400,6 @@ async function spawnThread(args) {
   )
 }
 
-/** POST a frizz RPC procedure and return its parsed payload. Shares spawn_thread's transport rules:
- * the port comes from server.lock and `sec-fetch-site: same-origin` satisfies the loopback gate.
- * @param {string} procedure @param {Record<string, unknown>} body @returns {Promise<any>} */
 // HOW LONG A RESTART WINDOW IS ALLOWED TO BE INVISIBLE. frizz replaces its own server routinely
 // ("Update & Restart", a dev rebuild), and this process is deliberately still here across every one of
 // them — so a call landing in that gap is ORDINARY, and failing it is the shim reporting frizz's
@@ -1444,9 +1419,10 @@ const LOCK_RETRY_INTERVAL_MS = 400
 
 /** The port, waiting out a brief restart window rather than failing into one. Rethrows the real
  *  "no running frizz server" error once the budget is spent, so a frizz that is actually down still
- *  says so — and says it with the retry guidance attached. */
-async function serverLockPortWaiting() {
-  const deadline = Date.now() + LOCK_RETRY_MS
+ *  says so — and says it with the retry guidance attached.
+ *  @param {number} deadline epoch ms; shared with postToFrizz's refused-connection retries, so the two
+ *  waits together never exceed one window. */
+async function serverLockPortWaiting(deadline = Date.now() + LOCK_RETRY_MS) {
   for (;;) {
     try {
       return serverLockPort()
@@ -1457,28 +1433,101 @@ async function serverLockPortWaiting() {
   }
 }
 
+// A LIVE LOCK IS NOT A LISTENING PORT. The lock wait above only covers a lock that is missing or names a
+// dead pid. Through the rest of a restart the lock names a pid that is still alive while its port is not
+// answering — the old server between closing its listener and exiting, or a dev supervisor's child being
+// replaced — and the call failed at once with a bare "fetch failed", the same non-answer the lock check
+// was written to remove. Two shapes, and they need opposite advice:
+//
+// - REFUSED (`ECONNREFUSED`): nothing was listening, so the request never left this process. Nothing can
+//   have been applied, so it is retried inside the same window, exactly as a dead lock is.
+// - DROPPED after connecting (`UND_ERR_SOCKET` "other side closed", `ECONNRESET`), or no answer inside
+//   DISPATCH_TIMEOUT_MS: the server had the request and may have acted on it. Retrying blindly could
+//   register a question or spawn a thread twice, so the worker is told it MAY have landed and to check.
+//
+// Measured 2026-10-02 (session fe5967ef): a `done` spent 16s and failed with "markOwnDone request failed:
+// fetch failed" during a server restart. The error carried no advice, the worker never repeated it, and
+// the thread's handoff was never recorded.
+/** @param {unknown} err */
+function causeCode(err) {
+  const cause = err && typeof err === "object" ? /** @type {{ cause?: { code?: unknown } }} */ (err).cause : undefined
+  return typeof cause?.code === "string" ? cause.code : undefined
+}
+
+/** @param {string} what @param {unknown} err */
+function transportFailure(what, err) {
+  if (causeCode(err) === "ECONNREFUSED") {
+    return new Error(
+      `${what} could not reach frizz: its server refused the connection for a whole minute. NOTHING WAS SAVED — ` +
+      "this call had no effect. frizz is probably mid-restart, which is ordinary; RETRY this exact call before " +
+      "you do anything else, and do not come to rest assuming it took.",
+    )
+  }
+  const aborted = err instanceof Error && err.name === "AbortError"
+  const how = aborted
+    ? `frizz did not answer within ${DISPATCH_TIMEOUT_MS / 1000}s`
+    : `the connection to frizz dropped before it answered (${causeCode(err) ?? (err instanceof Error ? err.message : String(err))}) — it was probably restarting`
+  return new Error(
+    `${what}: ${how}. This call MAY OR MAY NOT have taken effect. Check before repeating it — \`activity\` ` +
+    "lists what this thread has registered — and repeat it if it did not land. Do not come to rest assuming it took.",
+  )
+}
+
+/** A refusal frizz wrote for the worker, without the transport wrapped around it. Every handler that
+ *  throws answers HTTP 500 `{"error": "…"}` (packages/rpc errorEnvelope) and an input the schema rejects
+ *  answers 400 the same way, so `extend_shell` used to read "extendOwnShell returned HTTP 500:
+ *  {"error":"no background shell running…"}" — an internal procedure name, a status that says "server
+ *  bug", and JSON quoting around the one sentence that mattered. Any other status (a 404 from a server
+ *  that predates a procedure, which `goal get` matches on) keeps the status line.
+ *  @param {string} what @param {number} status @param {string} detail */
+function httpFailure(what, status, detail) {
+  if (status === 400 || status === 500) {
+    try {
+      const error = JSON.parse(detail)?.error
+      if (typeof error === "string" && error.trim()) return new Error(error.trim())
+    } catch {}
+  }
+  return new Error(`${what} returned HTTP ${status}${detail ? `: ${detail.slice(0, 500)}` : ""}`)
+}
+
+/** POST to frizz's RPC surface at `path`, riding out a restart: waits for a live lock, and retries a
+ *  refused connection, inside one LOCK_RETRY_MS window. Returns the parsed payload; throws the legible
+ *  errors above.
+ *  @param {string} what the procedure name, for messages @param {string} path @param {unknown} body */
+async function postToFrizz(what, path, body) {
+  const deadline = Date.now() + LOCK_RETRY_MS
+  for (;;) {
+    const port = await serverLockPortWaiting(deadline)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
+    let res
+    try {
+      res = await fetch(`http://127.0.0.1:${port}${path}`, {
+        method: "POST",
+        // No Origin header (undici omits it for non-browser fetch); `sec-fetch-site: same-origin`
+        // satisfies the server's loopback-origin gate (app.ts isTrustedLocalHttpRequest).
+        headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      })
+    } catch (err) {
+      if (causeCode(err) === "ECONNREFUSED" && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, LOCK_RETRY_INTERVAL_MS))
+        continue
+      }
+      throw transportFailure(what, err)
+    } finally {
+      clearTimeout(timer)
+    }
+    if (!res.ok) throw httpFailure(what, res.status, await res.text().catch(() => ""))
+    return await res.json().catch(() => null)
+  }
+}
+
+/** POST a frizz RPC procedure and return its parsed payload. @param {string} procedure
+ *  @param {Record<string, unknown>} body @returns {Promise<any>} */
 async function callRpc(procedure, body) {
-  const port = await serverLockPortWaiting()
-  const controller = new AbortController()
-  const timer = setTimeout(() => controller.abort(), DISPATCH_TIMEOUT_MS)
-  let res
-  try {
-    res = await fetch(`http://127.0.0.1:${port}${rpcPath(procedure)}`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
-      body: JSON.stringify(body),
-      signal: controller.signal,
-    })
-  } catch (err) {
-    throw new Error(`${procedure} request failed: ${err instanceof Error ? err.message : err}`)
-  } finally {
-    clearTimeout(timer)
-  }
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "")
-    throw new Error(`${procedure} returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 500)}` : ""}`)
-  }
-  return await res.json().catch(() => null)
+  return postToFrizz(procedure, rpcPath(procedure), body)
 }
 
 /** Which thread this MCP server belongs to. Stamped into our env at spawn (the broker bridge, on the

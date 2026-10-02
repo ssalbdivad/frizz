@@ -15,12 +15,18 @@
 //           a rest time, a spinner — so the names were dropped (maintainer 2026-09-29).
 //   QUIET — Snoozed, Done and External: a muted count per band under the work in flight, in the band's own
 //           glyph (the rail's legend, BandLabel.tsx), never louder than the names. Each count is its own
-//           toggle, collapsed to start (Colin's sidebar had the same three as separate collapsible
-//           sections), and an open band lists under the counts with its own name, rows and verbs.
+//           toggle on the project's row, collapsed to start (Colin's sidebar had the same three as
+//           separate collapsible sections), and an open band lists its rows under the work in flight,
+//           with no name or caret of its own (maintainer 2026-10-01, of a caret row closing every project:
+//           "find some way to have it expand just from the title bar so we don't need anything at the
+//           bottom of the list"). The same day the counts alone proved too hidden ("the click done on the
+//           top being the only way to view is too confusing"), so an unfolded project's list also ENDS in a
+//           small "N more" under its last row, which lists the rest in place (MoreRow) — one unnamed row,
+//           not a caret per band.
 //
 // ONE PRESENTATION, BOTH VIEWS. Focus mode is this list with one project in it; All projects is the same
 // groups, one per project. So the density is what a busy project costs beyond its own rows, and it is
-// measured, not guessed — see BAND_LABEL below and the header of ProjectGroup.
+// measured, not guessed — see the header of ProjectGroup.
 //
 // And the row itself FOLDS its project: one click and everything under it goes, work in flight included,
 // so the list shows only the projects being looked at (lib/crossProject.ts has the folds).
@@ -39,13 +45,13 @@
 // only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronRight, Ellipsis, Plus } from "lucide-react"
+import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
-import { externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
+import { displayTitle, externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { projectSlug } from "../lib/base-path.ts"
@@ -61,7 +67,7 @@ import { edgeScrollVelocity, listDropIndex, listPitch, placeAmong, shiftFor, typ
 import { useSteeredAt } from "../lib/steering.ts"
 import { drawerThreadSlug, store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
-import { BAND_LABEL_TYPE, BANDS, BandCount, type BandKey } from "./BandLabel.tsx"
+import { BANDS, type BandKey } from "./BandLabel.tsx"
 import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectSwitcher.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
@@ -78,6 +84,18 @@ const INDICATOR_SLOT = "flex h-[19px] w-4 shrink-0 items-center justify-center"
 const HEAD_BUTTON_CLASS = "flex min-w-0 flex-1 items-start gap-2 py-0.5 pl-5 pr-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 rounded-md"
 /** The space above every project's group but the first — see ProjectGroup. */
 const GROUP_GAP = "mt-1.5"
+/**
+ * THE RULE BETWEEN PROJECTS (maintainer 2026-10-01: "needs slightly more visual separation between projects
+ * now maybe thin divider? pick something elegant"). A hairline in a 13px gap, starting at the project
+ * squares' left edge so it heads the column the groups hang from, and fading out before the counts: it
+ * parts the projects without boxing them, so the list still reads as one list. Placed on the INK, not the
+ * gap: a thread row keeps ~4.5px of padding and leading under its title, so the gap's middle left 17.5px of
+ * ink above the rule and 9.5px below; 11px up from the next group it stands ~13.5px off each (sans). Between the busy
+ * projects, and once above the quiet ones, which are single rows and need nothing between them. It is a
+ * pseudo-element, so it rides a dragged group's transform; a lifted group drops it.
+ */
+const GROUP_RULE =
+  "relative mt-[13px] before:pointer-events-none before:absolute before:-top-[11px] before:left-5 before:right-1.5 before:h-px before:bg-linear-to-r before:from-border-strong before:from-15% before:to-transparent before:to-90% before:content-['']"
 /** A row whose "…" menu is open wears the rail's hover wash, held. */
 const SELECTED_ROW = "after:!opacity-100"
 /** Done rows listed per page: the band grows without bound, and a project opens on its most recent. */
@@ -197,7 +215,7 @@ export function ProjectList({
           which cost a click to reach a project whose row is already about as quiet as a row can be
           (maintainer: "if I want to navigate to them I shouldn't have to expand"). */}
       {quiet.length > 0 && (
-        <section aria-label="Quiet projects" className={busy.length > 0 ? GROUP_GAP : ""}>
+        <section aria-label="Quiet projects" className={busy.length > 0 ? GROUP_RULE : ""}>
           {quiet.map((entry) => group(entry, false))}
         </section>
       )}
@@ -463,10 +481,11 @@ function useReadAhead(projects: QueuesProject[]) {
  *
  *   the project's row          23px  (27 until 2026-09-29: 2px of padding a side, not 4 — the 16px square
  *                                     still has 3.5px around it, and nothing wraps in it)
- *   a band's name, per band    15px  (BAND_LABEL — Colin's was a 23.7px header under a 25px rule)
- *   the space before the next   6px  (12)
+ *   a band's name, per band     0px  (none since 2026-10-01: the count on the project's row is its only
+ *                                     handle; 15px before, and Colin's was a 23.7px header under a 25px rule)
+ *   the space before the next  13px  (GROUP_RULE's hairline in its middle; 6 until 2026-10-01, 12 before)
  *
- * so a busy project costs 23 + 6 = 29px beyond its rows now that no loud band is named (59 while both were, 80 while the quiet counts sat on a 21px line of their own under the
+ * so a busy project costs 23 + 13 = 36px beyond its rows (29 with the 6px gap) now that no loud band is named (59 while both were, 80 while the quiet counts sat on a 21px line of their own under the
  * threads, 2026-09-29 only), against 66px before its bands had names — and the same project in Colin's sidebar, one project per page, cost
  * 267px for its six headers and five rules.
  *
@@ -558,6 +577,7 @@ function ProjectGroupRows({
   const live = onPage ? (snap.board as BoardSnapshot) : null
   const opened = collapsed ? [] : QUIET_BANDS.filter((band) => open.has(bandKey(project.id, band)))
   const cached = useProjectBoard(project.id, opened.length > 0 && !onPage && project.open)
+  const [donePage, setDonePage] = useState(DONE_PAGE)
   const board = onPage ? live : cached
   const quiet = useMemo(() => quietBands(project, board), [project, board])
   // Only the page project's drawers can be open on this page, so only its rows can be the one up in one.
@@ -618,7 +638,7 @@ function ProjectGroupRows({
       data-xq-project-held={grip?.held || undefined}
       // Lifted while held: the page's own colour under it, so the rows it slides over do not show through,
       // and a shadow that says it is off the list. `relative` so the lift stacks above its neighbours.
-      className={`${spaced ? GROUP_GAP : ""} ${grip?.held ? "relative z-10 cursor-grabbing rounded-md bg-bg shadow-lg shadow-shadow-ink/50" : ""}`}
+      className={`${spaced && !grip?.held ? GROUP_RULE : spaced ? "mt-[13px]" : ""} ${grip?.held ? "relative z-10 cursor-grabbing rounded-md bg-bg shadow-lg shadow-shadow-ink/50" : ""}`}
       style={{
         transform: grip?.offset ? `translateY(${grip.offset}px)` : undefined,
         // The held group tracks the pointer exactly; the ones it passes are what animate.
@@ -650,7 +670,17 @@ function ProjectGroupRows({
           {slots("pinned").map(row)}
           {slots("ready").map(row)}
           {slots("working").map(row)}
-          {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} />}
+          {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} donePage={donePage} />}
+          {(loud.rows > 0 || opened.length > 0) && (
+            <MoreRow
+              project={project}
+              quiet={quiet}
+              opened={opened}
+              doneDrawn={Math.min(donePage, slots("done").length)}
+              onMore={() => setDonePage((page) => page + DONE_PAGE * 2)}
+              onLess={() => setDonePage(DONE_PAGE)}
+            />
+          )}
         </ThreadProjectScope>
       )}
     </section>
@@ -662,54 +692,6 @@ const QUIET_BANDS: readonly QuietBandKey[] = ["snoozed", "done", "external"]
 
 /** Every band a project's rows are drawn in, loud then quiet — the sections lib/heldLayout.ts holds. */
 type ListBand = "pinned" | "ready" | "working" | QuietBandKey
-
-/**
- * AN OPEN QUIET BAND'S NAME, over its rows — the rail's legend (BandLabel.tsx BANDS), in the rail header's
- * own face, and the band's collapse (`onToggle`). Its glyph stands in the INDICATOR column, where each
- * row's state glyph stands, so the project's cord strings it like a row (ThreadConnector) and the name
- * starts on the titles' column. The loud bands carry no name (ProjectGroup).
- */
-function BandName({ band, count, onToggle }: { band: QuietBandKey; count: number; onToggle: () => void }) {
-  const { Icon, label } = BANDS[band]
-  const body = (
-    <>
-      {/* The band table's glyph at the size its names wear it everywhere (BandLabel.tsx BandGlyph). Its
-          ink centre sits 0.3px under the name's cap band here (sans) — under the device grid, so it is
-          left alone. */}
-      <span data-xq-indicator className={BAND_GLYPH_SLOT}>
-        <Icon size={11} />
-      </span>
-      <span>{label}</span>
-      <BandCount count={count} />
-    </>
-  )
-  const className = `${BAND_LABEL} ${BAND_LABEL_TYPE}`
-  return (
-    <button
-      type="button"
-      data-xq-band-label={band}
-      data-xq-reshape
-      aria-expanded
-      title={`Hide ${label.toLowerCase()}`}
-      onClick={onToggle}
-      className={`${className} w-full rounded-md text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
-    >
-      {body}
-    </button>
-  )
-}
-
-/**
- * The band name's line. 15px, MEASURED against the rows either side (sans): the name's 11px capitals are
- * 8px of ink, and a row's 13px title leaves ~7px of its own line box and padding clear above and below its
- * ink, so at 15px the name stands ~10.5px off the row above and ~9.5px off the row below — a gap each way
- * that reads as a break in the list, where 12px left the name touching the titles and 19px (a row's line)
- * read as an empty row. `pl-5` and `gap-2` put the glyph in the indicator column and the name on the
- * titles' column.
- */
-const BAND_LABEL = "flex h-[15px] min-w-0 items-center gap-2 pl-5 pr-1.5 pt-1"
-/** The glyph's slot: the indicator column's 16px, so the glyph stands where each row's state glyph does. */
-const BAND_GLYPH_SLOT = "flex h-full w-4 shrink-0 items-center justify-center"
 
 interface QuietBands {
   /** Pinned threads that are Done: still on the shelf (the pin outranks Done), so listed loud — but only
@@ -751,12 +733,13 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
   const openInPlace = useOpenThreadInPlace()
   const slug = project.slug
   const id = project.id
+  const name = project.name
   const open = useCallback(
     (t: ThreadView) => {
       if (queued(t) && onQueuedRow(threadKey(id, t.id)) !== null) return
-      openInPlace({ slug }, t.id)
+      openInPlace({ slug, id, name }, t.id, displayTitle(t))
     },
-    [id, slug, onQueuedRow, openInPlace],
+    [id, slug, name, onQueuedRow, openInPlace],
   )
   return useMemo(() => ({ open, page }), [open, page])
 }
@@ -765,15 +748,12 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
  * A project's own row — the same for a busy project heading its threads and a quiet one alone.
  *
  * ITS CLICK FOLDS THE PROJECT (maintainer 2026-09-28: "we need a primary collapse button that would easily
- * allow you to visually filter which projects you're looking at"), and OPENS IT ONE STEP FURTHER each time
- * (2026-10-01: "clicking expand once its already open would be a good way to let people see done/snoozed").
- * A busy project cycles folded → its work in flight → that and every quiet band it has → folded, the last
- * click putting the bands away with it so the cycle starts over. Unfolding a project with nothing Ready
- * skips the middle step ("if a project has nothing ready, clicking expand should probably expand
- * done/snoozed etc. as well"): its work in flight is all it would show, and none of it wants you. A step
- * with nothing to add is skipped too — a project with no quiet bands just folds and unfolds. A quiet project
- * has nothing under it but the rest, so its click opens every quiet band it has (any it lacks, if some are
- * open already), and the next puts them all away.
+ * allow you to visually filter which projects you're looking at"). A busy project folds away EVERYTHING
+ * under its row — its work in flight and, if any is open, the rest — and a second click brings it all
+ * back; each quiet band opens from its own count on the row (QuietToggles). Unfolding a project with nothing Ready opens the rest too (maintainer 2026-10-01: "if a project has
+ * nothing ready, clicking expand should probably expand done/snoozed etc. as well") — its work in flight is
+ * all it would show, and none of it wants you. A quiet project has nothing under it but the rest, so its
+ * click opens every quiet band it has, and folds them away again.
  * Nothing navigates. The whole row is the fold's target; only its own controls sit above it.
  *
  * Its right edge carries, in order: the quiet bands' counts — each ITS OWN toggle, always here, folded or
@@ -816,27 +796,26 @@ function ProjectRow({
   const focused = view.kind === "project" && view.slug === project.slug
   const note = project.stale ? "Directory is missing" : !project.open ? "Not open" : null
   const quietBandsHere = QUIET_BANDS.filter((band) => quietCount(quiet, band) > 0)
+  // A project with nothing Ready and nothing Working — at most its pins — opens the rest like a quiet one
+  // rather than folding its pins away (maintainer 2026-10-01: "if a project has no ready/working threads,
+  // the expand button should open done"). Its pins stay listed either way.
+  const folds = busy && count + working > 0
   // Whether anything is listed under the row: the fold's own state, on either kind of project.
-  const unfolded = busy ? !collapsed : opened.length > 0
-  // What the click does next, by the cycle above. "all" opens every quiet band, on top of what is listed.
-  const allOpen = quietBandsHere.every((band) => opened.includes(band))
-  const next: "unfold" | "all" | "fold" | "hide" = !busy
-    ? allOpen && opened.length > 0 ? "hide" : "all"
-    : collapsed ? count === 0 && quietBandsHere.length > 0 ? "all" : "unfold"
-    : allOpen ? "fold" : "all"
+  const unfolded = folds ? !collapsed : opened.length > 0
   const fold = () => {
-    // A fold left over from when the project was busy is lifted, so the click always shows what it says.
-    if (next !== "fold") setProjectCollapsed(project.id, false)
-    if (next === "all") setBandsOpen(project.id, quietBandsHere, true)
-    if (next === "hide" || next === "fold") setBandsOpen(project.id, QUIET_BANDS, false)
-    if (next === "fold") setProjectCollapsed(project.id, true)
+    if (folds) {
+      setProjectCollapsed(project.id)
+      if (collapsed && count === 0) setBandsOpen(project.id, quietBandsHere, true)
+      return
+    }
+    // A quiet project folds only the rest. A fold left over from when it was busy is lifted, so the click
+    // always shows what it says it will.
+    setProjectCollapsed(project.id, false)
+    setBandsOpen(project.id, quietBandsHere, opened.length === 0)
   }
-  const foldTitle = {
-    unfold: `Show ${project.name}'s threads`,
-    all: `Show everything in ${project.name}`,
-    fold: `Collapse ${project.name}'s threads`,
-    hide: `Hide everything in ${project.name}`,
-  }[next]
+  const foldTitle = folds
+    ? `${collapsed ? "Show" : "Collapse"} ${project.name}'s threads`
+    : `${opened.length > 0 ? "Hide" : "Show"} everything in ${project.name}`
   return (
     <div
       data-xq-project-row={project.id}
@@ -876,13 +855,13 @@ function ProjectRow({
           {/* THE DISCLOSURE, in the gutter the rail's scroll marker uses — where the rail's own collapsible
               band headers kept theirs, so the list folds the way the rail did. Only while it means
               something: on hover (and always on touch), and HELD whenever the project is not as it starts —
-              a busy project folded away (pointing right), any project showing the rest (turned down). A busy
+              a busy project folded away (pointing right), a quiet one showing the rest (turned down). A busy
               project open, the usual case, draws none, so the list is not a column of chevrons. */}
           <span
             aria-hidden
             data-xq-project-chevron
             className={`pointer-events-none absolute left-[4.5px] top-0.5 flex h-[19px] items-center text-muted-60 transition-[opacity,transform] ${unfolded ? "rotate-90" : ""} ${
-              (busy && collapsed) || opened.length > 0 ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
+              (folds ? collapsed : opened.length > 0) ? "opacity-100" : "opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100 [@media(hover:none)]:opacity-100"
             }`}
           >
             <ChevronRight size={11} />
@@ -897,47 +876,46 @@ function ProjectRow({
           </span>
         </button>
       )}
-      {/* The right edge, beside the fold rather than inside it: the counts are buttons of their own. On a
-          touch screen the "…" never hides, so they step left of it rather than under it. */}
-      <div className="flex shrink-0 items-center gap-2 self-stretch pr-1.5 [@media(hover:none)]:pr-7">
+      {/* THE RIGHT EDGE, flush with every thread row's readings under it, and filled from the right: the
+          Ready badge when there is one, then the counts, then — on hover — the "…". Each mark that
+          appears takes its place on the LEFT of the ones already there, so nothing already drawn moves
+          and the column lines up down the whole list (maintainer 2026-10-01: "everything has to be right
+          aligned so it all lines up and new icons appear as needed moving left"). It used to hold a
+          19px slot for the badge on every row, so a project with no badge stood its counts 27px in from
+          the thread clocks beneath it, and the "…" overlaid that slot on hover. Beside the fold rather
+          than inside it: the counts are buttons of their own. */}
+      <div className="flex shrink-0 items-center gap-2 self-stretch pr-1.5">
+        {project.card && (
+          <div className={`items-center group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
+            <ProjectMenu
+              project={project.card}
+              home={home}
+              githubRepo={project.githubRepo}
+              focused={focused}
+              onFocus={() => {
+                // Leaving a project for All projects carries it over as the prompt box's pick, as the
+                // switcher does (AllQueues.tsx Switcher).
+                if (focused) rememberCrossProjectFocus(project.id)
+                navigate(focused ? viewHref(ALL_PROJECTS) : projectViewHref(project.slug))
+                glideTo(() => 0)
+              }}
+              onOpenChange={setMenuOpen}
+            >
+              <button type="button" aria-label={`More actions for ${project.name}`} className={`${ROW_ACTION_CLASS} data-[state=open]:bg-panel-2 data-[state=open]:text-fg data-[state=open]:opacity-100`}>
+                <Ellipsis size={13} />
+              </button>
+            </ProjectMenu>
+          </div>
+        )}
         {note ? (
           <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
-            <QuietToggles project={project} quiet={quiet} opened={opened} working={collapsed ? working : 0} />
-            {/* The Ready count, in the "…"'s own slot — it gives way to the menu on hover. */}
-            {project.card && (
-              <span
-                className={`flex w-[19px] shrink-0 justify-end transition-opacity group-hover:opacity-0 group-has-[:focus-visible]:opacity-0 ${menuOpen ? "opacity-0" : ""} [@media(hover:none)]:opacity-100`}
-              >
-                {count > 0 && <QueueBadge count={count} />}
-              </span>
-            )}
+            <QuietToggles project={project} quiet={quiet} opened={opened} working={collapsed && folds ? working : 0} />
+            {count > 0 && <span className="flex shrink-0"><QueueBadge count={count} /></span>}
           </>
         )}
       </div>
-      {project.card && (
-        <div className={`absolute right-1.5 top-0.5 items-center group-hover:flex group-has-[:focus-visible]:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
-          <ProjectMenu
-            project={project.card}
-            home={home}
-            githubRepo={project.githubRepo}
-            focused={focused}
-            onFocus={() => {
-              // Leaving a project for All projects carries it over as the prompt box's pick, as the
-              // switcher does (AllQueues.tsx Switcher).
-              if (focused) rememberCrossProjectFocus(project.id)
-              navigate(focused ? viewHref(ALL_PROJECTS) : projectViewHref(project.slug))
-              glideTo(() => 0)
-            }}
-            onOpenChange={setMenuOpen}
-          >
-            <button type="button" aria-label={`More actions for ${project.name}`} className={`${ROW_ACTION_CLASS} data-[state=open]:bg-panel-2 data-[state=open]:text-fg data-[state=open]:opacity-100`}>
-              <Ellipsis size={13} />
-            </button>
-          </ProjectMenu>
-        </div>
-      )}
     </div>
   )
 }
@@ -1005,9 +983,10 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
 
 /**
  * The quiet bands that are open, in the rail's own order — Snoozed, then Done (its most recent first, a
- * page at a time), then External, the project's own terminals, which a message takes over — each under its
- * name, which closes it. Off the cord: the cord is the work in flight (ThreadConnector reads only the
- * group's own children, and these sit in a container of their own).
+ * page at a time), then External, the project's own terminals, which a message takes over — their rows
+ * alone, under the work in flight: each band's handle is its count on the project's row, and a Done or
+ * Snoozed row wears its band in its own glyph. Off the cord: the cord is the work in flight
+ * (ThreadConnector reads only the group's own children, and these sit in a container of their own).
  */
 function QuietBands({
   project,
@@ -1015,53 +994,110 @@ function QuietBands({
   slots,
   opened,
   row,
+  donePage,
 }: {
   project: QueuesProject
   quiet: QuietBands
   /** The rows each band DRAWS — held while the pointer is over the list, so a band whose last row left on
-   *  its own keeps its name and that row until the hold ends. */
+   *  its own keeps that row until the hold ends. */
   slots: (band: ListBand) => HeldSlot<ThreadView>[]
   opened: readonly QuietBandKey[]
   row: (slot: HeldSlot<ThreadView>) => ReactNode
+  /** How many Done rows are listed — the rest are paged in by the group's MoreRow. */
+  donePage: number
 }) {
-  const [donePage, setDonePage] = useState(DONE_PAGE)
-  const shown = opened.filter((band) => slots(band).length > 0 || (band === "done" && quiet.done === undefined && quiet.doneCount > 0))
-  const close = (band: QuietBandKey) => () => setBandOpen(project.id, band, false)
+  const bands = opened.filter((band) => slots(band).length > 0 || (band === "done" && quiet.done === undefined && quiet.doneCount > 0))
+  if (bands.length === 0) return null
   return (
     <div data-xq-drill={project.id} className="flex min-w-0 flex-col">
-      {shown.includes("snoozed") && (
-        <div data-xq-drill-band="snoozed">
-          <BandName band="snoozed" count={quiet.snoozed.length} onToggle={close("snoozed")} />
-          {slots("snoozed").map(row)}
+      {bands.map((band) => (
+        <div key={band} data-xq-drill-band={band} data-xq-drill-open>
+          {band !== "done" && slots(band).map(row)}
+          {band === "done" &&
+            (slots("done").length > 0 ? (
+              slots("done").slice(0, donePage).map(row)
+            ) : (
+              <div aria-busy className="py-1 pl-[44px] text-[11.5px] leading-[19px] text-muted-50">
+                Loading…
+              </div>
+            ))}
         </div>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * THE END OF AN UNFOLDED PROJECT'S LIST: "⌄ N more" while any of its rest is not listed — a quiet band
+ * still closed, or Done rows past the page — and "⌃ Show less" beside it once any of the rest is. It names
+ * no band (maintainer 2026-10-01: "a little expand button … at the bottom of each list … without the word
+ * done"): the rest is one continuation of the list, and the counts on the project's row stay the way to
+ * open a single band. "More" opens every closed band first, then pages Done; "less" closes them all.
+ * At the thread titles' column, in the muted tone the quiet counts use, so it reads as the list's tail and
+ * not as a row of its own.
+ */
+function MoreRow({
+  project,
+  quiet,
+  opened,
+  doneDrawn,
+  onMore,
+  onLess,
+}: {
+  project: QueuesProject
+  quiet: QuietBands
+  opened: readonly QuietBandKey[]
+  /** How many Done rows the open Done band lists right now. */
+  doneDrawn: number
+  onMore: () => void
+  onLess: () => void
+}) {
+  const closed = QUIET_BANDS.filter((band) => quietCount(quiet, band) > 0 && !opened.includes(band))
+  const unpaged = opened.includes("done") && quiet.done !== undefined ? Math.max(0, quiet.done.length - doneDrawn) : 0
+  const more = closed.reduce((sum, band) => sum + quietCount(quiet, band), 0) + unpaged
+  const less = opened.length > 0
+  if (more === 0 && !less) return null
+  // The chevron paints 5.5 of its 11 box px, so its box starts 2px left of the titles' column (pl-42, not
+  // 44) to put its INK on the titles' ink, and sits 1px from its words for a ~4px ink gap; gap-1 drew 7px.
+  // Vertically it sits on its words' cap band the way the row's counts do (QuietToggles): box-centred, it
+  // read 1px low (sans, 11px). Both chevrons' ink is symmetric in the box, so the box centre is the ink's.
+  const action = "flex h-[19px] items-baseline gap-px rounded px-1 -mx-1 outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+  return (
+    <div data-xq-more={project.id} className="flex items-center gap-3 py-0.5 pl-[42px] pr-1.5 text-[11px] leading-[19px] text-muted-55">
+      {more > 0 && (
+        <button
+          type="button"
+          data-xq-reshape
+          data-xq-more-open
+          className={action}
+          onClick={() => {
+            setProjectCollapsed(project.id, false)
+            if (closed.length > 0) setBandsOpen(project.id, closed, true)
+            else onMore()
+          }}
+        >
+          <span aria-hidden className="flex self-baseline translate-y-[calc(5.5px_-_0.5cap)]">
+            <ChevronDown size={11} />
+          </span>
+          <span className="tabular-nums">{more} more</span>
+        </button>
       )}
-      {shown.includes("done") && (
-        <div data-xq-drill-band="done">
-          <BandName band="done" count={quiet.doneCount} onToggle={close("done")} />
-          {slots("done").length > 0 ? (
-            <>
-              {slots("done").slice(0, donePage).map(row)}
-              {slots("done").length > donePage && (
-                <button
-                  type="button"
-                  data-xq-reshape
-                  onClick={() => setDonePage((page) => page + DONE_PAGE * 2)}
-                  className="rounded-md py-1 pl-[44px] pr-1.5 text-left text-[11.5px] leading-[19px] text-muted-60 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-                >
-                  Show {Math.min(DONE_PAGE * 2, slots("done").length - donePage)} more
-                </button>
-              )}
-            </>
-          ) : (
-            <div aria-busy className="py-1 pl-[44px] text-[11.5px] leading-[19px] text-muted-50">Loading…</div>
-          )}
-        </div>
-      )}
-      {shown.includes("external") && (
-        <div data-xq-drill-band="external">
-          <BandName band="external" count={quiet.external.length} onToggle={close("external")} />
-          {slots("external").map(row)}
-        </div>
+      {less && (
+        <button
+          type="button"
+          data-xq-reshape
+          data-xq-more-close
+          className={action}
+          onClick={() => {
+            setBandsOpen(project.id, QUIET_BANDS, false)
+            onLess()
+          }}
+        >
+          <span aria-hidden className="flex self-baseline translate-y-[calc(5.5px_-_0.5cap)]">
+            <ChevronUp size={11} />
+          </span>
+          Show less
+        </button>
       )}
     </div>
   )

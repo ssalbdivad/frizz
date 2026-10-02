@@ -124,6 +124,8 @@ test("an answer that lands after the turn rested is dropped", async () => {
     firstMs: 0,
   })
   live.onActivity(storage.getSession(SLUG)!)
+  // The read is awaited before the model is asked, so let it reach the model call first.
+  await new Promise((r) => setImmediate(r))
   live.onTurnDone(storage.getSession(SLUG)!)
   release("Running the test suite")
   await new Promise((r) => setImmediate(r))

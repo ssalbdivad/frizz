@@ -1,18 +1,15 @@
-import { Fragment, memo, useCallback, useRef, useState } from "react"
+import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlarmClock, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
-import { questionsOwed, type SubAgentView, type ThreadView } from "@frizz/shared"
-import { pushSubAgentDrawer, showToast } from "../store.ts"
+import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
+import { questionsOwed, type ThreadView } from "@frizz/shared"
+import { showToast } from "../store.ts"
 import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
 import { ageSpan, relativeAge, limitResumeClock } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { humpStarts } from "../lib/threadMentions.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
-import { ChildOpRow } from "./ChildOpRow.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
-import { subAgentFold, toggleSubAgentFold, useSubAgentFoldOpen } from "../lib/subAgentFold.ts"
-import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
@@ -25,9 +22,6 @@ import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import { clearPinned, markPinned } from "../lib/optimisticPin.ts"
-import { holdLayout, type HeldSection } from "../lib/heldLayout.ts"
-import { actedOnHere } from "../lib/humanActs.ts"
-import { useListHold } from "../lib/listHold.ts"
 import type { ReactElement, ReactNode } from "react"
 
 // THE THREAD ROW — one thread as a line of a list, with its indicator, its title and trailers, and the
@@ -102,16 +96,11 @@ export interface RowScope {
   page: boolean
 }
 
-// One row of a band: the thread, then its live sub-agents as rows of their own. A thread's TERMINALS get
-// no row and no mark (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already
+// One row of a band. A thread's live sub-agents get no row of their own — a count on the thread's row
+// (SubAgentCount) — and its TERMINALS get no row and no mark (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already
 // say everything one could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
 export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean }) {
-  return (
-    <>
-      <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} />
-      <SubAgentRows t={t} scope={scope} />
-    </>
-  )
+  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} />
 }
 
 // A section header: an optional collapse caret, the band's icon, its name, and the count. ONE source
@@ -261,7 +250,7 @@ export const ThreadRow = memo(function ThreadRow({
   // A ROW IS ITS TITLE, AND NOTHING ELSE (maintainer 2026-08-19: "there should never ever be any fucking
   // thing in the sidebar except for the fucking title"). There is no subtitle line on any row, in any
   // state: not the fence's PR ref, not a snooze, not the legacy `.frizz` activity gloss, not a sub-agent
-  // count. Every one of them was a second, competing status beside the row's own — the rail is a column
+  // count line. Every one of them was a second, competing status beside the row's own — the rail is a column
   // of NAMES you scan, and each caption added there made the next one harder to find.
   //
   // ONE EXCEPTION, ON THE SAME LINE: a WORKING thread's status, in grey after its name, with its task clock
@@ -271,7 +260,8 @@ export const ThreadRow = memo(function ThreadRow({
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
-  // the detail is available on demand and never spends a line of the rail. That is the same call that
+  // the detail is available on demand and never spends a line of the rail. Live sub-agents are the other
+  // reading that costs no line: a quiet count in the right-edge column (SubAgentCount). That is the same call that
   // hid the SNOOZED label (2026-08-03) and the worker's reason (2026-08-16), applied to the last of them.
   //
   // THE HOVER WASH IS AN `after:` PSEUDO PAINTED ABOVE THE ROW, not a background under it. The hover
@@ -335,6 +325,7 @@ export const ThreadRow = memo(function ThreadRow({
                 </span>
               )}
             </span>
+            <SubAgentCount t={t} yieldsToRetry={hoverActions} />
             {working && <WorkingAge elapsed={working.elapsed} yieldsToRetry={hoverActions} />}
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
@@ -390,10 +381,6 @@ export const ThreadRow = memo(function ThreadRow({
           {!foreign && pinned && <RowPinButton t={t} />}
         </div>
       )}
-      {/* Live children render as SIBLING rows under this one, not inside it — see SubAgentRows, which
-          RailRow mounts directly after each ThreadRow (maintainer 2026-07-09: render
-          running sub-agents in the sidebar). They replaced an old one-line summary suffix that used to
-          live in this row's subtitle. */}
     </div>
   )
 })
@@ -630,78 +617,6 @@ function RowUncheckDone({ t }: { t: ThreadView }) {
   )
 }
 
-// The rail's INDENTED child rows — the same shared ChildOpRow the queue cards and the drawer's ops
-// strip render, at "rail" density (the [ ]/[/] checkbox motif the rest of the rail speaks, indented to
-// clear the parent row's indicator column). The liveness policy is the rail's own and is deliberately
-// unchanged: running OR stale, and only children carrying an id (the drill-in drawer's RPC handle —
-// see lib/childOps.ts, which lists all three surfaces' divergent policies in one place).
-//
-// FOLDED BY DEFAULT (maintainer 2026-09-29): one "3 sub-agents" line that spins while any of them runs,
-// and opens to the rows themselves one indent step deeper, so they read as its contents. See
-// lib/subAgentFold.ts for why the names wait for a click.
-function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
-  const api = useThreadApi()
-  const open = useSubAgentFoldOpen(t.id)
-  // HELD WITH THE LIST (lib/listHold.ts): a sub-agent's line appearing or going pushes every row under it,
-  // so while the pointer is over the list the lines stay as drawn — a child that finished keeps its line,
-  // as it is now, and a new one waits — unless this tab acted on the thread (dismissed a child, say).
-  const held = useListHold()
-  const drawn = useRef<HeldSection<SubAgentView & { id: string }>[]>([])
-  const layout = holdLayout({
-    prev: drawn.current,
-    target: [{ id: "subs", items: visibleChildOps(t.subAgents ?? [], "rail") }],
-    keyOf: (s) => s.id,
-    frozen: held,
-    moved: () => actedOnHere(t.id),
-    live: (id) => t.subAgents?.find((s): s is SubAgentView & { id: string } => s.id === id),
-  })
-  drawn.current = layout
-  const subs = layout[0]?.slots.map((slot) => slot.item) ?? []
-  if (subs.length === 0) return null
-  const fold = subAgentFold(subs)
-  // A child's drawer is pushed on the PAGE project, so a row of another project opens its parent's
-  // drawer instead (its ops strip lists the same children, one click from their own). Its × goes
-  // through the row's own project's client, so it stops THIS thread's child and not a child of the page
-  // project's same-named thread.
-  const foreignToPage = !scope.page
-  return (
-    <div className="flex flex-col" data-rail-subagents={t.id}>
-      <ChildOpRow
-        kind="AGENT"
-        label={fold.label}
-        state={fold.state}
-        density="rail"
-        parentSlug={t.id}
-        onOpen={() => toggleSubAgentFold(t.id)}
-        disclosure={{ open }}
-        title={fold.names}
-      />
-      {open && subs.map((s) => (
-        <ChildOpRow
-          key={s.id}
-          kind={s.workflow ? "WORKFLOW" : "AGENT"}
-          // The child's HANDLE (`cache-keys`), the segment typed after `@thread.`; the fold line above
-          // is a count, not a name, and keeps its words.
-          label={subAgentName(s.label)}
-          state={s.state}
-          density="rail"
-          // One step under the fold line, and a sub-agent's own sub-agents one further, so a branch reads
-          // as a tree. `s.depth` itself is untouched: the dismisser keys off the child's real depth.
-          depth={(s.depth ?? 1) + 1}
-          startedAt={s.startedAt}
-          parentSlug={t.id}
-          onOpen={() => (foreignToPage ? scope.open(t) : pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }))}
-          // The same dismiss × the queue card and the ops strip carry (maintainer 2026-07-30): the rail
-          // is where a phantom child is most often SEEN, so it is where retiring one has to be possible.
-          onDismiss={childOpDismisser(t.id, s, "AGENT", api)}
-          // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
-          title={s.workflow ? `[workflow] ${s.label}` : s.phase ? `${s.phase} › ${s.label}` : s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
-        />
-      ))}
-    </div>
-  )
-}
-
 /** THE ROW'S POPOVER — ONE SENTENCE about the wait, then the worker's own sentence under it.
  *
  *  The rail's rows are TITLE-ONLY (see ThreadRow), so this is the only place the wait is legible, which
@@ -743,6 +658,46 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 
 // How long a working thread has been on the task its inline status names — the rested row's rest-time
 // column and type, so a rail's right edge always reads as "time", whichever band the row is in.
+// A THREAD'S LIVE SUB-AGENTS, AS A COUNT IN THE RIGHT-EDGE COLUMN — a robot and `5`, left of the clock.
+// They were rows of their own under the thread until 2026-10-01, then one folded "5 sub-agents" line;
+// either way every busy thread took two lines of a rail that is meant to be a column of names, for a
+// list nobody opened from there (maintainer 2026-10-01: "usually people won't want to click on it from
+// that view"). The count is every child the drawer would list, at every depth — a workflow and each
+// agent it fanned out — under the rail's liveness policy (lib/childOps.ts visibleChildOps). The names
+// ride the tooltip; the children themselves are one click away on the card and in the drawer, which is
+// where the row's own click already goes.
+//
+// THE PROJECT ROW'S COUNTS, SPOKEN THE SAME WAY (ProjectList QuietToggles): glyph first, then digits,
+// a 10px glyph 3px from them, in the column's type and grey — so the robot here and the Working count's
+// robot on a folded project are one mark. It yields to the hover actions as the clock does.
+//
+// THE BOT'S FACE SITS ON THE DIGITS' CAP BAND, NOT ITS INK BOX: the antenna is a hairline and the eye
+// reads the face, so centring the whole ink (antenna included) left the face riding low beside the
+// number (maintainer 2026-10-01: "alignment super needs to be fixed"). In lucide's 24-unit box the
+// face's ink (rect y 8–20 plus its stroke) centres at y 14, which is 4.17px above the bottom of a 10px
+// box; `self-baseline` puts that bottom on the baseline, and the translate lifts the face's centre to
+// half the cap height. Measured residual ~0 (sans, 10.5px); `cap` keeps it right in any font.
+function SubAgentCount({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?: boolean }) {
+  const subs = visibleChildOps(t.subAgents ?? [], "rail")
+  if (subs.length === 0) return null
+  const names = subs.map((s) => subAgentName(s.label)).join(", ")
+  return (
+    <span
+      data-rail-subagents={t.id}
+      title={names}
+      aria-label={`${subs.length} ${subs.length === 1 ? "sub-agent" : "sub-agents"}`}
+      className={`flex shrink-0 items-baseline gap-[3px] text-[10.5px] leading-[19px] text-muted-55 ${
+        yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
+      }`}
+    >
+      <span aria-hidden className="flex self-baseline translate-y-[calc(4.17px_-_0.5cap)]">
+        <Bot size={10} />
+      </span>
+      <span className="tabular-nums">{subs.length}</span>
+    </span>
+  )
+}
+
 function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry?: boolean }) {
   return (
     <span

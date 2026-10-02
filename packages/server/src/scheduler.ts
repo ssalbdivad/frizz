@@ -2461,7 +2461,20 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // When EVERY dead name simply finished, the news is not "your fence is wrong" — it is "the thing
       // you were waiting for is done". Different fact, different next action.
       const allFinished = dead.length > 0 && dead.every(finishedItem)
+      // ONE EVENT, ONE WAKE. A shell that finished AFTER this rest gets its own wake from SOURCE "shell
+      // completions" (evalShellCompletions), which is the same news. Sending this one too delivered both,
+      // merged under two headings — "the work you parked on has FINISHED" and "your background shell
+      // finished" — for the one shell (observed 2026-10-01 on wsl-cleanup). So when every dead name is
+      // such a shell, that wake speaks and this one stays quiet. A shell that finished BEFORE the rest
+      // gets no completion wake (the runtime folded it into the turn), so the park still says it here.
+      const finishedAfterRest = new Set<string>()
+      const restedAtMs = Date.parse(tele.lastAssistantAt ?? "")
+      for (const sh of tele.retiredShells ?? []) {
+        if (!(Date.parse(sh.finishedAt ?? "") > restedAtMs)) continue
+        for (const h of [sh.taskId, sh.id, sh.label]) if (h) finishedAfterRest.add(h)
+      }
       const retired = retiredAwaitingKindsIn(tele.lastFence.body ?? "")
+      if (allFinished && retired.length === 0 && dead.every((i) => i.kind === "shell" && finishedAfterRest.has(i.value))) continue
       const head = retired.length > 0
         ? [
           // The LEAD comes from shared so the transcript can recognise this delivery as a correction and
@@ -2481,7 +2494,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "issues: [owner/repo#45]       GitHub issues registered with `mcp__frizz__watch_issue`",
           "for:    2h                    REQUIRED — a DURATION, never an instant",
           "---",
-          "your handoff prose, as much as you want",
+          "one or two sentences: what is running, and what it gates",
           "```",
           "",
           "Keep the keys you need and drop the rest. There is NO prose above the `---`: a colon or a ` #`",
@@ -2564,7 +2577,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const clock = wakeTimeHeader(nowMs, spokeAt)
       const message = ops.length > 0
         ? `${head}\n${ops.join("\n")}`
-        : cause === "expired"
+        // A wait that FINISHED is not a fence naming nothing: its head already says "read the result and
+        // carry on", and the "nothing could wake you, finish in done" tail contradicted it.
+        : cause === "expired" || allFinished
         ? head
         : `${head}\n\nYou have NOTHING running right now — no shell, no sub-agent, no timer, no registered\npull request. There is nothing that could wake you, so this thread is not awaiting: finish in\n\`\`\`done, or register a question with \`mcp__frizz__ask\`.`
       // THE CONSECUTIVE CAP, and the reason SOURCE 12 needed one. A correction is only worth sending to a
@@ -2590,7 +2605,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: fenceId,
         message: messageWithClock,
-        reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : `awaiting park named ${dead.length} dead item(s)`,
+        reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : allFinished ? "the work you parked on finished" : `awaiting park named ${dead.length} dead item(s)`,
       }, nowMs).delivery
       // COUNTED AT ENQUEUE, not at delivery — the one place the sign-off nudge's idiom does not transfer.
       // A nudge counts when it lands because it fires on a rest the thread is dispatchable for; a

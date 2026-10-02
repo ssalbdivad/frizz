@@ -287,7 +287,7 @@ const SEP = <span aria-hidden className="text-muted-25">·</span>
 /**
  * ONE ROW for one process, whoever started it. The ops strip's row box (ChildOpRow's sheet density):
  *
- *   ⤷ [owner glyph, hue = state] TERM  label  × ……  [📁 root ·] [N lines ·] [45m left | state] · 12m
+ *   ⤷ [owner glyph, hue = state] TERM  label  × ……  [📁 root ·] [N lines ·] [times out in 45m | state] · 12m
  *
  * The tag is `TERM` for every row: the owner is the glyph's job, and the tag's word is the kind of thing
  * this is — a terminal, whether its output streams from a pty (yours) or from the file the harness writes

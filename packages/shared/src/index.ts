@@ -1757,18 +1757,19 @@ export const SIGNOFF_NUDGE_MESSAGE = [
   "  with a question in its body is plain prose. Register it (options with one-line trade-offs, the",
   "  recommended one first), then rest normally — an open registered question is the sign-off.",
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
-  "  if anything is still owed, it is not done. Body: 1-3 sentences, then bullets, each opening with a",
-  "  **bolded verb phrase**.",
+  "  if anything is still owed, it is not done. Body: at most one sentence, then one ONE-LINE bullet per",
+  "  deliverable, each opening with a **bolded verb phrase**. A card is read at a glance: keep it short.",
   "- `` ```awaiting `` — you are WAITING on work that is actually running. FRONTMATTER, THEN MARKDOWN:",
   "  one YAML list per kind of thing you are waiting on, a REQUIRED `for:` duration, then a `---` line and",
-  "  as much prose as you want. The prose is OPTIONAL; the lines above it are not.",
+  "  ONE OR TWO SENTENCES naming what is running and what it gates — never the plan for when it lands.",
+  "  The prose is OPTIONAL; the lines above it are not.",
   "",
   "  ```awaiting",
   "  shells: [<the id your runtime gave you>]",
   "  prs: [owner/repo#123]",
   "  for: 2h",
   "  ---",
-  "  What you are waiting for, in your own words — this is what the human reads on your card.",
+  "  What is running and what it gates, in one sentence — this is what the human reads on your card.",
   "  ```",
   "",
   "  Frizz CHECKS every line: name something that is not running and you are bumped rather than parked.",
@@ -3043,6 +3044,10 @@ export const ThreadFence = z.object({
   // is in no message, needs the client to know it must draw the card itself at the bottom of the thread
   // (maintainer 2026-08-27: a thread that signed off by tool rested with no card at all).
   registered: z.literal(true).optional(),
+  // On a registered done only: the human has written since it was registered and the worker answered in
+  // prose, so the done still stands (board.registeredDoneFence) but its ledger is old news. The client
+  // draws the card without its body (web lib/registeredDone registeredDoneBody).
+  spokenPast: z.literal(true).optional(),
 })
 export type ThreadFence = z.infer<typeof ThreadFence>
 
@@ -3406,6 +3411,10 @@ export const ThreadView = z.object({
   // thread reads `needsYou: false` meanwhile, but no hold stands any more — so nothing may read a park
   // into it (groups.isSnoozed), and its page keeps its handoff card.
   queueSettling: z.boolean().optional(),
+  // True while the ONLY thing queuing this thread is a reply to the human they have not read: it is
+  // parked on a wait it named, and once they have seen the reply it leaves the queue on its own. The
+  // card says so and offers "Mark as read" (board.ts queuedForReply).
+  queuedForReply: z.boolean().optional(),
   // True only for the crash/stall branch (pane exited while the transcript still says in-flight).
   // Once every ordinary rest also queues, runtime=exited + needsYou is no longer enough for clients
   // to distinguish a failed worker from a clean completed process.

@@ -2,6 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { spawn } from "node:child_process"
 import { createServer } from "node:http"
+import { createServer as createNetServer } from "node:net"
 import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
@@ -1515,6 +1516,113 @@ test("a call landing in a restart window waits for the server instead of failing
     assert.equal(call.result.isError, undefined, "the window must be invisible to the worker")
     assert.deepEqual(seen, ["/_frizz/rpc/listOwnThreadTimers"], "and the call actually lands, once")
     assert.ok(Date.now() - started >= 8_000, "it really did wait past the old window")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A LIVE LOCK WHOSE PORT REFUSES IS STILL A RESTART WINDOW. The lock names a pid that is alive while
+// nothing listens — the old server closing, a dev child being replaced — and the call used to fail at
+// once with a bare "fetch failed" (2026-10-02, session fe5967ef: a `done` lost that way, never repeated).
+// A refused connection sent nothing, so it is retried inside the same window; `spawn_thread`, which had
+// no restart wait at all, rides the same path.
+test("a refused connection behind a live lock is waited out, for every tool including spawn_thread", async () => {
+  const probe = createServer()
+  await new Promise<void>((resolve) => probe.listen(0, "127.0.0.1", resolve))
+  const port = (probe.address() as { port: number }).port
+  await new Promise<void>((resolve) => probe.close(() => resolve()))
+  const seen: string[] = []
+  const http = createServer((req, res) => {
+    seen.push(req.url ?? "")
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: { timers: [], slug: "spawned-child" } }))
+  })
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-refused-"))
+  // OUR pid: alive, so the lock check passes and only the connection can fail.
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ pid: process.pid, port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "refused-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "timer", arguments: { action: "list" } } })
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "spawn_thread", arguments: { prompt: "p", model: "opus", effort: "low" } } })
+    const timerCall = rpc.next(2)
+    const spawnCall = rpc.next(3)
+    await new Promise((r) => setTimeout(r, 3_000))
+    await new Promise<void>((resolve) => http.listen(port, "127.0.0.1", resolve))
+    assert.equal((await timerCall).result.isError, undefined, "the refused window must be invisible to the worker")
+    assert.equal((await spawnCall).result.isError, undefined)
+    assert.deepEqual(seen.sort(), ["/_frizz/rpc/dispatch", "/_frizz/rpc/listOwnThreadTimers"], "each call lands exactly once")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A CONNECTION DROPPED AFTER THE REQUEST WENT OUT IS NOT RETRIED — the server may have acted on it, and a
+// blind retry could register a question or spawn a thread twice — but it is no longer a bare "fetch
+// failed": the worker learns the call may have landed and that it must check, not assume.
+test("a connection dropped mid-call says the call MAY have landed and to check, and is not retried", async () => {
+  let requests = 0
+  const raw = createNetServer((socket) => {
+    socket.once("data", () => {
+      requests++
+      socket.destroy()
+    })
+  })
+  await new Promise<void>((resolve) => raw.listen(0, "127.0.0.1", resolve))
+  const port = (raw.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-dropped-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ pid: process.pid, port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "dropped-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "done", arguments: { body: "Finished." } } })
+    const failed = await rpc.next(2)
+    assert.equal(failed.result.isError, true)
+    const text = failed.result.content[0].text
+    assert.match(text, /connection to frizz dropped before it answered/)
+    assert.match(text, /MAY OR MAY NOT have taken effect/)
+    assert.match(text, /repeat it if it did not land/)
+    assert.doesNotMatch(text, /^`done` failed: \w+ request failed: fetch failed$/, "not the bare transport error")
+    assert.equal(requests, 1, "a request the server may have applied is never resent")
+  } finally {
+    rpc.kill()
+    raw.close()
+  }
+})
+
+// A REFUSAL READS AS THE SENTENCE FRIZZ WROTE. Every handler that throws answers HTTP 500 {"error": …}, so
+// `extend_shell` read "extendOwnShell returned HTTP 500: {\"error\":\"no background shell…\"}" — an internal
+// procedure name, a status that reads as a server crash, and JSON around the one line that mattered.
+test("a handler's refusal reaches the worker as its own sentence, not an HTTP 500 envelope", async () => {
+  const refusal = "no background shell running on this thread answers to `bad5ozjm1` — call `activity` for the exact ids."
+  const http = createServer((req, res) => {
+    if ((req.url ?? "").endsWith("/extendOwnShell")) {
+      res.writeHead(500, { "content-type": "application/json" })
+      res.end(JSON.stringify({ error: refusal }))
+    } else {
+      res.writeHead(404, { "content-type": "text/plain" })
+      res.end("404 Not Found")
+    }
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-refusal-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "refused-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "extend_shell", arguments: { shell: "bad5ozjm1", for: "3h" } } })
+    const text = (await rpc.next(2)).result.content[0].text
+    assert.equal(text, `\`extend_shell\` failed: ${refusal}`)
+    // A status that is not a handler's refusal keeps its status line — `goal get` reads "HTTP 404" as "this
+    // server predates the procedure", and that branch must still fire.
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "goal", arguments: { action: "get" } } })
+    assert.match((await rpc.next(3)).result.content[0].text, /predates the read action/)
   } finally {
     rpc.kill()
     http.close()

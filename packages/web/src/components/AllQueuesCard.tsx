@@ -24,6 +24,7 @@ import { useLocation, useNavigate } from "react-router"
 import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
+import { prefetchProjectTranscript } from "../hooks.ts"
 import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
@@ -44,7 +45,7 @@ import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
 import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
-import { showsRegisteredDoneCard } from "../lib/registeredDone.ts"
+import { registeredDoneBody, showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
@@ -154,11 +155,20 @@ export function crossProjectThreadHref(project: Pick<QueuesProject, "slug">, slu
  * project list opens one (`openThread`: the drawer animates in and the store writes the URL). Any other thread moves
  * the focus there by URL, which rebinds the page project and opens the drawer once its board lands
  * (routes.tsx CrossProjectPage → store.resolveRoutedThread).
+ *
+ * THAT DRAWER IS SECONDS AWAY, SO ITS FRAME IS NOT. The rebind re-renders the whole page for the new
+ * project and the drawer cannot exist until that project's board has landed: measured 2026-10-01 on a
+ * loaded WSL box, a click on "Show earlier messages" drew nothing for 4–6s, then the transcript 3s after
+ * that. So the click first puts the drawer's frame on screen (store.pendingOpen → PendingThreadSheet) and
+ * starts reading the transcript through the thread's own project, and only navigates once the frame has
+ * painted — the rebind's render would otherwise hold the frame's first paint hostage too. The real drawer
+ * takes the frame's place, already open, with the transcript waiting in the cache.
  */
-export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, slug: string) => void {
+export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug" | "id" | "name">, slug: string, title?: string) => void {
   const navigate = useNavigate()
+  const qc = useQueryClient()
   return useCallback(
-    (project, slug) => {
+    (project, slug, title) => {
       // The focus AS OF THE CLICK, read off the address bar — never the one this component last rendered
       // with. react-router renders a location change as a transition, and under load the page it leads to
       // took up to 1.8s to commit, so for that long the page on screen was the one BEFORE it, clickable,
@@ -167,10 +177,21 @@ export function useOpenThreadInPlace(): (project: Pick<QueuesProject, "slug">, s
       // address writer refused to name a board the page no longer owned, the rebind swept the drawer away,
       // and the click did nothing. The address has moved on the moment the router has, so it cannot lag.
       const focus = projectSlug()
-      if (project.slug === focus && store.board?.projectSlug === focus) openThread(slug)
-      else navigate(crossProjectThreadHref(project, slug), { state: IN_PLACE_OPEN_STATE })
+      if (project.slug === focus && store.board?.projectSlug === focus) {
+        openThread(slug)
+        return
+      }
+      const pending = { projectSlug: project.slug, projectName: project.name, slug, title: title ?? slug }
+      store.pendingOpen = pending
+      prefetchProjectTranscript(qc, project, slug)
+      // rAF runs before the frame's paint and a timeout queued from it after, so the navigation's render
+      // starts once the frame is on screen. An open closed or replaced in between never navigates.
+      requestAnimationFrame(() => window.setTimeout(() => {
+        if (store.pendingOpen?.slug !== pending.slug || store.pendingOpen.projectSlug !== pending.projectSlug) return
+        navigate(crossProjectThreadHref(project, slug), { state: IN_PLACE_OPEN_STATE })
+      }, 0))
     },
-    [navigate],
+    [navigate, qc],
   )
 }
 
@@ -289,14 +310,14 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   // that project's); otherwise the thread's drawer carries it.
   const openProcess = (process: ThreadProcess) => {
     const here = focusedProject(project.slug)
-    openInPlace(project, thread.id)
+    openInPlace(project, thread.id, displayTitle(thread))
     if (here) openProcessDrawer(thread.id, process)
   }
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
     if (!isPlainLeftClick(event)) return
     event.preventDefault()
-    openInPlace(project, thread.id)
+    openInPlace(project, thread.id, displayTitle(thread))
   }
 
   return (
@@ -344,7 +365,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   lead={<span aria-hidden>·</span>}
                   resolve={(slug) => queueThread(project, slug)}
                   href={(slug) => crossProjectThreadHref(project, slug)}
-                  onOpen={(slug) => openInPlace(project, slug)}
+                  onOpen={(slug) => { const t = queueThread(project, slug); openInPlace(project, slug, t ? displayTitle(t) : undefined) }}
                 />
                 {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
                 <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
@@ -430,7 +451,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               ))}
               {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
               {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
-                ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id)} onSnoozed={onLeave} onUndone={onUnsnoozed} />
+                ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
                 : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
               {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
                   contract now asks for first — is in no message, so the handoff text above carries no fence
@@ -438,7 +459,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
                   from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
                   the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
                   Held until the handoff is read, or a fenced done would draw here first and then swap. */}
-              {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={thread.lastFence!.body} />}
+              {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={registeredDoneBody(thread.lastFence!)} />}
               {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
                   with its real buttons, under the prose that led to it. It is the whole reason such a card
                   is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
@@ -494,7 +515,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
               thread={thread}
               api={api}
               agents={!drawsSubAgentWait}
-              onOpenThread={() => openInPlace(project, thread.id)}
+              onOpenThread={() => openInPlace(project, thread.id, displayTitle(thread))}
               after={cardProcesses(thread, Date.now()).length > 0 ? (
                 <div data-queue-processes={thread.id} className="min-w-0">
                   <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
@@ -507,6 +528,7 @@ export const AllQueuesCard = memo(function AllQueuesCard({
 
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
             <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
+              {thread.queuedForReply && <MarkReadButton project={project} thread={thread} onRead={onLeave} onFailed={onReturn} />}
               <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
               <StateButton thread={thread} onArchived={onSent} onDismissCancel={onReturn} onCompleted={onLanded} command />
             </footer>
@@ -545,6 +567,37 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
  * The thread header's stall recovery (HeaderActions.tsx RetryButton): the same message through the same
  * follow-up, sent to the thread's own project. The thread goes back to work, so the card leaves.
  */
+/**
+ * THE WAY OUT FOR A REPLY THAT IS ALL THE CARD IS FOR (ThreadView.queuedForReply). The thread is parked on
+ * a wait it named and queues only because the human has not read its answer, and until this the one thing
+ * that cleared it was opening the drawer — the card showed the reply, an Awaiting fence and nothing to
+ * press. Recording it seen is the same write the drawer makes on open (threadSeen), so the park takes and
+ * the thread moves to Snoozed until its wait wakes it. Optimistic, like Mark as done: the card leaves on
+ * the click and comes back if the write fails.
+ */
+function MarkReadButton({ project, thread, onRead, onFailed }: { project: QueuesProject; thread: ThreadView; onRead: () => void; onFailed: () => void }) {
+  const [pending, setPending] = useState(false)
+  return (
+    <button
+      type="button"
+      data-mark-read
+      disabled={pending}
+      onClick={() => {
+        setPending(true)
+        onRead()
+        projectRpc(project.id).threadSeen({ slug: thread.id }).catch((error) => {
+          onFailed()
+          setPending(false)
+          showToast(`Couldn’t mark as read: ${(error as Error).message.slice(0, 80)}`)
+        })
+      }}
+      className="rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg disabled:opacity-60"
+    >
+      Mark as read
+    </button>
+  )
+}
+
 function RetryButton({ project, thread, onSent, onLanded, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onLanded: () => void; onFailed: () => void }) {
   const queryClient = useQueryClient()
   const retry = useMutation({
@@ -591,6 +644,7 @@ function RetryButton({ project, thread, onSent, onLanded, onFailed }: { project:
  */
 function ProjectLinkScope({ project, children }: { project: QueuesProject; children: ReactNode }) {
   const navigate = useNavigate()
+  const openInPlace = useOpenThreadInPlace()
   const { pathname } = useLocation()
   const onClickCapture = (event: ReactMouseEvent<HTMLDivElement>) => {
     if (event.button !== 0) return
@@ -624,6 +678,16 @@ function ProjectLinkScope({ project, children }: { project: QueuesProject; child
     // thread's /full, and the way out of that page looks its origin up by its own slug.
     const full = inner.match(/^\/thread\/([^/?#]+)\/full\/?$/)
     if (full) rememberFullscreenOrigin(decodeURIComponent(full[1]!), pathname)
+    // A thread of this card's own project — the card's "Show earlier messages" and title among them, which
+    // this capture reaches before their own handlers — opens through the one in-place verb, so its drawer's
+    // frame is up at the click rather than seconds later (useOpenThreadInPlace).
+    const thread = inner.match(/^\/thread\/([^/?#]+)\/?$/)
+    if (thread && linked === project.slug) {
+      const slug = decodeURIComponent(thread[1]!)
+      const t = queueThread(project, slug)
+      openInPlace(project, slug, t ? displayTitle(t) : undefined)
+      return
+    }
     navigate(inner.startsWith("/thread/") ? `${crossProjectHref(linked)}${inner}` : href)
   }
   return <div className="contents" onClickCapture={onClickCapture}>{children}</div>
@@ -702,7 +766,8 @@ function FenceBody({ kind, body }: { kind: "done" | "awaiting"; body: string }) 
   const html = useMarkdownHtml(body)
   return (
     <TranscriptCard icon={kind === "done" ? Check : Hourglass} label={kind === "done" ? "Done" : "Awaiting"}>
-      {html && <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} />}
+      {/* null, not a falsy "": an empty body (registeredDoneBody) is a header-only card, not a blank content gap. */}
+      {html ? <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} /> : null}
     </TranscriptCard>
   )
 }

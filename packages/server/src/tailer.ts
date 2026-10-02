@@ -39,7 +39,8 @@ import { log as frizzLog } from "./logging.ts"
 import { frizzTempDir } from "./frizz-paths.ts"
 import { declaredShellBudgetMs } from "./shell-budget.ts"
 import { vetHarnessOutputPath } from "./background-shell-output.ts"
-import { liftRepoWorktree, liftWorkingDir } from "./thread-cwd.ts"
+import { leadingCd, liftRepoWorktree, liftWorkingDir } from "./thread-cwd.ts"
+export { leadingCd }
 // A cycle (transcript.ts imports this module's fence parser), safe because neither reads the other at
 // module load: codexToolWorkdir is only ever called from inside a fold.
 import { codexToolWorkdir } from "./transcript.ts"
@@ -407,6 +408,8 @@ export interface FenceView {
   // Set by the board alone, on the fence it synthesizes from a REGISTERED done (board.registeredDoneFence);
   // the tailer never sets it, because everything it parses came from a message.
   registered?: true
+  // Board-only too: the human spoke after the registered done, which still stands (registeredDoneFence).
+  spokenPast?: true
 }
 
 // Per-session derived telemetry surfaced to the board overlay. Structurally a NormalizedTail (the
@@ -1177,26 +1180,6 @@ function shellSummary(command: unknown): string {
   const first = (command.split("\n").find((l) => l.trim()) ?? "").trim().replace(/\s+/g, " ")
   if (!first) return "background shell"
   return first.length > 120 ? `${first.slice(0, 119)}…` : first
-}
-
-// WHERE A SHELL STARTS when its command opens with a `cd`. The launch record's `cwd` is where the SESSION
-// was; `cd /home/ssalb/frizz/packages/web && nubx vite` runs the server somewhere else, and a worktree
-// shell is very often exactly `cd .frizz/worktrees/x && …`. Deliberately NARROW: one leading `cd` to a
-// literal path, then `&&` or `;`. A bare token with no `$`, backtick, glob or subshell character, or the
-// same wrapped in plain quotes; `~` is the home folder and a relative path resolves against `base`.
-// Anything cleverer (`cd "$D"`, `pushd`, a `cd` mid-command, a subshell) answers undefined and the shell
-// keeps the session's folder until the OS names the one its process is really in (shell-cwd-probe.ts).
-const LEADING_CD_RE = /^\s*cd\s+(?:"([^"$`*?(\\]+)"|'([^'$`*?(]+)'|([^\s"'$`*?(;&|<>\\]+))\s*(?:&&|;)/
-
-export function leadingCd(command: unknown, base: string | undefined): string | undefined {
-  if (typeof command !== "string" || !base) return undefined
-  const m = LEADING_CD_RE.exec(command)
-  const raw = (m?.[1] ?? m?.[2] ?? m?.[3])?.trim()
-  if (!raw || raw.startsWith("-")) return undefined // `cd -` / an option is not a folder
-  if (raw === "~") return homedir()
-  if (raw.startsWith("~/")) return join(homedir(), raw.slice(2))
-  if (raw.startsWith("~")) return undefined // `~user` — not ours to resolve
-  return isAbsolute(raw) ? resolve(raw) : resolve(base, raw)
 }
 
 // The folder a launch record says a shell starts in: its leading `cd`, else the session's own `cwd`.

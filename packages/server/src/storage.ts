@@ -1737,13 +1737,18 @@ export function createStorage(source: string | Database, projectId: string): Sto
   //
   // So keep the last read and re-run the query only when the database actually moved. Two cheap probes
   // decide that, and they are deliberately BOTH here:
-  //   * `total_changes()` (~0.3µs) counts rows this connection has inserted/updated/deleted. It moves
-  //     for any write we made, whatever table — over-invalidating (a `tail_state` flush re-reads the
-  //     sessions) but never under-invalidating, which is the only direction that could serve stale rows.
-  //     A no-op UPDATE that matches nothing does not move it, so the per-assemble snooze sweep is free.
-  //   * `PRAGMA data_version` (~1.8µs) changes only when ANOTHER connection commits. Today one process
-  //     owns each project DB, so this never fires; it is here so that if that ever stops being true the
-  //     failure mode is a re-read rather than a board frozen forever.
+  //   * `scope.writes("session")` counts the row-changing writes this project's scope has made to the
+  //     session table (project-scope.ts; it was `total_changes()` until the database became one file
+  //     for every project). A no-op UPDATE that matches nothing does not move it, so the per-assemble
+  //     snooze sweep is free, and neither does a `tail_state` flush.
+  //   * `PRAGMA data_version` changes only when ANOTHER connection commits. Today one process owns the
+  //     database, so this never fires; it is here so that if that ever stops being true the failure
+  //     mode is a re-read rather than a board frozen forever. It is read ONCE PER SYNCHRONOUS TURN, not
+  //     once per call: `getSession` asks on behalf of every row the board assembles, and on the
+  //     mirrored 440-session machine (2026-10-01) the probe — measured at ~1.8µs bare, ~38µs through
+  //     the statement wrapper on a busy shared connection — cost 578ms of a 40s profile, more than the
+  //     lookups it guarded. Another process's commit landing mid-turn is seen at the next turn, which is
+  //     the same answer a read taken a moment earlier would have given.
   // Both are read on every call rather than trusting a hand-maintained version counter: there are ~40
   // statements that write this table, and a new one added later must not be able to silently serve
   // stale rows to the board.
@@ -1758,10 +1763,18 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const readAllSessions = () => selAll.all().filter((row) => ThreadSlug.safeParse(row.slug).success)
   // True while the memoised snapshot is still the database's current state. Both probes are read every
   // time; see the note above for why neither alone is enough.
+  let turnDataVersion: number | undefined
+  const dataVersionThisTurn = (): number => {
+    if (turnDataVersion === undefined) {
+      turnDataVersion = dataVersionStmt.get()?.data_version ?? -1
+      queueMicrotask(() => { turnDataVersion = undefined })
+    }
+    return turnDataVersion
+  }
   const cacheIsCurrent = (): boolean => {
     if (db.inTransaction) return false
-    const changes = scope.writes()
-    const dataVersion = dataVersionStmt.get()?.data_version ?? -1
+    const changes = scope.writes("session")
+    const dataVersion = dataVersionThisTurn()
     if (cachedSessions && changes === cachedAtChanges && dataVersion === cachedAtDataVersion) return true
     cachedSessions = null
     cachedBySlug = null

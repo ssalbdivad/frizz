@@ -19,6 +19,8 @@ import "./styles.css"
 const params = new URLSearchParams(location.search)
 const authed = !params.has("unauthed")
 const heals = params.has("heals")
+// `?lazy` passes `onSaveLazy`, as the new-thread box does: the lazy-save glyph joins the rail beside send.
+const lazy = params.has("lazy")
 let githubStatusCalls = 0
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
@@ -44,6 +46,7 @@ function Fixture() {
           value={value}
           onChange={setValue}
           onSubmit={() => {}}
+          {...(lazy ? { onSaveLazy: () => {} } : {})}
           placeholder="Describe the task…"
           minHeight={96}
           maxHeight={340}

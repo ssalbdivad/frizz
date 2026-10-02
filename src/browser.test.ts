@@ -4,7 +4,11 @@ import {
   bundleNameMatchesManifest,
   defaultBrowserOpenCommand,
   launchBrowserTab,
+  runUrlHandler,
 } from "./browser.ts"
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
 
 test("default browser launch uses each platform's shell-free URL handler", () => {
   const url = "http://127.0.0.1:4917"
@@ -90,4 +94,81 @@ test("a Chrome-disambiguated shim bundle is the same app, not a stale one", () =
   assert.equal(bundleNameMatchesManifest("Frizz "), false)
   assert.equal(bundleNameMatchesManifest("Frizz 1x"), false)
   assert.equal(bundleNameMatchesManifest(""), false)
+})
+
+// ── The real URL-handler runner, against real processes ────────────────────────────────────────────
+// These spawn shell scripts standing in for xdg-open, because the bug lived in how the runner treats a
+// live child — a stub runner cannot show it. Linux/macOS only: the stand-ins are POSIX sh.
+
+function fakeOpener(body: string): { path: string; dir: string } {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-url-handler-"))
+  const path = join(dir, "xdg-open")
+  writeFileSync(path, `#!/bin/sh\n${body}\n`)
+  chmodSync(path, 0o755)
+  return { path, dir }
+}
+
+function alive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+test("a handler that runs the browser in the FOREGROUND is accepted promptly and left running", { skip: process.platform === "win32" }, async () => {
+  // xdg-open starting snap Firefox does not return until Firefox quits. The old runner waited 10s,
+  // SIGTERMed it and reported failure while the browser was already open.
+  const { path, dir } = fakeOpener(`echo $$ > "${"$"}(dirname "$0")/pid"\necho "snapd: cannot change mount namespace" >&2\nexec sleep 30`)
+  let pid = 0
+  try {
+    const started = performance.now()
+    await runUrlHandler(path, ["http://127.0.0.1:4917/"], { acceptAfterMs: 300 })
+    const elapsed = performance.now() - started
+    assert.ok(elapsed < 3_000, `accepted after ${Math.round(elapsed)}ms — it must not wait for the browser to exit`)
+    // The stand-in writes its pid as its first act, but on a loaded box that can land after 300ms.
+    for (let waited = 0; !pid && waited < 10_000; waited += 50) {
+      try {
+        pid = Number(readFileSync(join(dir, "pid"), "utf8"))
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50))
+      }
+    }
+    assert.equal(alive(pid), true, "the runner must never kill the browser it asked to open")
+  } finally {
+    if (pid && alive(pid)) process.kill(pid, "SIGKILL")
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a handler that exits 0 resolves at once, without waiting out the acceptance window", { skip: process.platform === "win32" }, async () => {
+  const { path, dir } = fakeOpener("exit 0")
+  try {
+    const started = performance.now()
+    await runUrlHandler(path, ["http://127.0.0.1:4917/"], { acceptAfterMs: 20_000 })
+    assert.ok(performance.now() - started < 10_000)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a handler that refuses (nonzero exit) is a failure, named without the opener's stderr", { skip: process.platform === "win32" }, async () => {
+  const { path, dir } = fakeOpener("echo 'xdg-open: no method available' >&2\nexit 3")
+  try {
+    await assert.rejects(runUrlHandler(path, ["http://127.0.0.1:4917/"], { acceptAfterMs: 20_000 }), (error: Error) => {
+      assert.match(error.message, /exited with code 3$/)
+      assert.doesNotMatch(error.message, /no method available/)
+      return true
+    })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a missing handler binary is a failure, not a hang", async () => {
+  await assert.rejects(
+    runUrlHandler(join(tmpdir(), "frizz-no-such-opener-binary"), ["http://127.0.0.1:4917/"], { acceptAfterMs: 20_000 }),
+    /ENOENT/,
+  )
 })

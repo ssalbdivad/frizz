@@ -24,7 +24,7 @@ import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
-import { readTranscript, sourceForThread } from "./transcript.ts"
+import { readTranscriptYielding, sourceForThread } from "./transcript.ts"
 import { forkPointOf } from "./fork-point.ts"
 import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
@@ -935,7 +935,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     writeStatus: threadNamer.available ? (input) => threadNamer.status(input) : undefined,
     nameOf: (row) => threadNamer.threads().find((t) => t.slug === row.slug)?.name || undefined,
-    readMessages: (sessionId, forkAnchor) => readTranscript(project, sessionId, forkAnchor),
+    readMessages: (sessionId, forkAnchor) => readTranscriptYielding(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
   })
@@ -948,7 +948,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     complete: threadNamer.available && process.env.FRIZZ_LIVE_STATUS !== "0"
       ? createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) })
       : undefined,
-    readMessages: (sessionId, forkAnchor) => readTranscript(project, sessionId, forkAnchor),
+    readMessages: (sessionId, forkAnchor) => readTranscriptYielding(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] working status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
     ...(Number.isInteger(liveStatusMs) && liveStatusMs > 0 ? { intervalMs: liveStatusMs, firstMs: Math.min(liveStatusMs, 20_000) } : {}),

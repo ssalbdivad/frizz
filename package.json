@@ -30,7 +30,7 @@
     "dist"
   ],
   "scripts": {
-    "dev": "nub packages/server/src/dev.ts",
+    "dev": "nub src/dev.ts",
     "desktop": "nub run --filter @frizz/desktop start",
     "desktop:dist": "nub run --filter @frizz/desktop dist",
     "frizz-dev:install": "nub scripts/install-global-cli.mjs",

@@ -9,9 +9,9 @@
 // The project defaults to the frizz repo itself (a gh-authed repo, an empty board under the temp HOME).
 //
 // Usage:
-//   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--prime] [--keep] [--home=/abs] [--seed]
+//   nub scripts/adhoc-stack.mjs [--port=4930] [--project=/abs/dir] [--claude-bin=/abs/bin] [--wakers] [--reaper] [--prime] [--keep] [--home=/abs] [--seed] [--log=/abs/server.log] [--dist]
 //
-// It prints ONE json line to stdout: {"url","port","home","project"} once /health is green,
+// It prints ONE json line to stdout: {"url","port","home","project","log",…} once /health is green,
 // then stays up until SIGINT/SIGTERM, deleting the temp HOME on exit (unless --keep). Run it with Bash
 // run_in_background:true, parse that json line, then drive the url with Chrome DevTools MCP or shot.mjs.
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync } from "node:fs"
@@ -111,9 +111,30 @@ process.on("SIGINT", () => stop(0))
 process.on("SIGTERM", () => stop(0))
 process.on("uncaughtException", (e) => { console.error("[adhoc-stack] uncaught", e); stop(1) })
 
+// The server's own log. `startServer` is the in-process half of a launch, and the launcher is the one
+// that opens a run log — so a stack booted here logged NOWHERE: `ambientLogger()` invents no file for a
+// process nobody configured, and every tailer, scheduler, broker and tenant record was dropped. The 37
+// stack logs agents left in /tmp on 2026-10-01 held Vite's chatter and nothing of the server's. Now the
+// full feed goes to `--log=/abs` (default: inside the sandbox HOME), the path rides in the json line,
+// and every WARN/ERROR is mirrored to stderr — the stack.log a caller is already reading — since the
+// server is meant to be silent there on a healthy board. FRIZZ_LOG_FILE carries the file to anything
+// the server forks, exactly as the real launcher's environment does.
+const serverLog = opt("log", join(home, "frizz-server.log"))
+{
+  const { createLogger, formatFeedLine, setAmbientLogger } = await import("../packages/server/src/logging.ts")
+  const logger = setAmbientLogger(createLogger({ file: serverLog, owner: false }))
+  process.env.FRIZZ_LOG_FILE = serverLog
+  logger.onRecord((record) => {
+    if (record.level === "warn" || record.level === "error") process.stderr.write(`[frizz] ${formatFeedLine(record)}\n`)
+  })
+}
+
 const { startServer } = await import("../packages/server/src/index.ts")
 try {
-  const started = await startServer({ dev: true, port, installSignalHandlers: false, claudeBin })
+  // --dist serves the BUILT client (packages/web/dist — run `vite build` in packages/web first) instead of
+  // Vite's dev middleware. Anything judged by load time — first paint, time to interactive — must use it:
+  // in dev every module is transformed on request, which measures Vite, not Frizz.
+  const started = await startServer({ dev: !flag("dist"), port, installSignalHandlers: false, claudeBin })
   close = () => started.close()
   // Confirm the API is actually serving before announcing — a race here would hand CDP a dead port.
   for (let i = 0; i < 100; i++) {
@@ -164,6 +185,7 @@ try {
     url: slug ? `http://127.0.0.1:${port}/all/${slug}` : `http://127.0.0.1:${port}/`,
     gridUrl: `http://127.0.0.1:${port}/`,
     slug, port, home, project: projectDir,
+    log: serverLog,
     // The launcher is the project whose `server.lock` this process publishes — the one file every
     // worker on this stack, in ANY project, reads the port out of.
     launcher: launcher ? { id: launcher.id, slug: launcher.slug, dir: projectDir, serverLock: join(home, ".frizz", "projects", launcher.id, "server.lock") } : undefined,

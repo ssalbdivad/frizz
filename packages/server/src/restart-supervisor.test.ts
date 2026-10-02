@@ -12,6 +12,7 @@ import {
   SUPERVISOR_UPDATE_RESTART_PATH,
   SUPERVISOR_STATUS_PATH,
   SUPERVISOR_ACCESS_CODE_PATH,
+  SUPERVISOR_REMOTE_PATH,
   SUPERVISOR_SESSIONS_PATH,
   SUPERVISOR_SIGN_OUT_PATH,
   type RestartResult,
@@ -1070,6 +1071,8 @@ test("the control plane is behind the session gate: no session through the tunne
       [SUPERVISOR_ACCESS_CODE_PATH, "POST"],
       [SUPERVISOR_SESSIONS_PATH, "GET"],
       [SUPERVISOR_SESSIONS_PATH, "POST"],
+      [SUPERVISOR_REMOTE_PATH, "GET"],
+      [SUPERVISOR_REMOTE_PATH, "POST"],
     ]
     // No session, a forged one, and the missing-Origin spelling a same-origin status read may use: all
     // refused before any per-path logic, with nothing in the body to say what lives here.
@@ -1122,6 +1125,65 @@ test("the control plane is behind the session gate: no session through the tunne
     assert.equal(dead.status, 401)
     assert.deepEqual(JSON.parse(dead.body), { protocol: 1, result: "no-remote-session" })
     assert.match(String(dead.headers?.["set-cookie"]), /^frizz_session=;.*Max-Age=0/)
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close().catch(() => undefined)
+  }
+})
+
+test("remote access is changed from this machine only: a live session through the tunnel cannot read or change it", async () => {
+  // Choosing how the board is reached decides who can reach it, so Settings → Remote access needs
+  // presence on the machine, like minting a link. A phone holding a perfectly good session must get a
+  // 403 for the read AND the change, and the launcher's handler must never run for it.
+  const current = await child("only")
+  const port = await freePort()
+  const calls: string[] = []
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const loopbackRead = { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin" }
+    const loopbackWrite = { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` }
+
+    // No handler wired (`pnpm dev`): a JSON 404 the browser reads as "this launch cannot".
+    const unwired = await proxied(port, SUPERVISOR_REMOTE_PATH, loopbackRead)
+    assert.equal(unwired.status, 404)
+    assert.equal(JSON.parse(unwired.body).protocol, 1)
+
+    proxy.setRemoteControl({
+      get: async () => { calls.push("get"); return { status: 200, body: { protocol: 1, read: true } } },
+      post: async (body) => { calls.push(`post ${JSON.stringify(body)}`); return { status: 200, body: { protocol: 1, applied: true } } },
+    })
+
+    // Loopback: the same-origin read a browser sends (no Origin on a GET), and a POST naming this board.
+    assert.deepEqual(JSON.parse((await proxied(port, SUPERVISOR_REMOTE_PATH, loopbackRead)).body), { protocol: 1, read: true })
+    const applied = await new Promise<{ status: number; body: string }>((resolve, reject) => {
+      const req = request({ host: "127.0.0.1", port, path: SUPERVISOR_REMOTE_PATH, method: "POST", headers: { ...loopbackWrite, "content-type": "application/json" } }, (res) => {
+        let body = ""
+        res.setEncoding("utf8")
+        res.on("data", (chunk) => { body += chunk })
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, body }))
+      })
+      req.once("error", reject)
+      req.end(JSON.stringify({ kind: "off" }))
+    })
+    assert.equal(applied.status, 200)
+    assert.deepEqual(calls, ["get", 'post {"kind":"off"}'])
+
+    // A page on another site cannot drive it from this machine's browser: its POST carries its own Origin.
+    assert.equal((await proxied(port, SUPERVISOR_REMOTE_PATH, { host: `127.0.0.1:${port}`, origin: "https://evil.example" }, "POST")).status, 403)
+
+    // Through the tunnel, holding a live session: refused for both verbs, handler untouched.
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const exchange = await proxied(port, `/?frizz_code=${proxy.issueAccessCode()!.code}`, publicHeaders)
+    const session = String(exchange.headers?.["set-cookie"]).split(";")[0]!
+    assert.equal((await proxied(port, SUPERVISOR_REMOTE_PATH, { ...publicHeaders, cookie: session })).status, 403)
+    assert.equal((await proxied(port, SUPERVISOR_REMOTE_PATH, { ...publicHeaders, cookie: session }, "POST")).status, 403)
+    assert.deepEqual(calls, ["get", 'post {"kind":"off"}'], "the handler ran for a request from the tunnel")
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)

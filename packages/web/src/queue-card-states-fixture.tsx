@@ -35,6 +35,8 @@ import "./styles.css"
 //   ?case=pending-ask          a session frozen at a native AskUserQuestion, nothing journaled (B2).
 //   ?case=perm-prompt          a session parked on a permission prompt, nothing journaled (B2).
 //   ?case=perm-prompt-journaled  the same, but an answerable interaction IS journaled: the net stands down.
+//   ?case=replied              a park queued only for its unread reply (queuedForReply): "Replied", and
+//                              Mark as read records it seen (threadSeen), after which the poll drops it.
 //
 // The card's project is NOT the page's: `store.board` names another project, so a control that read the
 // page's client instead of the card's would call `/_frizz/rpc/…` (unprefixed) and show up in __rpc as
@@ -123,6 +125,11 @@ function scenario(): Scenario {
         threads: [thread("rotate-key", "Rotate the signing key without downtime", { runtime: "perm-prompt", pendingInteraction: CASE === "perm-prompt-journaled" })],
         text: () => "Running the migration against staging now.",
       }
+    case "replied":
+      return {
+        threads: [thread("rotate-key", "Rotate the signing key without downtime", { queuedAt: now, queuedForReply: true })],
+        text: () => "Yes — the old key stays readable for 24h.\n\n```awaiting\nshells: [b1]\nfor: 2h\n---\nThe dual-read window is open; the old key is retired when it closes.\n```",
+      }
     default:
       return {
         threads: [
@@ -174,6 +181,10 @@ window.fetch = async (input, init) => {
   // The reply box's @ typeahead reads every project's queue on an All projects page, which this path
   // reads as; its answer is a list, and `{}` crashed the box.
   if (rpc === "projectsQueues") return json([])
+  if (rpc === "threadSeen") {
+    setTimeout(() => dropThread(body.slug ?? ""), 50)
+    return json({})
+  }
   if (rpc === "threadTerminalCommand") return json({ command: "claude --resume sess-rotate-key", mode: "attach" })
   if (rpc === "completeThread") {
     log.completeCalledAt = performance.now()

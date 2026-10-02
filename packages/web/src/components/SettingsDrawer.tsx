@@ -18,6 +18,7 @@ import { EDITOR_OPENER_LABEL, codeFilesDestination, connectedOpeners } from "../
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { isRemoteSession } from "../api/signOut.ts"
 import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
+import { RemoteAccessField } from "./RemoteAccessField.tsx"
 import { QuotaMeters } from "./QuotaBar.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { Select } from "./ui/Select.tsx"
@@ -186,6 +187,10 @@ export function SettingsDrawer() {
             <SettingsField label="Delete untouched threads now" help={SETTINGS_HELP.deleteOldThreads}>
               <DeleteOldThreads />
             </SettingsField>
+
+            {/* Renders nothing on a page reached through the public origin: the supervisor answers it
+                over loopback only (RemoteAccessField.tsx). */}
+            <RemoteAccessField />
 
             {/* LAST, on purpose: where a vetted local path opens is the one power-user pair in the
                 drawer, so it sits below everything an ordinary operator adjusts. */}

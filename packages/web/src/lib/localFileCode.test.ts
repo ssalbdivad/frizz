@@ -86,6 +86,23 @@ test("a resolution is cached per project, and asked of that project's own client
   assert.deepEqual(asked, ["/work/a", "/work/b"])
 })
 
+// Every prose surface on a page asks from its own layout effect in one commit; those asks go out as ONE
+// request per project (2026-10-01), so the answer lands as one re-tag of every surface instead of one per ask.
+test("asks made in one turn go out as one request per project", async () => {
+  const { resolveUnknown, cachedResolution } = await import("./localFileCode.ts")
+  const asked: string[][] = []
+  const client = { resolveLocalPaths: async ({ paths }: { paths: string[] }) => {
+    asked.push([...paths])
+    return { resolved: paths.map((input) => ({ input, path: `/work/c/${input}` })) }
+  } }
+  await Promise.all([
+    resolveUnknown(["one.md", "two.md"], "project-c", client as never),
+    resolveUnknown(["two.md", "three.md"], "project-c", client as never),
+  ])
+  assert.deepEqual(asked, [["one.md", "two.md", "three.md"]])
+  assert.equal(cachedResolution("project-c", "three.md"), "/work/c/three.md")
+})
+
 // A PLACE IN A FILE in inline code: the server is asked for the BARE path (one resolution per file, however
 // many lines the prose names) and the line stays client-side, to be stamped on the element.
 test("localFileCandidate splits the line off before the path test", () => {

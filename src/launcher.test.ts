@@ -44,6 +44,7 @@ import {
   probeFrizz,
   JOIN_PROBE_TIMEOUT_MS,
   HEALTH_PROBE_TIMEOUT_MS,
+  devLauncherReexecArgs,
   durableReexecArgs,
   readPreferredPort,
   waitForWorkspace,
@@ -2435,6 +2436,19 @@ test("an update re-execs with the port alone; how the board is reached lives in 
   assert.deepEqual(durableReexecArgs({ entry: "/opt/frizz/src/index.js", port: 9393 }), ["/opt/frizz/src/index.js", "--port", "9393"]);
 });
 
+test("a --dev launcher re-execs into a launch its internal re-entry accepts: --dev with the allocated port", () => {
+  // The operator typed `frizz-dev --dev`. Re-execing that argv reached a re-entry that refuses to start
+  // without --port, and every edit to the launcher's own source ended the board.
+  const args = devLauncherReexecArgs({ entry: "/repo/src/index.ts", port: 9494, debug: false });
+  assert.equal(args[0], "/repo/src/index.ts");
+  const parsed = parseCliArgs(args.slice(1));
+  assert.equal(parsed.port, 9494);
+  assert.equal(parsed.dev, true);
+  assert.equal(parsed.debug, false);
+  assert.equal(parsed.sandbox, false, "a re-exec adopts its sandbox through the environment, never mints another");
+  assert.equal(parseCliArgs(devLauncherReexecArgs({ entry: "/e", port: 1, debug: true }).slice(1)).debug, true);
+});
+
 test("--sessions and --sign-out are parsed, in both the spaced and the = spelling", () => {
   assert.equal(parseCliArgs(["--sessions"]).sessions, true);
   assert.equal(parseCliArgs(["--sign-out", "abc123"]).signOut, "abc123");
@@ -2504,6 +2518,44 @@ test("--sandbox never creates ~/.frizz on a real home that has none", () => {
     rmSync(sandbox.home, { recursive: true, force: true });
     rmSync(real, { recursive: true, force: true });
   }
+});
+
+// The pinned runtimes are a cache, and a sandbox that kept its own downloaded both on every launch and
+// deleted them on exit — 42s of the server's 44s start in the sandbox launch logged 2026-10-01.
+test("--sandbox shares the operator's runtime cache, resolved under the operator's own roots", () => {
+  const cwd = process.cwd();
+  const real = mkdtempSync(join(tmpdir(), "frizz-rthome-"));
+  const plain: NodeJS.ProcessEnv = {};
+  const sandbox = prepareSandbox(plain, real);
+  try {
+    assert.equal(plain.FRIZZ_RUNTIMES_DIR, join(frizzPaths({ home: real, env: {} }).cache, "runtimes"));
+    assert.ok(!plain.FRIZZ_RUNTIMES_DIR!.startsWith(sandbox.home), "never under the throwaway home");
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(sandbox.home);
+  }
+  // XDG_CACHE_HOME is scrubbed from the sandbox, but it is still where the OPERATOR's cache lives.
+  const xdg: NodeJS.ProcessEnv = { XDG_CACHE_HOME: join(real, "xdg-cache") };
+  const second = prepareSandbox(xdg, real);
+  try {
+    assert.equal(xdg.XDG_CACHE_HOME, undefined);
+    assert.equal(xdg.FRIZZ_RUNTIMES_DIR, join(real, "xdg-cache", "frizz", "runtimes"));
+  } finally {
+    process.chdir(cwd);
+    cleanupSandbox(second.home);
+  }
+  // An explicit choice wins — that is how a run exercising provisioning itself asks for a cold root.
+  for (const explicit of [{ FRIZZ_RUNTIMES_DIR: "/elsewhere/runtimes" }, { FRIZZ_RUNTIMES: "/bin/fake" }]) {
+    const env: NodeJS.ProcessEnv = { ...explicit };
+    const third = prepareSandbox(env, real);
+    try {
+      assert.equal(env.FRIZZ_RUNTIMES_DIR, explicit.FRIZZ_RUNTIMES_DIR);
+    } finally {
+      process.chdir(cwd);
+      cleanupSandbox(third.home);
+    }
+  }
+  rmSync(real, { recursive: true, force: true });
 });
 
 // The other way a sandbox can reach the real install: a set XDG variable wins over the home in

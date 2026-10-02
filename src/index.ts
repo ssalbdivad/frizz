@@ -1,17 +1,13 @@
 #!/usr/bin/env node
+import type { RemoteController } from "./remote-controller.ts";
+import { wireRemote } from "./remote-wiring.ts";
 import { bindHostIsExposed } from "@frizz/server/local-origin";
 import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
-import {
-  establishCloudConfig,
-} from "./cloud.ts";
 import { renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
-import { createAccessPane, type AccessPane } from "./access-pane.ts";
-import { installPaneHost, type PaneHost } from "./pane-host.ts";
-import { createRemoteController, type RemoteController } from "./remote-controller.ts";
-import { probeCloudflared, probeGithub, probeTailscale } from "./remote-detect.ts";
-import { createRemotePane } from "./remote-pane.ts";
+import type { AccessPane } from "./access-pane.ts";
+import type { PaneHost } from "./pane-host.ts";
 import { LOOPBACK_BIND_HOST } from "@frizz/server/local-origin";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -32,7 +28,6 @@ import {
   assertArtifactHostCompatible,
   defaultArtifactRoot,
   ensureStableFrizzArtifact,
-  promoteCurrentSourceArtifact,
   promoteFrizzArtifact,
   readFrizzArtifact,
   readStableArtifact,
@@ -49,6 +44,8 @@ import {
   FIRST_ARTIFACT_LAUNCH_LOCK_TIMEOUT_MS,
   helpText,
   liveWorkspaceOwner,
+  DEV_SANDBOX_HOME_ENV,
+  devLauncherReexecArgs,
   durableReexecArgs,
   cleanupSandbox,
   parseCliArgs,
@@ -82,6 +79,11 @@ import {
 } from "@frizz/server/project-launch";
 import { registerProject } from "@frizz/server/project-registry";
 import { resolveProjectLabel } from "@frizz/server/project-identity";
+import { runArtifactBuildJob, spawnArtifactBuild } from "./artifact-build-job.ts";
+
+// Update & Restart re-runs this entry as its artifact build job (see artifact-build-job.ts). It must
+// hand off before anything below parses an argument, resolves a project or opens a log.
+if (runArtifactBuildJob()) await new Promise<never>(() => {});
 
 function fail(error: unknown): never {
   console.error(`frizz: ${error instanceof Error ? error.message : error}`);
@@ -140,8 +142,18 @@ if (argv.includes("--prod"))
 
 // Before ANYTHING reads the home directory: the sandbox swaps $HOME for a throwaway, so every piece
 // of state after this line — registry, lock, logs, session key, cloud.json — is a disposable copy.
-const sandbox = options.sandbox ? prepareSandbox() : null;
-if (sandbox) process.on("exit", () => cleanupSandbox(sandbox.home));
+// A `--dev` launcher that re-execs itself for a source edit is still the same sandbox: the throwaway
+// home rides in the environment (its HOME already points there), so the successor adopts it rather
+// than minting a second one, and still deletes it when the board finally stops.
+const sandbox = options.sandbox
+  ? prepareSandbox()
+  : process.env.FRIZZ_DEV_REEXEC === "1" && process.env[DEV_SANDBOX_HOME_ENV]
+  ? { home: process.env[DEV_SANDBOX_HOME_ENV]!, project: process.cwd() }
+  : null;
+if (sandbox) {
+  process.env[DEV_SANDBOX_HOME_ENV] = sandbox.home;
+  process.on("exit", () => cleanupSandbox(sandbox.home));
+}
 
 const internalLaunch =
   process.env.FRIZZ_DIRECT_SUPERVISOR === "1" ||
@@ -305,6 +317,18 @@ async function runSupervisor(
       // silent on the terminal without its records being lost.
       ...logEnvironment(logger, options.debug ? "debug" : "info"),
       ...(options.debug ? { FRIZZ_DEBUG: "1" } : {}),
+      // --dev runs Vite from this checkout, and Vite's dependency cache must never be shared with
+      // another dev server rooted here (packages/web/vite.config.ts says why). Left at its default,
+      // a `frizz-dev --dev` beside the maintainer's `nub run dev` hashed its config differently and
+      // re-optimized node_modules/.vite under the live server, whose open tab then 404ed on every
+      // rewritten chunk (2026-10-01). So --dev keeps its own cache, and a sandbox one of its own.
+      // Relative to packages/web like the throwaway stacks' `.vite-scratch`, and inside node_modules
+      // on purpose: @vitejs/plugin-react skips any path containing node_modules, and a cache outside
+      // it (one under the sandbox's /tmp home was tried) gets its prebundled react-scan run through
+      // Fast Refresh, which throws "can't detect preamble" on every load.
+      ...(options.dev && !process.env.FRIZZ_VITE_CACHE_DIR
+        ? { FRIZZ_VITE_CACHE_DIR: sandbox ? "node_modules/.vite-sandbox" : "node_modules/.vite-frizz-dev" }
+        : {}),
     },
     target,
     launchOwner.token
@@ -322,13 +346,13 @@ async function runSupervisor(
         defaultArtifactRoot()
       );
   if (selectedArtifact) assertArtifactHostCompatible(selectedArtifact);
-  const { createSupervisorShutdownHandler, startDevSupervisor } = await import(
+  const { createSupervisorShutdownHandler, probeLauncherSource, startDevSupervisor } = await import(
     "@frizz/server/dev-supervisor"
   );
   let supervisor: Awaited<ReturnType<typeof startDevSupervisor>>;
   const stableOptions = selectedArtifact
     ? (() => {
-        let updateRollbackArtifact: typeof selectedArtifact | undefined;
+        let updateRollbackArtifact: string | undefined;
         let firstChildLaunch = true;
         const selectedChildLaunch = () => {
           // The launcher selected this artifact before starting the foreground supervisor. The first control-plane child is
@@ -361,12 +385,15 @@ async function runSupervisor(
             // Build and verify before touching the healthy child. No source edit can enter this path.
             // An unverifiable current artifact leaves us without a rollback target but does not
             // block the update — see promoteCurrentSourceArtifact.
+            // In a child process: this one owns the board's listener and the stop signals, and the
+            // build blocks for minutes — see artifact-build-job.ts.
             try {
-              const { previous } = promoteCurrentSourceArtifact(
-                workspace.stateDir,
-                sourceWorkspaceDir(),
-                defaultArtifactRoot()
-              );
+              const { previous } = await spawnArtifactBuild({
+                stateDir: workspace.stateDir,
+                sourceDir: sourceWorkspaceDir(),
+                root: defaultArtifactRoot(),
+                onProgress: (message) => logger.info("artifact", message),
+              }).result;
               updateRollbackArtifact = previous;
               return { state: "ready" as const };
             } catch (error) {
@@ -380,7 +407,7 @@ async function runSupervisor(
             if (!updateRollbackArtifact) return;
             promoteFrizzArtifact(
               workspace.stateDir,
-              updateRollbackArtifact.digest,
+              updateRollbackArtifact,
               defaultArtifactRoot()
             );
             updateRollbackArtifact = undefined;
@@ -446,6 +473,45 @@ async function runSupervisor(
     : {
         // --dev is intentionally the only route that can boot source plus Vite/HMR.
         watch: true,
+        // An edit to the launcher's own source re-execs this process in place. Its argv must be the
+        // internal re-entry's, not the operator's: `frizz-dev --dev` carries no --port, and the
+        // re-entry refuses to start without one, so every launcher edit used to end the board with
+        // "internal supervisor launch is missing --port" (2026-10-01, three runs in one evening).
+        reexecArgs: devLauncherReexecArgs({
+          entry: import.meta.filename,
+          port,
+          debug: options.debug,
+        }),
+        validateLauncher: async () => {
+          // `--help` loads every module this entry imports statically and exits before touching any
+          // state; dev-supervisor is the one launcher module it loads lazily, so it gets its own probe.
+          const env = { ...supervisorEnv };
+          delete env.FRIZZ_DEV_REEXEC;
+          const [cli, supervisorModule] = await Promise.all([
+            probeLauncherSource({ args: [import.meta.filename, "--help"], env }),
+            probeLauncherSource({
+              args: [
+                "--input-type=module",
+                "-e",
+                `await import(${JSON.stringify(import.meta.resolve("@frizz/server/dev-supervisor"))})`,
+              ],
+              env,
+            }),
+          ]);
+          return cli ?? supervisorModule;
+        },
+        ...(process.platform !== "win32" && typeof process.execve === "function"
+          ? {
+              reexec: (request: { executable: string; argv: string[]; env: Record<string, string> }) => {
+                // Same handoff as an update's: the successor serves the saved remote setup itself, so a
+                // tunnel left running here would outlive every handle to it. And give the terminal back
+                // before the new image installs its own key handling.
+                remote?.stop();
+                paneHost?.dispose();
+                process.execve!(request.executable, request.argv, request.env);
+              },
+            }
+          : {}),
       };
   try {
     // First run only. Asking here rather than at import keeps the question off every other launch.
@@ -479,31 +545,12 @@ async function runSupervisor(
       onActivity: (event) => renderSupervisorActivity(activityReadout, event),
     });
     // The supervisor is listening now, so a code minted here is immediately redeemable.
-    remote = createRemoteController({ host: supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`) });
-    try {
-      await remote.serveSaved();
-    } catch (error) {
-      // A saved setup that cannot come up must not take the board down with it: the board still serves
-      // loopback, the readout says so, and R offers the setup again.
-      const message = error instanceof Error ? error.message : String(error);
-      logger.error("remote", message);
-      console.error(`frizz: the saved remote setup could not start: ${message}`);
-    }
-    activeAccessLink = remote.origin() ? supervisor.issueAccessLink() : null;
-    {
-      accessPane = createAccessPane({ issue: () => supervisor.issueAccessLink() });
-      const remotePane = createRemotePane({
-        port,
-        current: () => remote?.current() ?? null,
-        apply: (next, applyOptions) => remote!.apply(next, applyOptions),
-        claim: (name) => establishCloudConfig(name, port),
-        issueLink: () => supervisor.issueAccessLink(),
-        probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
-        onChanged: (config) => logger.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
-        sandbox: sandbox !== null,
-      });
-      paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });
-    }
+    // Serve the saved setup, offer Settings → Remote access, and bind L and R (remote-wiring.ts).
+    const wiring = await wireRemote({ supervisor, port, log: logger, say: (message) => console.error(`frizz: ${message}`), sandbox: sandbox !== null });
+    remote = wiring.remote;
+    activeAccessLink = wiring.firstLink;
+    accessPane = wiring.accessPane;
+    paneHost = wiring.paneHost;
   } catch (error) {
     launchOwner.release();
     throw error;

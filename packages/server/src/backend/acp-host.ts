@@ -21,6 +21,7 @@ import { PassThrough, Writable, type Readable } from "node:stream"
 import { StringDecoder } from "node:string_decoder"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import { endDaemonTree } from "./daemon-tree.ts"
+import { recordedDaemonIsLive } from "./daemon-identity.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
 import { spawnAcpChild, type AcpProcess, type AcpSpawn, type AcpSpawnOptions } from "./acp-rpc.ts"
 import { log as frizzLog } from "../logging.ts"
@@ -36,6 +37,8 @@ export interface AcpDaemonRecord {
   childPid: number
   socketPath: string
   createdAt: string
+  /** The daemon's own birth marker (daemon-identity.ts). Absent on non-Linux and on older daemons. */
+  processStart?: string
 }
 
 /** What the daemon reports about the stream a client is about to join. */
@@ -114,17 +117,19 @@ export function readAcpDaemonRecord(stateDir: string, sessionId: string): AcpDae
       childPid: typeof value.childPid === "number" ? value.childPid : 0,
       socketPath: value.socketPath,
       createdAt: value.createdAt ?? "",
+      ...(typeof value.processStart === "string" && value.processStart ? { processStart: value.processStart } : {}),
     }
   } catch {
     return null
   }
 }
 
-/** A daemon is live only while its process is running; a stale record is pruned. */
+/** A daemon is live only while ITS process is running — the pid and the birth it recorded, since after a
+ *  reboot a stale record's pid can belong to a stranger (daemon-identity.ts). A stale record is pruned. */
 export function liveAcpDaemonRecord(stateDir: string, sessionId: string): AcpDaemonRecord | null {
   const record = readAcpDaemonRecord(stateDir, sessionId)
   if (!record) return null
-  if (pidAlive(record.daemonPid)) return record
+  if (recordedDaemonIsLive(record.daemonPid, record.processStart, pidAlive)) return record
   try { unlinkSync(acpDaemonRecordPath(stateDir, sessionId)) } catch {}
   return null
 }

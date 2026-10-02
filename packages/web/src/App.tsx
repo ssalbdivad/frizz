@@ -17,6 +17,7 @@ import { AllQueuesPage } from "./components/AllQueues.tsx"
 import { rpc } from "./api/rpc.ts"
 import { useCrossProjectNotifications } from "./lib/crossProjectNotify.ts"
 import { DrawerStack } from "./components/DrawerStack.tsx"
+import { PendingThreadSheet } from "./components/PendingThreadSheet.tsx"
 import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
 import { useGithubStatus } from "./components/GithubTrigger.tsx"
@@ -295,6 +296,7 @@ export function App() {
       {/* The side-drawer STACK — and the Escape chain that unwinds it — lives in <DrawerStack> so the
           standalone `/thread/<slug>/full` page can mount the identical thing. See DrawerStack.tsx. */}
       <DrawerStack />
+      <PendingThreadSheet />
       {snap.showSettings && <SettingsDrawer />}
       {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false }} />}
       {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}

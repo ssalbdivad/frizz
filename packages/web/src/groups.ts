@@ -342,10 +342,15 @@ export function sortThreads(threads: readonly ThreadView[]): ThreadView[] {
 // an at-rest row keys off when it came to rest, matching its "Last active" label. New array; input
 // untouched.
 export function orderByInteraction(threads: readonly ThreadView[]): ThreadView[] {
-  return [...threads].sort((a, b) => {
-    const d = lastActiveAt(b) - lastActiveAt(a)
+  // Keys read ONCE per thread, not twice per comparison: these are valtio snapshot proxies, where every
+  // property read is tracked, and lastActiveAt parses dates — inside the comparator that was O(n log n)
+  // of both (1.2s of a 20s page profile on a 440-thread mirror, 2026-10-01).
+  const keyed = threads.map((t) => ({ t, at: lastActiveAt(t), id: t.id }))
+  keyed.sort((a, b) => {
+    const d = b.at - a.at
     return d !== 0 ? d : a.id.localeCompare(b.id)
   })
+  return keyed.map((k) => k.t)
 }
 
 // The queue is a SINGLE strictly time-ordered list — no priority band. Every waiting card orders by
@@ -394,7 +399,10 @@ export function queueLabelAt(t: Pick<ThreadView, "queuedAt" | "runtime" | "lastA
 // entered off a wait — its agent may last have spoken hours before it came to the human — so a queued
 // card says how long it has been READY, the name its band wears (7f840a59). A card for a thread that is
 // not queued (none on the queue surfaces today) keeps saying what its time is.
-export function queueLabelWord(t: Pick<ThreadView, "queuedAt">): string {
+export function queueLabelWord(t: Pick<ThreadView, "queuedAt" | "queuedForReply">): string {
+  // A park in the queue only for its unread reply says so: "Ready" over an Awaiting card read as a
+  // wait the human was somehow supposed to act on (board.ts queuedForReply).
+  if (t.queuedAt && t.queuedForReply) return "Replied"
   return t.queuedAt ? "Ready" : "Last active"
 }
 
@@ -501,7 +509,7 @@ export function parkedAwaitingHint(_hints: readonly AwaitingHint[], _nowMs = Dat
 // OWN turn is over (turn-idle/exited). It must not make the PARENT's rail mark claim motion the parent
 // does not have (maintainer 2026-07-27: "when an agent comes to rest and shows up in the queue, it
 // should get the ellipsis indicator in the sidebar, even though its sub-agents are still spinning").
-// The children keep their own spinners on their own indented rows (Sidebar SubAgentRows → ChildOpRow);
+// The children keep their own spinners on the card and in the drawer (ChildOpRow), and a count on the rail row (Sidebar SubAgentCount);
 // the parent's indicator speaks for the parent. A queued row therefore sits in the rested band AND
 // reads as rested.
 //

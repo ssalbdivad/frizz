@@ -23,6 +23,7 @@ import { Dialog } from "./ui/Dialog.tsx"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { BLOCK_RADIUS } from "./TranscriptCard.tsx"
+import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 // SPINOFFS — a new thread the human asks for from this one ("fix this", "investigate perf"), with this
 // thread supplying the context. Three surfaces, one concept:
@@ -200,6 +201,7 @@ function SpinoffDialog({ thread, open, onOpenChange }: { thread: ThreadView & { 
           data-1p-ignore
           className={`w-full resize-none ${BLOCK_RADIUS} border border-border bg-bg px-3 py-2 text-[13px] leading-5 text-fg outline-none transition-colors placeholder:text-muted focus:border-accent`}
         />
+        <TextareaCodeFences value={instructions} />
         {error
           ? <p role="alert" className="text-[11px] leading-4 text-danger">{error}</p>
           : <p className="text-[11px] leading-4 text-muted-60">{target ? `It starts in ${target.name}, with this thread's context.` : "It starts with this thread's context."}</p>}

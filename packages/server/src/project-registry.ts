@@ -113,6 +113,8 @@ const RESERVED = new Set([
   "home",
   // `/_frizz/editor`, the machine-wide socket editor extensions dial (editor-bridge.ts).
   "editor",
+  // `/_frizz/vite-hmr`, the dev board's Vite HMR socket (index.ts VITE_HMR_PATH).
+  "vite-hmr",
 ])
 
 export function registryPath(home = homedir()): string {
