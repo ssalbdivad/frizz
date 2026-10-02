@@ -93,6 +93,7 @@ import { decodePng, inkOf } from "../e2e/png.ts"
 import { SAMPLE, seedSidebarStack, seedWorktreeThread, type Seeded } from "../e2e/sidebar-seed.ts"
 import { bootStack, freePort, killAll, leftovers, stubbedPath, type Stack } from "../e2e/stack.ts"
 import { workerTool } from "../e2e/worker-tool.ts"
+import { hasShellExecutions } from "../src/extras-feed.ts"
 import { FrizzRpc } from "../src/rpc.ts"
 
 const pkg = resolve(dirname(fileURLToPath(import.meta.url)), "..")
@@ -1225,6 +1226,23 @@ try {
     if (!closed) await resetPage()
   })
 
+  // The side bar's width, read and set by dragging its sash with the mouse (c3 and c9).
+  const sidebarWidth = async () => (await rectOf(".part.sidebar"))?.width ?? 0
+  const dragSidebarTo = async (width: number) => {
+    const sash = await inWorkbench(() => {
+      const part = document.querySelector(".part.sidebar")!.getBoundingClientRect()
+      const sashes = [...document.querySelectorAll<HTMLElement>(".monaco-sash.vertical")].map((s) => s.getBoundingClientRect()).filter((r) => r.height > 100 && Math.abs(r.left + r.width / 2 - part.right) < 6)
+      const r = sashes[0]
+      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: part.right, y: part.top + part.height / 2 }
+    })
+    const delta = width - (await sidebarWidth())
+    await page.mouse.move(sash.x, sash.y)
+    await page.mouse.down()
+    for (let step = 1; step <= 10; step++) await page.mouse.move(sash.x + (delta * step) / 10, sash.y)
+    await page.mouse.up()
+    await sleep(800)
+  }
+
   // ── c3: the editor's context in the page ──
   /**
    * Lines 2-3 of sample.ts selected by keys and the add chord (Ctrl+L, the one the page names) pressed the
@@ -1245,6 +1263,12 @@ try {
     return 0
   }
   await run("c3", "the context bar follows the editor", async () => {
+    // At ~300px, the width the shots are named for, on every VS Code: 1.90's default side bar is 255px,
+    // where the bar's hint has no variant short enough beside the file chip and the page drops it by
+    // design (EditorContextBar.tsx Hint fits the longest that fits) — the check then failed on the floor
+    // for the width, not for the bar. The width it found is in the notes.
+    notes.c3SidebarWidthBefore = await sidebarWidth()
+    if (Math.abs((await sidebarWidth()) - 300) > 12) await dragSidebarTo(300)
     await command("workbench.action.closeAllEditors")
     await agent({ op: "open", path: files.a })
     await agent({ op: "open", path: files.b })
@@ -1658,21 +1682,6 @@ try {
   })
 
   // ── c9: the gallery, at ~300px and ~450px ──
-  const sidebarWidth = async () => (await rectOf(".part.sidebar"))?.width ?? 0
-  const dragSidebarTo = async (width: number) => {
-    const sash = await inWorkbench(() => {
-      const part = document.querySelector(".part.sidebar")!.getBoundingClientRect()
-      const sashes = [...document.querySelectorAll<HTMLElement>(".monaco-sash.vertical")].map((s) => s.getBoundingClientRect()).filter((r) => r.height > 100 && Math.abs(r.left + r.width / 2 - part.right) < 6)
-      const r = sashes[0]
-      return r ? { x: r.left + r.width / 2, y: r.top + r.height / 2 } : { x: part.right, y: part.top + part.height / 2 }
-    })
-    const delta = width - (await sidebarWidth())
-    await page.mouse.move(sash.x, sash.y)
-    await page.mouse.down()
-    for (let step = 1; step <= 10; step++) await page.mouse.move(sash.x + (delta * step) / 10, sash.y)
-    await page.mouse.up()
-    await sleep(800)
-  }
   const gallery = async (tag: string) => {
     await command("workbench.view.extension.frizz")
     await waitFor("the Frizz view", async () => (await status()).sidebar.visible || undefined, 10_000)
@@ -2149,7 +2158,12 @@ try {
     const problemsRow = await extra("problems")
     const terminalRow = await extra("terminal")
     expect("c15", "the menu offers the file's problems with their counts", shown && /^Add problems in this file 1 error$/u.test(problemsRow ?? ""), problemsRow)
-    expect("c15", "…and the terminal's last command, by its line", /^Add last terminal command echo frizz-from-the-terminal$/u.test(terminalRow ?? ""), { terminalRow, ran })
+    // VS Code tells extensions each command line only from 1.93 (shell integration's executions). Before
+    // that the menu offers the last command without naming it, and adding it borrows the terminal's own
+    // Copy Last Command (extras-feed.ts) — the floor's graceful path, checked as that, not failed as the
+    // other.
+    if (hasShellExecutions(version)) expect("c15", "…and the terminal's last command, by its line", /^Add last terminal command echo frizz-from-the-terminal$/u.test(terminalRow ?? ""), { terminalRow, ran })
+    else expect("c15", `…and the terminal's last command, unnamed: VS Code ${version} tells extensions no command line before 1.93`, terminalRow === "Add last terminal command" && ran.exitCode === "not reported before 1.93", { terminalRow, ran })
     await shot("c15-bar-menu-extras-w300")
     const extraGaps = (await rowGaps("[data-editor-extra], [data-editor-open-file]")) as { row: string; gap: number }[]
     notes.barMenuGaps = extraGaps

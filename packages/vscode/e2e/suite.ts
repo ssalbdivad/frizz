@@ -159,6 +159,14 @@ async function openSample(selection?: [number, number, number, number?]): Promis
   return editor
 }
 
+/** Revert every document a step left with unsaved changes, each in front in turn (revert acts on the active editor). */
+async function revertDirty(): Promise<void> {
+  for (const document of vscode.workspace.textDocuments.filter((candidate) => candidate.isDirty && candidate.uri.scheme === "file")) {
+    await vscode.window.showTextDocument(document, { preview: false })
+    await vscode.commands.executeCommand("workbench.action.files.revert")
+  }
+}
+
 /** The sample's 1-based lines `from`..`to`, as the extension quotes them. */
 function sampleLines(document: vscode.TextDocument, from: number, to: number): string {
   return document.getText(new vscode.Range(from - 1, 0, to - 1, document.lineAt(to - 1).text.length))
@@ -432,7 +440,11 @@ const steps: Step[] = [
       } finally {
         problems.dispose()
         await frizz.update("shareEditorState", undefined, vscode.ConfigurationTarget.Global)
-        await vscode.commands.executeCommand("workbench.action.files.revert")
+        // Revert the SAMPLE, which the keystroke above made dirty — not whatever is in front (the .env by
+        // now). Reverting the active editor left the sample's "// edited" line in the buffer, and VS Code
+        // 1.90 keeps a dirty buffer through closeAllEditors in a test window (1.140 discards it), so on the
+        // floor every later step read the edited sample: the next step's lines 2-3 were the wrong lines.
+        await revertDirty()
         await vscode.commands.executeCommand("workbench.action.closeAllEditors")
       }
     },
@@ -1067,6 +1079,108 @@ const steps: Step[] = [
         target: "front",
         focus: true,
       }])
+    },
+  },
+  {
+    name: "a selection made by hand gets the hint `Ctrl+L to add to Frizz` once it settles; none when it empties, for one an extension set, a select-all, a diff, one just added, or with the setting off",
+    modes: ["fake"],
+    async run({ api }) {
+      const mod = process.platform === "darwin" ? "meta" : "ctrl"
+      const words = `${process.platform === "darwin" ? "⌘L" : "Ctrl+L"} to add to Frizz`
+      // What the editor DRAWS: VS Code renders an `after` decoration as a CSS ::after on a span of the line.
+      const drawn = () => workbench<string[]>(`[...document.querySelectorAll(".part.editor .view-lines span")]
+        .map((span) => getComputedStyle(span, "::after").content).filter((content) => content.includes("add to Frizz"))`)
+      const none = async (why: string) => {
+        await sleep(800)
+        assert.equal(api.selectionHint(), undefined, why)
+        assert.deepEqual(await drawn(), [], `${why}: nothing drawn`)
+      }
+
+      // Shift+Down twice from the start of line 2: lines 2-3 by the chip's count (the caret ends at column
+      // 1 of line 4, which is not in it), so the hint sits after line 3.
+      const editor = await openSample()
+      editor.selection = new vscode.Selection(1, 0, 1, 0)
+      await sleep(400)
+      const pressed = Date.now()
+      await press("shift+down")
+      await press("shift+down")
+      await until("the hint", () => api.selectionHint() !== undefined)
+      const after = Date.now() - pressed
+      assert.deepEqual(api.selectionHint(), { path: sample, line: 3, text: words })
+      assert.ok(after >= 250, `it waits for the selection to settle: shown ${after}ms after the first key`)
+      await until("the hint drawn", async () => (await drawn()).length === 1)
+      assert.deepEqual(await drawn(), [JSON.stringify(words)])
+      // Drawn on the selection's last line, after its text.
+      const onLine = await workbench<string | null>(`(() => {
+        const span = [...document.querySelectorAll(".part.editor .view-lines span")].find((s) => getComputedStyle(s, "::after").content.includes("add to Frizz"))
+        return span?.closest(".view-line")?.textContent?.replace(/\u00a0/g, " ") ?? null
+      })()`)
+      assert.equal(onLine?.trimEnd(), editor.document.lineAt(2).text.trimEnd(), "after line 3's own text")
+      console.log(`  · shown ${after}ms after the first key, after line 3`)
+      await fake("/__e2e/shot", { path: join(process.env.FRIZZ_E2E_SHOTS || workspace, `${vscode.version}-selection-hint.png`) })
+
+      // The selection empties: gone.
+      await press("right")
+      await until("the hint gone", () => api.selectionHint() === undefined)
+      await until("nothing drawn", async () => (await drawn()).length === 0)
+
+      // Made upward, it sits on the selection's first line, where the caret is.
+      editor.selection = new vscode.Selection(4, 0, 4, 0)
+      await sleep(400)
+      await press("shift+up")
+      await until("the hint, upward", () => api.selectionHint()?.line === 4)
+
+      // A selection an extension set — as Frizz's own file links select their lines — gets none.
+      editor.selection = new vscode.Selection(1, 0, 3, 4)
+      await none("a selection an extension set")
+
+      // A select-all gets none.
+      editor.selection = new vscode.Selection(0, 0, 0, 0)
+      await sleep(400)
+      await press(`${mod}+a`)
+      await until("the select-all", () => !editor.selection.isEmpty)
+      await none("a select-all")
+
+      // After Ctrl+L the selection is in the prompt: the hint has done its job, until the selection moves.
+      editor.selection = new vscode.Selection(1, 0, 1, 0)
+      await sleep(400)
+      await press("shift+down")
+      await until("the hint before Ctrl+L", () => api.selectionHint() !== undefined)
+      const from = await received()
+      await press(`${mod}+l`)
+      await until("Ctrl+L's chip in the page", async () => (await pageReceived("frizz:compose", from)).length > 0, 15_000)
+      assert.equal(api.selectionHint(), undefined, "gone once added")
+      // Back to the editor with its selection as it was (showing an open editor keeps its view state).
+      await vscode.window.showTextDocument(editor.document, { preserveFocus: false })
+      await none("the same selection, already added")
+      await press("shift+down")
+      await until("the hint on a new selection", () => api.selectionHint()?.line === 3)
+
+      // A diff: the same file as a diff's modified side gets none; the chord still works there.
+      const base = workspaceFile("hint-base.ts")
+      await vscode.commands.executeCommand("vscode.diff", vscode.Uri.file(base), vscode.Uri.file(sample), "hint diff")
+      await until("the diff in front", () => vscode.window.activeTextEditor?.document.uri.fsPath === sample && !(vscode.window.tabGroups.activeTabGroup.activeTab?.input instanceof vscode.TabInputText))
+      const modified = vscode.window.activeTextEditor!
+      modified.selection = new vscode.Selection(1, 0, 1, 0)
+      await sleep(400)
+      await press("shift+down")
+      await until("the diff's selection", () => !modified.selection.isEmpty)
+      await none("in a diff")
+
+      // The setting off: none, and on again, it is back for the next selection.
+      const frizz = vscode.workspace.getConfiguration("frizz")
+      await frizz.update("selectionHint", false, vscode.ConfigurationTarget.Global)
+      try {
+        const again = await openSample()
+        again.selection = new vscode.Selection(1, 0, 1, 0)
+        await sleep(400)
+        await press("shift+down")
+        await until("the selection", () => !again.selection.isEmpty)
+        await none("with frizz.selectionHint off")
+      } finally {
+        await frizz.update("selectionHint", undefined, vscode.ConfigurationTarget.Global)
+      }
+      await until("the hint once the setting is back", () => api.selectionHint() !== undefined)
     },
   },
   {

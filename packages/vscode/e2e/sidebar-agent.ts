@@ -10,6 +10,7 @@
 import { realpathSync } from "node:fs"
 import * as vscode from "vscode"
 import type { FrizzExtensionApi } from "../src/app.ts"
+import { hasShellExecutions } from "../src/extras-feed.ts"
 
 const control = process.env.FRIZZ_E2E_AGENT ?? ""
 
@@ -134,6 +135,30 @@ async function perform(api: FrizzExtensionApi, op: AgentOp): Promise<unknown> {
       // awaited — what the bar's "Add last terminal command" then offers.
       const terminal = vscode.window.createTerminal({ name: "frizz e2e", shellPath: "/bin/bash" })
       terminal.show(true)
+      if (!hasShellExecutions(vscode.version)) {
+        // Before 1.93 shell integration is not the extension API's: `terminal.shellIntegration` is a
+        // PROPOSAL there, whose getter throws for an extension that has not declared it — which is what
+        // failed c15 on the manifest's floor (1.90), in this harness, not the extension. The command is
+        // typed instead, and its end is the terminal's own Copy Last Command naming it — the same terminal
+        // shell integration the extension's own 1.90 path reads (extras-feed.ts copiedLastCommand), with
+        // the clipboard put back. Its exit code is not reported to extensions before 1.93.
+        await terminal.processId
+        terminal.sendText(op.command)
+        const before = await vscode.env.clipboard.readText()
+        const deadline = Date.now() + 30_000
+        let seen = false
+        try {
+          while (!seen && Date.now() < deadline) {
+            await vscode.env.clipboard.writeText("")
+            await vscode.commands.executeCommand("workbench.action.terminal.copyLastCommand")
+            seen = (await vscode.env.clipboard.readText()).trim() === op.command
+            if (!seen) await new Promise((resolve) => setTimeout(resolve, 250))
+          }
+        } finally {
+          await vscode.env.clipboard.writeText(before)
+        }
+        return { exitCode: seen ? "not reported before 1.93" : "timeout" }
+      }
       const integrated = terminal as vscode.Terminal & { shellIntegration?: { executeCommand(command: string): unknown } }
       const deadline = Date.now() + 30_000
       while (!integrated.shellIntegration && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100))

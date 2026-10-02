@@ -27,8 +27,8 @@
 //     until the selection changes.
 //   - SETTLED: 250ms after the last change, cleared AT ONCE on any change, so a drag or a held Shift+Arrow
 //     shows nothing until the hand stops, and nothing lags behind the caret.
-//   - only while this window is CONNECTED to Frizz (the chord says "Frizz isn't running" otherwise), while
-//     the window has focus, and while `frizz.selectionHint` is on.
+//   - only while this window is CONNECTED to Frizz (the chord says "Frizz isn't running" otherwise), and
+//     while `frizz.selectionHint` is on. The window losing focus clears it; the next selection brings it.
 //   - NOT in Cursor or Windsurf: each draws its own selection hint naming its own chat's chord, and in
 //     Cursor that chord is the same Ctrl+L / ⌘L — two hints for one chord would leave the human guessing
 //     which answers (README § Where the sidebar differs).
@@ -158,7 +158,10 @@ export function registerSelectionHint(api: Vscode, context: vscode.ExtensionCont
   }
 
   function wanted(): { editor: vscode.TextEditor; line: number } | undefined {
-    if (suppressedApp || !enabled() || !host.connected() || !api.window.state.focused) return undefined
+    // Not `window.state.focused`: a selection made by hand is made in a focused window, and the window
+    // losing focus clears the hint below; asking here only hid it where VS Code's own reading lags (a
+    // window with no window manager, as under Xvfb, never says it is focused).
+    if (suppressedApp || !enabled() || !host.connected()) return undefined
     const editor = api.window.activeTextEditor
     if (!editor || editor.document.uri.scheme !== "file" || byApi.has(editor.document.uri.toString())) return undefined
     const selection = editor.selection
@@ -200,7 +203,9 @@ export function registerSelectionHint(api: Vscode, context: vscode.ExtensionCont
     }),
     api.window.onDidChangeActiveTextEditor(() => settle()),
     api.workspace.onDidCloseTextDocument((document) => byApi.delete(document.uri.toString())),
-    api.window.onDidChangeWindowState((state) => (state.focused ? settle() : clear())),
+    api.window.onDidChangeWindowState((state) => {
+      if (!state.focused) clear()
+    }),
     // A tab turned into a diff or back (the same file opened in "Open changes") without a selection change.
     api.window.tabGroups.onDidChangeTabs(() => {
       if (on) settle()
