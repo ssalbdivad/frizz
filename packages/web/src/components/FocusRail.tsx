@@ -232,8 +232,16 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
               aria-label={review}
               onMouseDown={(e) => e.stopPropagation()}
               onClick={() => reviewChanges(api, thread.id, displayName(thread))}
-              className="rounded-sm text-[10.5px] uppercase tracking-wide text-muted-45 transition-colors hover:text-muted-80"
+              className="flex items-baseline gap-[5px] rounded-sm text-[10.5px] uppercase tracking-wide text-muted-45 transition-colors hover:text-muted-80"
             >
+              {/* The glyph is what makes it a verb. Bare, "REVIEW" in the heading's type sat right above
+                  the rows' "+1 ›" column and read as that column's header. It is the file rows' own
+                  FileDiff mark, 1em on ON_CAP's cap-band correction (its ink is vertically symmetric in
+                  its box). Measured on the fullscreen rail, sans, dsf 3: glyph ink 0.33px above the cap
+                  band's centre (the heading's caret: 0.08px), under the device grid; glyph→"R" ink gap
+                  6.75px, a little under the label→count gap's 7.84px so the glyph reads as the word's.
+                  Its right edge is the rail's, the rows' carets'. */}
+              <FileDiff size="1em" aria-hidden className={ON_CAP} />
               Review
             </button>
           )
