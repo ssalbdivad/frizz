@@ -10,6 +10,7 @@ import {
   type RemoteSetupView,
   type RemoteSignInLink,
 } from "../api/remoteAccess.ts"
+import { useInnerHtml } from "../lib/innerHtml.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
 import { SettingsField } from "./SettingsField.tsx"
 import { Select } from "./ui/Select.tsx"
@@ -236,11 +237,14 @@ function Commands({ lines }: { lines: string[] }) {
 }
 
 function SignInLink({ link }: { link: RemoteSignInLink }) {
+  // Through useInnerHtml, never an inline `{ __html }`: the pane re-renders while the operator edits the
+  // fields above, and a fresh literal would rebuild the QR's SVG each time (lib/innerHtml.ts).
+  const qr = useInnerHtml(link.qrSvg)
   return (
     <div className="flex items-start gap-3" data-remote-sign-in>
       {/* The launcher draws the SVG (packages/server/src/qr.ts renderQrSvg): fixed markup from an encoder,
           with no text from the request in it. */}
-      <div className="size-[168px] shrink-0 overflow-hidden rounded-md border border-border [&>svg]:block [&>svg]:size-full" dangerouslySetInnerHTML={{ __html: link.qrSvg }} />
+      <div className="size-[168px] shrink-0 overflow-hidden rounded-md border border-border [&>svg]:block [&>svg]:size-full" dangerouslySetInnerHTML={qr} />
       <div className="flex min-w-0 flex-col gap-1.5">
         <p className={HINT}>Scan to sign in on a phone. Works once and expires in 5 minutes.</p>
         <p className="break-all font-mono text-[11px] text-muted">{link.url}</p>
