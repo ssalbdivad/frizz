@@ -39,6 +39,7 @@ import { ROOT_PATH, liveQuestionNodes, nodeAnswered, questionComplete, registere
 import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard, focusQuestionNode } from "./QuestionBlockCard.tsx"
+import { revealInDrawerTranscript } from "../lib/drawerReveal.ts"
 
 function errorText(error: unknown): string {
   const message = error instanceof Error ? error.message : "The answer could not be sent."
@@ -380,12 +381,12 @@ export function SettledQuestionCard({ s, wrap }: { s: SettledQuestion; wrap?: bo
   )
   const branch = nodes.slice(1)
   return (
-    <article data-question-id={s.id} data-settled-question aria-label="Answered question" className="flex min-w-0 flex-col gap-2 opacity-60">
+    <article data-question-id={s.id} data-settled-question aria-label="Answered question" className={`${QUESTION_CONTAINER} flex min-w-0 flex-col gap-2 opacity-60`}>
       {card(nodes[0])}
       {branch.length > 0 && (
-        <div className="ml-3 flex flex-col gap-2 border-l border-border pl-3">
+        <div className={`${BRANCH_RULE} flex flex-col gap-2`}>
           {branch.map((node) => (
-            <div key={node.path} className={node.depth > 2 ? "ml-3 border-l border-border pl-3" : undefined}>
+            <div key={node.path} className={node.depth > 2 ? BRANCH_RULE : undefined}>
               {card(node)}
             </div>
           ))}
@@ -393,6 +394,29 @@ export function SettledQuestionCard({ s, wrap }: { s: SettledQuestion; wrap?: bo
       )}
     </article>
   )
+}
+
+// A REGISTERED QUESTION IS ITS OWN SIZE CONTAINER, so its follow-up branch can tighten to the width the
+// card actually has (a 300px VS Code sidebar's drawer gives it ~252px, a phone's ~330, the desktop
+// drawer's 672). Each level of the branch cost 24px of indent (`ml-3 pl-3`) on top of the nested card's
+// own 32px of padding, leaving a depth-3 follow-up ~160px of label at 300. Under 24rem of card the rule
+// keeps its place and the indent halves (6px + 8px); anywhere wider it is the desktop's 12 + 12.
+const QUESTION_CONTAINER = "@container/question"
+const BRANCH_RULE = "ml-3 border-l border-border pl-3 @max-[24rem]/question:ml-1.5 @max-[24rem]/question:pl-2"
+
+/** A follow-up the human's own pick just opened. It grows the card BELOW the fold of a drawer's transcript
+ *  — at a 300px VS Code sidebar under the floating "Jump to latest" control, over its "Something else…"
+ *  rows — so it reveals itself, clear of that control, in the drawer's transcript only
+ *  (lib/drawerReveal.ts). Only a node that mounts AFTER its card did (`reveal`): the branch a card opens
+ *  with is where the human left it, and a card re-mounted by the virtualizer must not drag the transcript. */
+function BranchNode({ reveal, className, children }: { reveal: ((el: HTMLElement) => void) | null; className?: string; children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null)
+  // Mount-only on purpose: `reveal` is read at the moment the node appears, never again. It only queues
+  // the node; the card reveals everything one pick opened as one span (RegisteredQuestionCard).
+  useEffect(() => {
+    if (reveal && ref.current) reveal(ref.current)
+  }, [])
+  return <div ref={ref} className={className}>{children}</div>
 }
 
 /** Several answered registrations anchored after one message. */
@@ -416,6 +440,19 @@ export function RegisteredAnsweringProvider({ thread, scope, children }: { threa
  *  surface's shared state through context, or the one a stack hands it. */
 export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQuestionView; answering?: RegisteredAnswering }) {
   const shared = useContext(RegisteredAnsweringContext)
+  // False through the card's first render, true after: a follow-up that mounts later was opened by a pick.
+  // Those queue themselves in `opened` as they mount, and the effect below — after every child's, in the
+  // same commit — reveals them together and clears the queue.
+  const mounted = useRef(false)
+  const opened = useRef<HTMLElement[]>([])
+  useEffect(() => {
+    mounted.current = true
+  }, [])
+  useEffect(() => {
+    if (opened.current.length === 0) return
+    revealInDrawerTranscript(opened.current)
+    opened.current = []
+  })
   const a = given ?? shared
   if (!a || !a.slug) return null
   const nodes = liveQuestionNodes(q.spec, a.answersOf(q))
@@ -477,14 +514,14 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
   // stops (ASK_MAX_DEPTH).
   const branch = nodes.slice(1)
   return (
-    <article data-question-id={q.id} className="flex min-w-0 flex-col gap-2">
+    <article data-question-id={q.id} className={`${QUESTION_CONTAINER} flex min-w-0 flex-col gap-2`}>
       {card(nodes[0])}
       {branch.length > 0 && (
-        <div className="ml-3 flex flex-col gap-2 border-l border-border pl-3">
+        <div className={`${BRANCH_RULE} flex flex-col gap-2`}>
           {branch.map((node) => (
-            <div key={node.path} className={node.depth > 2 ? "ml-3 border-l border-border pl-3" : undefined}>
+            <BranchNode key={node.path} reveal={mounted.current ? (el) => opened.current.push(el) : null} className={node.depth > 2 ? BRANCH_RULE : undefined}>
               {card(node)}
-            </div>
+            </BranchNode>
           ))}
         </div>
       )}

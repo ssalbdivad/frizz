@@ -52,7 +52,7 @@ import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
 import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visualizationThemeProtocol.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
-import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
+import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTAINER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleFooter, StateButton } from "./ThreadLifecycleFooter.tsx"
@@ -410,7 +410,7 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
         // py-5, so putting it here is the one place both paths end up with the same gap to the
         // non-scrolling composer footer. 20px of trailing space read as the last row crowding the
         // prompt box; 32px reads as an ending.
-        className="relative min-h-0 flex-1 overflow-y-auto pb-3 outline-none [overflow-anchor:none] focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="relative min-h-0 flex-1 overflow-y-auto pb-3 outline-none [overflow-anchor:none] focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
       {virtualized && count > 0 ? (
         <VirtualizedThreadTranscript
@@ -609,7 +609,9 @@ function ChatView({ slug, virtualized }: { slug: string; virtualized: boolean })
       <div
         ref={setJumpOverlay}
         data-transcript-overlay
-        className="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end p-4 [&>*]:pointer-events-auto"
+        // `@container/jump`: the layer spans the viewport's width (inset-x-0), so "Jump to latest" can size
+        // itself to the drawer it floats in (JumpToLatest).
+        className="@container/jump pointer-events-none absolute inset-x-0 bottom-0 z-20 flex justify-end p-4 [&>*]:pointer-events-auto"
       />
       </div>
       {/* This entire footer is deliberately non-scrolling: transcript history alone overflows. */}
@@ -1581,6 +1583,12 @@ function VirtualizedThreadTranscript({
 // scrolling column. (It used to render inside the virtualized content and chase the viewport by
 // recomputing a content-space `top` every render — which meant it drifted with the content on every
 // scroll and snapped back a frame later.)
+//
+// IN A NARROW DRAWER IT IS THE ARROW ALONE, a 28px round ↓ (the words become its accessible name and
+// tooltip). The pill is ~120px; in a 300px VS Code sidebar's transcript that is half the row, and it came up
+// exactly when an answer card grew under the human's own click — a pick opening follow-ups, "Grant for
+// session" opening its confirmation — so it sat on "Confirm grant for session" and the follow-up rows.
+// Keyed on the drawer's width (the overlay is a size container), so the desktop drawer keeps the pill.
 function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null; hidden: boolean; onJump: () => void }) {
   if (!overlay || hidden) return null
   return createPortal(
@@ -1588,10 +1596,11 @@ function JumpToLatest({ overlay, hidden, onJump }: { overlay: HTMLElement | null
       type="button"
       data-jump-to-latest
       onClick={onJump}
-      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-shadow-ink/30 hover:bg-panel-2"
+      title="Jump to latest"
+      className="flex items-center gap-1.5 rounded-full border border-border-strong bg-elevated px-3 py-1.5 text-[11px] font-medium text-fg shadow-lg shadow-shadow-ink/30 hover:bg-panel-2 @max-[25.5rem]/jump:size-7 @max-[25.5rem]/jump:justify-center @max-[25.5rem]/jump:p-0"
     >
-      <ArrowDown size={12} />
-      Jump to latest
+      <ArrowDown size={12} className="shrink-0 @max-[25.5rem]/jump:size-3.5" />
+      <span className="@max-[25.5rem]/jump:sr-only">Jump to latest</span>
     </button>,
     overlay,
   )
@@ -1613,6 +1622,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
   const hasDoc = stripFrontmatter(docQ.data?.markdown ?? "").trim().length > 0
   if (!thread) return null
   return (
+    // The size container the header's two-row wrap reads (lib/threadHeaderLayout.ts): the drawer's
+    // width decides it, not the window's.
+    <div className={THREAD_HEADER_CONTAINER_CLASS}>
     <header
       data-thread-header
       className={THREAD_HEADER_CLASS}
@@ -1692,6 +1704,7 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
         )}
       </div>
     </header>
+    </div>
   )
 }
 
@@ -2578,7 +2591,7 @@ function SentFilesCard({ images, files, caption, status, durationMs }: { images:
         aria-controls={bodyId}
         aria-expanded={open}
         aria-label={`${open ? "Collapse" : "Expand"} files sent to you${summary ? `: ${summary}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
         <span className="flex min-w-0 items-center gap-2">
           <span className="petite-caps frizz-bash-label shrink-0">Sent to you</span>
@@ -2662,7 +2675,7 @@ function BashBlock({
         aria-controls={expandable ? bodyId : undefined}
         aria-expanded={expandable ? open : undefined}
         aria-label={`${expandable ? `${open ? "Collapse" : "Expand"} ` : ""}${prettyToolName(name)}${shownDesc ? `: ${shownDesc}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       >
         <span className="flex min-w-0 items-center gap-2">
           <ToolLiveMark status={status} backgroundState={backgroundState} liveBackgroundState={liveBackgroundState} startedAt={startedAt} />
@@ -2923,7 +2936,9 @@ export function AgentBlock({
   return (
     <div className="frizz-bash">
       <ToolDisclosureHeader
-        className="frizz-bash-header"
+        // `@container`: the profile reading below gives way to the header's OWN width, not the viewport's —
+        // a 300px VS Code sidebar draws this header 243px wide, a phone's drawer 318px, the desktop's 662px.
+        className="frizz-bash-header @container"
         controls={bodyId}
         expanded={open}
         label={`${open ? "Collapse" : "Expand"} ${kind} dispatch: ${title}`}
@@ -2941,12 +2956,17 @@ export function AgentBlock({
           // each pushed it to a different x, and a column of them read with a ragged left edge. The
           // right-hand slot already varies card to card, so it absorbs a second reading without moving
           // anything the eye scans down.
+          //
+          // BELOW 18rem OF HEADER the profile and its `·` drop out and the runtime stays: at 243px (a 300px
+          // VS Code sidebar) `opus › high · 1h 15m` left the title 0px of its own and the title's text was
+          // drawn UNDER the reading, overlapping it by 9-19.7px. The runtime is what says the child ran
+          // and stopped; the profile is still in the sub-agent's drawer, one click away.
           (profile || reading) && (
             <>
               {profile && (
                 <span
                   data-subagent-profile
-                  className="petite-caps frizz-tool-header-caps shrink-0 whitespace-nowrap text-[11.5px] leading-none text-muted-55"
+                  className="petite-caps frizz-tool-header-caps shrink-0 whitespace-nowrap text-[11.5px] leading-none text-muted-55 @max-[18rem]:hidden"
                   title={`Sub-agent profile: ${profile}`}
                 >
                   {profile}
@@ -2958,7 +2978,7 @@ export function AgentBlock({
                   row's flex gap while the reading's identical dot ("stopped · 41 min") is spaced by two
                   text spaces, and the two rhythms did not agree — measured 8.91/8.26px of ink against
                   the text one's 6.51/7.01. Trimmed, they read as one chain (6.9/6.3). */}
-              {profile && reading && <span aria-hidden className="petite-caps frizz-tool-header-caps -mx-[2px] shrink-0 text-[11.5px] leading-none text-muted-55">·</span>}
+              {profile && reading && <span aria-hidden className="petite-caps frizz-tool-header-caps -mx-[2px] shrink-0 text-[11.5px] leading-none text-muted-55 @max-[18rem]:hidden">·</span>}
               {reading && (
                 <ToolMetaReading
                   tone={reading.tone === "failed" ? "frizz-tool-failed" : "text-muted-55"}
@@ -2987,12 +3007,12 @@ export function AgentBlock({
             // The profile renders in the header now, so this tooltip is back to naming its own action.
             title={kind === "Workflow" ? "Open workflow agents" : "Open sub-agent transcript"}
             onClick={openDrawer}
-            className="min-w-[4rem] flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
+            className="min-w-0 flex-1 truncate text-left text-[11.5px] text-muted outline-none hover:underline hover:text-fg/80 focus-visible:underline focus-visible:text-fg/80"
           >
             {title}
           </button>
         ) : (
-          <span className="min-w-[4rem] flex-1 truncate text-[11.5px] text-muted" title={title}>{title}</span>
+          <span className="min-w-0 flex-1 truncate text-[11.5px] text-muted" title={title}>{title}</span>
         )}
       </ToolDisclosureHeader>
       <div id={bodyId} hidden={!open}>
@@ -3089,7 +3109,7 @@ function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?:
         aria-controls={hasBody ? bodyId : undefined}
         aria-expanded={hasBody ? open : undefined}
         aria-label={`${hasBody ? `${open ? "Collapse" : "Expand"} ` : ""}${label}${to ? ` to ${to}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60"
+        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
         disabled={!hasBody}
       >
         <span className="flex min-w-0 items-center gap-2">

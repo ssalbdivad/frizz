@@ -254,7 +254,7 @@ export function ChildOpRow({
     // `overflow-hidden` is load-bearing at a narrow width: the arrow/dot/kind tag inside are shrink-0,
     // so once the row runs out of room the button's own content used to SPILL and the × landed on top
     // of the "AGENT" tag. Clipping keeps the collapse graceful. The ring goes inset to survive it.
-    : `group flex min-w-0 items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-focus-ink-60" : ""}`
+    : `group flex min-w-0 items-center gap-1.5 overflow-hidden text-left text-[11.5px] ${clickable ? "cursor-pointer rounded-sm outline-none transition-colors focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60" : ""}`
 
   // The rail indents with PADDING, not margin: a margin would carve the row wrapper's full-width hover
   // highlight back on every nested row. The two prompt-box densities have no such highlight, so they
