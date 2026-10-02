@@ -176,6 +176,45 @@ export function latestConfirmation(dataUpdatedAt: number | undefined, newestRend
   return new Date(at).toISOString()
 }
 
+/** Ticks (of WATCHDOG_MS) the watchdog waits on a fetch already in flight before treating it as hung. */
+export const WATCHDOG_MAX_DEFER_TICKS = 4
+
+export type TranscriptWatchdogStep =
+  | { kind: "fresh" }
+  | { kind: "defer" }
+  | { kind: "heal"; lagMs: number | null }
+
+/**
+ * One watchdog tick's decision, pure so it is tested apart from the timer.
+ *
+ * DEFER while a read is already in flight: that read IS the heal. Healing over it used to call
+ * `query.refetch()`, whose default `cancelRefetch: true` ABORTS the in-flight read and starts it again
+ * — so on a slow server (a cold transcript, a loaded box) the watchdog's first tick, 7s after mount,
+ * threw away a read that was about to land and paid for it twice, and the breadcrumb blamed delivery.
+ * A read still in flight after WATCHDOG_MAX_DEFER_TICKS ticks is treated as hung and healed anyway, so
+ * a request that never settles cannot disarm the watchdog.
+ *
+ * `lagMs` is measured against the SAME confirmation the decision used. It was measured against the
+ * newest rendered message, which on a thread with nothing rendered yet is the epoch, so every
+ * breadcrumb from a cold view reported a lag of ~56 years: all 47 watchdog lines across the 2026-10-01
+ * adhoc stack logs read `lagMs: 17909…` (46 of them attempt 1, i.e. the first tick after a mount).
+ * null when nothing has confirmed the cache at all.
+ */
+export function transcriptWatchdogStep(input: {
+  activity: string | undefined
+  confirmedAt: string | undefined
+  staleMs: number
+  fetching: boolean
+  /** Consecutive earlier ticks that already found this read in flight. */
+  fetchingTicks: number
+}): TranscriptWatchdogStep {
+  if (!isTranscriptStale(input.activity, input.confirmedAt, input.staleMs)) return { kind: "fresh" }
+  if (input.fetching && input.fetchingTicks < WATCHDOG_MAX_DEFER_TICKS) return { kind: "defer" }
+  const activity = input.activity ? Date.parse(input.activity) : NaN
+  const confirmed = input.confirmedAt ? Date.parse(input.confirmedAt) : NaN
+  return { kind: "heal", lagMs: Number.isFinite(activity) && Number.isFinite(confirmed) ? activity - confirmed : null }
+}
+
 export function useTranscript(slug: string, opts: { poll: boolean }) {
   const qc = useQueryClient()
   const snap = useSnapshot(store)
@@ -247,6 +286,7 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
     if ((!opts.poll && !socket) || transportFallback) return // typed pause stays manual; never turn the watchdog into a full-read loop
     let inFlight = false
     let attempts = 0
+    let fetchingTicks = 0
     let lastHealNewest: string | undefined
     const tick = () => {
       if (inFlight) return
@@ -254,18 +294,22 @@ export function useTranscript(slug: string, opts: { poll: boolean }) {
       const state = qc.getQueryState<TranscriptData>(["transcript", slug])
       const newest = newestRenderedAt(state?.data?.messages)
       const confirmedAt = latestConfirmation(state?.dataUpdatedAt, newest)
-      if (!isTranscriptStale(activity, confirmedAt, STALE_MS)) {
+      const fetching = state?.fetchStatus === "fetching"
+      // fetchingTicks counts the EARLIER ticks that already found this read in flight.
+      const step = transcriptWatchdogStep({ activity, confirmedAt, staleMs: STALE_MS, fetching, fetchingTicks })
+      fetchingTicks = fetching ? fetchingTicks + 1 : 0
+      if (step.kind === "fresh") {
         attempts = 0 // caught up — re-arm
         return
       }
+      if (step.kind === "defer") return // a read is already landing; healing over it would abort it
       // Stale. If the transcript advanced since our last heal, re-arm; otherwise the lead is likely a benign
       // tail-advance (sidecar records with nothing renderable) — cap attempts so we don't hammer forever.
       if (newest !== lastHealNewest) attempts = 0
       if (attempts >= MAX_HEAL_ATTEMPTS) return
       attempts++
       lastHealNewest = newest
-      const lagMs = activity ? Date.parse(activity) - (newest ? Date.parse(newest) : 0) : 0
-      console.warn("[frizz] transcript watchdog: stale view — self-healing", { slug, lagMs, transport: socket ? "socket" : "poll", attempt: attempts })
+      console.warn("[frizz] transcript watchdog: stale view — self-healing", { slug, lagMs: step.lagMs, transport: socket ? "socket" : "poll", attempt: attempts })
       if (socket) {
         // Re-establish the server-side subscription (drop→re-add on the ref count) so future pushes resume.
         unsubscribeTranscript(slug)
