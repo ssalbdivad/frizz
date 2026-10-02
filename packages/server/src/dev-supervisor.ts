@@ -23,6 +23,7 @@ import {
 import type { SessionDirectory } from "./access-codes.ts"
 import { RestartSupervisorProxy, type RemoteControlHandler, type RestartResult } from "./restart-supervisor.ts"
 import { log as frizzLog } from "./logging.ts"
+import { withRootsPin } from "./frizz-paths.ts"
 import { BOOT_HARD_TIMEOUT_MS, BOOT_STALL_TIMEOUT_MS, readBootProgress } from "./boot-progress.ts"
 
 export const DEV_RESTART_DEBOUNCE_MS = 180
@@ -636,7 +637,11 @@ class Supervisor implements DevSupervisor {
     this.launchTarget = opts.launchTarget
     this.cwd = resolve(opts.cwd ?? opts.launchTarget.projectDir)
     if (this.cwd !== opts.launchTarget.projectDir) throw new Error("dev supervisor cwd does not match its owned project")
-    this.parentEnv = projectLaunchEnvironment(opts.env ?? process.env, opts.launchTarget, opts.launchOwnerToken)
+    // Every child generation and every re-exec of this supervisor inherits THIS process's data-root
+    // decision (frizz-paths.ts `withRootsPin`). Without it each forked child resolved afresh at boot,
+    // so a stray `~/.frizz/registry.json` written under a running board took effect at the next source
+    // edit or crash restart — the 2026-10-02 incident, deferred by one restart instead of prevented.
+    this.parentEnv = withRootsPin(projectLaunchEnvironment(opts.env ?? process.env, opts.launchTarget, opts.launchOwnerToken))
     this.roots = (opts.watchRoots ?? defaultDevWatchRoots()).map((root) => resolve(root))
     this.watchEnabled = opts.watch !== false
     this.childEnvironment = opts.childEnvironment ?? (() => ({}))

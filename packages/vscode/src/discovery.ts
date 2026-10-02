@@ -31,7 +31,7 @@ import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
 import { readFileSync, realpathSync } from "node:fs"
 import { isAbsolute, join } from "node:path"
-import { frizzPaths, type FrizzPaths } from "@frizz/server/frizz-paths"
+import { frizzPathsNow, type FrizzPaths } from "@frizz/server/frizz-paths"
 
 /** `DEFAULT_PORT`, its fallback, `DEFAULT_DEV_PORT`, its fallback (packages/shared `fallbackPort` = +10 000). */
 export const WELL_KNOWN_PORTS: readonly number[] = [9393, 19393, 9494, 19494]
@@ -345,7 +345,10 @@ export async function discoverFrizz(options: DiscoveryOptions = {}): Promise<Dis
     return { found: { origin, port: Number(new URL(origin).port || (origin.startsWith("https:") ? 443 : 80)), source: "setting" }, notes }
   }
 
-  const roots = options.roots ?? frizzPaths()
+  // Resolved afresh per discovery, never memoised: this host lives for days and owns no Frizz data,
+  // and the server it looks for may have started on other roots than this process would have frozen
+  // (frizz-paths.ts `frizzPathsNow`).
+  const roots = options.roots ?? frizzPathsNow()
 
   const addressPath = join(roots.state, STABLE_SERVER_DIR, "address.json")
   const owner = await readOwnerAddress(roots, pidAlive, options.observeGeneration ?? observeGeneration)
