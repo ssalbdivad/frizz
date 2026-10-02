@@ -10,7 +10,10 @@
 // these anchors stop the click's propagation in their own onClick (ThreadLinks, the GitHub picker's
 // rows), so a listener that waited for the bubble would never hear them.
 
+import { innerPath } from "./base-path.ts"
 import { embedded, postToHost } from "./embed.ts"
+import { spaNavigate } from "./router.ts"
+import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 
 type AnchorLike = Pick<HTMLAnchorElement, "getAttribute" | "setAttribute" | "hasAttribute">
 
@@ -75,14 +78,82 @@ function hostOpens(url: string): void {
   postToHost({ type: "frizz:open-external", url })
 }
 
+/** What a sidebar does with a click on an anchor the browser would otherwise have opened in a tab. */
+export type EmbedLinkAction = { kind: "navigate"; path: string } | { kind: "external"; url: string }
+
+/**
+ * IN AN EDITOR'S SIDEBAR, THE ANCHORS THAT WOULD OPEN A TAB — which a webview cannot, so a click on one
+ * did nothing at all (sweep 2026-10-01): agent prose's in-app links (markdown.ts stamps `target=_blank` on
+ * every anchor), `mailto:`, and the modified or middle click a thread link or @mention leaves to the
+ * browser on purpose (lib/thread-links.ts, MentionLinks.tsx). Each gets the destination the browser gives
+ * it, in the editor's terms:
+ *
+ *   mailto:                                  the mail client, through the editor — its `openExternal`
+ *   ⌘/Ctrl/Shift/Alt or middle click, in-app the browser, with the address — the "open in a new tab" it asked for
+ *   a thread's /full page                    the browser, as `f` does: the frame is the drawer's width already
+ *   any other in-app page (`/`, `?project=`) here, in the frame — the tab it would have opened
+ *
+ * A plain click on a thread's address is not here: lib/thread-links.ts opens its drawer. Same-origin
+ * paths under `/_frizz/` are Frizz's API, not the app, and are left alone, as is everything cross-origin
+ * (createExternalLinkClickHandler). Null when the click is not one of these. Pure, for its test.
+ */
+export function embedLinkAction(
+  href: string,
+  click: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean; blank: boolean },
+  currentHref: string,
+): EmbedLinkAction | null {
+  let url: URL
+  let current: URL
+  try {
+    url = new URL(href, currentHref)
+    current = new URL(currentHref)
+  } catch {
+    return null
+  }
+  if (url.protocol === "mailto:") return click.button === 0 || click.button === 1 ? { kind: "external", url: url.toString() } : null
+  if (url.origin !== current.origin || url.pathname.startsWith("/_frizz/")) return null
+  if (click.button === 1 || (click.button === 0 && (click.metaKey || click.ctrlKey || click.shiftKey || click.altKey))) return { kind: "external", url: url.toString() }
+  if (click.button !== 0 || !click.blank) return null
+  const inner = innerPath(url.pathname)
+  if (parseStandaloneThreadPath(inner) !== null) return { kind: "external", url: url.toString() }
+  if (/^\/thread\//u.test(inner)) return null
+  return { kind: "navigate", path: `${url.pathname}${url.search}${url.hash}` }
+}
+
+function createEmbedLinkClickHandler(currentHref: () => string = () => location.href): (event: MouseEvent) => void {
+  return (event) => {
+    if (event.defaultPrevented) return
+    const anchor = findAnchor(event)
+    const href = anchor?.getAttribute("href")
+    if (!anchor || !href) return
+    const action = embedLinkAction(href, { button: event.button, metaKey: event.metaKey, ctrlKey: event.ctrlKey, shiftKey: event.shiftKey, altKey: event.altKey, blank: anchor.getAttribute("target") === "_blank" }, currentHref())
+    if (!action) return
+    event.preventDefault()
+    // Nothing under it acts on the click either: the thread-link and @mention handlers would open the
+    // drawer here as well as the address in the browser.
+    event.stopPropagation()
+    if (action.kind === "external") hostOpens(action.url)
+    else spaNavigate(action.path)
+  }
+}
+
 export function installExternalLinkInterceptor(): () => void {
   const host = embedded()
   const handler = createExternalLinkClickHandler(undefined, host ? hostOpens : undefined)
+  const inApp = host ? createEmbedLinkClickHandler() : null
   document.addEventListener("click", handler, true)
   if (host) document.addEventListener("auxclick", handler, true)
+  if (inApp) {
+    document.addEventListener("click", inApp, true)
+    document.addEventListener("auxclick", inApp, true)
+  }
   return () => {
     document.removeEventListener("click", handler, true)
     document.removeEventListener("auxclick", handler, true)
+    if (inApp) {
+      document.removeEventListener("click", inApp, true)
+      document.removeEventListener("auxclick", inApp, true)
+    }
   }
 }
 
