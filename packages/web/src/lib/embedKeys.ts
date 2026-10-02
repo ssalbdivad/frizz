@@ -65,7 +65,7 @@ export interface EditorChord {
 
 export const EDITOR_CHORDS: readonly EditorChord[] = [
   { label: "Add the selection", chord: { key: "l", mod: true, alt: false, shift: false }, command: "frizz.addToPrompt", when: "editorTextFocus && editorHasSelection" },
-  { label: "Add the selection, or the file", chord: { key: "k", mod: false, alt: true, shift: false }, command: "frizz.addSelectionOrFile", when: "editorTextFocus" },
+  { label: "Add the selection or file", chord: { key: "k", mod: false, alt: true, shift: false }, command: "frizz.addSelectionOrFile", when: "editorTextFocus" },
 ]
 
 /** The note under the Editor group. ⌘L also works from a prompt box here (lib/embedHost.ts), as ⌘I does. */

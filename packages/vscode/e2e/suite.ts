@@ -945,7 +945,9 @@ const steps: Step[] = [
         await frizz.update("serverUrl", "http://127.0.0.1:1", vscode.ConfigurationTarget.Global)
         await until("the frame on port 1", () => api.sidebar().url === `http://127.0.0.1:1/${embedQuery(project)}`)
         assert.equal(api.sidebar().ready, false)
-        await until("the hint", () => api.sidebar().hinted, 15_000)
+        // The view waits 20s for a page to say it is ready (src/sidebar.ts READY_HINT_MS; 10s until a Frizz
+        // run from source took 13s and 42s to load on a busy machine), so the hint comes after that.
+        await until("the hint", () => api.sidebar().hinted, 30_000)
 
         // No address at all: discovery finds nothing. The page that was showing stays until Reload, which
         // then says why there is nothing to show.
