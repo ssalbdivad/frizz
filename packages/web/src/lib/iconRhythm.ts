@@ -92,3 +92,16 @@ export const RAIL_PAPERCLIP_PLAIN_OFFSET = "right-[44px]"
 /** Reserve the leftmost button's edge (99px with GitHub, 72px without), plus 8px for prose. */
 export const RAIL_RESERVE_WITH_ACTION = "pr-[6.6875rem]"
 export const RAIL_RESERVE_PLAIN = "pr-20"
+
+/** The new-thread box's lazy-save glyph (`ListPlus`) takes the slot directly left of Send, at the rail
+ *  action's own offset, and every slot further left moves over by 25.5px, not a full 28px pitch:
+ *  `ListPlus` paints further from its box's LEFT edge than its neighbours do, so on a full 28px the gap
+ *  before it read 16px against 14.25 / 14.75 elsewhere. Measured with scripts/ink-gaps.mjs on
+ *  composer-icons-fixture `?lazy` (dark, dsf 4): 14.25 · 14.5 · 14.25 with GitHub, 14.5 · 14.25 without.
+ *  The reserves grow by the full 28px. */
+export const RAIL_LAZY_OFFSET = RAIL_ACTION_OFFSET
+export const RAIL_LAZY_ACTION_OFFSET = "right-[68.5px]"
+export const RAIL_LAZY_PAPERCLIP_OFFSET = "right-[96.5px]"
+export const RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET = "right-[69.5px]"
+export const RAIL_LAZY_RESERVE_WITH_ACTION = "pr-[8.4375rem]"
+export const RAIL_LAZY_RESERVE_PLAIN = "pr-[6.75rem]"
