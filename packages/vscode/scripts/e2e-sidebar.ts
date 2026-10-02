@@ -22,18 +22,21 @@
 // THE CHECKS (each one PASS/FAIL with its evidence in results.json, and a screenshot where it is visible):
 //   c1 the Frizz icon in the activity bar, side and top, dark and light: its mask file loads, and its ink
 //      is a line drawing the weight of the codicons beside it — not a blank, not a solid square
-//   c2 the view frames the real page, which says frizz:ready and draws no header; VS Code's title row
-//      carries the route and its buttons, and each button, clicked, does its thing in the page
+//   c2 the view frames the real page, which says frizz:ready and draws no header and no lone ⌨ row; VS
+//      Code's title row reads Frizz, its buttons follow the page's view, the badge's tooltip carries the
+//      counts, and each button, clicked, does its thing in the page
 //   c3 the context bar follows the editor: a selection, no selection, another editor, the open files
-//   c4 Ctrl+I in the editor: the sidebar revealed, the chip a pill in the front composer, the caret after
-//      it, typing after it; sent to a thread with a simulated worker, the context serialized and the
-//      transcript showing the chip; the context bar's click does the same
+//   c4 Ctrl+L (Cursor's chord, the one the page names) in the editor: the sidebar revealed, the chip a pill
+//      in the front composer, the caret after it, typing after it; sent to a thread with a simulated
+//      worker, the context serialized and the transcript showing the chip; the context bar's click does the
+//      same; Alt+K with only a caret adds the whole file; Ctrl+L pressed in the reply box adds the selection
 //   c5 "Ask Frizz to fix" on a real TypeScript error: chip + the problem as a note
 //   c6 a code-file link opens in the editor at its range; a web link goes to openExternal (a stub
 //      xdg-open, no browser); a Markdown link opens Frizz's reader
 //   c7 a VS Code theme switch re-themes the page live
 //   c8 keys with the frame focused: Ctrl+Shift+P is VS Code's palette, Ctrl+K Frizz's, `?` the shortcuts
-//      sheet with its VS Code group, Ctrl+1 back to the editor
+//      sheet with its Editor group (Ctrl+L first) and its VS Code group, the title row's ⋯ Keyboard
+//      shortcuts opening the same sheet, Ctrl+1 back to the editor
 //   c9 the gallery: queue (dark, light), a thread with a selection and a chip, the open-files menu,
 //      Settings, the shortcuts sheet — at ~300px and ~450px
 //
@@ -851,6 +854,10 @@ try {
       phone: document.querySelectorAll("[data-mobile-thread-row], [data-mobile-board-title]").length,
       statusTitle: !!document.querySelector("[data-status-title]"),
       gear: !!document.querySelector('[data-status-row] [aria-label="Settings"]'),
+      // The ⌨ is in VS Code's title row (⋯ Keyboard shortcuts), and a status row with nothing left in it
+      // is not drawn: it stood alone on a 36px row above the prompt box (2026-10-01).
+      keyboard: !!document.querySelector('[data-status-row] [aria-label="Keyboard shortcuts"]'),
+      emptyStatusRow: [...document.querySelectorAll<HTMLElement>("[data-status-row]")].some((row) => row.getClientRects().length > 0 && row.querySelectorAll("button, [data-quota-bar]").length === 0),
       header: [...document.querySelectorAll("header")].filter((h) => h.getClientRects().length > 0 && !h.closest("[role=dialog], .frizz-sheet-panel")).length,
       width: innerWidth,
       scrollWidth: document.documentElement.scrollWidth,
@@ -862,27 +869,34 @@ try {
     expect("c2", "the page knows it is in VS Code, in VS Code's dark theme, in sans", boot.embed === "vscode" && boot.theme === "dark" && boot.font === "sans", boot)
     expect("c2", "the desktop page narrowed, not the phone page", boot.sidebarPage && boot.phone === 0 && boot.rowTitlePx === "13px", boot)
     expect("c2", "no Frizz header: no title, no gear, no header bar", !boot.statusTitle && !boot.gear && boot.header === 0, boot)
+    expect("c2", "no ⌨ over the prompt box, and no empty status row", !boot.keyboard && !boot.emptyStatusRow, boot)
     expect("c2", "nothing overflows sideways", boot.scrollWidth <= boot.width, { width: boot.width, scrollWidth: boot.scrollWidth })
 
-    const queueRow = await waitFor("the queue's reading in the title row", async () => {
+    // The row says Frizz and nothing the page names: VS Code re-cases a view's title ("Frizz: Marketing-Site"
+    // on 1.140, all caps on 1.90) and drops its description in a one-view container, so the counts ride the
+    // badge's tooltip and the names stay in the page (src/sidebar.ts applyRoute).
+    const queueRow = await waitFor("the queue's buttons in the title row", async () => {
       const row = await titleRow()
-      return /marketing-site/iu.test(row.text) && /ready|need|Nothing/iu.test(row.text) ? row : undefined
+      return row.buttons.includes("New thread") ? row : undefined
     }, 15_000).catch(async () => titleRow())
-    const queueSnapshot = (await status()).sidebar
-    expect("c2", "queue: the page told the view its scope and counts", queueSnapshot.title === workspace.slug && /ready|need|Nothing/iu.test(queueSnapshot.description ?? ""), { title: queueSnapshot.title, description: queueSnapshot.description })
-    expect("c2", "queue: the title row SHOWS the scope and the counts", /marketing-site/iu.test(queueRow.text) && !!queueSnapshot.description && queueRow.sidebarText.includes(queueSnapshot.description.split(" · ")[0]!), { shown: queueRow.text, words: queueRow.words, transform: queueRow.transform, description: queueSnapshot.description, sidebarText: queueRow.sidebarText })
+    const queueSnapshot = await waitFor("the queue's counts on the badge", async () => {
+      const snapshot = (await status()).sidebar
+      return snapshot.view === "queue" && /ready|need/iu.test(snapshot.badgeTooltip ?? "") ? snapshot : undefined
+    }, 15_000).catch(async () => (await status()).sidebar)
+    expect("c2", "queue: the page's counts ride the badge's tooltip", /ready|need/iu.test(queueSnapshot.badgeTooltip ?? ""), { badge: queueSnapshot.badge, badgeTooltip: queueSnapshot.badgeTooltip })
+    expect("c2", "queue: the title row reads Frizz, with no page name in it to re-case", /frizz/iu.test(queueRow.text) && !/marketing-site/iu.test(queueRow.text), { shown: queueRow.text, words: queueRow.words, transform: queueRow.transform })
     expect("c2", "queue: the buttons are New thread, Jump to a thread, Settings — no Back to queue", JSON.stringify(queueRow.buttons) === JSON.stringify(["New thread", "Jump to a thread", "Settings"]), queueRow.buttons)
     notes.titleRowQueue = queueRow
     await shot("c2-queue-dark-w300", { window: true })
 
     // A thread, opened with the mouse from its row.
     await openThreadRow()
-    const threadRow = await waitFor("the thread in the title row", async () => {
+    const threadRow = await waitFor("the thread's buttons in the title row", async () => {
       const row = await titleRow()
-      return row.buttons.includes("Back to queue") && row.words.includes(seeded!.thread.handle) ? row : undefined
+      return row.buttons.includes("Back to queue") ? row : undefined
     }, 10_000).catch(async () => titleRow())
-    expect("c2", "thread: the title row names the thread", threadRow.words.includes(seeded!.thread.handle), { shown: threadRow.text, words: threadRow.words, transform: threadRow.transform })
-    expect("c2", "the title row shows the page's words as written (no re-casing of a handle or a project name)", threadRow.transform === "none" || threadRow.text === threadRow.words, { shown: threadRow.text, words: threadRow.words, transform: threadRow.transform })
+    const named = await inPage((handle) => [...document.querySelectorAll<HTMLElement>(".frizz-sheet-panel")].some((panel) => panel.getClientRects().length > 0 && panel.innerText.includes(handle)), seeded!.thread.handle)
+    expect("c2", "thread: the drawer names the thread, and the title row still reads Frizz (no handle for VS Code to re-case)", named && !threadRow.text.toLowerCase().includes(seeded!.thread.handle.toLowerCase()), { named, shown: threadRow.text, words: threadRow.words, transform: threadRow.transform })
     expect("c2", "thread: the buttons are Back to queue, Jump to a thread, Settings — no New thread", JSON.stringify(threadRow.buttons) === JSON.stringify(["Back to queue", "Jump to a thread", "Settings"]), threadRow.buttons)
     notes.titleRowThread = threadRow
     await shot("c2-thread-dark-w300", { window: true })
@@ -942,8 +956,8 @@ try {
     const settingsAt = Date.now()
     await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label="Settings"]')
     const settings = await until(async () => (await inPage(() => !!document.querySelector('[data-settings-editor="appearance"]'))), 8_000)
-    const settingsRow = await titleRow()
-    expect("c2", "Settings opens Settings, and the title row says so", settings && /Settings/u.test(settingsRow.words), settingsRow)
+    const settingsView = await until(async () => (await status()).sidebar.view === "settings", 3_000)
+    expect("c2", "Settings opens Settings, and the page tells the title row so (its view is settings)", settings && settingsView, { settings, view: (await status()).sidebar.view, row: await titleRow() })
     await sleep(1_000)
     const settingsFocus = { workbench: await workbenchFocus(), page: await inPage(() => ({ hasFocus: document.hasFocus(), active: document.activeElement?.tagName ?? null, inDialog: !!document.activeElement?.closest("[role=dialog]") })) }
     await press("Escape")
@@ -955,18 +969,19 @@ try {
 
   // ── c3: the editor's context in the page ──
   /**
-   * Lines 2-3 of sample.ts selected by keys and Ctrl+I pressed the instant after — clicking back into the
-   * editor first when the keyboard is not there. `focused` says the editor already has it (the first try
-   * then skips the click). Returns the try that put the chip in the reply box, 0 for none.
+   * Lines 2-3 of sample.ts selected by keys and the add chord (Ctrl+L, the one the page names) pressed the
+   * instant after — clicking back into the editor first when the keyboard is not there. `focused` says the
+   * editor already has it (the first try then skips the click). Returns the try that put the chip in the
+   * reply box, 0 for none.
    */
-  const selectAndCtrlI = async (focused: boolean): Promise<number> => {
+  const selectAndAdd = async (focused: boolean, chord = "Control+KeyL"): Promise<number> => {
     for (let attempt = 1; attempt <= 3; attempt++) {
       if (attempt > 1 || !focused) {
         await clickInWorkbench(".editor-group-container .monaco-editor .view-lines")
         if (!(await until(async () => (await workbenchFocus()).editor, 3_000))) continue
       }
       await selectLines23()
-      await press("Control+KeyI")
+      await press(chord)
       if (await until(async () => (await box("chatComposer").catch(() => null))?.value.includes("@sample.ts:2-3") === true, 6_000)) return attempt
     }
     return 0
@@ -994,7 +1009,7 @@ try {
       const bar = await contextBar("newComposer")
       return bar?.kind === "file" ? bar : undefined
     }, 5_000).catch(async () => contextBar("newComposer"))
-    expect("c3", "no selection: the bar names the file alone, quietly, with the Ctrl+I hint", file?.kind === "file" && /sample\.ts/u.test(file.text ?? "") && !/lines?/u.test(file.text ?? "") && /Ctrl\+I/u.test(file.hint ?? ""), file)
+    expect("c3", "no selection: the bar names the file alone, quietly, with the Ctrl+L hint", file?.kind === "file" && /sample\.ts/u.test(file.text ?? "") && !/lines?/u.test(file.text ?? "") && /Ctrl\+L/u.test(file.hint ?? ""), file)
     await shot("c3-bar-file-w300")
 
     // Another editor, by its tab.
@@ -1018,9 +1033,9 @@ try {
     await press("Escape")
   })
 
-  // ── c4: Ctrl+I, the chip, a send to a simulated worker ──
-  await run("c4", "Ctrl+I puts the selection in the front composer as a pill, and it sends", async () => {
-    // The thread in the drawer is the front composer; the Explorer takes the side bar, so Ctrl+I must reveal Frizz.
+  // ── c4: Ctrl+L, the chip, a send to a simulated worker ──
+  await run("c4", "Ctrl+L puts the selection in the front composer as a pill, and it sends", async () => {
+    // The thread in the drawer is the front composer; the Explorer takes the side bar, so Ctrl+L must reveal Frizz.
     await resetPage()
     await openThreadRow()
     await command("workbench.view.explorer")
@@ -1031,21 +1046,21 @@ try {
     // A human's beat with the selection made: the keyboard must still be the editor's.
     await sleep(1_500)
     const held = { focus: await workbenchFocus(), editor: await editorState() }
-    notes.focusBeforeCtrlI = { ...held, trace: await focusTraceSince(editorAt) }
+    notes.focusBeforeCtrlL = { ...held, trace: await focusTraceSince(editorAt) }
     expect("c4", "with a thread open in the (hidden) sidebar, the editor keeps the keyboard after a selection is made in it", held.focus.editor, held)
-    // Ctrl+I. At a human's pace the keyboard is gone by now (when it is, the check above failed and says
-    // where it went), so Ctrl+I is pressed the instant the selection is made, before the page can take it:
-    // what follows tests the rest of the path, which is otherwise unreachable.
+    // Ctrl+L. If the keyboard is gone by now (the check above failed and says where it went), Ctrl+L is
+    // pressed the instant the selection is made, before the page can take it: what follows tests the rest
+    // of the path, which is otherwise unreachable.
     const eventsBefore = (await status()).sidebar.events.length
-    notes.ctrlITries = await selectAndCtrlI(held.focus.editor)
+    notes.ctrlLTries = await selectAndAdd(held.focus.editor)
     const landed = await waitFor("the chip in the thread's reply box", async () => {
       const state = await box("chatComposer").catch(() => null)
       return state?.value.includes("@sample.ts:2-3") ? state : undefined
     }, 15_000).catch(async () => box("chatComposer").catch(() => null))
     const view = (await status()).sidebar
-    notes.ctrlIEvents = view.events.slice(eventsBefore)
-    notes.focusCtrlI = await focusTraceSince(editorAt)
-    expect("c4", "Ctrl+I reveals the sidebar", view.visible, { visible: view.visible, events: notes.ctrlIEvents })
+    notes.ctrlLEvents = view.events.slice(eventsBefore)
+    notes.focusCtrlL = await focusTraceSince(editorAt)
+    expect("c4", "Ctrl+L reveals the sidebar", view.visible, { visible: view.visible, events: notes.ctrlLEvents })
     expect("c4", "the chip `@sample.ts:2-3` is in the thread's reply box", landed?.value.startsWith("@sample.ts:2-3") === true, landed)
     const pill = landed?.pills.find((p) => p.token === "@sample.ts:2-3")
     expect("c4", "…drawn as a pill (a filled, ringed token in the box's backdrop)", !!pill && pill.background !== "rgba(0, 0, 0, 0)" && pill.ring !== "none", pill)
@@ -1109,6 +1124,34 @@ try {
     await typeInto("chatComposer", "x")
     await sleep(200)
     expect("c4", "…and typing lands after it", (await box("chatComposer"))?.value.trimEnd().endsWith("x") === true, (await box("chatComposer"))?.value)
+    await clearBox("chatComposer")
+
+    // Alt+K, Claude Code's chord, with only a caret in the editor: the whole file, `@sample.ts`.
+    await openInEditor(files.sample)
+    await agent({ op: "select", selection: [1, 2, 1, 2] })
+    await sleep(500)
+    await press("Alt+KeyK")
+    const wholeFile = await waitFor("the file's chip from Alt+K", async () => {
+      const state = await box("chatComposer")
+      return state?.value.includes("@sample.ts") ? state : undefined
+    }, 8_000).catch(async () => box("chatComposer"))
+    expect("c4", "Alt+K with only a caret puts the whole file in the reply box as a pill, `@sample.ts`", /^@sample\.ts(?!:)/u.test(wholeFile?.value ?? "") && !!wholeFile?.pills.some((pill) => pill.token === "@sample.ts"), wholeFile)
+    await clearBox("chatComposer")
+
+    // Ctrl+L PRESSED IN THE REPLY BOX, the chord the bar names: the editor's selection, into this box.
+    await openInEditor(files.sample)
+    await agent({ op: "select", selection: [1, 0, 2, -1] })
+    await waitFor("the reply box's bar on the selection", async () => (await contextBar("chatComposer"))?.kind === "selection" || undefined, 5_000)
+    await clickInPage('textarea[data-surface="chatComposer"]')
+    await until(async () => (await box("chatComposer"))?.active === true, 3_000)
+    const keysBefore = (await status()).sidebar.events.filter((event) => event.type === "frizz:key").length
+    await press("Control+KeyL")
+    const inBox = await waitFor("the chip from Ctrl+L in the box", async () => {
+      const state = await box("chatComposer")
+      return state?.value.includes("@sample.ts:2-3") ? state : undefined
+    }, 8_000).catch(async () => box("chatComposer"))
+    const forwarded = (await status()).sidebar.events.filter((event) => event.type === "frizz:key").slice(keysBefore)
+    expect("c4", "Ctrl+L pressed in the reply box adds the editor's selection there, and is not forwarded to VS Code", inBox?.value.startsWith("@sample.ts:2-3") === true && forwarded.length === 0, { box: inBox, forwarded })
     await clearBox("chatComposer")
   })
 
@@ -1266,10 +1309,36 @@ try {
     const sheetState = await inPage(() => ({
       note: document.querySelector("[data-shortcut-sidebar-note]")?.textContent ?? null,
       hints: [...document.querySelectorAll("[data-shortcut-hint]")].map((h) => h.textContent),
+      editor: [...document.querySelectorAll<HTMLElement>("[data-shortcut-editor] li")].map((row) => ({ label: row.innerText.split("\n")[0], keys: row.querySelector("[aria-label]")?.getAttribute("aria-label") ?? "" })),
+      // The Editor group leads: it is the first group after the notes.
+      editorFirst: document.querySelector("[data-shortcut-list] section")?.matches("[data-shortcut-editor]") ?? false,
       host: document.querySelector<HTMLElement>("[data-shortcut-host]")?.innerText.replace(/\s+/gu, " ").slice(0, 400) ?? null,
     }))
     expect("c8", "? opens the shortcuts sheet, with its sidebar hints and its VS Code group", sheet && !!sheetState.note && sheetState.hints.length >= 3 && /VS Code/u.test(sheetState.host ?? "") && /Ctrl/u.test(sheetState.host ?? ""), sheetState)
+    expect("c8", "…led by the Editor group: Ctrl+L adds the selection, Alt+K the selection or the file", sheetState.editorFirst && JSON.stringify(sheetState.editor.map((row) => row.keys)) === JSON.stringify(["Ctrl+L", "Alt+K"]), sheetState.editor)
     await shot("c8-shortcuts-w300")
+    await press("Escape")
+    await until(async () => !(await inPage(() => !!document.querySelector("[data-shortcut-list]"))), 3_000)
+
+    // The same sheet from VS Code's title row: its ⋯, Keyboard shortcuts — clicked, as a human does.
+    await clickInWorkbench('.part.sidebar .title-actions .action-label[aria-label^="More Actions"]')
+    const menuItem = await waitFor("Keyboard shortcuts in the ⋯ menu", async () => {
+      const items = await inWorkbench(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].filter((label) => label.getClientRects().length > 0).map((label) => label.getAttribute("aria-label") ?? label.textContent ?? ""))
+      return items.some((label) => /Keyboard shortcuts/u.test(label)) ? items : undefined
+    }, 5_000).catch(() => null)
+    if (menuItem) {
+      const item = await page.evaluateHandle(() => [...document.querySelectorAll<HTMLElement>(".monaco-menu .action-item .action-label")].find((label) => /Keyboard shortcuts/u.test(label.getAttribute("aria-label") ?? label.textContent ?? "")) ?? null)
+      await clickHandle(item.asElement() as ElementHandle | null, "Keyboard shortcuts in the ⋯ menu")
+    } else {
+      // A native context menu (no DOM to click): the same command the item runs.
+      notes.shortcutsMenu = "the ⋯ menu was not in the workbench's DOM; ran frizz.sidebar.shortcuts"
+      await press("Escape")
+      await command("frizz.sidebar.shortcuts")
+    }
+    const fromRow = await until(async () => (await inPage(() => !!document.querySelector("[data-shortcut-list]"))), 5_000)
+    const sheetFocus = await inPage(() => ({ hasFocus: document.hasFocus(), inSheet: !!document.activeElement?.closest("[role=dialog]") }))
+    expect("c8", "the title row's ⋯ Keyboard shortcuts opens the sheet, with the keyboard in it", fromRow && sheetFocus.inSheet, { menu: menuItem, ...sheetFocus })
+    await shot("c8-shortcuts-from-title-row-w300")
     await press("Escape")
     await until(async () => !(await inPage(() => !!document.querySelector("[data-shortcut-list]"))), 3_000)
 
@@ -1327,7 +1396,7 @@ try {
 
     await openThreadRow()
     await openInEditor(files.sample)
-    notes[`ctrlITries-${tag}`] = await selectAndCtrlI(true)
+    notes[`ctrlLTries-${tag}`] = await selectAndAdd(true)
     await waitFor("the chip", async () => (await box("chatComposer"))?.value.includes("@sample.ts:2-3") || undefined, 15_000)
     await sleep(1_000)
     if (!(await box("chatComposer"))?.active) await clickInPage('textarea[data-surface="chatComposer"]')
