@@ -57,8 +57,10 @@ const currentCopy = "There is no newer version of Frizz to install."
 // (it was a z-20 chip until 2026-08-19), and the sidebar deliberately has no z-index, so z-50 is what
 // puts either panel over the rail and the composer.
 //
-// The `fixed left-3 right-3 top-12` full-width strip below `sm:` (640px) is unreachable and kept only
-// as a floor: this button renders only on the desktop shell, which the phone shell replaces at 700px.
+// Below `sm:` (640px) the panel is the `fixed left-3 right-3 top-12` full-width strip instead. The phone
+// shell (700px) never shows it, but an editor's sidebar does: VS Code's renders this desktop shell 300-
+// 600px wide with the status row at the top, so the strip hangs just under the button (48px against a
+// 36px bottom, at 300 and 450). The strip draws NO arrow — see PANEL_ARROW.
 //
 // `sm:-left-[17px]` is DERIVED from the arrow, not chosen: PANEL_ARROW below carries the arithmetic
 // and the readings. It is not the offset that lines the panel's own edge up with anything — the panel
@@ -82,10 +84,15 @@ const ANCHORED_PANEL =
 //   button's 12px glyph centre, 6px into the wrapper that STATUS_ROW_ACTION's `-mx-1.5` ink trim
 //   (lib/statusRow.ts) leaves behind — so panelLeft = 6 - 23 = -17.
 //
+// Below `sm:` it is `hidden`: the strip's arrow sat at its left (x 35) under nothing, with the button at
+//   the frame's right end, and no arrow can reach that button there. Its glyph centre is 18px from the
+//   frame's right edge; the strip's right edge is 12px inside it, and the arrow's right foot needs the
+//   same 14.51px off that corner as the left one, so its apex can come no nearer than 35px from the edge.
+//
 // RE-DERIVE, don't re-guess, if the corner radius, the arrow size, the panel border or that ink trim
 // moves. `nub scripts/shot.mjs http://localhost:<vite>/restart-frizz-button-fixture.html?failure
 // out.png --clip=.rotate-45 --pad=18 --dsf=8` is the crop that shows the join.
-const PANEL_ARROW = "absolute -top-[7px] left-4 h-3 w-3 rotate-45 border-l border-t bg-elevated"
+const PANEL_ARROW = "absolute -top-[7px] left-4 hidden h-3 w-3 rotate-45 border-l border-t bg-elevated sm:block"
 
 /**
  * The same geometry as numbers, in CSS px, so the focused test can check the ARITHMETIC above rather

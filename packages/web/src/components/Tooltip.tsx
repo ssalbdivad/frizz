@@ -1,7 +1,8 @@
 import * as RT from "@radix-ui/react-tooltip"
 import { createPortal } from "react-dom"
-import { cloneElement, isValidElement, useId, useRef, useState, type KeyboardEvent, type ReactElement, type ReactNode } from "react"
+import { cloneElement, isValidElement, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement, type ReactNode } from "react"
 import { OVERLAY_Z_CLASS } from "../lib/overlaySurface.ts"
+import { placeHelpTip } from "../lib/helpTipPlacement.ts"
 
 // A small dark shadcn-style tooltip that shows IMMEDIATELY on hover (delayDuration 0) — used for the
 // icon-only affordances (card-header actions) where a label needs to appear the instant you point at
@@ -44,11 +45,22 @@ export function Tooltip({
     : null
   const trigger = clickableChild ? cloneElement(clickableChild, { "aria-describedby": contentId }) : children
   const triggerRef = useRef<HTMLSpanElement>(null)
+  const tipRef = useRef<HTMLSpanElement>(null)
+  // The clickable branch places itself (below), once it can measure what it drew; until then it is hidden.
+  const [place, setPlace] = useState<{ left: number; top: number } | null>(null)
+  const placed = clickable && isValidElement(children)
+  useLayoutEffect(() => {
+    if (!open || !placed) {
+      setPlace(null)
+      return
+    }
+    const trigger = triggerRef.current?.getBoundingClientRect()
+    const tip = tipRef.current?.getBoundingClientRect()
+    if (!trigger || !tip) return
+    setPlace(placeHelpTip(trigger, { width: tip.width, height: tip.height }, { width: window.innerWidth, height: window.innerHeight }))
+  }, [open, label, placed])
 
   if (clickableChild) {
-    const rect = triggerRef.current?.getBoundingClientRect()
-    const left = rect ? Math.min(Math.max(12, rect.right + 8), window.innerWidth - 364) : 12
-    const top = rect ? Math.min(Math.max(12, rect.top - 6), window.innerHeight - 96) : 12
     const onKeyDown = (event: KeyboardEvent<HTMLSpanElement>) => {
       if (event.key === "Escape") {
         event.stopPropagation()
@@ -69,10 +81,16 @@ export function Tooltip({
         {trigger}
         {open && createPortal(
           <span
+            ref={tipRef}
             id={contentId}
             role="tooltip"
             className={`${OVERLAY_Z_CLASS} max-w-[min(22rem,calc(100vw-1.5rem))] rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-shadow-ink/40 break-words ${whitespace}`}
-            style={{ position: "fixed", left, top }}
+            // Measured at the far left, where nothing narrows it, then placed (useLayoutEffect, before paint).
+            // `pointer-events: none`, as Radix's tooltips are (disableHoverableContent): the help text is a
+            // React child of the trigger, so a pointer resting on it counted as still on the (?) and kept it
+            // open — and placed over the next field it hid that field's (?) from the pointer, which reached
+            // the help under it only by first leaving the column.
+            style={{ position: "fixed", pointerEvents: "none", left: place?.left ?? -10_000, top: place?.top ?? 0, visibility: place ? undefined : "hidden" }}
           >
             {label}
           </span>,

@@ -215,7 +215,7 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
             }
             handleDialogEscape(event)
           }}
-          // A non-modal Radix layer also dismisses on any pointer-down OUTSIDE its content. Three cases
+          // A non-modal Radix layer also dismisses on any pointer-down OUTSIDE its content. Four cases
           // must not self-dismiss: (0) the pointer landed on the TOAST, whose buttons are its own
           // (isToastPointer — a snooze's Undo closed this drawer); (1) this sheet is BURIED under another
           // drawer layer (a sub-agent/doc sheet stacked over it, or a lateral swap in flight) — only the
@@ -223,11 +223,23 @@ export function ThreadSheet({ id, slug, depth, widthDepth, initiallyOpen }: { id
           // silently closes the parent underneath it; (2) the pointer landed on one of THIS thread's own
           // sub-agent rows (sidebar child rows / queue card lines carry data-subagent-parent) — that click
           // is a drill-IN, and the drawer policy in openOrRaiseDrawer stacks the child over this sheet
-          // instead of dismissing it. Every other outside pointer (backdrop, blank sidebar, sibling rows)
+          // instead of dismissing it; (3) the pointer landed in a hovercard or other popper this sheet
+          // did not open (below). Every other outside pointer (backdrop, blank sidebar, sibling rows)
           // dismisses as before — sibling opens also route through the store policy, which closes this
           // layer anyway.
           onPointerDownOutside={(event) => {
             if (isToastPointer(event.target)) {
+              event.preventDefault()
+              return
+            }
+            // (3) the pointer landed in a POPPER that is not this sheet's React descendant — the GitHub
+            // hovercard is one global Popover (GithubHovercards.tsx), so Radix cannot tell a click on it from
+            // a click on the page, and clicking a PR title in the card over a thread's link closed the
+            // thread (sidebar and desktop, 2026-10-01; Radix defers a left click's outside-dismiss to the
+            // `click`, so the drawer went as the link went out). ui/Sheet.tsx PORTALED_OVERLAY exempts the
+            // same wrapper for the plain sheets. A menu or select opened from inside this sheet is a React
+            // descendant, which Radix already counts as inside.
+            if (event.target instanceof Element && event.target.closest("[data-radix-popper-content-wrapper]")) {
               event.preventDefault()
               return
             }

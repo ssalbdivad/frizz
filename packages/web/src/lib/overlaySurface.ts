@@ -11,10 +11,30 @@ export const OPAQUE_SURFACE_BASE =
 // stacking): it and the workpane are side-by-side columns that never overlap, and its old desktop
 // z-[100] is what forced every overlay to escalate past it — the recurring "hidden underneath the
 // prompt box" bug. Anything below is an OVERLAY and therefore already outranks the rail:
-//   z-20  fixed corner chrome · z-50 modal dialogs/drawers · z-[60] ⌘K palette · z-[70] toasts
+//   z-20  fixed corner chrome · 50 + 2·depth the drawer stack (a layer's scrim; a thread's panel one above)
+//   aboveDrawersZ(n) the New thread dialog and the ⌘K palette · z-[70] toasts
 //   z-[110] portaled selector surfaces · z-[200] shared Dialog · z-[250] anchored popovers/tooltips
 //   z-[260] a selector opened from INSIDE a popover · z-[300] restart scrim (alone must cover the whole app)
 // Never re-elevate a persistent layer to "win" a collision — raise the specific overlay instead.
+
+// THE TIER JUST ABOVE THE DRAWER STACK, for a modal that can be opened over an open drawer: the New thread
+// dialog (`c`, the palette's New thread, an editor's New thread button) and the ⌘K palette. Drawers climb
+// two steps a layer (DrawerStack: a layer at depth d paints its scrim at 50 + 2d and a thread's panel at
+// 51 + 2d), so a fixed z loses to a deep enough stack: the dialog sat at z-50 and the palette at z-[60], and
+// with a thread open the dialog painted UNDER it — invisible in an editor's sidebar while its textarea held
+// focus, so typing went into a box nobody could see (2026-10-01). One step above the top layer instead: the
+// returned z is the scrim's and the next one up the panel's.
+//
+// Never the shared z-[200] tier, which looks like the obvious fix: the pickers these surfaces open (the
+// model/effort grid, every menu) are z-[110] portals and would land beneath them, and toasts (z-[70]) would
+// vanish behind the scrim. So the tier is capped below toasts — reached only past nine open drawers, where a
+// dialog under the tenth beats a toast nobody can read.
+export function aboveDrawersZ(drawerCount: number): number {
+  return Math.min(52 + 2 * Math.max(0, drawerCount), TOAST_Z - 2)
+}
+
+// Toasts (Toaster.tsx `z-[70]`): above every modal that opens over a drawer, below the selector surfaces.
+export const TOAST_Z = 70
 
 // The selector-surface contract for Select, DropdownMenu, and the profile grid: the opaque base at
 // z-[110]. Portal content mounts at document.body, so it must clear the modal surfaces it can be

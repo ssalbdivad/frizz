@@ -9,7 +9,7 @@ import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
 import { getThemeSnapshot, setThemePreference, subscribeTheme, type ThemePreference } from "../lib/theme.ts"
 import { registerSettingsClose } from "../lib/overlays.ts"
-import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
+import { SETTINGS_HELP, SETTINGS_HELP_IN_EDITOR } from "../lib/settingsHelp.ts"
 import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMotion } from "../lib/sheet.ts"
 import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettingsAutosave.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -123,7 +123,7 @@ export function SettingsDrawer() {
 
         <div className="flex-1 overflow-y-auto p-5 flex flex-col gap-6">
           {/* Browser appearance remains usable even while server settings are unavailable. */}
-          <SettingsField label="Appearance" help={SETTINGS_HELP.appearance}>
+          <SettingsField label="Appearance" help={inEditor ? SETTINGS_HELP_IN_EDITOR.appearance : SETTINGS_HELP.appearance}>
             {/* The editor's theme, for the session (lib/theme.ts setHostTheme): a choice here would be saved
                 and never shown. */}
             {inEditor ? <EditorFixed name="appearance">Follows your editor</EditorFixed> : <AppearanceControl />}
@@ -134,13 +134,17 @@ export function SettingsDrawer() {
             <>
             {/* A client-only VIEW preference (localStorage, not server Settings): it never travels to
                 the server at all, so it's wired straight to the prefs proxy rather than the draft. */}
+            {/* In an editor's sidebar that localStorage is the FRAME's, partitioned from the browser's, so a
+                choice here is the sidebar's alone — said under each, since nothing else would tell you. */}
             <SettingsField label="Density" help={SETTINGS_HELP.density}>
               <DensityToggle />
+              {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
             </SettingsField>
 
             {/* Client-only VIEW preference (localStorage): applies immediately, wired to prefs. */}
             <SettingsField label="Queue order" help={SETTINGS_HELP.queueOrder}>
               <QueueOrderControl />
+              {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
             </SettingsField>
 
             {/* Same segmented Off/On control as every other row (the old bare checkbox matched
@@ -284,8 +288,10 @@ function HomeFolderField({ value, onCommit }: { value: string; onCommit: (folder
         }`}
       />
       {/* Always a line tall, so the drawer does not jump as the reading comes and goes. The notification
-          field's hint type (PermHint), at the same 6px from its control. */}
-      <p className={`mt-1.5 min-h-[1.4em] truncate text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
+          field's hint type (PermHint), at the same 6px from its control. It WRAPS where it does not fit, the
+          path breaking anywhere: the folder is the whole reading, and truncated in a 300px sidebar it was the
+          part cut ("…run in /tmp/frizz-a…"). */}
+      <p className={`mt-1.5 min-h-[1.4em] break-words text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
         {reading ? reading.problem ?? `Threads started in Home run in ${reading.folder}` : ""}
       </p>
     </div>

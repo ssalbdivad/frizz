@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactElement, type ReactNode, type RefObject } from "react"
+import * as RadixDialog from "@radix-ui/react-dialog"
+import { cloneElement, useCallback, useEffect, useRef, useState, type MutableRefObject, type ReactElement, type ReactNode, type RefObject } from "react"
 import { RemoveScroll } from "react-remove-scroll"
 import { useSnapshot } from "valtio"
 import { store, markDrawerClosing, removeDrawerAfterExit } from "../../store.ts"
@@ -188,24 +189,127 @@ export function Sheet({
   const narrow = useNarrowDrawer()
   const holdsLock = useHoldsScrollLock(id)
   useOutsidePointerDismiss(id, panelRef, close, subagentParent)
+  const focus = useNarrowSheetFocus(panelRef)
   // The panel's own scroll lock while it is the top layer on a narrow screen — the lock the thread
   // sheet below hands over (see useHoldsScrollLock). Pinch-zoom stays allowed, as Radix's lock allows it.
+  const panel = (
+    <RemoveScroll ref={panelRef} enabled={narrow && holdsLock} allowPinchZoom forwardProps>
+      <NarrowFocusLayer narrow={narrow} focus={focus}>
+        <div
+          // The keyboard runtime's handle on the TOP layer: thread commands (`r` to reply, …) press the
+          // controls inside whichever layer store.drawers says is on top.
+          data-drawer-layer={id}
+          className={`${SHEET_PANEL_CLASS} pointer-events-auto outline-none ${shown ? "translate-x-0" : "translate-x-full"}`}
+          style={{ width: sheetWidth(widthDepth, widthOffset) }}
+        >
+          {children(close)}
+        </div>
+      </NarrowFocusLayer>
+    </RemoveScroll>
+  )
   return (
     <div
       className={`${SHEET_SCRIM_CLASS} pointer-events-none flex justify-end ${shown ? "opacity-100" : "opacity-0"}`}
       style={{ zIndex: 50 + depth * 2 }}
     >
-      <RemoveScroll ref={panelRef} enabled={narrow && holdsLock} allowPinchZoom forwardProps>
-        <div
-          // The keyboard runtime's handle on the TOP layer: thread commands (`r` to reply, …) press the
-          // controls inside whichever layer store.drawers says is on top.
-          data-drawer-layer={id}
-          className={`${SHEET_PANEL_CLASS} pointer-events-auto ${shown ? "translate-x-0" : "translate-x-full"}`}
-          style={{ width: sheetWidth(widthDepth, widthOffset) }}
-        >
-          {children(close)}
-        </div>
-      </RemoveScroll>
+      {narrow ? (
+        // Outside RemoveScroll, which hands its props and ref to its ONE child: the Root takes neither.
+        <RadixDialog.Root open modal={false}>
+          {panel}
+        </RadixDialog.Root>
+      ) : panel}
     </div>
   )
+}
+
+// FOCUS, on a narrow screen. There a thread is a MODAL Radix dialog (ThreadSheet), whose focus scope traps
+// focus inside the thread — and a plain sheet stacked on it (your terminal, a sub-agent, a reader) is a
+// sibling outside that scope. So the trap pulled every focus straight back into the thread: the terminal's
+// "Run another command" box never took focus on open, a click on the xterm left focus on the thread's ✕, and
+// letters typed "into the terminal" fired the thread's single-key shortcuts (`echo hello` raised "Signed out
+// of Claude" through `r`). Below 800px in a browser, and at every width in an editor's sidebar (2026-10-01).
+//
+// The fix is to be on the SAME focus-scope stack: Radix keeps one module-level stack and pauses every scope
+// but the newest, so a scope of the sheet's own pauses the thread's trap for exactly as long as the sheet is
+// mounted, and resumes it when the sheet goes. That stack belongs to the one copy of
+// @radix-ui/react-focus-scope that react-dialog bundles, which this package does not depend on directly — so
+// the scope comes from react-dialog itself: a NON-modal Dialog content, `asChild` on the panel. Non-modal,
+// because a modal one would also pin `body{pointer-events:none}` and aria-hide the page, which on a phone
+// with no thread under the sheet would stop a tap beside it from closing it (useOutsidePointerDismiss). Its
+// scope LOOPS Tab at the panel's edges and does not trap, which is enough: the trap it pauses was the only
+// thing pulling focus out, and in the sidebar the sheet covers the frame. Every dismissal Radix would add is
+// refused — the sheet keeps its own (DrawerStack's Escape, useOutsidePointerDismiss) — and only a narrow
+// screen gets it, so the desktop's sheets are exactly what they were (crossing 800px remounts the panel, as
+// ThreadSheet's `modal` does).
+function NarrowFocusLayer({ narrow, focus, children, ...slotProps }: { narrow: boolean; focus: NarrowSheetFocus; children: ReactElement }) {
+  // RemoveScroll's ref and scroll handlers arrive in `slotProps` (forwardProps) and must reach the panel.
+  if (!narrow) return cloneElement(children, slotProps)
+  return (
+    <RadixDialog.Content
+      asChild
+      {...slotProps}
+      aria-describedby={undefined}
+      onOpenAutoFocus={focus.onOpenAutoFocus}
+      onCloseAutoFocus={focus.onCloseAutoFocus}
+      // Escape stays DrawerStack's, which unwinds the top layer (refusing here leaves the key to it), and a
+      // field that claims it (the terminal's command box) still stops it first.
+      onEscapeKeyDown={(event) => event.preventDefault()}
+      onPointerDownOutside={(event) => event.preventDefault()}
+      onFocusOutside={(event) => event.preventDefault()}
+    >
+      {children}
+    </RadixDialog.Content>
+  )
+}
+
+interface NarrowSheetFocus {
+  onOpenAutoFocus: (event: Event) => void
+  onCloseAutoFocus: (event: Event) => void
+}
+
+// Where focus goes as the scope above mounts and unmounts. A sheet's OWN first focus (TerminalSheet's
+// command box) is a React `autoFocus`, which runs in the same commit as the panel — BEFORE the scope's
+// effect has paused the thread's trap, which therefore pulls it straight back — and inside the commit,
+// where React's own event system is switched off, so no `onFocus` on the panel ever sees it. The element
+// never even gets its `focusin`: the trap refocuses the thread from the `focusout` that precedes it. So a
+// native capture listener notes the last few elements focus was moving TO (the `focusout`'s relatedTarget
+// as well as every `focusin`), and the scope's mount hands focus back to the newest one inside this panel.
+// A sheet that asked for nothing gets the panel itself, so its keys are its own. On the way out, focus
+// returns to the opener only if nothing else claimed it meanwhile (ThreadSheet's rule: a click that
+// dismissed the sheet may have put focus somewhere on purpose).
+const recentFocus: Element[] = []
+let focusRecorderInstalled = false
+function installFocusRecorder(): void {
+  if (focusRecorderInstalled || typeof document === "undefined") return
+  focusRecorderInstalled = true
+  const note = (target: EventTarget | null) => {
+    if (!(target instanceof Element)) return
+    recentFocus.push(target)
+    if (recentFocus.length > 8) recentFocus.shift()
+  }
+  document.addEventListener("focusout", (event) => note(event.relatedTarget), true)
+  document.addEventListener("focusin", (event) => note(event.target), true)
+}
+
+function useNarrowSheetFocus(panelRef: RefObject<HTMLElement | null>): NarrowSheetFocus {
+  // In render, not an effect: it must be listening before this commit's autoFocus runs.
+  installFocusRecorder()
+  const openerRef = useRef<HTMLElement | null>(
+    typeof document !== "undefined" && document.activeElement instanceof HTMLElement ? document.activeElement : null,
+  )
+  return {
+    onOpenAutoFocus: (event) => {
+      event.preventDefault()
+      const panel = panelRef.current
+      if (!panel) return
+      const asked = [...recentFocus].reverse().find((el) => el !== panel && el.isConnected && panel.contains(el))
+      ;(asked instanceof HTMLElement ? asked : panel).focus({ preventScroll: true })
+    },
+    onCloseAutoFocus: (event) => {
+      event.preventDefault()
+      const active = document.activeElement
+      if (active && active !== document.body) return
+      if (openerRef.current?.isConnected) openerRef.current.focus({ preventScroll: true })
+    },
+  }
 }

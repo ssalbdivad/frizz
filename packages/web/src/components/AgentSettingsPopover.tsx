@@ -87,6 +87,18 @@ export function AgentSettingsPopover({ backend, open, onOpenChange }: {
         // The panel is a React descendant of the picker's menu (portals keep the React tree), so its
         // keystrokes would bubble into the menu's typeahead and roving focus. They stop here.
         onKeyDown={(event) => event.stopPropagation()}
+        // Open on the first SETTING, not the first focusable thing: Radix's default landed on Permissions'
+        // (?) — which a focus opens — so the panel always arrived with that help tooltip spread over it,
+        // unasked (and, until 2026-10-01, run 64px off a 300px sidebar). The form may still be loading on the
+        // first open; then the panel itself takes focus, and Tab reaches the setting once it is there.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          const panel = event.currentTarget instanceof HTMLElement ? event.currentTarget : null
+          // A control, not a (?): LabelWithHelp's help buttons are labelled "About <field>".
+          const first = [...(panel?.querySelectorAll<HTMLElement>('button, textarea, input:not([type="hidden"])') ?? [])]
+            .find((el) => !el.getAttribute("aria-label")?.startsWith("About ") && !(el as HTMLButtonElement).disabled)
+          ;(first ?? panel)?.focus({ preventScroll: true })
+        }}
       >
         <AgentSettingsForm backend={backend} />
       </PopoverContent>

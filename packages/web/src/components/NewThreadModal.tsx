@@ -3,7 +3,8 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
 import { type AccountBackend, type CreateLazyThreadInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { showToast } from "../store.ts"
+import { useSnapshot } from "valtio"
+import { showToast, store } from "../store.ts"
 import { Composer } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
 import { useMentionCandidates } from "../hooks/useMentionCandidates.ts"
@@ -22,6 +23,7 @@ import { restoreContextItems, stagedItems, takeContextItems, useStagedContextSou
 import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
+import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
@@ -381,6 +383,9 @@ function PromptForm({
 // here BEFORE the composer's own Escape-blurs handler can swallow it).
 export function NewThreadDialog({ onClose }: { onClose: () => void }) {
   const contentRef = useRef<HTMLDivElement>(null)
+  // Over whatever drawers are open — `c`, the palette's New thread or an editor's New thread button all
+  // open it on top of a thread (lib/overlaySurface.ts aboveDrawersZ, which says why not z-[200]).
+  const z = aboveDrawersZ(useSnapshot(store).drawers.length)
   // Frizz opens this dialog by writing store state, not through RadixDialog.Trigger. Capture the real
   // opener during the mount render so close can restore it explicitly.
   const openerRef = useRef<HTMLElement | null>(
@@ -397,7 +402,7 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
       <RadixDialog.Portal>
         {/* Frosted glass: heavy blur + saturation over a light black wash, so the board reads as a
             texture behind the dialog rather than going fully dark. */}
-        <RadixDialog.Overlay className="fixed inset-0 z-50 bg-scrim-30 backdrop-blur-md backdrop-saturate-150" />
+        <RadixDialog.Overlay className="fixed inset-0 bg-scrim-30 backdrop-blur-md backdrop-saturate-150" style={{ zIndex: z }} />
         <RadixDialog.Content
           ref={contentRef}
           aria-modal="true"
@@ -415,7 +420,8 @@ export function NewThreadDialog({ onClose }: { onClose: () => void }) {
           // TOP-ANCHORED ON A PHONE. Vertically centred, this dialog sits at ~420pt on a 844pt screen —
           // which is under the keyboard the moment its textarea takes focus, and the composer is the
           // entire point of the dialog. Above the phone breakpoint nothing changes.
-          className="fixed left-1/2 top-1/2 z-50 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
+          style={{ zIndex: z + 1 }}
+          className="fixed left-1/2 top-1/2 w-[640px] max-w-[86vw] -translate-x-1/2 -translate-y-1/2 rounded-xl border border-border bg-panel p-5 shadow-2xl shadow-shadow-ink/50 outline-none max-[700px]:top-[calc(env(safe-area-inset-top)+56px)] max-[700px]:w-[calc(100vw-24px)] max-[700px]:max-w-none max-[700px]:translate-y-0"
         >
           <RadixDialog.Title className="mb-1 text-[14px] font-medium">New thread</RadixDialog.Title>
           <DispatchForm autoFocus onDispatched={onClose} />
