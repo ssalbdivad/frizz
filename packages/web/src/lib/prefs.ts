@@ -42,13 +42,10 @@ export interface Prefs {
   // known. Until 2026-10-01 the default was "frizz" and only a one-time 12s toast switched it, so a
   // human who missed the toast clicked a link with VS Code connected and got the reader.
   codeFiles: CodeFiles
-  // IN AN EDITOR'S SIDEBAR, whether a message sent from a box with a context bar carries what the editor
-  // has in front — the selection's text, or the file and the caret's line (lib/editorContext.ts
-  // outgoingMessage). On by default, as in Claude Code's extension and Cursor: an agent beside the editor
-  // that cannot see the highlighted code is the complaint this answers. The bar's eye turns it off and on.
-  // Only the sidebar reads it, and the sidebar's frame keeps its own localStorage, so a browser tab never
-  // holds a value for it that means anything.
-  sendEditorContext: boolean
+  // (No `sendEditorContext` here any more. The context bar's eye was a pref of the sidebar's frame from
+  // 2026-10-01 to 2026-10-02; it is now the extension's `frizz.shareEditorState` (lib/editorContext.ts
+  // setShareEditor), the one switch that also keeps the agents' tool out of the editor. A stored value is
+  // ignored: the eye had not reached anyone's installed extension.)
 }
 
 export type CodeFiles = "auto" | "frizz" | "editor"
@@ -76,7 +73,6 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     railFilesCollapsed: false,
     keybindings: {},
     codeFiles: "auto",
-    sendEditorContext: true,
     diffsRedefaulted: true,
     snoozeRedefaulted: true,
     codeFilesRedefaulted: true,
@@ -84,6 +80,9 @@ export function parseStoredPrefs(raw: string | null): Prefs {
   try {
     if (!raw) return fallback
     const stored = JSON.parse(raw) as Partial<Prefs> & RedefaultMarkers
+    // The context bar's eye was a pref here for a day (2026-10-01); it is the extension's setting now
+    // (lib/editorContext.ts setShareEditor). Dropped, so a stored value never rides the blob again.
+    delete (stored as Record<string, unknown>).sendEditorContext
     // ONE-TIME migration (2026-07-09): the maintainer settled diffs as collapsed-by-default for
     // card-family consistency. A stored `compactDiffs: false` predating that decision was the OLD
     // default, not a choice — re-default it once. The marker makes a subsequent deliberate
@@ -114,7 +113,6 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
       keybindings: sanitizeOverrides(stored.keybindings),
       codeFiles: stored.codeFiles === "editor" || stored.codeFiles === "frizz" ? stored.codeFiles : "auto",
-      sendEditorContext: typeof stored.sendEditorContext === "boolean" ? stored.sendEditorContext : fallback.sendEditorContext,
     }
   } catch {
     return fallback

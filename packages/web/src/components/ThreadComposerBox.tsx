@@ -156,9 +156,10 @@ export function ThreadComposerBox({
     // Staged ⌘I context items ride the send: serialized into the text (before any trailing
     // attachment paths) and cleared with it — restored on a rejected send exactly like the draft. In an
     // editor's sidebar the drawer's box — the one that shows the context bar — also carries what the
-    // editor has in front, read now; the queue card's copy shows no bar and so carries none of it.
+    // editor has in front, read now; the queue card's copy shows no bar and so carries none of it. The
+    // thread's transcript rides along so a selection it already quoted is named, not quoted again.
     const staged = takeContextItems(key)
-    const outgoing = outgoingMessage(text, staged, projectDir, surface === "chatComposer")
+    const outgoing = outgoingMessage(text, staged, projectDir, surface === "chatComposer", qc.getQueryData<TranscriptData>(["transcript", slug])?.messages)
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Never clobber a newer draft typed while the request was in flight.

@@ -13,10 +13,11 @@ import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
 import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
-import { activeFileEditor, registerContextFeed } from "./context-feed.ts"
+import { registerContextFeed } from "./context-feed.ts"
 import { discoverFrizz, pageAddressNote, SOURCE_WORDS, type FoundFrizz } from "./discovery.ts"
 import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./editor-context.ts"
-import { registerEditorStateFeed } from "./editor-state-feed.ts"
+import { registerEditorStateFeed, SHARE_SETTING } from "./editor-state-feed.ts"
+import { registerEditorWatcher } from "./editor-watcher.ts"
 import { addRoute, composeInSidebar as composeVia, promptRoute } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
@@ -101,14 +102,59 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     openInBrowser: () => openFrizz(),
     reconnect: () => connection.reconnect(),
     addContext: (message) => addContextFromPage(message),
+    hostState: () => ({ shareEditor: shared(), altK: !claudeCode }),
+    setShareEditor: (on) => setShareEditor(on),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line) },
   })
   const useSidebar = () => config().get<boolean>("useSidebar", true)
-  const feed = registerContextFeed(api, context, {
+  // Whether the human shares the editor with Frizz — THE switch: the page's feed carries the selection's
+  // text and a send attaches the block only while it is on, and the agents' frame says only `shared: false`
+  // while it is off. The bar's eye reads and writes it (`frizz:host-state` / `frizz:share-editor`).
+  const shared = () => config().get<boolean>(SHARE_SETTING, true)
+
+  /**
+   * The eye, flipped: write the setting where it takes effect — the workspace's value when this workspace
+   * sets one (a user-level write under it would change nothing), else the user's, which every window reads.
+   * The configuration listener below then tells the feeds and the page.
+   */
+  async function setShareEditor(on: boolean): Promise<string> {
+    if (shared() === on) return on ? "on" : "off"
+    const where = config().inspect<boolean>(SHARE_SETTING)?.workspaceValue !== undefined ? api.ConfigurationTarget.Workspace : api.ConfigurationTarget.Global
+    try {
+      await config().update(SHARE_SETTING, on, where)
+    } catch (error) {
+      log.warn(`Couldn't ${on ? "turn on" : "turn off"} sharing the editor with Frizz: ${(error as Error).message}`)
+      return "refused"
+    }
+    log.info(on ? "Sharing the editor with Frizz." : "Not sharing the editor with Frizz: sends carry no editor context, and agents can't read it.")
+    return shared() === on ? (on ? "on" : "off") : "overridden"
+  }
+
+  // CLAUDE CODE'S CHORD. Its VS Code extension (anthropic.claude-code) binds Alt+K with the same `when` as
+  // Frizz's ("editorTextFocus"), so with both installed which one answered depended on the order the
+  // extensions loaded — on the maintainer's own machine (review-final.md, 2026-10-02). Frizz steps aside:
+  // its Alt+K binding is gated on this context key, set now and whenever the extension set changes, and
+  // the page stops naming the chord. Ctrl+L, the chord the page teaches, is not Claude Code's.
+  const CLAUDE_CODE = "anthropic.claude-code"
+  let claudeCode = api.extensions.getExtension(CLAUDE_CODE) !== undefined
+  const applyClaudeCode = () => void api.commands.executeCommand("setContext", "frizz.claudeCodeInstalled", claudeCode)
+  applyClaudeCode()
+  context.subscriptions.push(api.extensions.onDidChange(() => {
+    const next = api.extensions.getExtension(CLAUDE_CODE) !== undefined
+    if (next === claudeCode) return
+    claudeCode = next
+    log.info(next ? "Claude Code's extension is installed: Alt+K is its, not Frizz's." : "Claude Code's extension is gone: Alt+K adds to Frizz's prompt again.")
+    applyClaudeCode()
+    sidebar.pushState()
+  }))
+  // One observer of the window's editors, which both feeds read (editor-front.ts says why there is one).
+  const watcher = registerEditorWatcher(api, context)
+  const feed = registerContextFeed(api, context, watcher, {
     ready: () => sidebar.ready(),
     onReady: (listener) => sidebar.onReady(listener),
     post: (message) => sidebar.post(message),
     projects: () => projects,
+    shared,
   })
 
   // ── status bar ───────────────────────────────────────────────────────────────────────────────────
@@ -154,7 +200,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   // What this window shows — file, selection, tabs, problems — for Frizz's agents to read
   // (`mcp__frizz__editor`), sent on every change to a Frizz that takes it. `frizz.shareEditorState` off
   // sends that it is off, and nothing else.
-  const editorState = registerEditorStateFeed(api, context, { send: () => connection.sendEditor() })
+  const editorState = registerEditorStateFeed(api, context, watcher, { send: () => connection.sendEditor(), shared })
 
   let lastNotes: string | undefined
   /** The last discovery's answer: the origin a page opens on even when the editor connection was refused. */
@@ -254,6 +300,11 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.workspace.onDidChangeConfiguration((event) => {
       if (event.affectsConfiguration("frizz.serverUrl")) connection.reconnect()
       else if (event.affectsConfiguration("frizz.openFileLinks")) connection.sendState()
+      if (event.affectsConfiguration(`frizz.${SHARE_SETTING}`)) {
+        editorState.sharingChanged()
+        feed.refresh()
+        sidebar.pushState()
+      }
     }),
   )
 
@@ -312,9 +363,12 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     return editor.document.uri.scheme !== "file" && !editor.selection.isEmpty
   }
 
-  /** The file a command is about: the resource it was invoked on, else the active editor's. */
-  function targetOf(uri: vscode.Uri | undefined): Target | undefined {
-    const editor = api.window.activeTextEditor
+  /**
+   * The file a command is about: the resource it was invoked on, else the editor's — the active one, unless
+   * the caller names the editor (the context bar names the one it showed, which with an output pane focused
+   * is the file editor still on screen, not the active one).
+   */
+  function targetOf(uri: vscode.Uri | undefined, editor = api.window.activeTextEditor): Target | undefined {
     const fromEditor = editor && (!uri || editor.document.uri.toString() === uri.toString()) ? editor : undefined
     if (fromEditor) {
       const document = fromEditor.document
@@ -685,9 +739,10 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   async function addContextFromPage(message: EmbedAddContextMessage): Promise<string> {
     let item: EditorComposeInput
     if (message.what === "selection") {
-      const editor = activeFileEditor(api)
-      if (!editor || editor.selection.isEmpty) return "nothing selected"
-      const target = targetOf(editor.document.uri)
+      // The editor the bar showed (the one in front, by the watcher's rule); a chip needs a file on disk.
+      const editor = watcher.frontEditor()
+      if (!editor || editor.document.uri.scheme !== "file" || editor.selection.isEmpty) return "nothing selected"
+      const target = targetOf(editor.document.uri, editor)
       if (!target?.selection) return "nothing selected"
       item = itemFor(target)
     } else {
@@ -743,6 +798,9 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     api.commands.registerCommand("frizz.sidebar.jump", () => sidebarCommand("jump")),
     api.commands.registerCommand("frizz.sidebar.settings", () => sidebarCommand("settings")),
     api.commands.registerCommand("frizz.sidebar.shortcuts", () => sidebarCommand("shortcuts")),
+    // Ctrl+L / ⌘L in the editor with nothing selected: Cursor's chord to its chat, here the sidebar's prompt
+    // box — revealed and focused, the caret at the end of what it holds. Ctrl+L there comes back (embed.ts).
+    api.commands.registerCommand("frizz.focusPrompt", () => sidebarCommand("prompt")),
     // "Ask Frizz to fix" on any problem in a file on disk, in every language. Offered only with the sidebar
     // on: without it the problem's message has nowhere to go, and a bare chip is Add to Frizz prompt.
     api.languages.registerCodeActionsProvider({ scheme: "file" }, {

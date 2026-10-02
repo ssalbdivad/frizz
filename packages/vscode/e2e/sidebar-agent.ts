@@ -24,6 +24,9 @@ export type AgentOp =
   | { op: "editor" }
   | { op: "tabs" }
   | { op: "config"; section: string; key: string; value: unknown }
+  | { op: "inspect"; section: string; key: string }
+  | { op: "install"; vsix: string }
+  | { op: "extension"; id: string }
   | { op: "diagnostics"; path: string }
   | { op: "done" }
 
@@ -34,6 +37,13 @@ export interface AgentStatus {
   sidebar: ReturnType<FrizzExtensionApi["sidebar"]>
   editorContext: ReturnType<FrizzExtensionApi["editorContext"]>
   theme: number
+}
+
+/** A setting as `inspect` reads it: what each level sets, and what wins. */
+export interface SettingState {
+  value: unknown
+  globalValue: unknown
+  workspaceValue: unknown
 }
 
 export interface EditorState {
@@ -95,8 +105,21 @@ async function perform(api: FrizzExtensionApi, op: AgentOp): Promise<unknown> {
         active: tab.isActive && group.isActive,
       })))
     case "config":
-      await vscode.workspace.getConfiguration(op.section).update(op.key, op.value, vscode.ConfigurationTarget.Global)
+      // JSON has no `undefined`: a `null` value removes the user's setting, back to its default.
+      await vscode.workspace.getConfiguration(op.section).update(op.key, op.value ?? undefined, vscode.ConfigurationTarget.Global)
       return null
+    case "inspect": {
+      const config = vscode.workspace.getConfiguration(op.section)
+      const levels = config.inspect(op.key)
+      return { value: config.get(op.key) ?? null, globalValue: levels?.globalValue ?? null, workspaceValue: levels?.workspaceValue ?? null } satisfies SettingState
+    }
+    case "install":
+      // As Extensions: Install from VSIX… does it — into this run's extensions dir, live, with no reload.
+      await vscode.commands.executeCommand("workbench.extensions.installExtension", vscode.Uri.file(op.vsix))
+      return null
+    case "extension":
+      // Whether this extension host sees it: what the extension under test reads (extensions.getExtension).
+      return vscode.extensions.getExtension(op.id) !== undefined
     case "diagnostics":
       return vscode.languages.getDiagnostics(vscode.Uri.file(op.path)).map((d) => ({
         message: d.message,
@@ -117,14 +140,20 @@ export async function run(): Promise<void> {
   const api = await extension.activate()
   console.log(`frizz e2e agent: ${vscode.env.appName} ${vscode.version}, asking ${control}`)
   let seq = 0
+  let misses = 0
   for (;;) {
     let next: { seq: number; op: AgentOp } | undefined
     try {
       const response = await fetch(`${control}/next?after=${seq}`)
+      misses = 0
       if (response.status === 204) continue
       next = (await response.json()) as { seq: number; op: AgentOp }
     } catch (error) {
-      // The harness went away: nothing more will be asked.
+      // A harness busy for a moment (a synchronous step) is not a harness gone: a few tries, a second apart.
+      if (++misses < 10) {
+        await new Promise((resolve) => setTimeout(resolve, 1_000))
+        continue
+      }
       console.log(`frizz e2e agent: the harness is gone (${(error as Error).message})`)
       return
     }

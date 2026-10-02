@@ -69,6 +69,11 @@
         "category": "Frizz"
       },
       {
+        "command": "frizz.focusPrompt",
+        "title": "Go to the prompt box",
+        "category": "Frizz"
+      },
+      {
         "command": "frizz.addTerminalSelection",
         "title": "Add to Frizz prompt",
         "category": "Frizz"
@@ -254,10 +259,16 @@
         "when": "editorTextFocus && editorHasSelection"
       },
       {
+        "command": "frizz.focusPrompt",
+        "key": "ctrl+l",
+        "mac": "cmd+l",
+        "when": "editorTextFocus && !editorHasSelection && config.frizz.useSidebar"
+      },
+      {
         "command": "frizz.addSelectionOrFile",
         "key": "alt+k",
         "mac": "alt+k",
-        "when": "editorTextFocus"
+        "when": "editorTextFocus && !frizz.claudeCodeInstalled"
       }
     ],
     "configuration": {
@@ -276,7 +287,7 @@
         "frizz.shareEditorState": {
           "type": "boolean",
           "default": true,
-          "markdownDescription": "Let Frizz's agents see what you have in front of you in this window when they need it: the file you are in, what you have selected and its text, your open tabs, and the editor's errors and warnings — so you can ask about \"this\" without pasting it. Turn it off to keep the editor to yourself."
+          "markdownDescription": "Share what you have in front of you in this editor with Frizz: the file you are in and what you have selected, with its text, goes with every message you send from the Frizz sidebar, and Frizz's agents can read it — with your open tabs and the editor's errors and warnings — when they need it. So you can ask about \"this\" without pasting it. The eye on the sidebar's prompt box is this setting. Turn it off to keep the editor to yourself: only what you add to a prompt goes. Text from files that may hold secrets (`.env`, keys, credentials) is never sent on its own."
         },
         "frizz.useSidebar": {
           "type": "boolean",

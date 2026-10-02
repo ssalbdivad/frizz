@@ -42,8 +42,14 @@ export interface ActiveInput {
   lineCount: number
   /** The caret: the primary selection's moving end. */
   cursor: Position
-  /** The primary selection, when it is not empty, with its text as the document has it. */
-  selection?: { start: Position; end: Position; text: string }
+  /**
+   * The primary selection, when it is not empty, with its text as the document has it — read only as far as
+   * the frame can carry (editor-front.ts selectedText), so `more` says the document has more of it. No text
+   * when it is withheld.
+   */
+  selection?: { start: Position; end: Position; text?: string; more?: boolean }
+  /** The file may hold secrets (editor-front.ts secretFile, or VS Code excludes it): its selection goes without text. */
+  withheld?: boolean
   /** The first and last line on screen (0-based); absent when the editor reports no visible range. */
   visible?: { start: number; end: number }
 }
@@ -107,13 +113,14 @@ function activeFile(input: ActiveInput): EditorActiveFile {
     // The chip's line rule (a drag that ends at column 1 does not include that line), so what an agent
     // reads as "lines 12-20" is what the human's chip of the same selection would say.
     const { startLine, endLine } = lineSpan(input.selection.start, input.selection.end)
-    const text = normalizeNewlines(input.selection.text)
-    const carried = cut(text, EDITOR_STATE_MAX_SELECTION_TEXT)
-    active.selection = {
-      startLine: line1(startLine - 1),
-      endLine: Math.max(line1(startLine - 1), line1(endLine - 1)),
-      text: carried,
-      ...(carried.length < text.length ? { truncated: true as const } : {}),
+    const lines = { startLine: line1(startLine - 1), endLine: Math.max(line1(startLine - 1), line1(endLine - 1)) }
+    if (input.withheld || input.selection.text === undefined) {
+      // Named, never quoted: the agent learns where the human is looking, not what the file holds.
+      active.selection = { ...lines, ...(input.withheld ? { withheld: true as const } : { truncated: true as const }) }
+    } else {
+      const text = normalizeNewlines(input.selection.text)
+      const carried = cut(text, EDITOR_STATE_MAX_SELECTION_TEXT)
+      active.selection = { ...lines, text: carried, ...(carried.length < text.length || input.selection.more ? { truncated: true as const } : {}) }
     }
   }
   return active

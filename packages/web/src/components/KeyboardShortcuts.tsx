@@ -21,7 +21,8 @@ import {
 } from "../lib/keybindings.ts"
 import { useShortcutLabel, useShortcutListener, withShortcut } from "../lib/keyboardRuntime.ts"
 import { embedded } from "../lib/embed.ts"
-import { EDITOR_CHORDS, EDITOR_CHORDS_NOTE, HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, SIDEBAR_KEYS_NOTE, SIDEBAR_QUEUE_NOTE, hostChordKeycaps, hostChordProblem } from "../lib/embedKeys.ts"
+import { useEditorContext } from "../lib/editorContext.ts"
+import { EDITOR_CHORDS, editorChordsNote, HOST_CHORDS, HOST_CHORDS_NOTE, SIDEBAR_KEY_HINTS, SIDEBAR_KEY_NAMES, SIDEBAR_KEYS_NOTE, SIDEBAR_QUEUE_NOTE, hostChordKeycaps, hostChordProblem } from "../lib/embedKeys.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 
@@ -90,6 +91,8 @@ const NOTHING_HELD: Held = { mod: false, alt: false, shift: false }
 
 function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
   const sidebar = embedded()
+  // Whether Alt+K is Frizz's in this editor: not while Claude Code's extension holds it (lib/embedKeys.ts).
+  const { altK } = useEditorContext()
   const overrides = useSnapshot(prefs).keybindings as typeof prefs.keybindings
   const bindings = effectiveBindings(overrides)
   const [recording, setRecording] = useState<ActionId | null>(null)
@@ -252,9 +255,9 @@ function KeyboardShortcutsDialog({ open, onOpenChange }: { open: boolean; onOpen
         {sidebar && (
           <section aria-label="Editor" data-shortcut-editor className="mt-3">
             <h3 className="text-[11px] font-medium uppercase tracking-wide text-fg/60">Editor</h3>
-            <p className="mt-0.5 text-[11.5px] text-muted-65">{EDITOR_CHORDS_NOTE}</p>
+            <p className="mt-0.5 text-[11.5px] text-muted-65">{editorChordsNote(formatChord(EDITOR_CHORDS[0]!.chord, platform))}</p>
             <ul className="mt-1.5 flex flex-col">
-              {EDITOR_CHORDS.map((editorChord) => (
+              {EDITOR_CHORDS.filter((editorChord) => !editorChord.altK || altK).map((editorChord) => (
                 <li key={editorChord.label} className="flex min-h-7 items-center gap-3">
                   <span className="min-w-0 flex-1 text-[13px] text-fg/90">{editorChord.label}</span>
                   {/* Not muted, unlike the fixed keys and VS Code's: these are what the sidebar is for. */}

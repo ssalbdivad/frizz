@@ -49,10 +49,12 @@ export const SIDEBAR_KEYS_NOTE = "Keys reach Frizz while the sidebar has focus. 
 export const SIDEBAR_QUEUE_NOTE = "In the open thread. With none open, a key opens the one you're on."
 
 /**
- * A chord the extension binds IN THE EDITOR to put code into the sidebar's prompt box — the reason the
- * sidebar exists, so the sheet leads with them there. Cursor's ⌘L first, the chord the context bar names
- * (lib/editorContext.ts editorAddChord); Claude Code's ⌥K second. (The app's own ⌘I is bound there too,
- * and listed where it always is, under Thread details with its sidebar hint.) `command` and `when` are the
+ * A chord the extension binds IN THE EDITOR to reach the sidebar's prompt box — the reason the sidebar
+ * exists, so the sheet leads with them there. Cursor's ⌘L first, both its halves (the chord the context bar
+ * names, lib/editorContext.ts editorAddChord): with a selection, add it; with none, go to the prompt box.
+ * Claude Code's ⌥K last, and only while Claude Code's own extension does not hold it (`altK`: the sheet
+ * drops the row then, since the key is not Frizz's in that editor). The app's own ⌘I is bound there too, and
+ * listed where it always is, under Thread details with its sidebar hint. `command` and `when` are the
  * extension's keybinding, which embedKeys.test.ts finds in packages/vscode/package.json, so the sheet can
  * never teach a chord the editor does not have.
  */
@@ -61,15 +63,20 @@ export interface EditorChord {
   chord: Chord
   command: string
   when: string
+  /** Shown only while Alt+K is Frizz's in this editor (the extension's `frizz:host-state`). */
+  altK?: true
 }
 
 export const EDITOR_CHORDS: readonly EditorChord[] = [
   { label: "Add the selection", chord: { key: "l", mod: true, alt: false, shift: false }, command: "frizz.addToPrompt", when: "editorTextFocus && editorHasSelection" },
-  { label: "Add the selection or file", chord: { key: "k", mod: false, alt: true, shift: false }, command: "frizz.addSelectionOrFile", when: "editorTextFocus" },
+  { label: "No selection: go to the prompt box", chord: { key: "l", mod: true, alt: false, shift: false }, command: "frizz.focusPrompt", when: "editorTextFocus && !editorHasSelection && config.frizz.useSidebar" },
+  { label: "Add the selection or file", chord: { key: "k", mod: false, alt: true, shift: false }, command: "frizz.addSelectionOrFile", when: "editorTextFocus && !frizz.claudeCodeInstalled", altK: true },
 ]
 
-/** The note under the Editor group. ⌘L also works from a prompt box here (lib/embedHost.ts), as ⌘I does. */
-export const EDITOR_CHORDS_NOTE = "Pressed in the editor, these add to the prompt box here."
+/** The note under the Editor group: where these are pressed, and the way back. */
+export function editorChordsNote(chord: string): string {
+  return `Pressed in the editor. ${chord} here goes back to it.`
+}
 
 /**
  * A VS Code chord the sidebar passes on. `primary` is ⌘ on a Mac and Ctrl elsewhere, as VS Code spells it;
@@ -99,7 +106,8 @@ export const HOST_CHORDS: readonly HostChord[] = [
   chord("Toggle the side bar", "primary+KeyB"),
   chord("Toggle the panel", "primary+KeyJ"),
   chord("Toggle the terminal", "ctrl+Backquote"),
-  chord("Back to the editor", "primary+Digit1"),
+  chord("Back to the editor", "primary+KeyL"),
+  chord("First editor group", "primary+Digit1"),
   chord("Explorer", "primary+shift+KeyE"),
   chord("Search", "primary+shift+KeyF"),
   chord("Source control", "ctrl+shift+KeyG"),

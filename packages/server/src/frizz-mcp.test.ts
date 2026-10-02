@@ -296,7 +296,7 @@ test("`editor` reads the window on this project as text, and says why when there
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
 
-    const full = await call({ windows: [front, { app: "Cursor", kind: "cursor", focused: false, focusedAgoMs: 7_200_000, folders: ["/home/me/repo/packages/x"], editor: { ...front.editor, active: { ...front.editor.active, path: "/home/me/repo/packages/x/i.ts", dirty: false, selection: undefined, cursorLine: 3 } } }], connected: 2, elsewhere: [] })
+    const full = await call({ windows: [front, { app: "Cursor", kind: "cursor", focused: false, focusedAgoMs: 7_200_000, folders: ["/home/me/repo/packages/x"], editor: { ...front.editor, active: { ...front.editor.active, path: "/home/me/repo/packages/x/i.ts", dirty: false, selection: undefined, cursorLine: 3 } } }], connected: 2 })
     assert.equal(full.isError, undefined)
     assert.deepEqual(seen.at(-1), { url: `/_frizz/${projectId}/rpc/editorState`, body: {} }, "the CALLING project's procedure, by its id")
     assert.equal(full.text, [
@@ -328,19 +328,27 @@ test("`editor` reads the window on this project as text, and says why when there
     ].join("\n"))
 
     // A selection too large to carry whole says so, and where to read the rest.
-    const truncated = await call({ windows: [{ ...front, editor: { ...front.editor, active: { ...front.editor.active, selection: { startLine: 1, endLine: 900, text: "x", truncated: true } } } }], connected: 1, elsewhere: [] })
+    const truncated = await call({ windows: [{ ...front, editor: { ...front.editor, active: { ...front.editor.active, selection: { startLine: 1, endLine: 900, text: "x", truncated: true } } } }], connected: 1 })
     assert.match(truncated.text, /Selected text \(900 lines; ONLY THE START — the selection was too large to carry whole, so read the file for the rest\):/)
 
+    // A file that may hold secrets: its lines are named and its text is not there to quote.
+    const withheld = await call({ windows: [{ ...front, editor: { ...front.editor, active: { ...front.editor.active, path: "/home/me/repo/.env", selection: { startLine: 2, endLine: 3, withheld: true } } } }], connected: 1 })
+    assert.match(withheld.text, /In front: \/home\/me\/repo\/\.env \(typescript, unsaved changes\), lines 2-3 selected\.\nIts text is not shared: the file may hold secrets\. Read lines 2-3 of the file yourself only if the task needs it\./)
+    assert.doesNotMatch(withheld.text, /````/)
+
     // Each way of having nothing to show, with its reason and the move that is always open.
-    const off = await call({ windows: [{ ...front, editor: { shared: false, reportedAgoMs: 0, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1, elsewhere: [] })
-    assert.match(off.text, /turned off sharing their editor with Frizz's agents \(the `frizz.shareEditorState` setting\)/)
-    const silent = await call({ windows: [{ ...front, editor: undefined }], connected: 1, elsewhere: [] })
+    const off = await call({ windows: [{ ...front, editor: { shared: false, reportedAgoMs: 0, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1 })
+    assert.match(off.text, /turned off sharing their editor with Frizz \(the eye over the sidebar's prompt box, the `frizz.shareEditorState` setting\)/)
+    const silent = await call({ windows: [{ ...front, editor: undefined }], connected: 1 })
     assert.match(silent.text, /has this project open, but it has not reported what it shows: its Frizz extension predates this/)
-    const none = await call({ windows: [], connected: 0, elsewhere: [] })
+    const none = await call({ windows: [], connected: 0 })
     assert.match(none.text, /^No editor is connected to Frizz/)
-    const elsewhere = await call({ windows: [], connected: 2, elsewhere: [{ app: "Cursor", folders: ["/home/me/other"] }, { app: "Visual Studio Code", folders: [] }] })
-    assert.match(elsewhere.text, /^2 editor windows are connected to Frizz, but none has this project open:\n- Cursor: \/home\/me\/other\n- Visual Studio Code: no folder open/)
-    const empty = await call({ windows: [{ ...front, editor: { ...front.editor, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1, elsewhere: [] })
+    // Windows on other projects are counted, never described — and an OLDER server's listing of their
+    // folders (it sent `elsewhere` until 2026-10-02) is not repeated to the worker either.
+    const elsewhere = await call({ windows: [], connected: 2, elsewhere: [{ app: "Cursor", folders: ["/home/me/other"] }] })
+    assert.match(elsewhere.text, /^2 editor windows are connected to Frizz, but none has this project open, so what the human has in front of them is in another project\./)
+    assert.doesNotMatch(elsewhere.text, /\/home\/me\/other/)
+    const empty = await call({ windows: [{ ...front, editor: { ...front.editor, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1 })
     assert.match(empty.text, /No file is in front/)
     assert.match(empty.text, /Problems: no errors or warnings\./)
     for (const reply of [off, silent, none, elsewhere]) {

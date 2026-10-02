@@ -37,6 +37,8 @@ export const EDITOR_COMPOSE_MAX_TEXT = 64 * 1024
 export const EDITOR_FEATURES = {
   /** The server takes `editor` frames (EditorSnapshot) and answers the workers' `editorState` with them. */
   editorState: "editor-state",
+  /** The server takes `withheld` on an `editor` frame's selection (EditorStateSelection). */
+  selectionWithheld: "editor-selection-withheld",
 } as const
 export type EditorFeature = (typeof EDITOR_FEATURES)[keyof typeof EDITOR_FEATURES]
 
@@ -174,6 +176,12 @@ export interface EditorStateSelection {
   text?: string
   /** `text` is only the start of the selection (or absent): it was too large to carry whole. */
   truncated?: true
+  /**
+   * No `text`, on purpose: the file may hold secrets (`.env`, a key, a file VS Code hides). Sent only to a
+   * server whose welcome names EDITOR_FEATURES.selectionWithheld; an older one gets `truncated` instead,
+   * which its schema takes.
+   */
+  withheld?: true
 }
 
 /** The text editor in front. */
@@ -314,8 +322,10 @@ export interface EditorStateWindow {
 /** The `editorState` RPC: the editor windows that have this project open, the one the human was in last first. */
 export interface EditorStateResult {
   windows: EditorStateWindow[]
-  /** Every editor window connected to Frizz, these included. */
+  /**
+   * Every editor window connected to Frizz, these included. The others are counted and NOT described: their
+   * folders are other projects, which a worker of this one has no business learning (until 2026-10-02 they
+   * were listed, folders and all, to any worker of any project).
+   */
   connected: number
-  /** The connected windows that do NOT have this project open: their app and folders, so a worker can say what is open instead. */
-  elsewhere: { app: string; folders: string[] }[]
 }

@@ -1,11 +1,9 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { ChevronDown, Eye, EyeOff, FileCode2 } from "lucide-react"
-import { useSnapshot } from "valtio"
 import { embedded } from "../lib/embed.ts"
-import { barAdd, contextBarReading, editorAddChord, registerContextBar, requestEditorContext, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
+import { barAdd, barHints, contextBarReading, editorAddChord, registerContextBar, requestEditorContext, setShareEditor, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
-import { prefs } from "../lib/prefs.ts"
 import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 
 // THE CONTEXT BAR — the top strip inside a prompt box in an editor's sidebar (plans/vscode-extension.md
@@ -15,10 +13,11 @@ import { Menu, MenuContent, MenuItem, MenuTrigger } from "./ui/Menu.tsx"
 // IT SAYS WHAT THE NEXT SEND CARRIES. A message sent from this box takes the selection with it — or, with
 // nothing selected, the file's name and the caret's line — as Claude Code's VS Code extension and Cursor
 // do (lib/editorContext.ts outgoingMessage), so the reading here is not a suggestion but the attachment
-// itself. The EYE before it turns that off and on (prefs.sendEditorContext, kept by the sidebar's frame):
-// off, the reading is struck through and dimmed, so whether the code is going is legible without hovering
-// anything. A click on the reading still adds it as a chip in THIS box, for the human who wants it placed
-// in their sentence; the other open files are behind the control's chevron.
+// itself. The EYE before it is the one switch for the editor reaching Frizz on its own — the extension's
+// `frizz.shareEditorState`, which also keeps the agents' editor tool out (lib/editorContext.ts
+// setShareEditor): off, the reading is struck through and dimmed, so whether the code is going is legible
+// without hovering anything. A click on the reading still adds it as a chip in THIS box, for the human who
+// wants it placed in their sentence; the other open files are behind the control's chevron.
 //
 // The prior art the maintainer pointed at, in this app's own vocabulary: Claude Code's VS Code extension
 // names the selection under its prompt ("26 lines selected"), Copilot Chat offers the current file as a
@@ -40,11 +39,12 @@ export function EditorContextBar({ box }: { box: ContextBox }) {
 }
 
 function Bar({ box }: { box: ContextBox }) {
-  const { active, open } = useEditorContext()
-  const sending = useSnapshot(prefs).sendEditorContext
+  const { active, open, share: sending } = useEditorContext()
   const reading = contextBarReading(active)
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
-  // Registered by its strip, so ⌘I or ⌘L typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
+  const hints = barHints({ sending, selection: reading?.kind === "selection", withheld: active?.withheld === true, chord })
+  // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
+  // ⌘L typed here is not the bar's: it goes back to the editor, as Cursor's does (lib/embedKeys.ts).
   const strip = useRef<HTMLDivElement>(null)
   const drawn = Boolean(reading || open.length)
   useEffect(() => {
@@ -70,7 +70,7 @@ function Bar({ box }: { box: ContextBox }) {
   const struck = sending ? "" : "line-through decoration-from-font"
   return (
     <div ref={strip} data-editor-context-bar data-editor-context-sending={reading ? String(sending) : undefined} className="flex items-center gap-2 px-1.5 pt-1.5">
-      {reading && <SendToggle sending={sending} selection={selection} />}
+      {reading && <SendToggle sending={sending} />}
       <div data-editor-context-control className={`flex h-6 min-w-0 items-stretch rounded-md text-[11.5px] leading-6 inset-ring transition-colors ${tone} ${reading ? "max-w-full" : ""}`}>
         {reading && (
           <button
@@ -82,8 +82,9 @@ function Bar({ box }: { box: ContextBox }) {
             // The readings are separate spans spaced by the row's gap, so the text alone would read
             // "r2-private.ts:91-11626 lines" to a screen reader.
             aria-label={`Add ${reading.name}${reading.range}${reading.count ? `, ${reading.count},` : ""} to the prompt`}
-            // The chord does this from the box as well as from the editor (lib/embedHost.ts; ⌘I too, App.tsx app.details).
-            title={`Add ${reading.where}${reading.range} to the prompt (${chord})`}
+            // The chord is the editor's: pressed here, it goes back to the editor (lib/embedHost.ts). ⌘I adds
+            // from a box here, as the `?` sheet says (App.tsx app.details).
+            title={active?.untitled ? `${reading.where} isn't saved, so it can't be added here` : `Add ${reading.where}${reading.range} at the caret (${chord} in the editor)`}
             // 7px, not 6, on the right when the chevron follows: its glyph carries 0.88px of side
             // bearing, and the rule between them should sit centred in ink (6.88 | 6.88, sans).
             className={`flex min-w-0 items-baseline gap-1 pl-1.5 transition-colors ${FOCUS} ${open.length ? "rounded-l-md pr-[7px]" : "rounded-md pr-1.5"} ${hover}`}
@@ -101,32 +102,32 @@ function Bar({ box }: { box: ContextBox }) {
         {reading && open.length > 0 && <span aria-hidden className="my-1.5 w-px shrink-0 bg-current opacity-20" />}
         {open.length > 0 && <OpenFiles box={box} open={open} labelled={!reading} hover={hover} />}
       </div>
-      {!selection && <Hint chord={chord} />}
+      {hints.length > 0 && <Hint variants={hints} />}
     </div>
   )
 }
 
 /**
- * The eye: whether a send from this box carries what the editor has in front. Every box with a bar shares
- * the one setting — it is a habit of how the human works beside this editor, not a choice per message, as
- * Claude Code's toggle is — and it lasts across reloads of the sidebar. Its glyph shows the state (open:
- * going; struck: staying behind); its tooltip says what a click will do.
+ * The eye: whether the editor reaches Frizz on its own — a send from this box carrying what the editor has
+ * in front, and Frizz's agents reading it through their editor tool. One switch for both, the extension's
+ * `frizz.shareEditorState`: an eye that kept the selection out of the message while an agent could still
+ * read it through the tool would promise a privacy it did not keep. Every box with a bar shows the same
+ * one — it is a habit of how the human works beside this editor, not a choice per message, as Claude Code's
+ * toggle is — and, being a VS Code setting, it holds across reloads and in every window. Its glyph shows
+ * the state (open: shared; struck: kept to yourself); its tooltip says what a click will do.
  */
-function SendToggle({ sending, selection }: { sending: boolean; selection: boolean }) {
-  const what = selection ? "the selected lines" : "the open file's name"
-  const title = sending ? `Don't send ${what} with your message` : "Send the editor selection with your message"
+function SendToggle({ sending }: { sending: boolean }) {
+  const title = sending ? "Stop sharing the editor with Frizz" : "Share the editor with Frizz"
   return (
     <button
       type="button"
       data-editor-context-toggle
       aria-pressed={sending}
-      aria-label="Send the editor selection with your message"
+      aria-label="Share the editor with Frizz"
       title={title}
       // Keep the caret in the box: the human is mid-sentence, deciding what goes with it.
       onMouseDown={(e) => e.preventDefault()}
-      onClick={() => {
-        prefs.sendEditorContext = !sending
-      }}
+      onClick={() => setShareEditor(!sending)}
       // A baseline row with a zero-width space, like the chevron's half of the control: the glyph then
       // rides the reading's own baseline and sits on its cap band (MARK), rather than centred in a box.
       className={`flex h-6 shrink-0 items-baseline rounded-md px-1 text-[11.5px] leading-6 transition-colors ${FOCUS} hover:bg-panel-2 hover:text-fg ${sending ? "text-muted" : "text-muted-55"}`}
@@ -177,14 +178,14 @@ function OpenFiles({ box, open, labelled, hover }: { box: ContextBox; open: Edit
 }
 
 /**
- * How to add LINES, for a bar that has none selected: the editor's chord (⌘L, Cursor's — lib/editorContext.ts
- * editorAddChord), which the human cannot learn from anywhere else in the sidebar but the `?` sheet. The longest wording that fits the room the control leaves, measured
- * — never one cut to "Select code and pr…", and nothing at all when even the short one does not fit (the
- * control's tooltip says it too). The room changes with the file's name as much as with the sidebar's
- * width, so a fixed breakpoint could not pick.
+ * What the bar means, said beside it (lib/editorContext.ts barHints): what goes with the message on its own,
+ * and what the editor's chord adds — a chip at the caret, to point at code mid-sentence. The longest
+ * wording that fits the room the control leaves, measured — never one cut to "Selections go with yo…", and
+ * nothing at all when even the short one does not fit (the eye's and the reading's tooltips say it too).
+ * The room changes with the file's name as much as with the sidebar's width, so a fixed breakpoint could
+ * not pick.
  */
-function Hint({ chord }: { chord: string }) {
-  const variants = [`Select code and press ${chord}`, `Select, then ${chord}`, `Select + ${chord}`]
+function Hint({ variants }: { variants: readonly string[] }) {
   const slotRef = useRef<HTMLSpanElement>(null)
   const measureRef = useRef<HTMLSpanElement>(null)
   const [fit, setFit] = useState(0)
@@ -202,7 +203,7 @@ function Hint({ chord }: { chord: string }) {
     const observer = new ResizeObserver(choose)
     observer.observe(slot)
     return () => observer.disconnect()
-  }, [chord])
+  }, [variants.join("\n")])
   return (
     // `pr-0.5`: the text's last ink then sits 9px in from the box's edge, over the send button's (sans).
     <span ref={slotRef} data-editor-context-hint className="relative min-w-0 flex-1 overflow-hidden whitespace-nowrap pr-0.5 text-right text-[11px] leading-6 text-muted-70">

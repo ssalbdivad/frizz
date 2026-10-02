@@ -287,12 +287,12 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
 // ── what the EDITOR had in front: the block a sidebar send carries on its own ─────────────────────
 //
 // In an editor's sidebar every send carries what the editor around it has in front — the selection, or
-// with nothing selected the file and the caret's line — unless the human turns that off at the context
-// bar's eye (lib/editorContext.ts outgoingMessage; plans/vscode-extension.md § The editor in the
-// sidebar). Claude Code's VS Code extension and Cursor both work this way, and the maintainer called it
-// "the #1 feature": an agent in the sidebar that cannot see the highlighted code is not beside the editor
-// at all. Asked "can you see the highlighted code?", the first cut's agent said no, because the selection
-// reached a message only when the human made a chip of it.
+// with nothing selected the file and the caret's line — while the human shares the editor (the context
+// bar's eye, which is the extension's `frizz.shareEditorState`; lib/editorContext.ts outgoingMessage;
+// plans/vscode-extension.md § The editor in the sidebar). Claude Code's VS Code extension and Cursor both
+// work this way, and the maintainer called it "the #1 feature": an agent in the sidebar that cannot see the
+// highlighted code is not beside the editor at all. Asked "can you see the highlighted code?", the first
+// cut's agent said no, because the selection reached a message only when the human made a chip of it.
 //
 // It is a block of its OWN, after the chips' "Selected context:" block, rather than one more chip
 // definition. A chip is a reference the human placed in their sentence; this is not, and the agent must
@@ -303,28 +303,52 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
 // stands for it in the prose. Like the chips it is text in the message, never a side channel: the worker
 // reads the same transcript the human does.
 //
-// Three readings, each one line under the header (the selection's quote under its line):
+// One reading under the header, and it says what the agent can and cannot do with it — because the
+// obvious next move, "read it from the file", is wrong for a buffer with unsaved changes (the copy on disk
+// is not what the human sees) and impossible for an untitled one:
 //
-//   Selected in src/a.ts, lines 12-20:        (then the text as a blockquote, as a chip's is)
+//   Selected in src/a.ts, lines 12-20:                                     (then the text, quoted)
+//   Selected in src/a.ts (unsaved changes), lines 12-20:                   (quoted; line numbers are the buffer's)
+//   Selected in Untitled-1 (unsaved, not a file on disk), lines 1-5:       (quoted)
 //   Selected in src/a.ts, lines 12-900 (not quoted here; read it from the file)
-//   Open in the editor: src/a.ts (cursor on line 40)
+//   Selected in src/a.ts (unsaved changes), lines 12-900 (not quoted here, and the copy on disk differs: ask the human to save it or paste it)
+//   Selected in Untitled-1 (unsaved, not a file on disk), lines 1-900 (not quoted here, and there is no file to read: ask the human to paste it)
+//   Selected in .env, lines 1-3 (not quoted here: the file may hold secrets)
+//   Still selected in src/a.ts, lines 12-20 (quoted in an earlier message)
+//   Open in the editor: src/a.ts (unsaved changes; cursor on line 40)
 //
-// The second is a selection past the feed's ceiling (EMBED_MAX_SELECTION_TEXT): its place, not its text.
+// "Not quoted" is a selection past the feed's ceiling (EMBED_MAX_SELECTION_TEXT, 16 Ki) or from a file
+// whose text the extension keeps home (packages/vscode editor-front.ts secretFile).
+//
+// "STILL SELECTED" is the repeat-send rule. A selection held while the human talks to a thread used to be
+// quoted IN FULL on every message of it — up to 16 Ki characters, about 4k tokens, each time, for code the
+// agent already had. When the last block this thread was sent quoted the very same lines with the very
+// same text (`previousEditorQuote`, read from its transcript), the next block names them instead. Any
+// change — another selection, an edit to the selected text, a different file — quotes afresh.
 
 const EDITOR_HEADER = "Editor context (attached automatically: what the human had in front of them in their editor when they sent this; it may or may not be related):"
-const NOT_QUOTED = "(not quoted here; read it from the file)"
+const NOT_QUOTED = "not quoted here; read it from the file"
+const NOT_QUOTED_UNSAVED = "not quoted here, and the copy on disk differs: ask the human to save it or paste it"
+const NOT_QUOTED_UNTITLED = "not quoted here, and there is no file to read: ask the human to paste it"
+const NOT_QUOTED_SECRET = "not quoted here: the file may hold secrets"
+const QUOTED_EARLIER = "quoted in an earlier message"
+const UNSAVED = "unsaved changes"
+const UNTITLED = "unsaved, not a file on disk"
 
 /** What the editor had in front, as the feed has it (embed-protocol.ts `EmbedEditorContextMessage.active`). */
 export interface EditorContextInput {
   path: string
   selection?: { startLine: number; endLine: number; text?: string }
   cursorLine?: number
+  untitled?: boolean
+  dirty?: boolean
+  withheld?: boolean
 }
 
-/** The block, parsed back out of a sent message, for the transcript's chip. */
+/** The block, parsed back out of a sent message, for the transcript's chip and for the repeat-send rule. */
 export interface SentEditorContext {
   kind: "selection" | "file"
-  /** The path as serialized (project-relative, or absolute outside the project). */
+  /** The path as serialized (project-relative, or absolute outside the project; an untitled buffer's label). */
   display: string
   /** A selection's lines. */
   startLine?: number
@@ -333,11 +357,20 @@ export interface SentEditorContext {
   cursorLine?: number
   /** The quoted selection; absent for a file, and for a selection that was not quoted. */
   text?: string
+  /** What the copy on disk is: absent for a saved file. */
+  state?: "unsaved" | "untitled"
+  /** "Still selected": the same lines and text as the quote before it in this thread. */
+  repeat?: true
+  /** Why a selection was not quoted: too long, or a file that may hold secrets. */
+  unquoted?: "long" | "secret"
 }
 
 function linesPhrase(startLine: number, endLine: number): string {
   return startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`
 }
+
+/** The quoted text as the block writes it and the parse gives it back: no trailing whitespace. */
+const quotable = (text: string) => text.replace(/\s+$/, "")
 
 /**
  * Whether a chip the message already carries says what the editor block would: one on the same file whose
@@ -356,25 +389,43 @@ export function editorContextCovered(active: EditorContextInput, present: readon
     || (!!text && item.text.includes(text)))
 }
 
+/** The last quote of a selection this thread was sent, as `previousEditorQuote` finds it. */
+export interface EditorQuote {
+  display: string
+  startLine: number
+  endLine: number
+  text: string
+}
+
 /**
  * The block for what the editor has in front, or "" when there is nothing to say — no editor in front, or
  * a chip already says it (`editorContextCovered`). A selection whose text is blank (whitespace selected)
- * reads as the file with the caret on its first line: there is nothing in it to quote.
+ * reads as the file with the caret on its first line: there is nothing in it to quote. `previous` is the
+ * last quote this thread was sent (`previousEditorQuote`): the same lines and text again are named, not
+ * re-quoted.
  */
-export function serializeEditorContext(active: EditorContextInput | null | undefined, present: readonly ComposerContextItem[], projectDir?: string | null): string {
+export function serializeEditorContext(active: EditorContextInput | null | undefined, present: readonly ComposerContextItem[], projectDir?: string | null, previous?: EditorQuote | null): string {
   if (!active || editorContextCovered(active, present)) return ""
-  const display = contextDisplayPath(active.path, projectDir)
+  const display = active.untitled ? active.path : contextDisplayPath(active.path, projectDir)
+  const state = active.untitled ? UNTITLED : active.dirty ? UNSAVED : ""
+  const named = `${display}${state ? ` (${state})` : ""}`
   const selection = active.selection
   let reading: string
   if (selection && selection.text !== undefined && !selection.text.trim()) {
-    reading = `Open in the editor: ${display} (cursor on line ${selection.startLine})`
+    reading = `Open in the editor: ${display} (${state ? `${state}; ` : ""}cursor on line ${selection.startLine})`
   } else if (selection) {
-    const where = `Selected in ${display}, ${linesPhrase(selection.startLine, selection.endLine)}`
-    reading = selection.text === undefined
-      ? `${where} ${NOT_QUOTED}`
-      : `${where}:\n${selection.text.replace(/\s+$/, "").split("\n").map((line) => `> ${line}`).join("\n")}`
+    const lines = linesPhrase(selection.startLine, selection.endLine)
+    if (selection.text === undefined) {
+      const why = active.withheld ? NOT_QUOTED_SECRET : active.untitled ? NOT_QUOTED_UNTITLED : active.dirty ? NOT_QUOTED_UNSAVED : NOT_QUOTED
+      reading = `Selected in ${named}, ${lines} (${why})`
+    } else if (previous && previous.display === display && previous.startLine === selection.startLine && previous.endLine === selection.endLine && previous.text === quotable(selection.text)) {
+      reading = `Still selected in ${named}, ${lines} (${QUOTED_EARLIER})`
+    } else {
+      reading = `Selected in ${named}, ${lines}:\n${quotable(selection.text).split("\n").map((line) => `> ${line}`).join("\n")}`
+    }
   } else {
-    reading = `Open in the editor: ${display}${active.cursorLine ? ` (cursor on line ${active.cursorLine})` : ""}`
+    const where = [state, active.cursorLine ? `cursor on line ${active.cursorLine}` : ""].filter(Boolean).join("; ")
+    reading = `Open in the editor: ${display}${where ? ` (${where})` : ""}`
   }
   return `${EDITOR_HEADER}\n\n${reading}`
 }
@@ -391,16 +442,25 @@ export function appendEditorContext(value: string, block: string): string {
   return joinComposerValue(body, attachments.map((attachment) => attachment.path))
 }
 
-const SELECTED_LINE = /^Selected in (.+), (?:line (\d+)|lines (\d+)-(\d+))(:| \(not quoted here; read it from the file\))$/
-const OPEN_LINE = /^Open in the editor: (.+?)(?: \(cursor on line (\d+)\))?$/
+const STATES = `${UNSAVED}|${UNTITLED}`
+const SELECTED_LINE = new RegExp(`^(Still selected|Selected) in (.+?)(?: \\((${STATES})\\))?, (?:line (\\d+)|lines (\\d+)-(\\d+))(:| \\((.+)\\))$`)
+const OPEN_LINE = new RegExp(`^Open in the editor: (.+?)(?: \\((?:(${STATES}); cursor on line (\\d+)|(${STATES})|cursor on line (\\d+))\\))?$`)
+const UNQUOTED: Record<string, SentEditorContext["unquoted"]> = {
+  [NOT_QUOTED]: "long",
+  [NOT_QUOTED_UNSAVED]: "long",
+  [NOT_QUOTED_UNTITLED]: "long",
+  [NOT_QUOTED_SECRET]: "secret",
+}
+const stateOf = (phrase: string | undefined): SentEditorContext["state"] => (phrase === UNSAVED ? "unsaved" : phrase === UNTITLED ? "untitled" : undefined)
 
 /**
  * The editor block at the END of a sent message's prose (attachment lines already peeled), and the prose
  * before it — on which `parseSentContext` then runs, so a message with both renders both. Strict, like
  * `parseSentContext`: the header must open its own paragraph and everything after it must be exactly one
- * reading, so a message that QUOTES a block somewhere in its middle (an agent's words pasted back, this
- * comment) keeps its plain-text rendering. A blockquote line can never be blank (`> ` at least), so a
- * blank line inside the quoted code cannot end the block early.
+ * reading in the grammar above, so a message that QUOTES a block somewhere in its middle (an agent's words
+ * pasted back, this comment) keeps its plain-text rendering. A blockquote line can never be blank (`> ` at
+ * least), so a blank line inside the quoted code cannot end the block early. Every reading an earlier page
+ * wrote still parses: the grammar only grew.
  */
 export function parseSentEditorContext(prose: string): { body: string; editor: SentEditorContext } | null {
   // The LAST header that opens a paragraph. One inside the quoted code cannot: every quoted line opens with
@@ -415,16 +475,55 @@ export function parseSentEditorContext(prose: string): { body: string; editor: S
   const body = prose.slice(0, Math.max(0, at - 2))
   const selected = head?.match(SELECTED_LINE)
   if (selected) {
-    const startLine = Number(selected[2] ?? selected[3])
-    const endLine = Number(selected[2] ?? selected[4])
-    const quoted = selected[5] === ":"
-    if (quoted ? !quote.length || !quote.every((line) => line.startsWith(">")) : quote.length > 0) return null
-    const text = quoted ? quote.map((line) => line.replace(/^> ?/, "")).join("\n") : undefined
-    return { body, editor: { kind: "selection", display: selected[1], startLine, endLine, ...(text !== undefined ? { text } : {}) } }
+    const repeat = selected[1] === "Still selected"
+    const state = stateOf(selected[3])
+    const startLine = Number(selected[4] ?? selected[5])
+    const endLine = Number(selected[4] ?? selected[6])
+    const quoted = selected[7] === ":"
+    const tail = selected[8]
+    const base: SentEditorContext = { kind: "selection", display: selected[2]!, startLine, endLine, ...(state ? { state } : {}) }
+    if (repeat) return tail === QUOTED_EARLIER && !quote.length ? { body, editor: { ...base, repeat: true } } : null
+    if (quoted) {
+      if (!quote.length || !quote.every((line) => line.startsWith(">"))) return null
+      return { body, editor: { ...base, text: quote.map((line) => line.replace(/^> ?/, "")).join("\n") } }
+    }
+    const unquoted = tail === undefined ? undefined : UNQUOTED[tail]
+    return unquoted && !quote.length ? { body, editor: { ...base, unquoted } } : null
   }
   const open = head?.match(OPEN_LINE)
   if (!open || quote.length) return null
-  return { body, editor: { kind: "file", display: open[1], ...(open[2] !== undefined ? { cursorLine: Number(open[2]) } : {}) } }
+  const state = stateOf(open[2] ?? open[4])
+  const cursor = open[3] ?? open[5]
+  return { body, editor: { kind: "file", display: open[1]!, ...(cursor !== undefined ? { cursorLine: Number(cursor) } : {}), ...(state ? { state } : {}) } }
+}
+
+/**
+ * The quote of a selection the thread's agent already has, for the repeat-send rule: walking the thread's
+ * messages from the newest back, the most recent editor block — passing over "still selected" references to
+ * the same lines, which are themselves repeats of it — if that block quoted a selection. Anything else most
+ * recently (another file, a selection too long to quote, the file with nothing selected) means the next
+ * selection is news, and is quoted. Messages with no block (sent from a browser tab, or with sharing off)
+ * are passed over: the agent still has what came before them.
+ *
+ * `text` is each message as the transcript shows it (its presentation text, newlines as `\n`).
+ */
+export function previousEditorQuote(messages: readonly { role: string; text: string }[]): EditorQuote | null {
+  let reference: SentEditorContext | null = null
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = messages[index]!
+    if (message.role !== "user") continue
+    const parsed = parseSentEditorContext(splitComposerValue(message.text).prose)
+    if (!parsed) continue
+    const { editor } = parsed
+    if (editor.kind !== "selection" || editor.startLine === undefined || editor.endLine === undefined) return null
+    if (reference && (reference.display !== editor.display || reference.startLine !== editor.startLine || reference.endLine !== editor.endLine)) return null
+    if (editor.repeat) {
+      reference = editor
+      continue
+    }
+    return editor.text === undefined ? null : { display: editor.display, startLine: editor.startLine, endLine: editor.endLine, text: editor.text }
+  }
+  return null
 }
 
 /**

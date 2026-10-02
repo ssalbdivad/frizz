@@ -74,6 +74,10 @@ test("every page message the contract names is taken, with only its own fields",
     description: "Ready",
   })
   assert.deepEqual(parsePageMessage({ type: "frizz:route", view: "queue", title: "All projects", description: "" }), { type: "frizz:route", view: "queue", title: "All projects" })
+  // The eye: share the editor or stop — a boolean, nothing else.
+  assert.deepEqual(parsePageMessage({ type: "frizz:share-editor", on: false, extra: 1 }), { type: "frizz:share-editor", on: false })
+  assert.equal(parsePageMessage({ type: "frizz:share-editor", on: "off" }), undefined)
+  assert.equal(parsePageMessage({ type: "frizz:share-editor" }), undefined)
   assert.deepEqual(parsePageMessage({ type: "frizz:open-external", url: "mailto:someone@example.com?subject=Hi" }), { type: "frizz:open-external", url: "mailto:someone@example.com?subject=Hi" })
 })
 
@@ -142,6 +146,10 @@ test("a forwarded chord runs the command VS Code binds it to by default — Ctrl
   assert.equal(chordCommand(chord("KeyP", { ctrl: true }), false), "workbench.action.quickOpen")
   assert.equal(chordCommand(chord("KeyB", { meta: true }), true), "workbench.action.toggleSidebarVisibility")
   assert.equal(chordCommand(chord("KeyJ", { ctrl: true }), false), "workbench.action.togglePanel")
+  // Cursor's ⌘L, pressed in the page: back to the editor the human came from.
+  assert.equal(chordCommand(chord("KeyL", { ctrl: true }), false), "workbench.action.focusActiveEditorGroup")
+  assert.equal(chordCommand(chord("KeyL", { meta: true }), true), "workbench.action.focusActiveEditorGroup")
+  assert.equal(chordCommand(chord("KeyL", { ctrl: true, shift: true }), false), undefined)
   assert.equal(chordCommand(chord("Digit1", { ctrl: true }), false), "workbench.action.focusFirstEditorGroup")
   assert.equal(chordCommand(chord("KeyE", { ctrl: true, shift: true }), false), "workbench.view.explorer")
   // VS Code binds the terminal and source control to Ctrl on a Mac too.

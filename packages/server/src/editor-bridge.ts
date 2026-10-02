@@ -357,7 +357,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       home: msg.home,
       platform: msg.platform,
     }
-    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState] })
+    send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState, EDITOR_FEATURES.selectionWithheld] })
     publishEditorsIfChanged()
     void pollProjects()
   }
@@ -609,14 +609,13 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       const realDir = closing ? undefined : realpathOrUndefined(dir)
       const at = now()
       const matched: Connection[] = []
-      const elsewhere: EditorStateResult["elsewhere"] = []
+      // The windows on other projects are counted, never described: their folders are not this worker's.
       let connected = 0
       for (const conn of connections) {
         const window = conn.window
         if (!window) continue
         connected++
         if (realDir && holdsProject(window, dir, realDir)) matched.push(conn)
-        else elsewhere.push({ app: window.app, folders: window.folders })
       }
       matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
       const windows = matched.map(({ window }): EditorStateWindow => {
@@ -630,7 +629,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
           ...(editor ? { editor: { ...editor.snapshot, reportedAgoMs: Math.max(0, at - editor.at) } } : {}),
         }
       })
-      return { windows, connected, elsewhere }
+      return { windows, connected }
     },
 
     takeCompose(id) {

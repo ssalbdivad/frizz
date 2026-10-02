@@ -8,6 +8,7 @@
 import { basename, isAbsolute } from "node:path"
 import { EDITOR_MAX_PATH } from "@frizz/shared/editor-protocol"
 import { EMBED_MAX_NOTE, EMBED_MAX_OPEN_FILES, EMBED_MAX_SELECTION_TEXT, type EmbedEditorContextMessage, type EmbedEditorFile, type EmbedEditorSelection } from "@frizz/shared/embed-protocol"
+import type { EditorFront } from "./editor-front.ts"
 import { composable, normalizeNewlines } from "./message.ts"
 
 /** A position as VS Code holds one: 0-based line and character. */
@@ -106,19 +107,36 @@ export function openFiles(tabs: readonly string[], active: string | undefined, r
 }
 
 /**
+ * The file in front as the page is told it (editor-front.ts reads it; this shapes it): the selection's
+ * lines, every selection's characters and — when `read` is given, the primary's characters are within the
+ * feed's ceiling and the text is not withheld — its text; else the caret's line. Plus what the block must
+ * say about the copy on disk: an untitled buffer has none, a dirty one differs. `read` is the glue's to
+ * withhold: it passes none while the human does not share the editor (frizz.shareEditorState).
+ */
+export function pageActive(front: EditorFront, file: EmbedEditorFile, read: (() => string) | undefined): NonNullable<EmbedEditorContextMessage["active"]> {
+  const flags = { ...(front.untitled ? { untitled: true as const } : {}), ...(front.dirty ? { dirty: true as const } : {}), ...(front.withheld ? { withheld: true as const } : {}) }
+  const sel = front.selection
+  const selection = sel ? editorSelection([{ start: sel.start, end: sel.end, chars: sel.primaryChars }], front.withheld ? undefined : read) : undefined
+  if (!sel || !selection) return { ...file, cursorLine: front.cursor.line + 1, ...flags }
+  return { ...file, selection: { ...selection, chars: sel.chars }, ...flags }
+}
+
+/**
  * The message, with every file in the contract's shape: a label clipped to the ceiling, a projectId only
- * when one matched, the selection's own fields and no others (its text only within the ceiling), and the
- * caret's line only where nothing is selected.
+ * when one matched, the selection's own fields and no others (its text only within the ceiling, and never
+ * from a withheld file), the caret's line only where nothing is selected, and the flags only when set.
  */
 export function editorContextMessage(active: EmbedEditorContextMessage["active"], open: readonly EmbedEditorFile[]): EmbedEditorContextMessage {
   const file = ({ path, label, projectId }: EmbedEditorFile): EmbedEditorFile => ({ path, label: label.slice(0, EDITOR_MAX_PATH), ...(projectId ? { projectId } : {}) })
-  const selection = ({ startLine, endLine, chars, text }: EmbedEditorSelection): EmbedEditorSelection =>
-    ({ startLine, endLine, chars, ...(text !== undefined && text.length <= EMBED_MAX_SELECTION_TEXT ? { text } : {}) })
+  const selection = ({ startLine, endLine, chars, text }: EmbedEditorSelection, withheld: boolean): EmbedEditorSelection =>
+    ({ startLine, endLine, chars, ...(text !== undefined && !withheld && text.length <= EMBED_MAX_SELECTION_TEXT ? { text } : {}) })
   const where = (entry: NonNullable<EmbedEditorContextMessage["active"]>) =>
-    entry.selection ? { selection: selection(entry.selection) } : entry.cursorLine !== undefined && entry.cursorLine >= 1 ? { cursorLine: entry.cursorLine } : {}
+    entry.selection ? { selection: selection(entry.selection, entry.withheld === true) } : entry.cursorLine !== undefined && entry.cursorLine >= 1 ? { cursorLine: entry.cursorLine } : {}
+  const flags = (entry: NonNullable<EmbedEditorContextMessage["active"]>) =>
+    ({ ...(entry.untitled ? { untitled: true as const } : {}), ...(entry.dirty ? { dirty: true as const } : {}), ...(entry.withheld ? { withheld: true as const } : {}) })
   return {
     type: "frizz:editor-context",
-    active: active && sendable(active.path) ? { ...file(active), ...where(active) } : null,
+    active: active && sendable(active.path) ? { ...file(active), ...where(active), ...flags(active) } : null,
     open: open.filter((entry) => sendable(entry.path)).slice(0, EMBED_MAX_OPEN_FILES).map(file),
   }
 }

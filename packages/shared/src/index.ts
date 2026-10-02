@@ -5727,6 +5727,7 @@ export const EditorSnapshotSchema = z.object({
     selection: EditorStateLines.extend({
       text: z.string().max(EDITOR_STATE_MAX_SELECTION_TEXT).optional(),
       truncated: z.literal(true).optional(),
+      withheld: z.literal(true).optional(),
     }).strict().optional(),
     visible: EditorStateLines,
   }).strict().nullable(),

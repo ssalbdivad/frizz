@@ -21,9 +21,15 @@ export function SentEditorContextChip({ editor, queued }: { editor: SentEditorCo
   const where = selection
     ? `${editor.display} · ${editor.startLine === editor.endLine ? `line ${editor.startLine}` : `lines ${editor.startLine}-${editor.endLine}`}`
     : `${editor.display}${editor.cursorLine !== undefined ? ` · line ${editor.cursorLine}` : ""}`
+  const unsaved = editor.state === "untitled" ? " (never saved)" : editor.state === "unsaved" ? " (unsaved changes)" : ""
+  // Each way a selection went, in the human's terms: quoted, named again (the thread had it already), or
+  // named without its text (too long, or a file that may hold secrets).
+  const how = editor.repeat
+    ? " (still selected; quoted in an earlier message)"
+    : editor.unquoted === "secret" ? " (its lines only: the file may hold secrets)" : editor.unquoted === "long" || (selection && editor.text === undefined) ? " (its lines, too long to quote)" : ""
   const title = selection
-    ? editor.text !== undefined ? `Sent with your message from the editor: ${where}` : `Sent with your message from the editor: ${where} (its lines, too long to quote)`
-    : `Open in the editor when you sent this: ${where}`
+    ? `Sent with your message from the editor: ${where}${unsaved}${how}`
+    : `Open in the editor when you sent this: ${where}${unsaved}`
   const body = (
     <>
       <FileCode2 aria-hidden size="1em" strokeWidth={2.25} className={MARK} />

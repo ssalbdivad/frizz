@@ -190,9 +190,14 @@ function PromptForm({
   function submitLazy() {
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: CreateLazyThreadInput = {
-      // The chips, and in an editor's sidebar what the editor has in front as the note is written down —
-      // the lazy thread starts on its note as it stands (lib/editorContext.ts outgoingMessage).
-      prompt: outgoingMessage(prompt, stagedItems(promptKey), projectDir, true).trim(),
+      // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
+      // A lazy thread is written down for later. The block says what the editor showed "when they sent
+      // this"; baked into the note it would be read hours later as the moment of launch, and it sat in an
+      // editable note the human never typed. Attached at launch instead, it would describe whatever the
+      // editor happens to show then — unrelated to a note written earlier, more often than not — from a box
+      // (LazyThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
+      // If the note means the editor ("fix this"), the agent reads it then through its editor tool.
+      prompt: outgoingMessage(prompt, stagedItems(promptKey), projectDir, false).trim(),
       // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,

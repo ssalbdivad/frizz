@@ -40,7 +40,7 @@ const { store } = await import("../store.ts")
 const { composePending } = await import("./editorBridge.ts")
 const { runHostCommand } = await import("./embedCommand.ts")
 const { reportRoute, repostRoute } = await import("./embedRoute.ts")
-const { addEditorContextByChord, setEditorContext } = await import("./editorContext.ts")
+const { hostKeyChord } = await import("./embed.ts")
 
 test("the address's embed mode is kept for the frame's session", () => {
   assert.equal(embedded(), true)
@@ -92,20 +92,29 @@ test("the title row's buttons are the app's own doors", () => {
   reset()
 })
 
-test("⌘L in the page adds the editor's selection, and with a thread open sends it to that thread's reply box", () => {
-  // The caret is in no box here; the class is only what the check for one asks of the globals.
-  Object.assign(globalThis, { HTMLTextAreaElement: globalThis.HTMLTextAreaElement ?? class {} })
-  setEditorContext({ type: "frizz:editor-context", active: { path: "/repo/a.ts", label: "a.ts", selection: { startLine: 2, endLine: 3, chars: 20 } }, open: [] })
-  // A thread open and the caret outside its reply box — where ⌘I is Thread details — ⌘L asks for the
-  // selection with no box of its own: the host answers "front", the open thread's reply box.
-  posted.length = 0
-  assert.equal(addEditorContextByChord(null, true, false), "added")
-  assert.deepEqual(posted, [{ type: "frizz:add-context", what: "selection" }])
-  // Nothing in front of the editor: nothing to add, and nothing asked.
-  setEditorContext({ type: "frizz:editor-context", active: null, open: [] })
-  posted.length = 0
-  assert.equal(addEditorContextByChord(null, true, false), "nothing")
-  assert.deepEqual(posted, [])
+test("⌘L in the page goes back to the editor: forwarded to VS Code like its own chords, never taken here", () => {
+  const key = (over: Partial<KeyboardEvent>) =>
+    ({ key: "l", code: "KeyL", ctrlKey: true, metaKey: false, shiftKey: false, altKey: false, defaultPrevented: false, repeat: false, isComposing: false, ...over }) as KeyboardEvent
+  // The page forwards it (the extension maps it to "focus the editor": packages/vscode embed.ts CHORDS)…
+  assert.deepEqual(hostKeyChord(key({})), { type: "frizz:key", key: "l", code: "KeyL", ctrl: true, meta: false, shift: false, alt: false })
+  assert.deepEqual(hostKeyChord(key({ ctrlKey: false, metaKey: true })), { type: "frizz:key", key: "l", code: "KeyL", ctrl: false, meta: true, shift: false, alt: false })
+  // …unless a box here took it first.
+  assert.equal(hostKeyChord(key({ defaultPrevented: true })), null)
+})
+
+test("the editor's Ctrl+L with nothing selected puts the caret in the prompt box in front", () => {
+  const reset = () => Object.assign(store, { showSettings: false, showPalette: false, showShortcuts: false, showNewThread: false, drawers: [] })
+  reset()
+  // No box rendered in this test's document: the chord still ends in a prompt box — `c`'s door, the dialog.
+  runHostCommand("prompt")
+  assert.equal(store.showNewThread, true)
+  // Over an open thread with no reply box to take it, the same; the drawer stays where it was.
+  reset()
+  store.drawers = [{ id: 4, kind: "thread", slug: "a", closing: false, openedAt: 4 }] as typeof store.drawers
+  store.showPalette = true
+  runHostCommand("prompt")
+  assert.deepEqual([store.showNewThread, store.showPalette, store.drawers.length], [true, false, 1])
+  reset()
 })
 
 test("the title row hears the view only when it changes, and again after ready", () => {
