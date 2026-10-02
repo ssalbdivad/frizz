@@ -328,29 +328,78 @@ async function clickHandle(handle: ElementHandle | null, what: string): Promise<
   }, x, y).catch(() => null)
   clicks.push({ at: Date.now(), what, x: Math.round(x), y: Math.round(y), ...under })
   if (clicks.length > 12) clicks.shift()
-  // A press meant for the page that the WORKBENCH receives, aimed at the webview's iframe element itself, is
-  // the browser's input routing gone stale (see capture()), not anything the page did — said as that, here,
+  // The pointer goes there first, as a human's does, and the press goes only once the browser routes the
+  // pointer INTO the page there (see routeIntoWebview); one the workbench still gets is said as that, here,
   // rather than as a check's "nothing happened" three steps later.
   const overWebview = under?.hit?.startsWith("iframe.webview") === true
-  if (overWebview) await page.evaluate(() => {
-    const w = window as unknown as { __misrouted?: string | null; __misroutedWatch?: (event: Event) => void }
-    w.__misrouted = null
-    w.__misroutedWatch = (event) => {
-      if ((event.target as Element | null)?.matches?.("iframe.webview")) w.__misrouted = `${(event as MouseEvent).clientX},${(event as MouseEvent).clientY}`
-    }
-    document.addEventListener("pointerdown", w.__misroutedWatch, true)
-  }).catch(() => undefined)
+  if (overWebview) await routeIntoWebview(x, y, what)
   await page.mouse.click(x, y)
   if (!overWebview) return
-  const misrouted = await page.evaluate(() => {
-    const w = window as unknown as { __misrouted?: string | null; __misroutedWatch?: (event: Event) => void }
-    if (w.__misroutedWatch) document.removeEventListener("pointerdown", w.__misroutedWatch, true)
-    return w.__misrouted ?? null
-  }).catch(() => null)
+  const misrouted = await misroutedSince()
   if (misrouted) {
     ;((notes.misroutedPresses ??= []) as unknown[]).push({ what, at: misrouted })
-    throw new Error(`${what}: the press went to the workbench's webview element, not into the page — the browser's routing to the webview's frames is stale (a DevTools capture's emulation; see capture())`)
+    throw new Error(`${what}: the press went to the workbench's webview element, not into the page — the browser's routing to the webview's frames is stale (see routeIntoWebview)`)
   }
+}
+
+/**
+ * STALE ROUTING INTO THE WEBVIEW — a pointer event over the sidebar that the WORKBENCH receives, aimed at
+ * the `iframe.webview` element itself, never reaches the page: the browser hit-tested the webview's nested
+ * out-of-process frames from stale data and handed the event to their parent. The press's default action
+ * then focuses the webview, so a click reads as "focus moved to the sidebar and nothing happened".
+ *
+ * DevTools screenshots cause it. A capture with a clip runs under a temporary device emulation, and
+ * restoring it leaves that hit-testing stale. Driven in real VS Code 1.140 (2026-10-02, the thread's
+ * first-click.md): c15's 6x capture of the open menu, then its item click, misrouted 6 runs of 6 — and
+ * every later press with it (4 more over 5s, the webview focused by then); without that capture, or at
+ * 1x, 3 of 3 passed. c10's click into the reply box right after a 2x shot misrouted once even with the
+ * re-sync below. Before this was looked for, a misrouted click into a TEXT BOX still passed (the press
+ * focused the webview, and the page puts its last focused box back), so it hid. Not a page bug and not
+ * a human's: no human's mouse goes through DevTools emulation.
+ *
+ * So the pointer moves to the press's point, and the press waits until the workbench no longer gets the
+ * move. Between tries, frames are re-sent their geometry: SETTING an empty device-metrics override and
+ * clearing it (a bare clear is a no-op when none is set, and did not help, 1 run of 1; this did, 1 of 1).
+ * Each settle that needed a retry is in results.json's `routeSettles`.
+ */
+async function routeIntoWebview(x: number, y: number, what: string): Promise<void> {
+  const started = Date.now()
+  let frames: Record<string, number> | undefined
+  for (let attempt = 0; attempt < 16; attempt++) {
+    await armMisrouteWatch()
+    await page.mouse.move(x + (attempt % 2), y)
+    await sleep(60)
+    const misrouted = await misroutedSince()
+    if (!misrouted) {
+      if (attempt > 0) ((notes.routeSettles ??= []) as unknown[]).push({ what, tries: attempt + 1, ms: Date.now() - started, frames })
+      return armMisrouteWatch()
+    }
+    if (attempt === 0) frames = await framesAlive()
+    if (attempt % 2 === 1) await resyncFrames()
+    await sleep(100)
+  }
+  ;((notes.routeSettles ??= []) as unknown[]).push({ what, tries: 16, ms: Date.now() - started, settled: false, frames, framesNow: await framesAlive() })
+  throw new Error(`${what}: for ${Date.now() - started}ms the pointer over the sidebar went to the workbench's webview element, not into the page — the browser's routing to the webview's frames is stale (see routeIntoWebview)`)
+}
+
+/** Watch the workbench for pointer events aimed at a webview's iframe element (the stale routing above). */
+const armMisrouteWatch = () =>
+  page.evaluate(() => {
+    const w = window as unknown as { __misrouted?: string | null; __misroutedWatch?: (event: Event) => void }
+    w.__misrouted = null
+    if (w.__misroutedWatch) return
+    w.__misroutedWatch = (event) => {
+      if ((event.target as Element | null)?.matches?.("iframe.webview")) w.__misrouted = `${event.type} ${(event as MouseEvent).clientX},${(event as MouseEvent).clientY}`
+    }
+    for (const type of ["pointermove", "pointerdown"]) document.addEventListener(type, w.__misroutedWatch, true)
+  }).catch(() => undefined)
+
+const misroutedSince = () => page.evaluate(() => (window as unknown as { __misrouted?: string | null }).__misrouted ?? null).catch(() => null)
+
+/** Re-send every frame its geometry: an empty device-metrics override, set and cleared (see routeIntoWebview). */
+async function resyncFrames(): Promise<void> {
+  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 0, height: 0, deviceScaleFactor: 0, mobile: false }).catch(() => undefined)
+  await cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => undefined)
 }
 const clicks: Record<string, unknown>[] = []
 
@@ -482,6 +531,26 @@ const drawerLayers = () =>
     const style = getComputedStyle(el)
     return { id: el.dataset.drawerLayer, x: Math.round(r.x), width: Math.round(r.width), state: el.dataset.state ?? null, shown: /translate-x-0/u.test(el.className), transform: style.transform, translate: style.translate, animations: el.getAnimations().map((a) => ({ kind: a.constructor.name, property: (a as CSSTransition).transitionProperty ?? null, playState: a.playState, currentTime: a.currentTime, pending: a.pending, startTime: a.startTime, timeline: document.timeline.currentTime })), visibility: document.visibilityState }
   }))
+
+/**
+ * Whether each document from the page up is RENDERING: rAF callbacks run only in a frame whose widget is
+ * shown and producing frames. ms for five frames, or -1 when none came within 1s (a hidden or stalled
+ * widget: its transitions stay pending, and the browser hit-tests it from stale data).
+ */
+async function framesAlive(): Promise<Record<string, number>> {
+  const probe = () => new Promise<number>((resolve) => {
+    const t0 = performance.now()
+    let n = 0
+    const tick = () => (++n < 5 ? requestAnimationFrame(tick) : resolve(Math.round(performance.now() - t0)))
+    requestAnimationFrame(tick)
+    setTimeout(() => resolve(-1), 1_000)
+  })
+  const out: Record<string, number> = {}
+  await Promise.all([...tracedFrames(), { name: "workbench", frame: page.mainFrame() }].map(async ({ name, frame }) => {
+    out[name] = await frame.evaluate(probe).catch(() => -2)
+  }))
+  return out
+}
 
 /** VS Code's title row over the sidebar: what it reads and the buttons it shows. */
 const titleRow = () =>
@@ -700,24 +769,11 @@ async function clearBox(surface: "chatComposer" | "newComposer"): Promise<void> 
 
 // ── screenshots ───────────────────────────────────────────────────────────────────────────────────────
 
-/**
- * A screenshot through DevTools — and, after it, the input routing it can break put right.
- *
- * A capture with a CLIP is taken under a temporary device emulation (Chromium scales the viewport to the
- * clip), and restoring it can leave the browser's hit-testing of the webview's nested out-of-process
- * frames stale: every press over the sidebar then goes to the WORKBENCH, aimed at the `iframe.webview`
- * element itself, and never reaches the page — its default action focuses the webview, so the click looks
- * like "focus moved to the sidebar and nothing happened". Driven in real VS Code 1.140 (2026-10-02, the
- * thread's first-click.md): c15's 6x capture of the open menu, then the item click, misrouted 6 runs of 6,
- * every later press with it (4 more over 5s, the frame focused by then); without that capture, or at 1x,
- * 3 of 3 passed. Not a page bug and not a human's: no human's mouse goes through DevTools emulation.
- * Clearing an override that is not set is a no-op and did not help (1 of 1 still failed); SETTING an
- * empty one and clearing it re-sends the frames their geometry, and did (1 of 1, and the suites since).
- */
+/** A screenshot through DevTools; the frames' geometry re-sent after it (routeIntoWebview says why). */
 async function capture(file: string, clip?: { x: number; y: number; width: number; height: number }, scale = 1): Promise<Buffer> {
   const { data } = await cdp.send("Page.captureScreenshot", { format: "png", ...(clip ? { clip: { ...clip, scale } } : {}), captureBeyondViewport: false })
-  await cdp.send("Emulation.setDeviceMetricsOverride", { width: 0, height: 0, deviceScaleFactor: 0, mobile: false }).catch(() => undefined)
-  await cdp.send("Emulation.clearDeviceMetricsOverride").catch(() => undefined)
+  await resyncFrames()
+  if (process.env.FRIZZ_E2E_FRAMES_AFTER_CAPTURE) ((notes.framesAfterCapture ??= []) as unknown[]).push({ file: file.split("/").pop(), ...(await framesAlive()) })
   const png = Buffer.from(data, "base64")
   if (file) {
     writeFileSync(file, png)
@@ -1297,6 +1353,7 @@ try {
     await shot("c4-transcript-chip-w300")
     // The chip unfolds its quote, as in the browser.
     notes.layersBeforeChip = await drawerLayers()
+    notes.framesBeforeChip = await framesAlive()
     notes.geometryBeforeChip = await frameGeometry()
     await clickTextInPage("button[aria-expanded]", "sample.ts:2-3")
     const unfolded = await until(async () => (await inPage(() => document.body.innerText.includes("lines 2-3"))), 3_000)
@@ -2109,6 +2166,7 @@ try {
       return state?.value.includes("@problems") ? state : undefined
     }, 8_000).catch(async () => box("newComposer"))
     if (!withProblems?.value.includes("@problems")) notes.extrasClick = {
+      frames: await framesAlive(),
       clicks: [...clicks],
       focus: await workbenchFocus(),
       menuOpen: await inPage(() => document.querySelector('[data-editor-extra="problems"]')?.closest("[role=menu]") !== null),
