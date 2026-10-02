@@ -364,7 +364,14 @@ export function useViewportLock(slots: string, keyOf: (slot: HTMLElement) => str
     const held = anchor.current
     // Restoring a reload holds the page on its own card (take), which this would fight.
     if (!held || lockSuspendCount > 0 || restoring.current) return
-    const scrolled = pageScrollY() - held.scrollY
+    // THE BROWSER'S CLAMP IS NOT A SCROLL. A page at its end that gets shorter has its offset clamped to the
+    // new end by the browser, and that clamp already holds everything below the shrink where it was; read as
+    // the human's scroll, it was undone a second time, and the page scrolled UP by the shrink — measured
+    // 2026-10-02 on the 60-card fixture at its end, a card above the reader built 111px shorter than its
+    // guess left a 111px gap under the last card, for good. So the offset the anchor was taken at counts
+    // only as far as the page still reaches. (A drawer pins the page instead of scrolling it: nothing clamps.)
+    const reach = isPageScrollLocked() ? held.scrollY : Math.min(held.scrollY, Math.max(0, (document.scrollingElement ?? document.documentElement).scrollHeight - window.innerHeight))
+    const scrolled = pageScrollY() - reach
     let delta = 0
     if (held.node.isConnected) delta = held.node.getBoundingClientRect().top - (held.top - scrolled)
     else if (held.slot.isConnected) delta = held.slot.getBoundingClientRect().top - (held.slotTop - scrolled)
