@@ -92,18 +92,28 @@ export function spawnArtifactBuild(options: SpawnArtifactBuildOptions): Artifact
     }
   );
   let settled = false;
-  const cancel = () => {
+  const signalGroup = (signal: NodeJS.Signals) => {
     if (settled || child.exitCode !== null || child.signalCode !== null || child.pid === undefined) return;
     try {
       if (process.platform === "win32") child.kill();
-      else process.kill(-child.pid, "SIGKILL");
+      else process.kill(-child.pid, signal);
     } catch {
       // Already gone.
     }
   };
+  // SIGTERM first, never a bare SIGKILL: `nub run` puts each script in a process group of its own,
+  // so `tsc` and vite are NOT in the job's group, and the only way to reach them is nub forwarding
+  // the signal — which SIGKILL never gives it a chance to do. Measured on a real sandbox: a group
+  // SIGKILL left `tsc -b` running after the launcher had exited.
+  const cancel = () => {
+    signalGroup("SIGTERM");
+    setTimeout(() => signalGroup("SIGKILL"), 5_000).unref();
+  };
   // A launcher that exits mid-build (a stop signal, the drain finishing) must not leave a detached
-  // build behind writing into the artifact cache.
-  process.once("exit", cancel);
+  // build behind writing into the artifact cache. Only the SIGTERM can be sent from `exit`; nub
+  // forwards it and the job's own default action is to die.
+  const onExit = () => signalGroup("SIGTERM");
+  process.once("exit", onExit);
   const result = new Promise<{ candidate: string; previous?: string }>((resolve, reject) => {
     let stdout = "";
     let stderr = "";
@@ -132,12 +142,12 @@ export function spawnArtifactBuild(options: SpawnArtifactBuildOptions): Artifact
     });
     child.once("error", (error) => {
       settled = true;
-      process.removeListener("exit", cancel);
+      process.removeListener("exit", onExit);
       reject(error);
     });
     child.once("close", (code, signal) => {
       settled = true;
-      process.removeListener("exit", cancel);
+      process.removeListener("exit", onExit);
       if (outcome?.ok) resolve({ candidate: outcome.candidate, ...(outcome.previous ? { previous: outcome.previous } : {}) });
       else if (outcome) reject(new Error(outcome.message));
       else

@@ -68,10 +68,13 @@ test("a synchronous build in the job leaves the parent's event loop free, and re
 
 test("cancel kills the job and the build tools it started", { skip: process.platform === "win32" }, async () => {
   const pidFile = join(tmpdir(), `frizz-build-job-grandchild-${process.pid}`);
-  // The grandchild stands in for `nub run typecheck`: a process the job started and blocks on.
+  // The grandchild stands in for `tsc` under `nub run typecheck`: nub starts the script in a process
+  // group of its OWN and forwards signals to it, so a signal to the job's group reaches the tool only
+  // through that forwarding. Mirror both halves.
   const { entry, dir } = fixture(
     `import { spawn } from "node:child_process";\nimport { writeFileSync } from "node:fs";\n` +
-      `const sleeper = spawn("sleep", ["60"], { stdio: "ignore" });\n` +
+      `const sleeper = spawn("sleep", ["60"], { stdio: "ignore", detached: true });\n` +
+      `process.on("SIGTERM", () => { process.kill(-sleeper.pid!, "SIGTERM"); process.exit(143); });\n` +
       `writeFileSync(${JSON.stringify(pidFile)}, String(sleeper.pid));\n` +
       `setInterval(() => {}, 1000);\n`
   );
@@ -85,7 +88,7 @@ test("cancel kills the job and the build tools it started", { skip: process.plat
     }
     const grandchild = Number(readFileSync(pidFile, "utf8"));
     handle.cancel();
-    await assert.rejects(handle.result, /exited on SIGKILL without a result/);
+    await assert.rejects(handle.result, /exited with code 143 without a result/);
     const alive = () => {
       try {
         process.kill(grandchild, 0);
