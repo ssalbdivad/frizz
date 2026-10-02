@@ -1,10 +1,10 @@
-import { isAnonymousClaimName } from "@frizz/shared";
 import { renderQrLines } from "@frizz/server/qr";
 import type { AccessLink } from "./access-pane.ts";
 import { ALT_SCREEN_OFF, ALT_SCREEN_ON, CLEAR, DIM, HIDE_CURSOR, RESET, SHOW_CURSOR } from "./access-pane.ts";
-import { type CloudConfig, describeCloudConfig, isClaimedConfig, isExternalConfig, normalizeHostname } from "./cloud.ts";
+import { type CloudConfig, describeCloudConfig } from "./cloud.ts";
 import type { Pane } from "./pane-host.ts";
 import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-detect.ts";
+import { applyRemoteChoice, kindOf, type RemoteChoice, type RemoteKind } from "./remote-setup.ts";
 
 /**
  * "Press R to reach this board from a phone or another machine" — the whole remote-access setup, in
@@ -22,7 +22,7 @@ import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-det
  * host's) is heard.
  */
 
-export type RemoteKind = "private" | "frizz" | "cloudflare" | "tailscale" | "other" | "off";
+export type { RemoteKind } from "./remote-setup.ts";
 
 export interface RemotePaneOptions {
   port: number;
@@ -87,13 +87,6 @@ interface Field {
 
 /** The setups that ask for anything. "off" clears and "private" claims — neither has a form. */
 type FormKind = Exclude<RemoteKind, "off" | "private">;
-
-function kindOf(config: CloudConfig | null): RemoteKind {
-  if (!config) return "off";
-  if (isClaimedConfig(config)) return isAnonymousClaimName(config.claim!) ? "private" : "frizz";
-  if (isExternalConfig(config)) return config.provider === "tailscale" ? "tailscale" : "other";
-  return "cloudflare";
-}
 
 function wrap(text: string, width = 74): string[] {
   const lines: string[] = [];
@@ -297,68 +290,43 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
 
   const valueOf = (field: Field): string => field.value || field.placeholder || "";
 
-  const submit = async (form: Extract<Screen, { name: "form" }>) => {
-    const back: Screen = form;
+  // Every change goes through applyRemoteChoice (remote-setup.ts), the same path Settings → Remote
+  // access takes, so the two surfaces cannot drift on what a choice means.
+  const run = async (choice: RemoteChoice, back: Screen) => {
     try {
-      let next: CloudConfig | null;
-      let justClaimed = false;
-      if (form.kind === "frizz") {
-        const name = valueOf(form.fields[0]!).trim();
-        if (!name) throw new Error("a name is needed");
-        screen = { name: "busy", message: `claiming ${name}.frizz.sh…` };
-        paint();
-        next = await options.claim(name);
-        justClaimed = true;
-      } else if (form.kind === "cloudflare") {
-        const hostname = normalizeHostname(valueOf(form.fields[0]!));
-        const tunnel = valueOf(form.fields[1]!).trim();
-        if (!tunnel) throw new Error("the tunnel's name is needed");
-        next = { hostname, tunnel };
-      } else {
-        const hostname = normalizeHostname(valueOf(form.fields[0]!));
-        next = { hostname, serve: "external", provider: form.kind === "tailscale" ? "tailscale" : "other" };
-      }
-      screen = { name: "busy", message: `serving ${next.hostname}…` };
-      paint();
-      await options.apply(next, { justClaimed });
+      const next = await applyRemoteChoice(choice, {
+        apply: options.apply,
+        claim: options.claim,
+        progress: (message) => {
+          screen = { name: "busy", message };
+          paint();
+        },
+      });
       options.onChanged?.(next);
-      screen = { name: "done", message: `Serving https://${next.hostname} (${describeCloudConfig(next)}).`, link: options.issueLink(), config: next };
+      screen = next
+        ? { name: "done", message: `Serving https://${next.hostname} (${describeCloudConfig(next)}).`, link: options.issueLink(), config: next }
+        : { name: "done", message: "Loopback only. This board is reachable from this machine alone.", link: null, config: null };
     } catch (error) {
       screen = { name: "error", message: error instanceof Error ? error.message : String(error), back };
     }
     paint();
+  };
+
+  const submit = (form: Extract<Screen, { name: "form" }>) => {
+    const first = valueOf(form.fields[0]!);
+    const choice: RemoteChoice =
+      form.kind === "frizz"
+        ? { kind: "frizz", name: first }
+        : form.kind === "cloudflare"
+          ? { kind: "cloudflare", hostname: first, tunnel: valueOf(form.fields[1]!) }
+          : { kind: form.kind, origin: first };
+    return run(choice, form);
   };
 
   // No form and nothing to ask: the name is minted, so choosing this IS the claim.
-  const claimPrivate = async () => {
-    const back: Screen = { name: "menu", index: 0 };
-    screen = { name: "busy", message: "claiming a private name on frizz.sh…" };
-    paint();
-    try {
-      const next = await options.claim("");
-      screen = { name: "busy", message: `serving ${next.hostname}…` };
-      paint();
-      await options.apply(next, { justClaimed: true });
-      options.onChanged?.(next);
-      screen = { name: "done", message: `Serving https://${next.hostname} (${describeCloudConfig(next)}).`, link: options.issueLink(), config: next };
-    } catch (error) {
-      screen = { name: "error", message: error instanceof Error ? error.message : String(error), back };
-    }
-    paint();
-  };
+  const claimPrivate = () => run({ kind: "private" }, { name: "menu", index: 0 });
 
-  const turnOff = async () => {
-    screen = { name: "busy", message: "back to loopback only…" };
-    paint();
-    try {
-      await options.apply(null);
-      options.onChanged?.(null);
-      screen = { name: "done", message: "Loopback only. This board is reachable from this machine alone.", link: null, config: null };
-    } catch (error) {
-      screen = { name: "error", message: error instanceof Error ? error.message : String(error), back: { name: "menu", index: CHOICES.length - 1 } };
-    }
-    paint();
-  };
+  const turnOff = () => run({ kind: "off" }, { name: "menu", index: CHOICES.length - 1 });
 
   return {
     open() {
