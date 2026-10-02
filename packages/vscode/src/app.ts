@@ -6,9 +6,10 @@
 // Copy follows the repo's rules: sentence case, what the human can do, never the machinery.
 
 import { randomUUID } from "node:crypto"
+import { realpathSync } from "node:fs"
 import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
-import { basename, dirname } from "node:path"
+import { basename, dirname, resolve } from "node:path"
 import type * as vscode from "vscode"
 import type { EditorComposeInput, EditorComposed, EditorOpen, EditorProject } from "@frizz/shared/editor-protocol"
 import { EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage } from "@frizz/shared/embed-protocol"
@@ -24,7 +25,7 @@ import { projectForPath, workspaceProjects } from "./projects.ts"
 import { describeRpcError, dispatchProfile, FrizzRpc, withRetry } from "./rpc.ts"
 import { registerSidebar, type SidebarSnapshot } from "./sidebar.ts"
 import { notConnectedMessage, statusView } from "./status.ts"
-import { findThread, pickerThreads, threadHandleOf, threadItem, displayTitle, type PickerThread } from "./threads.ts"
+import { findThread, pickerThreads, threadHandleOf, threadItem, displayTitle, windowThread, windowThreadFirst, type PickerThread } from "./threads.ts"
 
 type Vscode = typeof vscode
 
@@ -232,6 +233,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       renderStatus()
       sidebar.refresh()
       feed.refresh()
+      if (sidebar.ready() && !windowThreadCheck) windowThreadCheck = openWindowThread()
     },
     status(next) {
       status = next
@@ -244,13 +246,19 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
 
   async function openFromFrizz(message: EditorOpen): Promise<OpenResult> {
-    let entry
-    try {
-      entry = await stat(message.path)
-    } catch {
-      return { ok: false, error: `${message.path} doesn't exist.` }
+    let path = message.path
+    let entry = await stat(path).catch(() => undefined)
+    if (!entry) {
+      // A link into a thread's worktree that Done has since removed: Frizz names the main checkout's copy,
+      // which the work was merged into (settleMissing). Asked only for a path that is not there, so an
+      // ordinary open never waits on the server.
+      const settled = await settleMissing(path)
+      entry = settled ? await stat(settled).catch(() => undefined) : undefined
+      if (!entry || !settled) return { ok: false, error: `${message.path} doesn't exist.` }
+      log.info(`${message.path} is gone; opening the main checkout's copy, ${settled}.`)
+      path = settled
     }
-    const uri = api.Uri.file(message.path)
+    const uri = api.Uri.file(path)
     if (entry.isDirectory()) {
       // In the explorer when the window has it; a folder outside every one of its folders (a thread's
       // worktree elsewhere, another project) has nothing to reveal it in, and revealing it did nothing
@@ -284,6 +292,74 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     }
     await focusWindow()
     return { ok: true }
+  }
+
+  // ── the window's own thread ──────────────────────────────────────────────────────────────────────
+  // A window whose workspace folder IS a thread's worktree opens the sidebar on that thread (threads.ts
+  // windowThread says why, and why here rather than in the frame's address). Once per page load — a page
+  // the human has moved about in stays where they put it — and BEFORE anything else this extension posts
+  // to a page that just came up: every wait for the page (`waitSidebarReady`) waits for this too, or a
+  // chip added by the very command that opened the sidebar would land in the queue's box and then vanish
+  // under the thread opening over it.
+  let windowThreadCheck: Promise<void> | undefined
+  sidebar.onReady((ready) => {
+    if (!ready) windowThreadCheck = undefined
+    else windowThreadCheck ??= openWindowThread()
+  })
+
+  /** Two folders are one when their real paths are (a symlinked spelling of a worktree is that worktree). */
+  function sameFolder(a: string, b: string): boolean {
+    const real = (path: string) => {
+      try { return realpathSync.native(path) } catch { return resolve(path) }
+    }
+    return real(a) === real(b)
+  }
+
+  async function openWindowThread(): Promise<void> {
+    const origin = connection.origin ?? found?.origin
+    const project = workspaceProjects(folders(), projects)[0]
+    // Frizz's project list has not arrived yet: try again when it does (the `projects` callback).
+    if (!origin || !project) {
+      windowThreadCheck = undefined
+      return
+    }
+    let thread: PickerThread | undefined
+    try {
+      thread = windowThread((await new FrizzRpc(origin).query(project.id, "board", undefined, 5_000)).threads, folders(), sameFolder)
+    } catch (error) {
+      log.info(`Could not read the board to find this window's thread: ${(error as Error).message}`)
+      return
+    }
+    if (!thread || !sidebar.ready()) return
+    log.info(`This window is the worktree of thread ${thread.id}; the sidebar opens on it.`)
+    await sidebar.navigate({ thread: thread.id, project: project.slug })
+  }
+
+  /** The sidebar's page is ready, and has been taken to this window's thread when it has one. */
+  async function waitSidebarReady(ms: number): Promise<boolean> {
+    if (!(await sidebar.waitReady(ms))) return false
+    const check = windowThreadCheck
+    if (check) await Promise.race([check, new Promise((settle) => setTimeout(settle, SIDEBAR_COMPOSE_MS))])
+    return true
+  }
+
+  /**
+   * The main checkout's copy of a file in a worktree that is gone (the server's `settleLocalPath`), or
+   * undefined. A file link the sidebar's page hands over (`frizz:open-file`) comes straight here, not
+   * through Frizz's opener, which settles its own; an agent that worked in `.frizz/worktrees/<slug>` wrote
+   * its links there, and Done removes the worktree. Asked of the project the path lies in, else the
+   * window's; a Frizz too old for the procedure, or no answer within a moment, leaves the path missing.
+   */
+  async function settleMissing(path: string): Promise<string | undefined> {
+    const origin = connection.origin ?? found?.origin
+    const project = projectForPath(path, projects)?.project ?? windowProject()
+    if (!origin || !project) return undefined
+    try {
+      const settled = (await new FrizzRpc(origin).query(project.id, "settleLocalPath", { path }, 3_000)).path
+      return settled && settled !== path ? settled : undefined
+    } catch {
+      return undefined
+    }
   }
 
   // ── the window's own changes ─────────────────────────────────────────────────────────────────────
@@ -418,7 +494,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
 
   /** A selection into the sidebar's page (embed.ts composeInSidebar), as the server path's answer; undefined to fall back. */
   async function composeInSidebar(input: Omit<EmbedComposeMessage, "type" | "id">, preserveFocus: boolean): Promise<EditorComposed | undefined> {
-    const result = await composeVia(sidebar, input, { preserveFocus, readyMs: SIDEBAR_READY_MS, composeMs: SIDEBAR_COMPOSE_MS })
+    const result = await composeVia({ reveal: (keep) => sidebar.reveal(keep), waitReady: waitSidebarReady, compose: (item, ms) => sidebar.compose(item, ms) }, input, { preserveFocus, readyMs: SIDEBAR_READY_MS, composeMs: SIDEBAR_COMPOSE_MS })
     if (result.ok) return { t: "composed", id: result.id, ok: true }
     log.warn(result.why)
     sidebarWhy = result.why
@@ -503,6 +579,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     let threads: (PickerThread & { sessionId: string })[]
     try {
       threads = pickerThreads((await rpc.query(project.id, "board")).threads)
+      // A window on a thread's worktree offers that thread first (threads.ts windowThread).
+      threads = windowThreadFirst(threads, windowThread(threads, folders(), sameFolder))
     } catch (error) {
       void api.window.showErrorMessage(describeRpcError(error))
       return undefined
@@ -542,7 +620,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
         if (composed) return { slug: thread.id, composed }
       } else {
         await sidebar.reveal(false)
-        if ((await sidebar.waitReady(SIDEBAR_READY_MS)) && (await sidebar.navigate(to))) return { slug: thread.id }
+        if ((await waitSidebarReady(SIDEBAR_READY_MS)) && (await sidebar.navigate(to))) return { slug: thread.id }
       }
       log.info("Sending from an input box instead.")
     }
@@ -767,7 +845,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
    */
   async function sidebarCommand(command: EmbedCommandMessage["command"]): Promise<boolean> {
     await sidebar.reveal(false)
-    if ((await sidebar.waitReady(SIDEBAR_READY_MS)) && (await sidebar.post({ type: "frizz:command", command }))) return true
+    if ((await waitSidebarReady(SIDEBAR_READY_MS)) && (await sidebar.post({ type: "frizz:command", command }))) return true
     log.warn(`The sidebar's page isn't ready, so ${command} did nothing.`)
     return false
   }

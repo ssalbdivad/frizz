@@ -6,7 +6,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { worktreeAddTargets } from "../../../cc-worker/hooks/worktree.mjs"
-import { regenerable, removeThreadWorktrees, worktreesAddedBy } from "./worktree-cleanup.ts"
+import { regenerable, removableWorktrees, removeThreadWorktrees, unsavedWorktreeRefusal, worktreesAddedBy } from "./worktree-cleanup.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const hooks = join(here, "../../../cc-worker/hooks")
@@ -226,6 +226,52 @@ test("cleanup keeps a worktree another live thread is working in", async () => {
   // The worktree itself, exactly, counts as inside it.
   const exact = await removeThreadWorktrees([tree("shared")], undefined, () => [{ dir: tree("shared"), by: "t" }])
   assert.equal(exact.kept.length, 1)
+})
+
+// Git cannot see a buffer: a file edited in VS Code and not saved reads as clean, so without check 0 a
+// clean worktree goes out from under the tab — every other check passes.
+test("cleanup keeps a worktree an editor holds unsaved changes in, before running anything else", async () => {
+  const { dir, git, tree } = cleanupRepo()
+  git(dir, "worktree", "add", "-q", tree("edited"), "-b", "edited")
+  git(dir, "worktree", "add", "-q", tree("idle"), "-b", "idle")
+  mkdirSync(join(tree("edited"), "src"))
+  const asked: string[] = []
+  let inUseAsked = 0
+  const unsaved = (folder: string) => {
+    asked.push(folder)
+    return folder === tree("edited") ? [join(tree("edited"), "a.txt"), join(tree("edited"), "src", "b.ts")] : []
+  }
+  const { removed, kept } = await removeThreadWorktrees([tree("edited"), tree("idle")], undefined, () => (inUseAsked++, []), unsaved)
+  assert.deepEqual(kept, [{ path: tree("edited"), reason: "an editor holds unsaved changes in it: a.txt, src/b.ts" }])
+  assert.ok(existsSync(join(tree("edited"), "a.txt")), "negative control below: without the answer this worktree goes")
+  assert.deepEqual(removed, [tree("idle")])
+  assert.deepEqual(asked, [tree("edited"), tree("idle")])
+  assert.equal(inUseAsked, 1, "the edited worktree never got as far as the live-thread check")
+
+  const again = await removeThreadWorktrees([tree("edited")], undefined)
+  assert.deepEqual(again.removed, [tree("edited")], "the same worktree with no editor answer is removed: the check is what kept it")
+})
+
+test("removableWorktrees: only an existing linked worktree inside the worktree folder", () => {
+  const { dir, parent, git, tree } = cleanupRepo()
+  git(dir, "worktree", "add", "-q", tree("inside"), "-b", "inside")
+  const sibling = join(parent, "elsewhere", "sibling")
+  git(dir, "worktree", "add", "-q", sibling, "-b", "sibling")
+  assert.deepEqual(removableWorktrees([tree("inside"), tree("inside"), sibling, dir, tree("never-made"), join(dir, "plain")], undefined), [tree("inside")])
+  // The setting moves the folder, and with it what Done would remove.
+  assert.deepEqual(removableWorktrees([tree("inside"), sibling], join(parent, "elsewhere")), [sibling])
+})
+
+test("Done's refusal says what to do first, in the editor's own name, and fits the toast", () => {
+  const vscode = (path: string) => ({ path, app: "Visual Studio Code", kind: "vscode" })
+  assert.equal(unsavedWorktreeRefusal([vscode("/r/.frizz/worktrees/x/src/sample.ts")]), "Save or close sample.ts in VS Code first: it has unsaved changes.")
+  assert.equal(unsavedWorktreeRefusal([vscode("/w/a.ts"), vscode("/w/lib/b.ts")]), "Save or close a.ts and b.ts in VS Code first: they have unsaved changes.")
+  assert.equal(unsavedWorktreeRefusal([vscode("/w/a.ts"), vscode("/w/b.ts"), vscode("/w/c.ts")]), "Save or close a.ts and 2 more in VS Code first: they have unsaved changes.")
+  // The same name twice (two folders' index.ts) is one name, but both files still count as "them".
+  assert.equal(unsavedWorktreeRefusal([{ path: "/w/x/index.ts", app: "Cursor", kind: "cursor" }]), "Save or close index.ts in Cursor first: it has unsaved changes.")
+  assert.equal(unsavedWorktreeRefusal([{ path: "/w/a.ts", app: "VSCodium", kind: "other" }]), "Save or close a.ts in VSCodium first: it has unsaved changes.")
+  // The page clips the toast at 80 characters after "Couldn’t finish: ": the action must survive the clip.
+  assert.ok(unsavedWorktreeRefusal([vscode("/w/a.ts"), vscode("/w/b.ts"), vscode("/w/c.ts")]).slice(0, 80).includes("in VS Code first"))
 })
 
 test("regenerable: dependency and build output only", () => {

@@ -3,7 +3,7 @@ import { formatFileReference, splitFilePosition, type FilePosition } from "@friz
 import { projectRpc, rpc, type Api } from "../api/rpc.ts"
 import { apiBase } from "./base-path.ts"
 import { stampLocalPosition } from "./localFilePosition.ts"
-import { MarkdownScopeContext } from "./useMarkdown.ts"
+import { CheckoutBaseContext, MarkdownScopeContext } from "./useMarkdown.ts"
 
 // Clickable inline-code file paths. Agent prose often mentions files in backticks (`~/.claude/CLAUDE.md`,
 // `packages/web/src/App.tsx`). When the text of an inline `<code>` resolves to a real file on disk under
@@ -117,15 +117,15 @@ const RESOLVE_BATCH = 128
 // surface: N surfaces, N bumps, N² scans. On a 247-card mirror of a busy machine that decoration was the
 // largest item left in a 20s profile of the page (~1.0s). Requests made in one turn now go out together,
 // one batch per space, and land as ONE bump.
-const queued = new Map<string, { paths: Set<string>; api: Pick<Api, "resolveLocalPaths">; waiters: (() => void)[] }>()
-export function resolveUnknown(paths: string[], space: string, api: Pick<Api, "resolveLocalPaths"> = rpc): Promise<void> {
+const queued = new Map<string, { paths: Set<string>; api: Pick<Api, "resolveLocalPaths">; base?: string; waiters: (() => void)[] }>()
+export function resolveUnknown(paths: string[], space: string, api: Pick<Api, "resolveLocalPaths"> = rpc, base?: string): Promise<void> {
   const wanted = [...new Set(paths)].filter((p) => !cache.has(cacheKey(space, p)) && !inflight.has(cacheKey(space, p)))
   if (!wanted.length) return Promise.resolve()
   if (queued.size === 0) queueMicrotask(() => void flushQueued())
   let entry = queued.get(space)
   // One client per space: every caller asking for a space asks the same project, so the first one's
   // client speaks for the batch.
-  if (!entry) queued.set(space, (entry = { paths: new Set(), api, waiters: [] }))
+  if (!entry) queued.set(space, (entry = { paths: new Set(), api, ...(base ? { base } : {}), waiters: [] }))
   for (const p of wanted) {
     inflight.add(cacheKey(space, p))
     entry.paths.add(p)
@@ -138,13 +138,13 @@ async function flushQueued(): Promise<void> {
   const batch = [...queued]
   queued.clear()
   let changed = false
-  await Promise.all(batch.map(async ([space, { paths, api }]) => {
+  await Promise.all(batch.map(async ([space, { paths, api, base }]) => {
     const wanted = [...paths]
     const chunks: string[][] = []
     for (let i = 0; i < wanted.length; i += RESOLVE_BATCH) chunks.push(wanted.slice(i, i + RESOLVE_BATCH))
     const batches = await Promise.all(chunks.map(async (chunk) => {
       try {
-        return (await api.resolveLocalPaths({ paths: chunk })).resolved
+        return (await api.resolveLocalPaths(base ? { paths: chunk, base } : { paths: chunk })).resolved
       } catch {
         return chunk.map((input) => ({ input, path: null }))
       }
@@ -177,14 +177,17 @@ function decorate(code: Element, openPath: string, position: FilePosition | unde
 // resolves (via the shared `version`). Block code (inside `<pre>`) is left alone.
 //
 // WHOSE files: the project a MarkdownScopeContext names (the All queues page, which shows every
-// project's prose on a page that names none), else the page's own.
+// project's prose on a page that names none), else the page's own. And WHERE in it: a thread working in a
+// worktree (CheckoutBaseContext) has its relative paths looked up in the worktree first, then at the
+// project root — the cache partition carries the worktree, since `src/a.ts` names a different file there.
 export function useLocalFileCodeLinks(ref: RefObject<HTMLElement | null>, html: string): void {
   const seen = useSyncExternalStore(subscribe, readVersion, readVersion)
   const projectId = useContext(MarkdownScopeContext)?.projectId
+  const checkout = useContext(CheckoutBaseContext) ?? undefined
   useLayoutEffect(() => {
     const root = ref.current
     if (!root) return
-    const space = projectId ?? apiBase()
+    const space = checkout ? `${projectId ?? apiBase()}\u0001${checkout}` : projectId ?? apiBase()
     const unknown: string[] = []
     for (const code of root.querySelectorAll("code")) {
       if (code.closest("pre")) continue // block code, not an inline reference
@@ -200,6 +203,6 @@ export function useLocalFileCodeLinks(ref: RefObject<HTMLElement | null>, html: 
       if (resolved === undefined) unknown.push(candidate.path)
       else if (resolved) decorate(code, resolved, candidate.position)
     }
-    if (unknown.length) void resolveUnknown(unknown, space, projectId ? projectRpc(projectId) : rpc)
-  }, [ref, html, seen, projectId])
+    if (unknown.length) void resolveUnknown(unknown, space, projectId ? projectRpc(projectId) : rpc, checkout)
+  }, [ref, html, seen, projectId, checkout])
 }

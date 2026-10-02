@@ -115,9 +115,27 @@ export interface EditorBridge {
    * problems — the one the human was in last first; and how many windows are connected at all. A window
    * "has" the project when a workspace folder of it holds the project folder or sits inside it (a
    * package of a monorepo, a thread's worktree opened with "Open in editor"), or when its file in front
-   * is under the project folder.
+   * is under the project folder. `also` are more folders that count the same way — a thread's checkout
+   * outside the project folder (a sibling worktree), so a window opened on it is the thread's window.
    */
-  editorState(dir: string): EditorStateResult
+  editorState(dir: string, also?: readonly string[]): EditorStateResult
+  /**
+   * The files an editor window shows with UNSAVED changes that lie under any of `dirs` (realpath
+   * containment), each once, from every window whose last `editor` frame shared its state. What Done asks
+   * before it removes a thread's worktree (router.ts completeThread): a worktree removed under an open,
+   * edited buffer takes the file the human was editing with it, and the buffer is left pointing at a
+   * folder that no longer exists. Best effort by construction — a window with sharing off, an extension
+   * too old to send the frame, or a dirty tab past the frame's 50-tab cap is not seen — so it can only
+   * ever ADD a reason to keep a worktree, never remove one.
+   */
+  unsavedUnder(dirs: readonly string[]): EditorUnsavedFile[]
+}
+
+/** A file an editor window shows with unsaved changes (EditorBridge.unsavedUnder). */
+export interface EditorUnsavedFile {
+  path: string
+  app: string
+  kind: EditorKind
 }
 
 interface EditorWindow {
@@ -605,8 +623,11 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       return request(conn, { t: "focus", path: matches.find((m) => m.conn === conn)!.folder }).catch(() => false)
     },
 
-    editorState(dir) {
-      const realDir = closing ? undefined : realpathOrUndefined(dir)
+    editorState(dir, also = []) {
+      const targets = closing ? [] : [dir, ...also].flatMap((folder) => {
+        const real = realpathOrUndefined(folder)
+        return real ? [{ folder, real }] : []
+      })
       const at = now()
       const matched: Connection[] = []
       // The windows on other projects are counted, never described: their folders are not this worker's.
@@ -615,7 +636,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
         const window = conn.window
         if (!window) continue
         connected++
-        if (realDir && holdsProject(window, dir, realDir)) matched.push(conn)
+        if (targets.some((target) => holdsProject(window, target.folder, target.real))) matched.push(conn)
       }
       matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
       const windows = matched.map(({ window }): EditorStateWindow => {
@@ -630,6 +651,31 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
         }
       })
       return { windows, connected }
+    },
+
+    unsavedUnder(dirs) {
+      if (closing || dirs.length === 0) return []
+      const out: EditorUnsavedFile[] = []
+      const seen = new Set<string>()
+      for (const conn of connections) {
+        const window = conn.window
+        const snapshot = window?.editor?.snapshot
+        if (!window || !snapshot?.shared) continue
+        // An untitled buffer is not a file in any folder; a dirty one is the human's text with nowhere to go.
+        const files = [
+          ...(snapshot.active && snapshot.active.dirty && !snapshot.active.untitled ? [snapshot.active.path] : []),
+          ...snapshot.open.filter((file) => file.dirty && !file.untitled).map((file) => file.path),
+        ]
+        for (const path of files) {
+          if (seen.has(path)) continue
+          // A dirty buffer whose file was deleted on disk keeps its path; containment then reads the spelling.
+          const real = realpathOrUndefined(path) ?? path
+          if (!dirs.some((dir) => isUnder(real, dir))) continue
+          seen.add(path)
+          out.push({ path, app: window.app, kind: window.kind })
+        }
+      }
+      return out
     },
 
     takeCompose(id) {

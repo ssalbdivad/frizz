@@ -95,6 +95,7 @@ import {
   type InteractionRecord,
   type ThreadView,
   ThreadSlug,
+  splitFilePosition,
   isDirectSubAgent,
   DirectoryPickResult,
   ProjectAddResult,
@@ -172,7 +173,8 @@ import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, 
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueThreadMessageWake } from "./scheduler.ts"
 import { editedFilesOf } from "./edited-files.ts"
-import { removeThreadWorktrees, worktreesAddedBy } from "./worktree-cleanup.ts"
+import { removableWorktrees, removeThreadWorktrees, unsavedWorktreeRefusal, worktreesAddedBy } from "./worktree-cleanup.ts"
+import { worktreeRootFor } from "../../../cc-worker/hooks/worktree.mjs"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -194,7 +196,7 @@ import {
 } from "./transcript.ts"
 import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
 import { openExternalUrl } from "./open-external.ts"
-import { editorKindsForOpener, folderEditor, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
+import { editorKindsForOpener, folderEditor, mainCheckoutCopy, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
@@ -229,7 +231,7 @@ import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
 import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
-import { EditorComposeInputSchema, EditorSnapshotSchema, type EditorKind, type FilePosition } from "@frizz/shared"
+import { EditorComposeInputSchema, EditorSnapshotSchema, type EditorKind, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -786,6 +788,7 @@ function requestedPosition(input: { line?: number; column?: number; endLine?: nu
 // these values itself — and rpc-contract.ts pins each to the type contract.ts declares.
 const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean() })
 const EditorComposeItemOutput = EditorComposeInputSchema.extend({ id: z.string(), app: z.string(), at: z.string() })
+const EditorStateCheckoutOutput = z.object({ dir: z.string(), root: z.string(), kind: z.enum(["worktree", "folder"]) })
 const EditorStateOutput = z.object({
   windows: z.array(z.object({
     app: z.string(),
@@ -796,6 +799,7 @@ const EditorStateOutput = z.object({
     editor: EditorSnapshotSchema.omit({ t: true }).extend({ reportedAgoMs: z.number() }).optional(),
   })),
   connected: z.number(),
+  checkout: EditorStateCheckoutOutput.optional(),
 })
 
 /**
@@ -1385,18 +1389,95 @@ export function createRouter(ctx: AppContext) {
     const settings = ctx.getSettings()
     if (settings.removeWorktreesOnDone === false) return
     void (async () => {
-      const messages = readThreadTranscript(ctx.project, ctx.storage, slug, ctx.backendFor)
-      const checkout = ctx.tailer.get(slug)?.checkout
-      const candidates = [...worktreesAddedBy(messages, workDir), ...(checkout?.kind === "worktree" ? [checkout.dir] : [])]
+      const candidates = threadWorktreeCandidates(slug)
       const inUse = () =>
         ctx.storage
           .allSessions()
           .filter((row) => row.slug !== slug && row.state !== "archived" && !(row.state !== "open" && row.archived === 1))
           .map((row) => ({ dir: threadWorkingDir(row.slug).dir, by: row.slug }))
-      const { removed, kept } = await removeThreadWorktrees(candidates, settings.worktreeDir, inUse)
+      const unsaved = (dir: string) => (ctx.editors?.unsavedUnder([dir]) ?? []).map((file) => file.path)
+      const { removed, kept } = await removeThreadWorktrees(candidates, settings.worktreeDir, inUse, unsaved)
       for (const dir of removed) frizzLog.info("worktree", `removed ${dir} (thread ${slug} marked done)`)
       for (const { path: dir, reason } of kept) frizzLog.info("worktree", `kept ${dir} (thread ${slug}): ${reason}`)
     })().catch((error) => frizzLog.warn("worktree", `cleanup for ${slug} failed: ${String(error)}`))
+  }
+
+  /**
+   * The checkout `slug` works in when it is not the project root, for the `editor` tool (EditorStateCheckout):
+   * the thread's own reading (threadWorkingDir — the tailer's, else its transcript's), spelled through the
+   * project folder when it lies inside it. The reading is a REAL path (thread-cwd.ts liftWorkingDir) while an
+   * editor reports paths in its workspace folder's spelling, which is usually the project folder's; a
+   * `/tmp` project on macOS is `/private/tmp` to realpath and `/tmp` to the window. Undefined for an
+   * unknown slug and for a thread at the root.
+   */
+  function editorCheckoutOf(slug: string): EditorStateCheckout | undefined {
+    if (!ctx.storage.getSession(slug)) return undefined
+    const reading = threadWorkingDir(slug)
+    if (reading.kind === "root") return undefined
+    let dir = reading.dir
+    try {
+      const realRoot = realpathSync(workDir)
+      const rel = relative(realRoot, dir)
+      if (rel && !rel.startsWith("..") && !isAbsolute(rel)) dir = join(workDir, rel)
+    } catch {}
+    return { dir, root: workDir, kind: reading.kind === "worktree" ? "worktree" : "folder" }
+  }
+
+  /** The worktrees Done would consider removing for `slug`: the ones its Bash calls added, and the one it
+   *  is standing in (EnterWorktree). Reads the thread's transcript. */
+  function threadWorktreeCandidates(slug: string): string[] {
+    const messages = readThreadTranscript(ctx.project, ctx.storage, slug, ctx.backendFor)
+    const checkout = ctx.tailer.get(slug)?.checkout
+    return [...worktreesAddedBy(messages, workDir), ...(checkout?.kind === "worktree" ? [checkout.dir] : [])]
+  }
+
+  // The worktree folder (worktree-cleanup.ts worktreeRootFor), memoized per setting value: it asks git for
+  // the main checkout, and Done asks it on every press while any editor holds an unsaved file.
+  let worktreeRootMemo: { setting: string | undefined; root: string } | undefined
+  function worktreeRoot(setting: string | undefined): string {
+    if (worktreeRootMemo && worktreeRootMemo.setting === setting) return worktreeRootMemo.root
+    const root = worktreeRootFor(setting, workDir)
+    worktreeRootMemo = { setting, root }
+    return root
+  }
+
+  // A LINK INTO A WORKTREE THAT IS GONE OPENS THE MAIN CHECKOUT'S COPY. An agent working in a worktree
+  // names its files there — absolute paths in its tool calls and prose, relative ones the page resolves
+  // against its worktree (lib/useMarkdown.ts CheckoutBaseContext) — and Done removes the worktree. Every
+  // way the page opens a local file (the editor, the reader, inline-code links, the sidebar's own opener
+  // through `settleLocalPath`) passes the path through here: as asked while it exists, else the main
+  // checkout's copy when THAT exists (local-file.ts mainCheckoutCopy), else as asked, so the error a
+  // missing file gets is unchanged. A trailing `:12` the opener strips later is carried along.
+  function settleWorktreePath(path: string): string {
+    if (!isAbsolute(path) || existsOrPositioned(path)) return path
+    const copy = mainCheckoutCopy(path, workDir, worktreeRoot(ctx.getSettings().worktreeDir))
+    return copy && existsOrPositioned(copy) ? copy : path
+  }
+  function existsOrPositioned(path: string): boolean {
+    if (existsSync(path)) return true
+    const split = splitFilePosition(path)
+    return split.position !== undefined && existsSync(split.path)
+  }
+
+  // DONE REFUSES WHILE AN EDITOR HOLDS UNSAVED CHANGES IN A WORKTREE IT WOULD REMOVE. Marked done, a
+  // thread's worktree goes (cleanupThreadWorktrees), and git cannot see a buffer: a file the human edited
+  // in VS Code and has not saved reads as clean, so the folder would go out from under the tab. Refused
+  // HERE, before anything is archived or stopped, with what to do — save it (git then sees a modified
+  // file and keeps the worktree) or close it (nothing is lost) — because a worktree kept quietly by
+  // cleanup's own check 0 is a finished thread the human believes cleaned up and never hears about.
+  //
+  // Cheap when it does not apply, which is nearly always: no connected window with a dirty file under the
+  // worktree folder means no transcript read and no git. A dirty file in a worktree cleanup would keep
+  // anyway (an unmerged branch) is refused too: the human is plainly still working there, and saving or
+  // closing first costs one click.
+  function assertNoUnsavedWorktreeFiles(slug: string): void {
+    const editors = ctx.editors
+    const settings = ctx.getSettings()
+    if (!editors || settings.removeWorktreesOnDone === false) return
+    if (editors.unsavedUnder([worktreeRoot(settings.worktreeDir)]).length === 0) return
+    const dirs = removableWorktrees(threadWorktreeCandidates(slug), settings.worktreeDir)
+    const unsaved = editors.unsavedUnder(dirs)
+    if (unsaved.length > 0) throw new Error(unsavedWorktreeRefusal(unsaved))
   }
 
   // One launch per lazy thread at a time. A second click while the first is still spawning would start a
@@ -3336,6 +3417,7 @@ export function createRouter(ctx: AppContext) {
         // answered success while the card stayed exactly where it was. Caught 2026-08-08 archiving a
         // thread over the RPC: `archived = 1` in SQLite, `archived: false` on the board, forever.
         // Filed under Done, so its terminals stop with it, as they do for Mark as done (completeThread).
+        assertNoUnsavedWorktreeFiles(input.slug)
         await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, "archived")
         cleanupThreadWorktrees(input.slug)
@@ -3376,6 +3458,7 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ slug: ThreadSlug, state: z.enum(["open", "archived"]) }).strict(),
       handler: async ({ input }) => {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
+        if (input.state === "archived") assertNoUnsavedWorktreeFiles(input.slug)
         // Filed under Done ⇒ its terminals stop first (thread-terminals.ts), so nothing live is filed with it.
         if (input.state === "archived") await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, input.state)
@@ -3392,6 +3475,8 @@ export function createRouter(ctx: AppContext) {
       output: z.object({ needsConfirmation: z.boolean(), hold: CompletionHold.optional() }),
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
+        // Before the worker is stopped or asked about: a refusal must leave the thread exactly as it was.
+        assertNoUnsavedWorktreeFiles(input.slug)
         // The standing sign-off, as the BOARD reads it: a done registered through the tool is in no
         // transcript record, so the tailer's own `lastFence` never carries it (board.registeredDoneFence).
         const raw = ctx.tailer.get(input.slug)
@@ -4384,11 +4469,12 @@ export function createRouter(ctx: AppContext) {
         const asked = requestedPosition(input)
         // An image goes to the system viewer whatever the setting says, so never to an editor window.
         const kinds = input.image === true ? [] : editorKindsForOpener(opener, process.env)
+        const requested = settleWorktreePath(input.path)
         if (ctx.editors && kinds.length > 0) {
-          const { path, position } = resolveLocalFileAt(input.path, openRoots)
+          const { path, position } = resolveLocalFileAt(requested, openRoots)
           if (await ctx.editors.openFile(path, asked ?? position, kinds)) return { action: "opened" as const, path }
         }
-        return openLocalFile(input.path, opener, openRoots, { forceSystem: input.image === true, position: asked })
+        return openLocalFile(requested, opener, openRoots, { forceSystem: input.image === true, position: asked })
       },
     }),
 
@@ -4433,7 +4519,7 @@ export function createRouter(ctx: AppContext) {
     localMarkdown: query({
       input: z.object({ path: z.string().max(4096) }).strict(),
       output: z.object({ path: z.string(), markdown: z.string(), truncated: z.boolean() }),
-      handler: async ({ input }) => readLocalMarkdown(input.path, openRoots),
+      handler: async ({ input }) => readLocalMarkdown(settleWorktreePath(input.path), openRoots),
     }),
 
     // A file's SOURCE, for the fullscreen page's file viewer. The SAME openable roots as the Markdown
@@ -4442,23 +4528,50 @@ export function createRouter(ctx: AppContext) {
     localFile: query({
       input: z.object({ path: z.string().max(4096) }).strict(),
       output: z.object({ path: z.string(), text: z.string(), truncated: z.boolean() }),
-      handler: async ({ input }) => readLocalTextFile(input.path, openRoots),
+      handler: async ({ input }) => readLocalTextFile(settleWorktreePath(input.path), openRoots),
     }),
 
     // Batch-classify path REFERENCES (as they appear in inline code) → their canonical openable path, or
     // null when a candidate doesn't resolve to a real file under the openable roots. The client renders
     // resolved ones as clickable inline code (opened via openLocalFile). Pure read: it only realpath-
     // resolves + stats within the gate, never opening a file nor revealing existence outside it.
+    //
+    // `base` is the folder the prose's author worked in when that is not the project root — a thread in a
+    // worktree, whose `src/a.ts` means its worktree's copy. A relative candidate is tried there first, then
+    // at the project root, so a file only the main checkout has (`.frizz/threads/<id>/notes.md`) still
+    // links; the openable-roots gate judges the result either way, so a base outside them resolves nothing.
     resolveLocalPaths: query({
-      input: z.object({ paths: z.array(z.string().max(1024)).max(128) }).strict(),
+      input: z.object({ paths: z.array(z.string().max(1024)).max(128), base: z.string().max(4096).optional() }).strict(),
       output: z.object({ resolved: z.array(z.object({ input: z.string(), path: z.string().nullable() })) }),
       handler: async ({ input }) => {
         const memo = new Map<string, string | null>()
+        const at = (raw: string, dir: string) => resolveOpenableFile(raw, dir, openRoots, homedir(), settleWorktreePath)
+        const base = input.base && isAbsolute(input.base) && input.base !== workDir ? input.base : undefined
         const resolved = input.paths.map((raw) => {
-          if (!memo.has(raw)) memo.set(raw, resolveOpenableFile(raw, workDir, openRoots))
+          if (!memo.has(raw)) memo.set(raw, (base ? at(raw, base) : null) ?? at(raw, workDir))
           return { input: raw, path: memo.get(raw) ?? null }
         })
         return { resolved }
+      },
+    }),
+
+    // The sidebar's opener (lib/local-file-links.ts openInHostEditor) hands a path straight to the editor
+    // around it, not through the server, so it asks here first: the path as it is while it exists, else
+    // the main checkout's copy of a file in a worktree that is gone (settleWorktreePath). Never a realpath
+    // — the editor opens what it is given, and a symlink-resolved spelling opens as a file outside its
+    // workspace. Says nothing about a path outside the openable roots: that one comes back as asked.
+    settleLocalPath: query({
+      input: z.object({ path: z.string().max(4096) }).strict(),
+      output: z.object({ path: z.string() }),
+      handler: async ({ input }) => {
+        const settled = settleWorktreePath(input.path)
+        if (settled === input.path) return { path: input.path }
+        try {
+          resolveLocalFileAt(settled, openRoots)
+          return { path: settled }
+        } catch {
+          return { path: input.path }
+        }
       },
     }),
 
@@ -4475,10 +4588,21 @@ export function createRouter(ctx: AppContext) {
     // windows are connected at all, so "no editor has this project open" can be told from "no editor".
     // Project-scoped by the URL prefix like every worker call. A mutation only because the worker's MCP
     // server POSTs every procedure it calls; it changes nothing.
+    //
+    // `slug` is the CALLING thread (the worker's MCP server stamps its own, FRIZZ_THREAD_SLUG; a model never
+    // names it). When that thread works in a checkout of its own — a worktree — the answer says where
+    // (`checkout`), so the tool can tell the worker that the file the human has selected is the main
+    // checkout's copy and name its own; and a window opened on that checkout counts as this project's even
+    // when the checkout sits outside the project folder. An older MCP server sends `{}`, and this answers
+    // it as before. Not `.strict()`: an older SERVER must keep answering a newer MCP server's `slug`.
     editorState: mutation({
-      input: z.object({}),
+      input: z.object({ slug: ThreadSlug.optional() }),
       output: EditorStateOutput,
-      handler: async () => ctx.editors?.editorState(workDir) ?? { windows: [], connected: 0 },
+      handler: async ({ input }) => {
+        const checkout = input.slug ? editorCheckoutOf(input.slug) : undefined
+        const state = ctx.editors?.editorState(workDir, checkout ? [checkout.dir] : []) ?? { windows: [], connected: 0 }
+        return checkout ? { ...state, checkout } : state
+      },
     }),
 
     // Claim what an editor sent to the prompt box (`compose-pending` announced it on every open

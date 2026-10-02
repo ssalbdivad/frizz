@@ -10,7 +10,7 @@ import { useBoard, useProjectDir, useTranscript, type ChatMessage, type Transcri
 import { rpc } from "../api/rpc.ts"
 import { UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, subAgentName } from "../groups.ts"
 import { stripFrontmatter } from "../lib/markdown.ts"
-import { useMarkdownHtml } from "../lib/useMarkdown.ts"
+import { CheckoutBaseContext, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { splitComposerValue, splitProseAttachments } from "../lib/imagePaths.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
@@ -32,7 +32,7 @@ import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FrizzWake, ShellWakeText } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
-import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, type SentContextItem } from "../lib/composerContext.ts"
+import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, withoutWorktreeNote, type SentContextItem } from "../lib/composerContext.ts"
 import { SentEditorContextChip } from "./SentEditorContext.tsx"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { MentionIndexProvider } from "./MentionLinks.tsx"
@@ -205,9 +205,13 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       <ThreadHeader slug={slug} onStatusApplied={onStatusApplied} onClose={onClose} showReturnToQueue={showReturnToQueue} />
-      {/* `@handle` mentions in the human's messages link to the threads they name (MentionLinks.tsx). */}
+      {/* `@handle` mentions in the human's messages link to the threads they name (MentionLinks.tsx). A
+          thread working in a worktree has its relative file links resolved there (lib/useMarkdown.ts
+          CheckoutBaseContext). */}
       <MentionIndexProvider>
-        <ChatView slug={slug} virtualized={virtualized} />
+        <CheckoutBaseContext.Provider value={thread?.checkout?.dir ?? null}>
+          <ChatView slug={slug} virtualized={virtualized} />
+        </CheckoutBaseContext.Provider>
       </MentionIndexProvider>
       {thread && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
     </div>
@@ -3239,7 +3243,12 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
   // the trailing run, so a path typed mid-sentence stays the human's own words, and (unlike
   // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
   // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
-  const { prose: sentProse, attachments } = useMemo(() => splitComposerValue(text), [text])
+  // A sent message to a thread in a worktree may end on a sentence for its agent about whose copy the
+  // context is (lib/composerContext.ts worktreeNote) — the agent's, not the human's words, so it comes off too.
+  const { prose: sentProse, attachments } = useMemo(() => {
+    const split = splitComposerValue(text)
+    return { ...split, prose: withoutWorktreeNote(split.prose) }
+  }, [text])
   // What an editor's sidebar attached on its own — the editor block at the very END of the prose — comes
   // off first and is drawn as a chip under the bubble (SentEditorContext.tsx); everything below reads
   // what is left, so the ⌘I parse keeps its strictness and the bubble holds only what the human wrote.

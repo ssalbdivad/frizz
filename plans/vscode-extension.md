@@ -389,6 +389,40 @@ the agent can READ the editor when it decides to (Claude Code's IDE tools) — i
 human talks to in a browser tab, and for what the block does not carry (the tabs, the problems, a
 selection between the block's 16 Ki and the tool's 32 Ki).
 
+## Threads in worktrees: the right copy
+
+A thread that works in its own checkout (`.frizz/worktrees/<slug>`, or any folder the tailer lifts into
+`thread.checkout`) and a human whose window shows the main checkout are looking at two copies of every
+file, and the same relative path names both. Everything that crosses between them says which copy it
+means (2026-10-02):
+
+- **The `editor` tool** sends its thread's slug (`editorState({slug})`); the server answers the thread's
+  checkout beside the windows. Paths stay absolute; a window on the main checkout gets one clause saying
+  the selection is the human's copy and the same relative path under the worktree is the agent's, and
+  the file in front gets `Your copy: <worktree path>`. A window opened on the worktree itself says its
+  files are the agent's own.
+- **What the sidebar sends** to such a thread (chips, the editor block) writes a worktree file relative
+  to the worktree and a main-checkout file relative to the project, plus one trailing sentence naming
+  both folders. Every parser peels that sentence first, and the bubble hides it.
+- **Links the thread wrote** resolve against its checkout first, then the project: the transcript's
+  relative Markdown links render with the checkout as their base, inline code asks
+  `resolveLocalPaths({paths, base})`. A path into a worktree that is gone (Done removed it) settles to
+  the main checkout's copy in every opener (`settleWorktreePath` on the server; the extension asks
+  `settleLocalPath` only when a sidebar-opened path does not exist).
+- **A window whose folder is a thread's worktree** opens its sidebar on that thread, once per page load,
+  from the extension after `frizz:ready` (the frame's address is read once per frame and would be stale
+  after a move); every wait for the page waits for that navigation, so a chip added by the command that
+  opened the sidebar lands in the thread's box. Send to Frizz thread offers it first.
+- **Done** is refused (completeThread, setThreadState archived, archiveThread) while any window that
+  shares its state holds an unsaved file in a worktree Done would remove: "Save or close a.ts in VS Code
+  first: it has unsaved changes." The cleanup checks the same thing as its first reason to keep a
+  worktree. Best effort: sharing off, an extension too old to report, or a dirty tab past the frame's
+  50-tab cap is not seen.
+- **A worker never attaches to the human's editor.** Launched from an editor terminal, Frizz's own
+  environment carries Claude Code's IDE address (`CLAUDE_CODE_SSE_PORT`, `ENABLE_IDE_INTEGRATION`,
+  `FORCE_CODE_TERMINAL`, `CLAUDE_CODE_IDE_*`); `inheritWorkerEnvironment` drops them for every transport,
+  and a Claude worker gets `CLAUDE_CODE_AUTO_CONNECT_IDE=false`.
+
 ## Verification
 
 - Unit: `file-position.test.ts`; the bridge against real `ws` clients (`editor-bridge.test.ts`);

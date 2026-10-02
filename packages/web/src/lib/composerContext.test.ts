@@ -15,6 +15,9 @@ import {
   serializeContextItems,
   serializeEditorContext,
   withoutEditorContext,
+  withoutWorktreeNote,
+  worktreeNote,
+  appendWorktreeNote,
   splitProseByTokens,
   tokenLabel,
   uniqueToken,
@@ -311,8 +314,8 @@ test("an unsaved buffer says the copy on disk differs, an untitled one that ther
 })
 
 test("every new reading parses back, with what the chip needs to say it", () => {
-  const back = (active: Parameters<typeof serializeEditorContext>[0], previous?: Parameters<typeof serializeEditorContext>[3]) =>
-    parseSentEditorContext(appendEditorContext("hi", serializeEditorContext(active, [], "/repo", previous)))?.editor
+  const back = (active: Parameters<typeof serializeEditorContext>[0], previous?: Parameters<typeof serializeEditorContext>[4]) =>
+    parseSentEditorContext(appendEditorContext("hi", serializeEditorContext(active, [], "/repo", null, previous)))?.editor
   assert.deepEqual(back({ ...editorFile, dirty: true, selection: { startLine: 2, endLine: 3, text: "a\nb" } }), { kind: "selection", display: "src/a.ts", startLine: 2, endLine: 3, state: "unsaved", text: "a\nb" })
   assert.deepEqual(back({ ...editorFile, dirty: true, selection: { startLine: 1, endLine: 900 } }), { kind: "selection", display: "src/a.ts", startLine: 1, endLine: 900, state: "unsaved", unquoted: "long" })
   assert.deepEqual(back({ path: "Untitled-1", untitled: true, selection: { startLine: 1, endLine: 900 } }), { kind: "selection", display: "Untitled-1", startLine: 1, endLine: 900, state: "untitled", unquoted: "long" })
@@ -330,8 +333,8 @@ test("every new reading parses back, with what the chip needs to say it", () => 
 
 // ── the repeat-send rule ──────────────────────────────────────────────────────────────────────────
 
-const sentWith = (active: Parameters<typeof serializeEditorContext>[0], words = "q", previous?: Parameters<typeof serializeEditorContext>[3]) =>
-  ({ role: "user", text: appendEditorContext(words, serializeEditorContext(active, [], "/repo", previous)) })
+const sentWith = (active: Parameters<typeof serializeEditorContext>[0], words = "q", previous?: Parameters<typeof serializeEditorContext>[4]) =>
+  ({ role: "user", text: appendEditorContext(words, serializeEditorContext(active, [], "/repo", null, previous)) })
 
 test("a selection the thread was just sent is named, not quoted again; any change quotes afresh", () => {
   const held = { ...editorFile, selection: { startLine: 12, endLine: 20, text: "const a = 1\nconst b = 2\n" } }
@@ -339,7 +342,7 @@ test("a selection the thread was just sent is named, not quoted again; any chang
   const quote = previousEditorQuote([first, { role: "assistant", text: "It sets a and b." }])
   assert.deepEqual(quote, { display: "src/a.ts", startLine: 12, endLine: 20, text: "const a = 1\nconst b = 2" })
   // The same lines and text: a one-line reference.
-  assert.equal(serializeEditorContext(held, [], "/repo", quote), `${HEADER}\n\nStill selected in src/a.ts, lines 12-20 (quoted in an earlier message)`)
+  assert.equal(serializeEditorContext(held, [], "/repo", null, quote), `${HEADER}\n\nStill selected in src/a.ts, lines 12-20 (quoted in an earlier message)`)
   // …and again after that reference: the chain leads back to the quote.
   const second = sentWith(held, "and then?", quote)
   assert.deepEqual(previousEditorQuote([first, second]), quote)
@@ -348,7 +351,7 @@ test("a selection the thread was just sent is named, not quoted again; any chang
     { ...held, selection: { ...held.selection, text: "const a = 2\nconst b = 2\n" } },
     { ...held, selection: { ...held.selection, endLine: 21 } },
     { ...held, path: "/repo/src/b.ts" },
-  ]) assert.match(serializeEditorContext(changed, [], "/repo", quote), /\n\nSelected in .*:\n> /)
+  ]) assert.match(serializeEditorContext(changed, [], "/repo", null, quote), /\n\nSelected in .*:\n> /)
   // Messages without a block (sharing off, a browser tab) are passed over; the agent still has the quote.
   assert.deepEqual(previousEditorQuote([first, { role: "user", text: "no block here" }]), quote)
 })
@@ -365,4 +368,74 @@ test("the last block decides: a different reading after the quote, or none quote
   assert.equal(previousEditorQuote([]), null)
   // Attachment lines after the block do not hide it.
   assert.deepEqual(previousEditorQuote([{ role: "user", text: `${first.text}\n/tmp/shot.png` }])?.startLine, 12)
+})
+
+// ── a thread in a worktree ──────────────────────────────────────────────────────────────────────────
+
+const WT = "/repo/.frizz/worktrees/tidy"
+
+test("a file in the thread's own worktree is relative to the worktree; a main-checkout file to the project", () => {
+  // The agent resolves a relative path against its own working folder: from the worktree,
+  // `.frizz/worktrees/tidy/src/a.ts` names nothing.
+  assert.equal(contextDisplayPath(`${WT}/src/a.ts`, "/repo", WT), "src/a.ts")
+  assert.equal(contextDisplayPath("/repo/src/a.ts", "/repo", WT), "src/a.ts")
+  assert.equal(contextDisplayPath("/elsewhere/a.ts", "/repo", WT), "/elsewhere/a.ts")
+  assert.equal(contextDisplayPath("terminal", "/repo", WT), "terminal")
+  // A sibling worktree outside the project.
+  assert.equal(contextDisplayPath("/repo-perf/src/a.ts", "/repo", "/repo-perf"), "src/a.ts")
+  // Without a checkout, exactly as before.
+  assert.equal(contextDisplayPath(`${WT}/src/a.ts`, "/repo"), ".frizz/worktrees/tidy/src/a.ts")
+  assert.equal(serializeContextItems([item({ path: `${WT}/docs/guide.md` })], "/repo", WT), "Selected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> some text")
+  assert.equal(serializeEditorContext({ path: `${WT}/src/a.ts`, cursorLine: 4 }, [], "/repo", WT).endsWith("Open in the editor: src/a.ts (cursor on line 4)"), true)
+})
+
+test("the worktree note: only for context from the main checkout, sent to a thread working elsewhere", () => {
+  const note = worktreeNote(["/repo/src/a.ts"], "/repo", { dir: WT, kind: "worktree" })
+  assert.equal(note, "The context above is from the human's editor, which shows the project's main checkout (/repo). You are working in your own worktree (/repo/.frizz/worktrees/tidy): the same relative path there is your copy, and it may differ from what they see.")
+  assert.match(worktreeNote(["/repo/src/a.ts"], "/repo", { dir: "/repo-perf", kind: "folder" }), /You are working in your own checkout \(\/repo-perf\)/)
+  // Nothing to say: the thread is at the root, the file is the worktree's own, outside the project, the
+  // terminal, or there is no context at all.
+  assert.equal(worktreeNote(["/repo/src/a.ts"], "/repo", null), "")
+  assert.equal(worktreeNote(["/repo/src/a.ts"], "/repo", { dir: "/repo" }), "")
+  assert.equal(worktreeNote([`${WT}/src/a.ts`], "/repo", { dir: WT }), "")
+  assert.equal(worktreeNote(["/etc/hosts", "terminal"], "/repo", { dir: WT }), "")
+  assert.equal(worktreeNote([], "/repo", { dir: WT }), "")
+  assert.equal(worktreeNote(["/repo/src/a.ts"], null, { dir: WT }), "")
+})
+
+test("the note goes last, before the attachment lines, and the transcript and a take-back peel it off", () => {
+  const note = worktreeNote(["/repo/docs/guide.md"], "/repo", { dir: WT })
+  const block = serializeEditorContext({ path: "/repo/src/a.ts", selection: { startLine: 2, endLine: 3, text: "x\ny" } }, [], "/repo", WT)
+  const withChips = buildMessageWithContext("fix @guide.md:3\n/tmp/shot.png", [item({})], "/repo", WT)
+  const sent = appendWorktreeNote(appendEditorContext(withChips, block), note)
+  assert.equal(sent.endsWith(`\n\n${note}\n/tmp/shot.png`), true, sent)
+  // The transcript: the note comes off, then the editor block and the chips parse exactly as before.
+  const prose = withoutWorktreeNote(sent.slice(0, sent.lastIndexOf("\n/tmp/shot.png")))
+  const parsed = parseSentEditorContext(prose)
+  assert.deepEqual(parsed?.editor, { kind: "selection", display: "src/a.ts", startLine: 2, endLine: 3, text: "x\ny" })
+  assert.equal(parseSentContext(parsed!.body)?.body, "fix @guide.md:3")
+  // Taken back: the human's words, chips and attachment, with neither the block nor the note.
+  assert.equal(withoutEditorContext(sent), withChips)
+  // A note with no editor block (chips only) also comes off a take-back.
+  assert.equal(withoutEditorContext(appendWorktreeNote(withChips, note)), withChips)
+  // Only at the very end, and only the exact sentence: a human quoting it mid-message keeps it.
+  assert.equal(withoutWorktreeNote(`${note}\n\nand then?`), `${note}\n\nand then?`)
+  assert.equal(withoutWorktreeNote(`hi\n\n${note}`), "hi")
+  assert.equal(withoutWorktreeNote("hi"), "hi")
+  assert.equal(appendWorktreeNote("hi", ""), "hi")
+})
+
+test("a worktree thread's repeat-send: the note after the block does not hide the quote, and the reference keeps the worktree's path", () => {
+  // Merge of vscode-r4-context (the repeat-send rule) and vscode-r4-worktrees (the note after the block):
+  // the note is the prose's LAST paragraph, so the block parser alone would never find the quote under it.
+  const note = worktreeNote(["/repo/src/a.ts"], "/repo", { dir: WT })
+  const held = { path: "/repo/src/a.ts", selection: { startLine: 4, endLine: 5, text: "x\ny" } }
+  const first = { role: "user", text: appendWorktreeNote(appendEditorContext("q", serializeEditorContext(held, [], "/repo", WT)), note) }
+  const quote = previousEditorQuote([first])
+  assert.deepEqual(quote, { display: "src/a.ts", startLine: 4, endLine: 5, text: "x\ny" })
+  assert.equal(serializeEditorContext(held, [], "/repo", WT, quote), `${HEADER}\n\nStill selected in src/a.ts, lines 4-5 (quoted in an earlier message)`)
+  // The worktree's own copy, relative to the worktree, dedupes against itself too.
+  const own = { path: `${WT}/src/a.ts`, selection: { startLine: 4, endLine: 5, text: "x\ny" } }
+  const ownQuote = previousEditorQuote([{ role: "user", text: appendEditorContext("q", serializeEditorContext(own, [], "/repo", WT)) }])
+  assert.match(serializeEditorContext(own, [], "/repo", WT, ownQuote), /^.*\n\nStill selected in src\/a\.ts/)
 })

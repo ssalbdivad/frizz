@@ -65,10 +65,47 @@
 // worker's environment; it does not keep the operator's credentials out, and it never could.
 const FRIZZ_INTERNAL_PREFIX = "FRIZZ_"
 
-/** Whether `key` is one of frizz's own control-plane variables — the only thing a worker does not
- *  inherit. Exported so the transports and their tests share one predicate rather than three. */
+/** Whether `key` is one of frizz's own control-plane variables — never inherited by a worker. Exported so
+ *  the transports and their tests share one predicate rather than three. */
 export function isFrizzInternalEnvKey(key: string): boolean {
   return key.startsWith(FRIZZ_INTERNAL_PREFIX)
+}
+
+// ── THE HUMAN'S EDITOR IS NOT A WORKER'S ─────────────────────────────────────────────────────────
+// Launch Frizz from a terminal inside VS Code, Cursor or Windsurf with Claude Code's extension installed
+// and the shell carries that window's address: the extension writes CLAUDE_CODE_SSE_PORT, the port of
+// its own IDE server, into every terminal it can reach (`environmentVariableCollection.replace`, read out
+// of anthropic.claude-code 2.1.287), and older releases also wrote ENABLE_IDE_INTEGRATION=true. Claude
+// Code treats either as "you are running in that editor" (its `MNe` auto-connect check, 2.1.287: the
+// port alone is enough), so every BACKGROUND worker would attach to the human's editor and could open
+// diffs in it, steal focus, or read its selection as though the human had pointed at it — from a thread
+// they are not looking at. Frizz's own window onto the editor is `mcp__frizz__editor`, which reads and
+// never drives; a worker must not hold a second, driving one.
+//
+// So the variables that POINT a process at an editor are not inherited: the port, the legacy switch,
+// FORCE_CODE_TERMINAL (which makes Claude Code believe it runs in the editor's terminal), an operator's
+// CLAUDE_CODE_AUTO_CONNECT_IDE (a Claude worker gets an explicit `false` instead, types.ts
+// CLAUDE_WORKER_ENV), and the CLAUDE_CODE_IDE_* overrides that redirect or loosen the match
+// (HOST_OVERRIDE, SKIP_VALID_CHECK). The one IDE_* variable that only switches something OFF,
+// CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL, still comes through: it can only make a worker do less.
+//
+// Deliberately NOT stripped: TERM_PROGRAM and VS Code's GIT_ASKPASS / VSCODE_GIT_IPC_HANDLE. The first is
+// read by many tools for colour and nothing here attaches through it once auto-connect is off; the second
+// is how `git push` authenticates for an operator who signs in through VS Code, and taking it away would
+// break a worker's push to protect against a credential prompt that only appears when it is needed.
+const EDITOR_ATTACH_ENV_KEYS: ReadonlySet<string> = new Set([
+  "CLAUDE_CODE_SSE_PORT",
+  "ENABLE_IDE_INTEGRATION",
+  "FORCE_CODE_TERMINAL",
+  "CLAUDE_CODE_AUTO_CONNECT_IDE",
+])
+const EDITOR_ATTACH_PREFIX = "CLAUDE_CODE_IDE_"
+const EDITOR_ATTACH_KEPT: ReadonlySet<string> = new Set(["CLAUDE_CODE_IDE_SKIP_AUTO_INSTALL"])
+
+/** Whether `key` would point a worker at the human's editor (see above) — never inherited. */
+export function isEditorAttachEnvKey(key: string): boolean {
+  if (EDITOR_ATTACH_ENV_KEYS.has(key)) return true
+  return key.startsWith(EDITOR_ATTACH_PREFIX) && !EDITOR_ATTACH_KEPT.has(key)
 }
 
 /** Keys frizz's own in-process dependencies write into process.env at runtime — see the header. */
@@ -100,13 +137,13 @@ export function launchEnvironment(source: NodeJS.ProcessEnv = process.env): Node
 
 /** The environment a dispatched worker starts from: `source` (frizz's own process env by default) with
  *  the runtime-written keys put back to their launch values (see launchEnvironment), frizz's
- *  control-plane variables removed and undefined values dropped. Callers merge their per-thread
- *  `workerEnv` on top — that is what puts the FRIZZ_ variables a worker DOES need back, with this
- *  thread's values rather than the server's. */
+ *  control-plane variables and the editor-attach variables removed, and undefined values dropped.
+ *  Callers merge their per-thread `workerEnv` on top — that is what puts the FRIZZ_ variables a worker
+ *  DOES need back, with this thread's values rather than the server's. */
 export function inheritWorkerEnvironment(source: NodeJS.ProcessEnv = process.env): Record<string, string> {
   const env: Record<string, string> = {}
   for (const [key, value] of Object.entries(launchEnvironment(source))) {
-    if (value === undefined || isFrizzInternalEnvKey(key)) continue
+    if (value === undefined || isFrizzInternalEnvKey(key) || isEditorAttachEnvKey(key)) continue
     env[key] = value
   }
   return env

@@ -4,7 +4,7 @@
 // routes them through the webview into the page's frame), and what is asserted is read where it shows —
 // the page's own DOM, VS Code's own title row and editor, the simulated worker's socket.
 //
-//   nub packages/vscode/scripts/e2e-sidebar.ts [--out=<dir>] [--dev] [--only=c1,c4] [--icon-before=<png>]
+//   nub packages/vscode/scripts/e2e-sidebar.ts [--out=<dir>] [--dev] [--only=c1,c4] [--icon-before=<png>] [--worktree]
 //   (or: nub packages/vscode/scripts/e2e.ts --sidebar [same flags])
 //
 //   --out    where the screenshots and results.json go (default: a `shots` dir in the run's scratch folder,
@@ -13,9 +13,12 @@
 //   --dev    run the extension from the source tree (dist/ as scripts/build.ts makes it) instead of the
 //            packaged .vsix. The default is the .vsix, unpacked, because the maintainer's "the icon
 //            doesn't display" was a package with no icon in it: the source tree had it all along.
-//   --only   run only these checks (c1…c12); the boot, the seed and the view opening always run.
+//   --only   run only these checks (c1…c13); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
+//   --worktree  open the window on a thread's git worktree (`.frizz/worktrees/<slug>` of the workspace)
+//            instead of the workspace, for c12's positive half; runs c12 alone unless --only says more,
+//            because every other check is written against a window on the workspace itself.
 //   FRIZZ_E2E_VSCODE=oldest|<version>   VS Code to run (default: stable). `oldest` is the manifest's floor.
 //   FRIZZ_E2E_KEEP=1                    keep the scratch folder (logs, the stack's log) even on a pass.
 //
@@ -48,7 +51,9 @@
 //   c11 Claude Code: a stand-in extension with its id (anthropic.claude-code) and its Alt+K, installed
 //      live — Alt+K is then its (its binding answers, nothing reaches Frizz) and the `?` sheet drops the
 //      row; uninstalled, Alt+K is Frizz's again
-//   c12 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
+//   c12 the window's own thread: a window opened on a thread's worktree opens the sidebar on that thread
+//      (--worktree); a window on the project itself opens on the queue (every other run, the control)
+//   c13 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
 //      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
 //      both, and so does the eye, which is the VS Code setting
 //
@@ -71,7 +76,7 @@ import puppeteer, { type Browser, type CDPSession, type ElementHandle, type Fram
 import { parseSentContext, parseSentEditorContext } from "../../web/src/lib/composerContext.ts"
 import type { AgentOp, AgentStatus, EditorState, SettingState } from "../e2e/sidebar-agent.ts"
 import { decodePng, inkOf } from "../e2e/png.ts"
-import { SAMPLE, seedSidebarStack, type Seeded } from "../e2e/sidebar-seed.ts"
+import { SAMPLE, seedSidebarStack, seedWorktreeThread, type Seeded } from "../e2e/sidebar-seed.ts"
 import { bootStack, freePort, killAll, leftovers, stubbedPath, type Stack } from "../e2e/stack.ts"
 import { workerTool } from "../e2e/worker-tool.ts"
 
@@ -97,7 +102,8 @@ if (process.platform === "linux" && (!process.env.DISPLAY || process.env.DISPLAY
 
 const flag = (name: string) => process.argv.find((arg) => arg.startsWith(`--${name}=`))?.slice(name.length + 3)
 const devMode = process.argv.includes("--dev")
-const only = flag("only")?.split(",").map((id) => id.trim())
+const worktreeWindow = process.argv.includes("--worktree")
+const only = flag("only")?.split(",").map((id) => id.trim()) ?? (worktreeWindow ? ["c12"] : undefined)
 const wanted = (id: string) => !only || only.includes(id)
 
 function vscodeVersion(): string {
@@ -640,7 +646,10 @@ try {
   const workspace = stack.info.tenants.find((tenant) => tenant.slug === "marketing-site")!
   seeded = await seedSidebarStack({ stack, workspace, scratch, log })
   const files = seeded.files
-  log(`stack up at ${origin}; the window's folder is the tenant ${workspace.slug} (${workspace.dir})`)
+  // c12: a thread working in a worktree of the workspace, and (--worktree) the window opened on it.
+  const worktreeThread = worktreeWindow ? await seedWorktreeThread({ stack, workspace, log }) : undefined
+  const windowFolder = worktreeThread?.dir ?? workspace.dir
+  log(`stack up at ${origin}; the window's folder is ${worktreeThread ? `the worktree of ${worktreeThread.slug}` : "the tenant"} ${workspace.slug} (${windowFolder})`)
 
   // A cold dev server optimizes its dependencies on the first page load, which can take a minute — a
   // stall no installed Frizz has (it serves a build). One headless load first, so the sidebar's first
@@ -689,7 +698,7 @@ try {
     extensionDevelopmentPath: extensionPath,
     extensionTestsPath: join(pkg, "dist", "e2e", "sidebar-agent.cjs"),
     launchArgs: [
-      workspace.dir,
+      windowFolder,
       `--user-data-dir=${userData}`,
       `--extensions-dir=${join(scratch, "extensions")}`,
       "--disable-extension=GitHub.copilot",
@@ -851,6 +860,9 @@ try {
   notes.readyAfterMs = Date.now() - started
   await waitFor("the queue in the page", async () => (await inPage(() => document.querySelectorAll("[data-xq-thread-row]").length)) > 0 || undefined, 60_000)
   await sleep(1_000)
+  // Where the page went on its own, before anything here moved it (c12): a thread only for a window on
+  // that thread's worktree. The extension asks the board once the page is ready, which a second covers.
+  notes.firstRoute = (await status()).sidebar.href ?? null
   await installFocusTrace()
   // What the first load cost: a dev server serves the page as hundreds of unbundled modules, where an
   // installed Frizz serves a build — so a slow first ready here is a fact about the stack, and the
@@ -1628,8 +1640,46 @@ try {
     await clearBox("chatComposer")
   })
 
-  // ── c12: a restart and a window reload (LAST: it ends the agent's VS Code) ──
-  await run("c12", "a restart and a window reload keep what the page stored, and the eye", async () => {
+  // ── c12: the window's own thread ──
+  await run("c12", "a window opened on a thread's worktree opens the sidebar on that thread", async () => {
+    const first = notes.firstRoute as string | null
+    if (!worktreeThread) {
+      expect("c12", "a window on the project itself opens on the queue, not on a thread", first !== null && !/\/thread\//u.test(first), { firstRoute: first })
+      return
+    }
+    const onIt = (href: string | null | undefined) => !!href && new URL(href).pathname.endsWith(`/thread/${worktreeThread.slug}`)
+    const href = await waitFor(`the sidebar on ${worktreeThread.slug}`, async () => {
+      const now = (await status()).sidebar.href
+      return onIt(now) ? now : undefined
+    }, 20_000).catch(async () => (await status()).sidebar.href)
+    expect("c12", "the sidebar's page is on the worktree's thread, with nothing here asking it to be", onIt(href), { firstRoute: first, href })
+    const shown = await waitFor("the thread's drawer", async () => {
+      const read = await inPage((title) => {
+        const drawer = [...document.querySelectorAll<HTMLElement>("[data-drawer-layer]")].at(-1)
+        return drawer && drawer.innerText.includes(title) ? { title, composer: !!drawer.querySelector('textarea[data-surface="chatComposer"]') } : undefined
+      }, worktreeThread.title)
+      return read
+    }, 15_000).catch(() => undefined)
+    expect("c12", "the page shows that thread, its title and its reply box", !!shown?.composer, shown)
+    const said = frizzLog().split("\n").find((line) => line.includes(`worktree of thread ${worktreeThread.slug}`))
+    expect("c12", "the extension says why it opened there", !!said, said?.trim())
+    await shot("c12-worktree-window-thread", { window: true })
+    // A link the thread wrote into its worktree, to a file only the main checkout has (as every link is
+    // once Done removed the worktree): clicked in the sidebar, the extension finds it missing, asks Frizz
+    // (settleLocalPath) and opens the main checkout's copy at the linked line — not "doesn't exist".
+    const { linked, main } = worktreeThread.onlyMain
+    await clickTextInPage("[data-local-path]", "only-main.ts")
+    const opened = await waitFor("the main checkout's copy in the editor", async () => {
+      const now = await editorState()
+      return now.path === main && now.selection?.start[0] === 1 ? now : undefined
+    }, 15_000).catch(async () => editorState())
+    const settledLine = frizzLog().split("\n").find((line) => line.includes(`${linked} is gone`))
+    expect("c12", "a link into the worktree to a file it doesn't have opens the main checkout's copy, at its line", opened.path === main && opened.selection?.start[0] === 1, { linked, opened, log: settledLine?.trim() })
+    await shot("c12-settled-link", { window: true })
+  })
+
+  // ── c13: a restart and a window reload (LAST: it ends the agent's VS Code) ──
+  await run("c13", "a restart and a window reload keep what the page stored, and the eye", async () => {
     // A value in the framed page's own storage — where it keeps what the human set in it (its shortcuts,
     // drafts) — and the eye off, with a file in front so the bar (and its eye) is drawn.
     await openInEditor(files.sample)
@@ -1681,9 +1731,9 @@ try {
     const restarted = await pageUp()
     await inFront()
     const afterRestart = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
-    expect("c12", "a restart: the page's own storage is still there", afterRestart.probe === probe, { before: keysBefore, after: afterRestart.keys })
+    expect("c13", "a restart: the page's own storage is still there", afterRestart.probe === probe, { before: keysBefore, after: afterRestart.keys })
     const eyeRestart = await waitFor("the eye", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
-    expect("c12", "…and the eye is still off: it is the VS Code setting", eyeRestart === "false", { eye: eyeRestart })
+    expect("c13", "…and the eye is still off: it is the VS Code setting", eyeRestart === "false", { eye: eyeRestart })
 
     // A window reload, as a human does it: the palette's Developer: Reload Window, typed.
     await press("Control+Shift+KeyP")
@@ -1695,10 +1745,10 @@ try {
     await pageUp(restarted)
     await inFront()
     const afterReload = await inPage(() => ({ probe: localStorage.getItem("frizz-e2e-reload-probe"), keys: Object.keys(localStorage).sort() }))
-    expect("c12", "a window reload: the page's own storage is still there", afterReload.probe === probe, { before: keysBefore, after: afterReload.keys })
+    expect("c13", "a window reload: the page's own storage is still there", afterReload.probe === probe, { before: keysBefore, after: afterReload.keys })
     const eyeReload = await waitFor("the eye", async () => (await eye()) ?? undefined, 20_000).catch(() => null)
-    expect("c12", "…and the eye is still off", eyeReload === "false", { eye: eyeReload })
-    await shot("c12-after-reload-w300", { window: true })
+    expect("c13", "…and the eye is still off", eyeReload === "false", { eye: eyeReload })
+    await shot("c13-after-reload-w300", { window: true })
   })
 
   expect("all", "no page errors in the framed page", pageErrors.length === 0, pageErrors.slice(0, 10))

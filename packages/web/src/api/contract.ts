@@ -342,14 +342,15 @@ export interface Api {
   localFile(input: { path: string }): Promise<{ path: string; text: string; truncated: boolean }>
   // Classify path references (as they appear in inline code) → canonical openable path, or null when the
   // candidate doesn't resolve to a real file under the server's openable roots. Drives clickable inline code.
-  resolveLocalPaths(input: { paths: string[] }): Promise<{ resolved: { input: string; path: string | null }[] }>
+  resolveLocalPaths(input: { paths: string[]; base?: string }): Promise<{ resolved: { input: string; path: string | null }[] }>
+  settleLocalPath(input: { path: string }): Promise<{ path: string }>
   // Editor windows connected over the editor bridge (machine-wide; the `editors` event pushes changes).
   editorWindows(): Promise<{ windows: EditorWindowSummary[] }>
   // Claim what an editor sent to the prompt box (machine-wide, first caller wins). No id: the oldest.
   composeTake(input: { id?: string }): Promise<{ item: EditorComposeItem | null }>
   // What the editor windows that have this project open show: file in front, selection, tabs, problems.
   // The workers' `mcp__frizz__editor` reads it; the page does not.
-  editorState(input: Record<never, never>): Promise<EditorStateResult>
+  editorState(input: { slug?: string }): Promise<EditorStateResult>
   markComplete(input: { slug: string }): Promise<void>
   setThreadStatus(input: { slug: string; status: "active" | "planning" | "planned" | "needs-human" | "blocked" | "done" | "dismissed" }): Promise<void>
   dismissThread(input: { slug: string }): Promise<void>
@@ -541,6 +542,7 @@ export const PROCEDURES = {
   localMarkdown: "query",
   localFile: "query",
   resolveLocalPaths: "query",
+  settleLocalPath: "query",
   editorWindows: "query",
   composeTake: "mutation",
   editorState: "mutation",

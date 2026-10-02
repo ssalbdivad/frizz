@@ -47,6 +47,11 @@ in it. Works in VS Code, Cursor and Windsurf.
   box, which opens with the selection in it as the same chip the page's prompt box makes.
 - **Send to Frizz thread…** — pick one of the project's open threads, ones waiting on you first; it
   opens in the sidebar with the selection in its reply box.
+- **A window on a thread's worktree is that thread's.** Open a thread's worktree (`.frizz/worktrees/…`)
+  as a window's folder and the sidebar opens on that thread, which Send to Frizz thread also offers
+  first. Links the thread's agent wrote open its worktree's copy, and the main checkout's once the
+  worktree is gone. Done can remove the worktree, so Frizz won't mark the thread done while an editor
+  has unsaved changes in it: save or close them first.
 - **File links from Frizz** open here — in the window that has the file's folder open, at the line the
   link names, and that window comes to the front — when Frizz's External app setting is this editor
   (Frizz offers to switch it the first time a window connects).

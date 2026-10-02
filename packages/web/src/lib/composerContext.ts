@@ -167,10 +167,16 @@ export function locateInSource(source: string, selected: string): { startLine: n
  * `packages/web/src/App.tsx` for a file under the project; the absolute path for anything else. The
  * remainder keeps the path's own separators (`packages\web\src\App.tsx` under a `C:\…` project), as
  * the panel's canonical path is the server's spelling and the worker reads the same one.
+ *
+ * `checkoutDir` is where the box's thread works when that is not the project root — a worktree, which
+ * usually lies INSIDE the project (`.frizz/worktrees/<slug>`). A file under it is relative to IT: the agent
+ * resolves a relative path against its own working folder, and `.frizz/worktrees/x/src/a.ts` from there
+ * names nothing. A file of the main checkout stays relative to the project — the same relative path is the
+ * agent's own copy, which the worktree note says (`worktreeNote`).
  */
-export function contextDisplayPath(path: string, projectDir?: string | null): string {
+export function contextDisplayPath(path: string, projectDir?: string | null, checkoutDir?: string | null): string {
   if (isTerminalPath(path)) return path
-  return (projectDir && relativeTo(projectDir, path)) || path
+  return (checkoutDir && relativeTo(checkoutDir, path)) || (projectDir && relativeTo(projectDir, path)) || path
 }
 
 /**
@@ -206,11 +212,11 @@ export function contextSourceLabel(item: { path: string; startLine?: number; end
  * than a fence because the quoted text may itself contain any fence, and because the transcript
  * renders the sent message as markdown — quoted context reads as quotation.
  */
-export function serializeContextItems(items: ComposerContextItem[], projectDir?: string | null): string {
+export function serializeContextItems(items: ComposerContextItem[], projectDir?: string | null, checkoutDir?: string | null): string {
   if (!items.length) return ""
   const blocks = items.map((item) => {
     const quoted = item.text.replace(/\s+$/, "").split("\n").map((line) => `> ${line}`).join("\n")
-    return `${item.token} (${contextDisplayPath(item.path, projectDir)}${lineLabel(item)}):\n${quoted}`
+    return `${item.token} (${contextDisplayPath(item.path, projectDir, checkoutDir)}${lineLabel(item)}):\n${quoted}`
   })
   return `Selected context:\n\n${blocks.join("\n\n")}`
 }
@@ -222,12 +228,12 @@ export function serializeContextItems(items: ComposerContextItem[], projectDir?:
  * trailing position — context goes after the prose but BEFORE those lines so they stay trailing.
  * Definitions follow the order the references appear in the prose, not staging order.
  */
-export function buildMessageWithContext(value: string, items: ComposerContextItem[], projectDir?: string | null): string {
+export function buildMessageWithContext(value: string, items: ComposerContextItem[], projectDir?: string | null, checkoutDir?: string | null): string {
   const { prose, attachments } = splitComposerValue(value)
   const present = items
     .filter((item) => hasToken(prose, item.token))
     .sort((a, b) => tokenIndex(prose, a.token) - tokenIndex(prose, b.token))
-  const context = serializeContextItems(present, projectDir)
+  const context = serializeContextItems(present, projectDir, checkoutDir)
   if (!context) return value
   const body = prose.trimEnd() ? `${prose.trimEnd()}\n\n${context}` : context
   return joinComposerValue(body, attachments.map((attachment) => attachment.path))
@@ -402,11 +408,18 @@ export interface EditorQuote {
  * a chip already says it (`editorContextCovered`). A selection whose text is blank (whitespace selected)
  * reads as the file with the caret on its first line: there is nothing in it to quote. `previous` is the
  * last quote this thread was sent (`previousEditorQuote`): the same lines and text again are named, not
- * re-quoted.
+ * re-quoted. `checkoutDir` is the thread's own checkout when that is not the project root
+ * (`contextDisplayPath`).
  */
-export function serializeEditorContext(active: EditorContextInput | null | undefined, present: readonly ComposerContextItem[], projectDir?: string | null, previous?: EditorQuote | null): string {
+export function serializeEditorContext(
+  active: EditorContextInput | null | undefined,
+  present: readonly ComposerContextItem[],
+  projectDir?: string | null,
+  checkoutDir?: string | null,
+  previous?: EditorQuote | null,
+): string {
   if (!active || editorContextCovered(active, present)) return ""
-  const display = active.untitled ? active.path : contextDisplayPath(active.path, projectDir)
+  const display = active.untitled ? active.path : contextDisplayPath(active.path, projectDir, checkoutDir)
   const state = active.untitled ? UNTITLED : active.dirty ? UNSAVED : ""
   const named = `${display}${state ? ` (${state})` : ""}`
   const selection = active.selection
@@ -512,7 +525,8 @@ export function previousEditorQuote(messages: readonly { role: string; text: str
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index]!
     if (message.role !== "user") continue
-    const parsed = parseSentEditorContext(splitComposerValue(message.text).prose)
+    // A worktree thread's block is followed by the note on whose copy it is; the block is under it.
+    const parsed = parseSentEditorContext(withoutWorktreeNote(splitComposerValue(message.text).prose))
     if (!parsed) continue
     const { editor } = parsed
     if (editor.kind !== "selection" || editor.startLine === undefined || editor.endLine === undefined) return null
@@ -532,7 +546,55 @@ export function previousEditorQuote(messages: readonly { role: string; text: str
  * than carrying the old one as prose under a new one. Attachment lines stay. Unchanged when there is none.
  */
 export function withoutEditorContext(value: string): string {
-  const { prose, attachments } = splitComposerValue(value)
+  const { prose: sent, attachments } = splitComposerValue(value)
+  // The worktree note goes with the block: it describes the context of THAT moment, and the re-send
+  // writes its own when its own context needs one.
+  const prose = withoutWorktreeNote(sent)
   const parsed = parseSentEditorContext(prose)
-  return parsed ? joinComposerValue(parsed.body, attachments.map((attachment) => attachment.path)) : value
+  if (parsed) return joinComposerValue(parsed.body, attachments.map((attachment) => attachment.path))
+  return prose === sent ? value : joinComposerValue(prose, attachments.map((attachment) => attachment.path))
+}
+
+// ── a thread in a WORKTREE: whose copy the context is ─────────────────────────────────────────────
+//
+// About one thread in seven works in a worktree of its own (`.frizz/worktrees/<slug>`, 22 of 144
+// substantial sessions in a week), while the human's editor shows the project's main checkout. A chip or
+// the editor block names `src/a.ts` relative to the project, and the agent resolves that against its OWN
+// working folder — its worktree's copy, which is the right file to edit but may not hold the text the
+// human quoted from theirs. Nothing said so: a worktree worker read its own copy as the one the human had
+// selected and answered about code that was not in front of them.
+//
+// So when the context a message carries names a file of the main checkout and the thread works elsewhere,
+// ONE sentence after it says whose copy the context is and where the agent's own is. It is the last
+// paragraph of the message's prose (before any attachment lines), which keeps every parser above exactly
+// as strict as it was: the transcript takes it off first (`withoutWorktreeNote`), and the bubble shows what
+// the human wrote. A file in the worktree itself is the agent's own copy, relative to the worktree
+// (`contextDisplayPath`), and needs no sentence.
+
+const WORKTREE_NOTE_RE = /\n\nThe context above is from the human's editor, which shows the project's main checkout \([^\n]*\)\. You are working in your own (?:worktree|checkout) \([^\n]*\): the same relative path there is your copy, and it may differ from what they see\.$/
+
+/**
+ * The sentence for a message whose context names `paths`, sent to a thread working in `checkout`: "" when
+ * the thread works at the project root, or none of the paths is a file of the main checkout (the project,
+ * outside the thread's own checkout).
+ */
+export function worktreeNote(paths: readonly string[], projectDir: string | null | undefined, checkout: { dir: string; kind?: string } | null | undefined): string {
+  if (!projectDir || !checkout?.dir || checkout.dir === projectDir) return ""
+  const theirs = paths.some((path) => !isTerminalPath(path) && relativeTo(projectDir, path) !== null && relativeTo(checkout.dir, path) === null && path !== checkout.dir)
+  if (!theirs) return ""
+  const where = checkout.kind === "folder" ? "checkout" : "worktree"
+  return `The context above is from the human's editor, which shows the project's main checkout (${projectDir}). You are working in your own ${where} (${checkout.dir}): the same relative path there is your copy, and it may differ from what they see.`
+}
+
+/** Put the note at the end of an outgoing value's prose, before its attachment lines. */
+export function appendWorktreeNote(value: string, note: string): string {
+  if (!note) return value
+  const { prose, attachments } = splitComposerValue(value)
+  return joinComposerValue(`${prose.trimEnd()}\n\n${note}`, attachments.map((attachment) => attachment.path))
+}
+
+/** A sent message's prose without the note at its end; unchanged when there is none. */
+export function withoutWorktreeNote(prose: string): string {
+  const match = WORKTREE_NOTE_RE.exec(prose.trimEnd())
+  return match ? prose.slice(0, match.index) : prose
 }

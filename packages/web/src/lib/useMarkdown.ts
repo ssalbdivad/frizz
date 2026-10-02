@@ -32,6 +32,18 @@ export const MarkdownScopeContext = createContext<MarkdownScope | null>(null)
  *  looked up among (localFileCode.ts). */
 export type MarkdownScope = Required<Pick<MarkdownScopeOptions, "repo" | "appPath">> & Pick<MarkdownScopeOptions, "baseDir" | "homeDir" | "projectSlug"> & { projectId: string }
 
+/**
+ * WHERE THIS PROSE'S AUTHOR WORKED, when that is not the project root: a thread's worktree
+ * (ThreadView.checkout.dir), provided around its transcript (ChatView.tsx ThreadView). An agent in
+ * `.frizz/worktrees/<slug>` writes `src/a.ts` meaning ITS copy — the one it edited — and resolving that
+ * against the project root opened the main checkout's, which may not even have the change yet. So a
+ * relative link resolves here first, and an inline-code path is looked up here first and then at the
+ * project root (localFileCode.ts). When Done removes the worktree the board stops naming it, this falls
+ * back to the project root on the next render, and a link already resolved into the worktree is settled
+ * to the main checkout's copy by the server (router.ts settleWorktreePath).
+ */
+export const CheckoutBaseContext = createContext<string | null>(null)
+
 /** The repo GitHub-style references link to, as a render input. */
 export function useGithubRepoForLinks(): string | null {
   return useSyncExternalStore(subscribeGithubRepo, githubRepoForLinks, githubRepoForLinks)
@@ -66,8 +78,9 @@ export function useMarkdownHtml(md: string, opts?: { baseDir?: string; asDocumen
   const mentions = useMentionIndexVersion()
   const pageBase = useLocalPathBase()
   const scope = useContext(MarkdownScopeContext)
+  const checkout = useContext(CheckoutBaseContext)
   const { baseDir, asDocument } = opts ?? {}
-  const dir = baseDir ?? (scope ? scope.baseDir : pageBase.dir)
+  const dir = baseDir ?? checkout ?? (scope ? scope.baseDir : pageBase.dir)
   const home = scope ? scope.homeDir : pageBase.home
   // `pageRepo` is deliberately a dependency even where it is not passed: without a scope it is an input
   // to mdToHtml through githubAutolink.ts's module state, not through this argument list.
@@ -101,7 +114,8 @@ export function useInlineMarkdownHtml(md: string): string {
   const mentions = useMentionIndexVersion()
   const pageBase = useLocalPathBase()
   const scope = useContext(MarkdownScopeContext)
-  const dir = scope ? scope.baseDir : pageBase.dir
+  const checkout = useContext(CheckoutBaseContext)
+  const dir = checkout ?? (scope ? scope.baseDir : pageBase.dir)
   const home = scope ? scope.homeDir : pageBase.home
   const html = useMemo(
     () => mdInlineToHtml(md, { baseDir: dir, homeDir: home, repo: scope?.repo, appPath: scope?.appPath, projectSlug: scope?.projectSlug }),

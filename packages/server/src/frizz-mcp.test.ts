@@ -256,7 +256,8 @@ test("`editor` reads the window on this project as text, and says why when there
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
   const projectId = "0b7c1f6e-5a2d-4c4e-9d61-6f1f7c2b9a10"
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: projectId })
+  // No thread stamped (the test may itself run inside a Frizz worker, whose FRIZZ_THREAD would ride in).
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: projectId, FRIZZ_THREAD: "", FRIZZ_THREAD_SLUG: "" })
   let id = 10
   const call = async (result: unknown, status = 200) => {
     answer = { status, body: status === 200 ? { result } : result }
@@ -364,6 +365,84 @@ test("`editor` reads the window on this project as text, and says why when there
     const broken = await call({ error: "the bridge exploded" }, 500)
     assert.equal(broken.isError, true)
     assert.match(broken.text, /`editor` failed: the bridge exploded/)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A thread in a worktree: the human's editor shows the main checkout, so what they selected is THEIR copy.
+// The tool names the calling thread (its own stamp, never an argument), and when the server says that
+// thread works elsewhere, the report says whose copy each path is and names the worker's own copy.
+test("`editor` tells a thread in a worktree that the human's editor shows the main checkout, and names its own copy", async () => {
+  const seen: unknown[] = []
+  let answer: unknown = {}
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push(JSON.parse(body))
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: answer }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: "0b7c1f6e-5a2d-4c4e-9d61-6f1f7c2b9a10", FRIZZ_THREAD_SLUG: "tidy-loop", FRIZZ_THREAD: "" })
+  let id = 10
+  const call = async (result: unknown) => {
+    answer = result
+    const n = ++id
+    rpc.send({ jsonrpc: "2.0", id: n, method: "tools/call", params: { name: "editor", arguments: {} } })
+    return ((await rpc.next(n)).result.content[0].text as string)
+  }
+  const root = "/home/me/repo"
+  const dir = "/home/me/repo/.frizz/worktrees/tidy-loop"
+  const window = (active: string, open: string[] = [], folders = [root]) => ({
+    app: "Visual Studio Code",
+    kind: "vscode",
+    focused: true,
+    folders,
+    editor: {
+      shared: true,
+      reportedAgoMs: 0,
+      active: { path: active, languageId: "typescript", dirty: false, lineCount: 9, cursorLine: 3, selection: { startLine: 2, endLine: 3, text: "a\nb" }, visible: { startLine: 1, endLine: 9 } },
+      open: open.map((path) => ({ path })),
+      diagnostics: [],
+      problems: { errors: 0, warnings: 0 },
+    },
+  })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+
+    const main = await call({ windows: [window(`${root}/src/a.ts`, [`${root}/src/b.ts`])], connected: 1, elsewhere: [], checkout: { dir, root, kind: "worktree" } })
+    assert.deepEqual(seen.at(-1), { slug: "tidy-loop" }, "the CALLING thread, from its own stamp")
+    assert.equal(main.split("\n").slice(0, 5).join("\n"), [
+      "Visual Studio Code (focused now, folder /home/me/repo), last changed just now.",
+      "",
+      "You are working in your own worktree, /home/me/repo/.frizz/worktrees/tidy-loop, but this window shows the project's main checkout, /home/me/repo. " +
+        "A file below under /home/me/repo is the human's copy, and what they selected is its text; the same relative path under " +
+        "/home/me/repo/.frizz/worktrees/tidy-loop is your copy, which may differ. Read and edit yours.",
+      "",
+      "In front: /home/me/repo/src/a.ts (typescript), lines 2-3 selected. Your copy: /home/me/repo/.frizz/worktrees/tidy-loop/src/a.ts.",
+    ].join("\n"))
+
+    // The human opened the worktree itself: everything shown is already the worker's own copy.
+    const own = await call({ windows: [window(`${dir}/src/a.ts`, [], [dir])], connected: 1, elsewhere: [], checkout: { dir, root, kind: "worktree" } })
+    assert.match(own, /\n\nThis window has your own worktree open, \/home\/me\/repo\/\.frizz\/worktrees\/tidy-loop: the files below under it are your own copies\.\n\nIn front: \/home\/me\/repo\/\.frizz\/worktrees\/tidy-loop\/src\/a\.ts \(typescript\), lines 2-3 selected\.\n/)
+    assert.doesNotMatch(own, /Your copy:|main checkout/)
+
+    // A file outside the project is nobody's copy; a thread at the root gets no clause at all.
+    const outside = await call({ windows: [window("/etc/hosts")], connected: 1, elsewhere: [], checkout: { dir, root, kind: "worktree" } })
+    assert.doesNotMatch(outside, /Your copy:|main checkout|own copies/)
+    const atRoot = await call({ windows: [window(`${root}/src/a.ts`)], connected: 1, elsewhere: [] })
+    assert.doesNotMatch(atRoot, /Your copy:|main checkout|own copies/)
+    // A malformed checkout is ignored rather than trusted.
+    const junk = await call({ windows: [window(`${root}/src/a.ts`)], connected: 1, elsewhere: [], checkout: { dir: 3 } })
+    assert.doesNotMatch(junk, /Your copy:/)
   } finally {
     rpc.kill()
     http.close()

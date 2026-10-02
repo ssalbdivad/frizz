@@ -1,6 +1,6 @@
 import type { EmbedEditorContextMessage, EmbedHostStateMessage } from "@frizz/shared"
 import { proxy, useSnapshot } from "valtio"
-import { appendEditorContext, buildMessageWithContext, contextChipLabel, hasToken, previousEditorQuote, serializeEditorContext, type ComposerContextItem } from "./composerContext.ts"
+import { appendEditorContext, appendWorktreeNote, buildMessageWithContext, contextChipLabel, hasToken, previousEditorQuote, serializeEditorContext, worktreeNote, type ComposerContextItem } from "./composerContext.ts"
 import { embedded, postToHost } from "./embed.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 import { formatChord, type Chord, type Platform } from "./keybindings.ts"
@@ -252,34 +252,47 @@ export function sendsEditorContext(): boolean {
  * thread's reply box on a queue card has no bar, and context the human could not see go out is context
  * they could not turn off.
  *
- * `history` is the thread's transcript, for a reply: a selection whose lines and text the thread's last
- * block already quoted is named, not quoted again (composerContext.ts previousEditorQuote).
+ * `thread` is what the box knows of its thread, for a reply. `history`, its transcript: a selection whose
+ * lines and text the thread's last block already quoted is named, not quoted again (composerContext.ts
+ * previousEditorQuote). `checkout`, where it works when that is not the project root: paths are written
+ * for that checkout, with a word on whose copy the context is (composerContext.ts worktreeNote).
  */
 export function outgoingMessage(
   value: string,
   staged: readonly ComposerContextItem[],
   projectDir: string | null | undefined,
   editor: boolean,
-  history?: readonly { role: string; text: string; displayText?: string }[],
+  thread: { history?: readonly { role: string; text: string; displayText?: string }[]; checkout?: ThreadCheckout | null } = {},
 ): string {
-  if (!editor || !sendsEditorContext() || !editorContext.active) return outgoingMessageWith(value, staged, projectDir, null)
-  const previous = history ? previousEditorQuote(history.map((message) => ({ role: message.role, text: messagePresentationText(message).replace(/\r\n?/g, "\n") }))) : null
-  return outgoingMessageWith(value, staged, projectDir, editorContext.active, previous)
+  const active = editor && sendsEditorContext() ? editorContext.active : null
+  const { history, checkout } = thread
+  const previous = active && history ? previousEditorQuote(history.map((message) => ({ role: message.role, text: messagePresentationText(message).replace(/\r\n?/g, "\n") }))) : null
+  return outgoingMessageWith(value, staged, projectDir, active, checkout, previous)
 }
 
-/** `outgoingMessage` with the editor's context (and the thread's last quote of it) passed in, for its test. */
+/** Where the box's thread works when that is not the project root (ThreadView.checkout). */
+export type ThreadCheckout = { dir: string; kind?: string }
+
+/**
+ * `outgoingMessage` with the editor's context (and the thread's last quote of it) passed in, for its test.
+ * `checkout` is the thread's own checkout: a file in it is written relative to it, and context from the
+ * main checkout gets the sentence that says whose copy it is (composerContext.ts worktreeNote).
+ */
 export function outgoingMessageWith(
   value: string,
   staged: readonly ComposerContextItem[],
   projectDir: string | null | undefined,
   active: EditorContextState["active"],
+  checkout?: ThreadCheckout | null,
   previous?: ReturnType<typeof previousEditorQuote>,
 ): string {
-  const withChips = buildMessageWithContext(value, [...staged], projectDir)
-  if (!active) return withChips
+  const checkoutDir = checkout?.dir
+  const withChips = buildMessageWithContext(value, [...staged], projectDir, checkoutDir)
   // The chips that serialize — the ones whose token is still in the prose — are the ones that can say
   // what the editor block would (composerContext.ts editorContextCovered).
   const { prose } = splitComposerValue(value)
   const present = staged.filter((item) => hasToken(prose, item.token))
-  return appendEditorContext(withChips, serializeEditorContext(active, present, projectDir, previous))
+  const block = active ? serializeEditorContext(active, present, projectDir, checkoutDir, previous) : ""
+  const named = [...present.map((item) => item.path), ...(block && active ? [active.path] : [])]
+  return appendWorktreeNote(appendEditorContext(withChips, block), worktreeNote(named, projectDir, checkout))
 }

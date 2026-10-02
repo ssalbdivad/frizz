@@ -498,6 +498,11 @@ export const CLAUDE_WORKER_ENV = {
   CLAUDE_CODE_TOTAL_TOKENS_REMINDER: "infinite",
   BASH_DEFAULT_TIMEOUT_MS: "60000",
   BASH_MAX_TIMEOUT_MS: String(24 * 60 * 60 * 1000),
+  // A background worker never attaches to the human's editor. Stripping the editor's address from the
+  // inherited environment (worker-env.ts isEditorAttachEnvKey) removes what Claude Code would find it by;
+  // this is the CLI's own first check in its auto-connect decision, so it holds even if Claude Code learns
+  // a new way to find one — a lock file in ~/.claude/ide, a setting's `autoConnectIde`.
+  CLAUDE_CODE_AUTO_CONNECT_IDE: "false",
 } as const
 
 // EVERY Claude worker's environment, on EVERY transport — the static entries in CLAUDE_WORKER_ENV plus

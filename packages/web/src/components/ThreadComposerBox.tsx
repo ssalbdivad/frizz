@@ -159,7 +159,12 @@ export function ThreadComposerBox({
     // editor has in front, read now; the queue card's copy shows no bar and so carries none of it. The
     // thread's transcript rides along so a selection it already quoted is named, not quoted again.
     const staged = takeContextItems(key)
-    const outgoing = outgoingMessage(text, staged, projectDir, surface === "chatComposer", qc.getQueryData<TranscriptData>(["transcript", slug])?.messages)
+    // A thread working in a worktree reads paths against IT, so they are written for it, with a word on
+    // whose copy the context is (lib/composerContext.ts worktreeNote).
+    const outgoing = outgoingMessage(text, staged, projectDir, surface === "chatComposer", {
+      history: qc.getQueryData<TranscriptData>(["transcript", slug])?.messages,
+      checkout: thread?.checkout,
+    })
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Never clobber a newer draft typed while the request was in flight.

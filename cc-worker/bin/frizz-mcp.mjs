@@ -40,7 +40,7 @@
  * isError tool result so the worker sees a message instead of a dead tool.
  */
 import { readFileSync, readdirSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, isAbsolute, join, relative } from "node:path"
 
 const PROTOCOL_FALLBACK = "2025-06-18"
 // Comfortably above a codex dispatch's bounded rollout-discovery wait (~15s) so a legitimate slow
@@ -1220,8 +1220,12 @@ const EDITOR_FALLBACK = "Ask the human to paste the code, or to name the file an
  * @returns {Promise<string>} */
 async function editor() {
   let result
+  // This thread's own slug, when the spawn stamped one: the server answers with this thread's checkout
+  // when it works somewhere other than the project root (a worktree), which changes what the human's
+  // selection means to it. Never from the arguments — the tool takes none.
+  const slug = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
   try {
-    result = (await callRpc("editorState", {}))?.result
+    result = (await callRpc("editorState", slug ? { slug } : {}))?.result
   } catch (err) {
     // A Frizz from before this tool answers an unknown procedure with 404; the MCP server outlives
     // restarts, so a worker can hold this tool while the server it talks to does not have it yet.
@@ -1247,7 +1251,7 @@ async function editor() {
     )
   }
   const [front, ...others] = windows
-  const parts = [editorWindowReport(front)]
+  const parts = [editorWindowReport(front, editorCheckout(result?.checkout))]
   if (others.length) {
     parts.push(
       `Also open in ${others.length} other window${others.length === 1 ? "" : "s"} (not read in full; the one above was used last):\n` +
@@ -1281,8 +1285,38 @@ function agoLabel(ms) {
   return ms < 1_000 ? "just now" : `${durationLabel(Math.round(ms / 1_000))} ago`
 }
 
-/** One window, in full: the file in front with its selection, the tabs, the problems. @param {any} w */
-function editorWindowReport(w) {
+// A THREAD IN A WORKTREE IS NOT LOOKING AT THE HUMAN'S COPY. About one thread in seven works in a worktree
+// of its own (`.frizz/worktrees/<slug>`), while the human's editor shows the project's main checkout — so
+// the file they have selected is THEIR copy, its text may not be what the worker's copy holds, and an
+// absolute path read off this report points the worker's Edit at the main checkout instead of its own
+// work. The server says where the calling thread works (`checkout`, editorState); the report says once
+// whose copy each path is, and names the worker's own copy of the file in front. Paths stay absolute:
+// that is what Read and Edit take, and an absolute path can never be resolved against the wrong folder.
+
+/** The answer's `checkout`, or undefined when it is absent or malformed. @param {any} raw
+ *  @returns {{ dir: string, root: string, kind: string } | undefined} */
+function editorCheckout(raw) {
+  if (!raw || typeof raw.dir !== "string" || typeof raw.root !== "string" || !raw.dir || !raw.root) return undefined
+  return { dir: raw.dir, root: raw.root, kind: raw.kind === "folder" ? "folder" : "worktree" }
+}
+
+/** Whether `path` is `dir` or lies under it. @param {string} path @param {string} dir */
+function editorUnder(path, dir) {
+  const rel = relative(dir, path)
+  return rel === "" || (!!rel && !rel.startsWith("..") && !isAbsolute(rel))
+}
+
+/** The worker's own copy of a file the human's editor shows in the main checkout; undefined for a file
+ *  already in the worker's checkout, or outside the project. @param {string} path
+ *  @param {{ dir: string, root: string } | undefined} checkout */
+function editorOwnCopy(path, checkout) {
+  if (!checkout || !isAbsolute(path) || editorUnder(path, checkout.dir) || !editorUnder(path, checkout.root)) return undefined
+  return join(checkout.dir, relative(checkout.root, path))
+}
+
+/** One window, in full: the file in front with its selection, the tabs, the problems. @param {any} w
+ *  @param {{ dir: string, root: string, kind: string } | undefined} [checkout] the calling thread's own checkout */
+function editorWindowReport(w, checkout) {
   const head = editorWindowHead(w)
   const e = w.editor
   if (!e) {
@@ -1301,10 +1335,27 @@ function editorWindowReport(w) {
   // "Last changed", not "as of": the extension reports every change, so an old report is a quiet editor.
   const lines = [`${head}, last changed ${agoLabel(e.reportedAgoMs ?? 0)}.`]
   const a = e.active
+  const open = Array.isArray(e.open) ? e.open : []
+  const diagnostics = Array.isArray(e.diagnostics) ? e.diagnostics : []
+  if (checkout) {
+    const shown = [...(a && !a.untitled ? [a.path] : []), ...open.filter((f) => !f.untitled).map((f) => f.path), ...diagnostics.map((d) => d.path)]
+    const where = checkout.kind === "folder" ? "your own checkout" : "your own worktree"
+    if (shown.some((path) => editorOwnCopy(path, checkout))) {
+      lines.push(
+        "",
+        `You are working in ${where}, ${checkout.dir}, but this window shows the project's main checkout, ${checkout.root}. ` +
+        `A file below under ${checkout.root} is the human's copy, and what they selected is its text; the same relative ` +
+        `path under ${checkout.dir} is your copy, which may differ. Read and edit yours.`,
+      )
+    } else if (shown.some((path) => typeof path === "string" && editorUnder(path, checkout.dir))) {
+      lines.push("", `This window has ${where} open, ${checkout.dir}: the files below under it are your own copies.`)
+    }
+  }
   if (!a) {
     lines.push("", "No file is in front: the editor area is empty, or shows something that is not a file (a diff's old side, an output pane, a webview).")
   } else {
-    lines.push("", `In front: ${editorActiveLine(a)}.`)
+    const own = a.untitled ? undefined : editorOwnCopy(a.path, checkout)
+    lines.push("", `In front: ${editorActiveLine(a)}.${own ? ` Your copy: ${own}.` : ""}`)
     if (a.selection) {
       const s = a.selection
       const count = s.endLine - s.startLine + 1
@@ -1323,12 +1374,10 @@ function editorWindowReport(w) {
     }
     lines.push(`Caret on line ${a.cursorLine}; lines ${a.visible.startLine}-${a.visible.endLine} on screen; ${a.lineCount} line${a.lineCount === 1 ? "" : "s"} in all.`)
   }
-  const open = Array.isArray(e.open) ? e.open : []
   if (open.length) {
     lines.push("", `Other open tabs, most recent first (${open.length}):`)
     for (const f of open) lines.push(`- ${f.path}${f.untitled ? " (untitled, not saved to disk)" : f.dirty ? " (unsaved changes)" : ""}`)
   }
-  const diagnostics = Array.isArray(e.diagnostics) ? e.diagnostics : []
   const errors = e.problems?.errors ?? 0
   const warnings = e.problems?.warnings ?? 0
   if (!errors && !warnings) {

@@ -20,6 +20,7 @@ import {
   resolveLocalFile,
   resolveLocalFileAt,
   resolveOpenableFile,
+  mainCheckoutCopy,
   resolveWatchableLocalFile,
 } from "./local-file.ts"
 
@@ -494,4 +495,32 @@ test("a path with a trailing position that does not exist as written opens the b
   assert.deepEqual(await openLocalFile(`${file}:12`, "vscode", [root], linux), { action: "opened", path: file })
   await openLocalFile(`${file}:12`, "vscode", [root], { ...linux, position: { line: 40 } })
   assert.deepEqual(calls.map((c) => c.args), [["-g", `${file}:12`], ["-g", `${file}:40`]], "an explicit position wins over the path's own")
+})
+
+// A link an agent wrote in its worktree names the worktree's copy; Done removes the worktree. The same
+// relative path in the main checkout is the file it meant (router.ts settleWorktreePath).
+test("mainCheckoutCopy: a file in one of the project's worktrees is the same path in the main checkout", () => {
+  const root = "/repo"
+  const trees = "/repo/.frizz/worktrees"
+  assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees/tidy/src/a.ts", root, trees), "/repo/src/a.ts")
+  assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees/tidy/.frizz/threads/x/notes.md", root, trees), "/repo/.frizz/threads/x/notes.md")
+  assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees/tidy/src/a.ts:12", root, trees), "/repo/src/a.ts:12", "a trailing position rides along")
+  // The worktree folder, a worktree itself, and anything outside the worktree folder: nothing.
+  assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees", root, trees), undefined)
+  assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees/tidy", root, trees), undefined)
+  assert.equal(mainCheckoutCopy("/repo/src/a.ts", root, trees), undefined)
+  assert.equal(mainCheckoutCopy("/elsewhere/.frizz/worktrees/tidy/a.ts", root, trees), undefined)
+  assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees-old/tidy/a.ts", root, trees), undefined)
+  // The worktree folder may live outside the project (the `worktreeDir` setting).
+  assert.equal(mainCheckoutCopy("/trees/tidy/src/a.ts", root, "/trees"), "/repo/src/a.ts")
+})
+
+test("resolveOpenableFile lets the caller settle an absolute path before the gate", () => {
+  const project = realpathSync(mkdtempSync(join(tmpdir(), "frizz-openable-settle-")))
+  writeFileSync(join(project, "a.ts"), "x")
+  const gone = join(project, ".frizz", "worktrees", "tidy", "a.ts")
+  assert.equal(resolveOpenableFile(gone, project, [project]), null, "negative control: the worktree's file is gone")
+  assert.equal(resolveOpenableFile(gone, project, [project], undefined, (abs) => mainCheckoutCopy(abs, project, join(project, ".frizz", "worktrees")) ?? abs), join(project, "a.ts"))
+  // The settled path still faces the gate.
+  assert.equal(resolveOpenableFile(gone, project, [join(project, "nope")], undefined, () => join(project, "a.ts")), null)
 })
