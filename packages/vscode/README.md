@@ -18,11 +18,14 @@ in it. Works in VS Code, Cursor and Windsurf.
   file and your caret's line. So you can ask "why does this throw?" without pasting anything. A click on
   the bar adds it as a chip where your caret is instead, and the other open files are one more click away.
   A selection the thread already has is named, not sent again; text from files that may hold secrets
-  (`.env`, keys, credentials) is never sent on its own — only which lines.
+  (`.env`, keys, credentials) is never sent on its own — only which lines. To keep one selection out of
+  your message, point at the bar: its file icon turns into a ×, and a click leaves that selection (or,
+  with nothing selected, that file) out until you select something else. Sharing stays on.
 - **Frizz's agents can see your editor.** An agent can also read what you have in front of you when it
   needs to — the file you are in, what you have selected and its text, your open tabs, and the editor's
   errors and warnings — from the window that has the thread's project open, even when you talk to it in
-  your browser.
+  your browser. There, the prompt box names what it would read (`VS Code: sample.ts:12-20`), and a click
+  adds it as a chip.
 - **One switch.** The eye on the bar turns all of it off and on: off, nothing of your editor goes to Frizz
   unless you add it. It is the `frizz.shareEditorState` setting, so it holds in every window and across
   reloads.
@@ -118,6 +121,9 @@ command palette.
   default (`terminal.integrated.rightClickBehavior`); Shift+right-click opens the menu. Adding from the
   terminal borrows the clipboard for a moment and puts your text back: a clipboard holding an image
   comes back empty, and a clipboard history records the selection.
+- **A drop needs `Shift`.** VS Code hands a sidebar a drag only while `Shift` is held, so hold it to drop
+  files from the explorer or from your desktop onto a prompt box. Pasting a screenshot attaches it, as in
+  the browser.
 - **No Frizz header, no browser notifications.** The title row's buttons stand in for the header, and
   it always reads "Frizz": VS Code re-cases a view's title, so thread and project names stay in the page,
   and it shows no view description in a sidebar of one view. Frizz's

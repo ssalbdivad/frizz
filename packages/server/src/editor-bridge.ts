@@ -17,7 +17,9 @@ import {
   workingThread,
   type EditorAttentionNeeds,
   type EditorAttentionThread,
+  type EditorComposeInput,
   type EditorComposeItem,
+  type EditorFront,
   type EditorHello,
   type EditorKind,
   type EditorProject,
@@ -81,6 +83,13 @@ export const EDITOR_REQUEST_TIMEOUT_MS = 5_000
 export const EDITOR_REVIEW_TIMEOUT_MS = 20_000
 export const EDITOR_HELLO_TIMEOUT_MS = 10_000
 export const EDITOR_COMPOSE_TTL_MS = 10 * 60_000
+/**
+ * How long the bridge gathers editor changes before it tells the pages (`editor-front`). A selection
+ * dragged over lines arrives as a frame every 250ms (the extension's debounce), and a click into another
+ * window as a `state` from each; one ping per burst is all a page needs, since it asks for the whole
+ * picture anyway.
+ */
+export const EDITOR_FRONT_COALESCE_MS = 100
 export const EDITOR_COMPOSE_MAX_ITEMS = 20
 
 export interface EditorBridgeDeps {
@@ -108,6 +117,7 @@ export interface EditorBridgeDeps {
   composeTtlMs?: number
   maxComposeItems?: number
   maxWindows?: number
+  frontCoalesceMs?: number
 }
 
 export interface EditorBridge {
@@ -158,6 +168,20 @@ export interface EditorBridge {
    * ever ADD a reason to keep a worktree, never remove one.
    */
   unsavedUnder(dirs: readonly string[]): EditorUnsavedFile[]
+  /**
+   * What a browser tab beside the editor shows of it (editor-protocol.ts EditorFront): the file in front of
+   * the window `editorState` would put first for `dir` — the one the agents' `editor` tool reads — and its
+   * selection's lines. Null when no window has the project open, when that window does not share its
+   * editor (or has not said), or when it has no text editor in front: the tool would read nothing either.
+   */
+  front(dir: string): EditorFront | null
+  /**
+   * What a click on that line adds to a prompt box: the selection WITH its text — or, past what the frame
+   * carried whole, or from a file whose text stays home, its lines alone — or with nothing selected the
+   * file. The compose shape an editor's own "Add to Frizz prompt" sends, so the page makes the same chip.
+   * Null when `front` is, and for an untitled buffer, which no chip can name.
+   */
+  frontItem(dir: string): EditorComposeInput | null
 }
 
 /** A file an editor window shows with unsaved changes (EditorBridge.unsavedUnder). */
@@ -257,6 +281,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
   const composeTtlMs = deps.composeTtlMs ?? EDITOR_COMPOSE_TTL_MS
   const maxComposeItems = deps.maxComposeItems ?? EDITOR_COMPOSE_MAX_ITEMS
   const maxWindows = deps.maxWindows ?? EDITOR_MAX_WINDOWS
+  const frontCoalesceMs = deps.frontCoalesceMs ?? EDITOR_FRONT_COALESCE_MS
 
   const wss = new WebSocketServer({ noServer: true, maxPayload: EDITOR_MAX_PAYLOAD_BYTES })
   wss.on("error", () => {})
@@ -272,6 +297,10 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
   let projectsPollAgain = false
   // What the pages were last told, so a window's focus moving (which they do not show) publishes nothing.
   let publishedEditors = "[]"
+  // What every page could learn from `editorFront` as of the last `editor-front`, so a frame that changes
+  // nothing a page shows (a tab opened, a diagnostic, the lines on screen) publishes nothing.
+  let publishedFronts = "[]"
+  let frontTimer: NodeJS.Timeout | undefined
   const compose: { item: EditorComposeItem; expiresAt: number }[] = []
 
   function send(conn: Connection, msg: EditorServerMessage): boolean {
@@ -320,6 +349,25 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     if (json === publishedEditors) return
     publishedEditors = json
     try { deps.publish({ type: "editors", windows }) } catch {}
+  }
+
+  // `editor-front`, after the burst a change arrives in (EDITOR_FRONT_COALESCE_MS), when what a browser tab
+  // shows of some window changed. The diff is over every window in the order `editorState` ranks them —
+  // their folders, which decide whose project each one has open, and what each has in front — so a page
+  // asks again exactly when the answer for SOME project could differ. Payload-free and machine-wide: the
+  // ping cannot say which project, so it says nothing about any, and each page asks its own.
+  function frontsChanged(): void {
+    if (closing || frontTimer) return
+    frontTimer = setTimeout(() => {
+      frontTimer = undefined
+      if (closing) return
+      const ranked = [...connections].filter((c) => c.window).sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
+      const json = JSON.stringify(ranked.map((c) => [c.window!.folders, frontOf(c.window!)]))
+      if (json === publishedFronts) return
+      publishedFronts = json
+      try { deps.publish({ type: "editor-front" }) } catch {}
+    }, frontCoalesceMs)
+    frontTimer.unref?.()
   }
 
   // An in-memory diff of the projects list, re-sent to each window whose last copy differs. Polled
@@ -393,6 +441,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     if (conn.window) {
       conn.window = undefined
       publishEditorsIfChanged()
+      frontsChanged()
       watchAttention()
     }
     if (connections.size === 0) stopTimers()
@@ -429,6 +478,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     }
     send(conn, { t: "welcome", v: EDITOR_PROTOCOL_VERSION, bootId: deps.bootId(), features: [EDITOR_FEATURES.editorState, EDITOR_FEATURES.selectionWithheld, EDITOR_FEATURES.review, EDITOR_FEATURES.sidebar, EDITOR_FEATURES.attention] })
     publishEditorsIfChanged()
+    frontsChanged()
     void pollProjects()
   }
 
@@ -468,6 +518,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       window.focused = msg.focused
       window.acceptsOpens = msg.acceptsOpens
       publishEditorsIfChanged()
+      frontsChanged()
       return
     }
     if (msg.t === "result") {
@@ -489,6 +540,7 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       // is nothing to merge, and a window that turned sharing off sends `shared: false` with nothing else.
       const { t: _t, ...snapshot } = msg
       window.editor = { snapshot, at: now() }
+      frontsChanged()
       return
     }
     // compose: held for whichever page claims it (composeTake), announced to every open project's pages.
@@ -559,6 +611,42 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     if (!active || active.untitled) return false
     const realActive = realpathOrUndefined(active.path)
     return realActive !== undefined && isUnder(realActive, dir)
+  }
+
+  /**
+   * The windows that have the project at `dir` (or one of `also`) open, the one the human was in last
+   * first — EditorBridge.editorState's ranking, which `front` reads the head of, so the browser's line and
+   * the agents' tool name the same window.
+   */
+  function windowsHolding(dir: string, also: readonly string[] = []): Connection[] {
+    const targets = closing ? [] : [dir, ...also].flatMap((folder) => {
+      const real = realpathOrUndefined(folder)
+      return real ? [{ folder, real }] : []
+    })
+    const matched: Connection[] = []
+    for (const conn of connections) {
+      const window = conn.window
+      if (window && targets.some((target) => holdsProject(window, target.folder, target.real))) matched.push(conn)
+    }
+    return matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
+  }
+
+  /** What a window shows a browser tab (EditorFront): its file in front and selection, while it shares. */
+  function frontOf(window: EditorWindow): EditorFront | null {
+    const snapshot = window.editor?.snapshot
+    const active = snapshot?.shared ? snapshot.active : null
+    if (!active) return null
+    const { selection } = active
+    return {
+      app: window.app,
+      kind: window.kind,
+      path: active.path,
+      ...(active.untitled ? { untitled: true as const } : {}),
+      ...(active.dirty ? { dirty: true as const } : {}),
+      cursorLine: active.cursorLine,
+      ...(selection ? { selection: { startLine: selection.startLine, endLine: selection.endLine } } : {}),
+      ...(selection?.withheld ? { withheld: true as const } : {}),
+    }
   }
 
   function mostRecent(candidates: readonly Connection[]): Connection | undefined {
@@ -673,6 +761,8 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
       if (closePromise) return closePromise
       closing = true
       stopTimers()
+      if (frontTimer) clearTimeout(frontTimer)
+      frontTimer = undefined
       watchAttention()
       for (const conn of connections) for (const settle of [...conn.pending.values()]) settle("gone")
       // Terminate rather than handshake, as the application socket does: the extension reconnects on
@@ -772,21 +862,10 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
     },
 
     editorState(dir, also = []) {
-      const targets = closing ? [] : [dir, ...also].flatMap((folder) => {
-        const real = realpathOrUndefined(folder)
-        return real ? [{ folder, real }] : []
-      })
       const at = now()
-      const matched: Connection[] = []
+      const matched = windowsHolding(dir, also)
       // The windows on other projects are counted, never described: their folders are not this worker's.
-      let connected = 0
-      for (const conn of connections) {
-        const window = conn.window
-        if (!window) continue
-        connected++
-        if (targets.some((target) => holdsProject(window, target.folder, target.real))) matched.push(conn)
-      }
-      matched.sort((a, b) => (moreRecentlyFocused(a, b) ? -1 : moreRecentlyFocused(b, a) ? 1 : 0))
+      const connected = [...connections].filter((conn) => conn.window).length
       const windows = matched.map(({ window }): EditorStateWindow => {
         const { app, kind, focused, lastFocusedAt, folders, editor } = window!
         return {
@@ -799,6 +878,24 @@ export function createEditorBridge(deps: EditorBridgeDeps): EditorBridge {
         }
       })
       return { windows, connected }
+    },
+
+    front(dir) {
+      const first = windowsHolding(dir)[0]
+      return first ? frontOf(first.window!) : null
+    },
+
+    frontItem(dir) {
+      const first = windowsHolding(dir)[0]
+      const front = first ? frontOf(first.window!) : null
+      if (!front || front.untitled) return null
+      const selection = first!.window!.editor!.snapshot.active!.selection
+      if (!selection) return { path: front.path }
+      // Only a WHOLE text is quoted: the start of a selection, in a chip that names all its lines, would
+      // tell the agent those lines say less than they do. Cut or withheld, the lines alone, which the agent
+      // reads from the file — as an editor's own add does past its ceiling.
+      const whole = selection.text !== undefined && !selection.truncated && !selection.withheld
+      return { path: front.path, startLine: selection.startLine, endLine: selection.endLine, ...(whole ? { text: selection.text } : {}) }
     },
 
     unsavedUnder(dirs) {

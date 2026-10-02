@@ -124,6 +124,23 @@ it as a chip; a reference with no text becomes a plain `` `path:line` `` in the 
   something else, or the browser chose the reader — a toast offers to send them there (one click sets
   "Open code files: In external app" and External app to that editor).
 
+### The editor beside a browser tab
+
+In the sidebar the bar reads the editor live and every send carries it. A human talking to a thread from a
+BROWSER TAB beside VS Code had neither: the agent learned what was selected only if it called its tool,
+and the human could not see whether there was anything for it to read. So the tab's thread reply box and
+new-thread box end their footer with one quiet line — `VS Code: a.ts:12-20`, or the file alone with only a
+caret — naming exactly what `mcp__frizz__editor` would read: `editorFront` answers from the window
+`editorState` ranks first for the project, the file and the selection's LINES, never the text, and nothing
+while that window does not share. Its tooltip says agents can read it with their editor tool; a click asks
+again with `text: true` and adds the chip an editor's own "Add to Frizz prompt" would (a truncated or
+withheld selection as its lines alone, an untitled buffer not at all). It sends nothing on its own: a tab is
+not where the human points at code, and context sent from a surface that cannot show the switch is context
+they cannot stop. Live from `editor-front`, a payload-free machine-wide ping the bridge publishes after a
+100ms burst when some window's folders or front changed; the page asks only while a window is connected,
+never in the sidebar or on a phone. In the footer, not along the top: here it is a side note, and costs the
+box no height. (server editor-bridge.ts front/frontItem; web components/EditorLine.tsx, lib/editorFront.ts.)
+
 ## Positions in links
 
 `packages/shared/src/file-position.ts` is the one grammar: `a.ts:12`, `a.ts:12:3`, `a.ts:12-20`,
@@ -281,6 +298,17 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   (the workspace's value when one is set, else the user's). Until 2026-10-02 the eye was the frame's own
   pref and governed the block alone, so with the eye off an agent could still read the selection through
   its tool. Being a VS Code setting, it holds across window reloads and in every window.
+- **Leaving one out.** Claude Code's extension lets the human drop the selection in front from the next
+  message without turning the feature off; the eye cannot be that, since it is a VS Code setting that holds
+  in every window and also shuts the agents' tool out. So pointing at the bar's reading turns its file glyph
+  into a × (Cursor's context pills do the same), and a click leaves THIS selection — or with nothing
+  selected this file — out of every sidebar send until the editor shows something else. The key is the
+  file, lines and size (the file alone with no selection, so caret moves keep it out); the leave-out is
+  dropped, not shadowed, when the selection changes, so the same lines selected again later go. Left out,
+  the reading wears the eye-off state (struck, dimmed), the hint says what brings it back, and the glyph
+  offers the undo arrow. The page's alone: the agents' tool still reads the editor, because the eye is
+  on and the human can see that it is. A hover affordance rather than a fourth control on the strip: at
+  300px the hint already gets ~110px. (lib/editorContext.ts leaveOut, sentEditorFront.)
 - **The hint** beside the reading says what goes on its own and what the chord is still for — "Selections
   go with your message · Ctrl+L puts one at the caret", "Goes with your message" over a selection, "Lines
   only: the file may hold secrets", "Not shared" with the eye off — the longest that fits. It said "Select
@@ -713,4 +741,14 @@ the project root, which ignores `.frizz/`. Each path is now probed in the checko
   worker with the editor block, Ctrl+L into the tab and back; c17, always last, a restart and then a window reload
   (Developer: Reload Window, typed in the palette), both of which the framed page's own `localStorage`
   and the eye survive. Under the test runner a reload ends the run (VS Code exits with its extension
-  host), so c17 reopens the same profile in a VS Code of the harness's own and reloads that.
+  host), so c17 reopens the same profile in a VS Code of the harness's own and reloads that. c21 the bar's ×:
+  pointed at, the glyph is the ×; clicked, the reading is struck and pressed with the eye and the setting
+  untouched, the agents' tool still reading the selection, a send carrying no block, and a new selection
+  quoted again. c22 an image on the real X clipboard (xclip under the run's Xvfb), Ctrl+V in the reply box:
+  a control text paste attaches nothing, the image becomes a tile, and the send names a PNG on disk. c23 a
+  file from outside VS Code: VS Code's own drag monitor, measured on the workbench, turns the webview's
+  pointer events off for a plain drag and back on with Shift (so a drop needs Shift, as the explorer's
+  does); a drag carrying a real file, dispatched to the page's frame with Shift, shows "Drop file to
+  attach" and lands as a tile. Neither paste nor drop needed a fix: the page's own handlers work in the
+  webview. Not reached: a drag from a real file manager (none on the Xvfb box), so XDND itself is VS
+  Code's and Chromium's, not exercised.

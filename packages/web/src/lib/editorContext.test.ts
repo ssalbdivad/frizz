@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { ADD_CONTEXT_WINDOW_MS, barAdd, barHints, contextBarReading, editorAddChord, editorContext, outgoingMessage, outgoingMessageWith, pendingBox, requestEditorContext, setEditorContext, setHostState, setShareEditor, takePendingAdd, type ContextBox } from "./editorContext.ts"
+import { ADD_CONTEXT_WINDOW_MS, barAdd, barHints, contextBarReading, editorAddChord, editorContext, isLeftOut, leaveOut, leaveOutKey, outgoingMessage, outgoingMessageWith, pendingBox, requestEditorContext, sentEditorFront, setEditorContext, setHostState, setShareEditor, takePendingAdd, type ContextBox } from "./editorContext.ts"
 import { contextChipLabel, parseSentContext, parseSentEditorContext, type ComposerContextItem } from "./composerContext.ts"
 import { splitComposerValue } from "./imagePaths.ts"
 
@@ -148,4 +148,73 @@ test("a reply names a selection its thread was just sent, through the thread's o
   const again = outgoingMessageWith("and this?", [], "/work/alpha", active, null, previous)
   assert.match(first, /> return sig$/)
   assert.equal(again, `and this?\n\n${first.slice(first.indexOf("Editor context"), first.indexOf("\n\nSelected in"))}\n\nStill selected in src/lib/r2-private.ts, lines 91-92 (quoted in an earlier message)`)
+})
+
+// ── the bar's ×: this one left out, until the editor shows something else ─────────────────────────
+
+const lines = (startLine: number, endLine: number, chars = 40) => ({ ...file, selection: { startLine, endLine, chars, text: "x".repeat(chars) } })
+const feed = (active: Parameters<typeof leaveOutKey>[0]) => setEditorContext({ type: "frizz:editor-context", active, open: [] })
+
+test("the × leaves this selection out until the selection changes, and a new one goes again", () => {
+  feed(lines(12, 20))
+  leaveOut(true)
+  assert.equal(isLeftOut(editorContext), true)
+  // The same selection re-sent (the tab set moved, the host re-sent it on ready): still left out.
+  feed(lines(12, 20))
+  assert.equal(isLeftOut(editorContext), true)
+  // Another selection: it goes, and the leave-out is GONE, not merely shadowed —
+  feed(lines(30, 31))
+  assert.equal(isLeftOut(editorContext), false)
+  assert.equal(editorContext.leftOut, null)
+  // — so selecting lines 12-20 again is a fresh choice to point at them, and they go.
+  feed(lines(12, 20))
+  assert.equal(isLeftOut(editorContext), false)
+  // The same lines with more or less of them taken are a new selection too.
+  leaveOut(true)
+  feed(lines(12, 20, 41))
+  assert.equal(isLeftOut(editorContext), false)
+  // Nothing in front ends it as well.
+  leaveOut(true)
+  feed(null)
+  assert.equal(editorContext.leftOut, null)
+})
+
+test("with nothing selected the × leaves the file out: caret moves keep it out, another file or a selection bring it back", () => {
+  feed({ ...file, cursorLine: 3 })
+  leaveOut(true)
+  feed({ ...file, cursorLine: 90 })
+  assert.equal(isLeftOut(editorContext), true, "an arrow key is not a new choice")
+  feed(lines(5, 6))
+  assert.equal(isLeftOut(editorContext), false, "a selection in it goes")
+  feed({ ...file, cursorLine: 6 })
+  assert.equal(isLeftOut(editorContext), false, "and the file after it is not left out from before")
+  leaveOut(true)
+  feed({ path: "/work/alpha/src/b.ts", label: "src/b.ts", cursorLine: 1 })
+  assert.equal(isLeftOut(editorContext), false, "another file goes")
+  // Put back by the × itself.
+  leaveOut(true)
+  leaveOut(false)
+  assert.equal(isLeftOut(editorContext), false)
+  assert.equal(leaveOutKey(null), null)
+  feed(null)
+})
+
+test("a send leaves out what was left out, and the eye stays on for everything else", () => {
+  const active = lines(12, 20)
+  const shared = { active, share: true, leftOut: null }
+  assert.equal(sentEditorFront(shared, true), active)
+  assert.equal(sentEditorFront({ ...shared, leftOut: leaveOutKey(active) }, true), null, "left out: no block")
+  const other = lines(30, 31)
+  assert.equal(sentEditorFront({ ...shared, active: other, leftOut: leaveOutKey(active) }, true), other, "a key for what is no longer in front leaves nothing out")
+  assert.equal(sentEditorFront({ ...shared, share: false }, true), null, "the eye off: nothing, as before")
+  assert.equal(sentEditorFront(shared, false), null, "a browser tab: nothing, as before")
+  // What a left-out selection sends is the human's words and chips alone.
+  assert.equal(outgoingMessageWith("why?", [], "/work/alpha", sentEditorFront({ ...shared, leftOut: leaveOutKey(active) }, true)), "why?")
+})
+
+test("the hint says it is left out and what brings it back", () => {
+  assert.deepEqual(barHints({ sending: true, selection: true, withheld: false, chord: "Ctrl+L", leftOut: true }), ["Left out until you select something else", "Left out"])
+  assert.deepEqual(barHints({ sending: true, selection: false, withheld: false, chord: "Ctrl+L", leftOut: true }), ["Left out until you switch files", "Left out"])
+  // The eye off says so whatever was left out: it is the bigger switch.
+  assert.deepEqual(barHints({ sending: false, selection: true, withheld: false, chord: "Ctrl+L", leftOut: true }), ["Not shared · Ctrl+L still adds it", "Not shared"])
 })

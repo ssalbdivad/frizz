@@ -82,6 +82,15 @@ export function setEditorWindows(windows: EditorWindowSummary[]): void {
   void considerEditorOffer()
 }
 
+/**
+ * `editor-front` (api/board-stream.ts): what some editor window shows changed, so every browser line over a
+ * prompt box (components/EditorLine.tsx) asks its project again. Only the mounted, enabled ones refetch;
+ * the rest are marked stale for when they mount.
+ */
+export function editorFrontChanged(): void {
+  void queryClient?.invalidateQueries({ queryKey: ["editorFront"] })
+}
+
 // ── 2. the first-connection offer ──────────────────────────────────────────────────────────────────
 
 let considering = false

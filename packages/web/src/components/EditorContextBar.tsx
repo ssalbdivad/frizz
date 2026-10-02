@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, Eye, EyeOff, FileCode2 } from "lucide-react"
+import { ChevronDown, Eye, EyeOff, FileCode2, Undo2, X } from "lucide-react"
 import { embedded } from "../lib/embed.ts"
-import { barAdd, barHints, contextBarReading, editorAddChord, registerContextBar, requestEditorContext, setShareEditor, useEditorContext, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
+import { barAdd, barHints, contextBarReading, editorAddChord, isLeftOut, leaveOut, registerContextBar, requestEditorContext, setShareEditor, useEditorContext, type ContextBarReading, type ContextBox, type EditorContextState } from "../lib/editorContext.ts"
 import { problemCountsLabel, useEditorExtras, type EditorExtrasState } from "../lib/editorReach.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
@@ -26,6 +26,14 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 // box. Here the pill the bar offers IS the chip it will make — the same `r2-private.ts:91-116` label
 // (contextChipLabel) — so what the human clicks is what lands.
 //
+// LEAVING ONE OUT. Pointing at the reading turns its file glyph into a × (Cursor's context pills do the same
+// with theirs): a click leaves THIS selection — or with nothing selected this file — out of the messages
+// until the editor shows something else, while the eye stays on (lib/editorContext.ts leaveOut says why
+// that is a different thing from the eye). Left out, the reading wears the eye-off state — struck, dimmed —
+// so the two read alike at a glance: what is struck is not going. The glyph then offers to put it back.
+// A hover affordance and not a fourth control on the strip: at 300px the hint already gets ~110px, and a
+// × drawn at rest would take most of that for an act the human rarely needs.
+//
 // Two tones, because "is code highlighted right now" is the question the bar exists to answer at a
 // glance (the maintainer asked for "some visual indicator" of it): a selection wears the accent, like
 // the box's own focus ring; a file with nothing selected is a quiet outline — a suggestion.
@@ -40,14 +48,17 @@ export function EditorContextBar({ box }: { box: ContextBox }) {
 }
 
 function Bar({ box }: { box: ContextBox }) {
-  const { active, open, share: sending } = useEditorContext()
+  const { active, open, share, leftOut: leftOutKey } = useEditorContext()
   // The file's problems and the terminal's last command (lib/editorReach.ts), offered in the chevron's
   // menu above the open files — so the chevron is there whenever either is, even with no file open.
   const extras = useEditorExtras()
   const more = open.length > 0 || Boolean(extras.problems || extras.terminal)
   const reading = contextBarReading(active)
+  // Left out with the ×: only while the eye is on, which is the only time there is anything to leave out.
+  const leftOut = share && isLeftOut({ active, leftOut: leftOutKey })
+  const sending = share && !leftOut
   const chord = useMemo(() => editorAddChord(detectPlatform()), [])
-  const hints = barHints({ sending, selection: reading?.kind === "selection", withheld: active?.withheld === true, chord })
+  const hints = barHints({ sending: share, selection: reading?.kind === "selection", withheld: active?.withheld === true, chord, leftOut })
   // Registered by its strip, so ⌘I typed in this box presses it (lib/editorContext.ts addEditorContextByKey).
   // ⌘L typed here is not the bar's: it goes back to the editor, as Cursor's does (lib/embedKeys.ts).
   const strip = useRef<HTMLDivElement>(null)
@@ -63,9 +74,9 @@ function Bar({ box }: { box: ContextBox }) {
     if (what) requestEditorContext(box, what)
   }
   // `inset-ring`, never `ring-inset`: that one is also a COLOUR utility here (theme.css --color-inset)
-  // and paints every edge in it (Composer's CONTEXT_PILL has the measurement). Not sending, the reading
-  // takes the quiet outline whatever is selected: the accent says "this goes with your message", and it
-  // does not.
+  // and paints every edge in it (Composer's CONTEXT_PILL has the measurement). Not sending — the eye off,
+  // or this one left out — the reading takes the quiet outline whatever is selected: the accent says "this
+  // goes with your message", and it does not.
   const lit = selection && sending
   const tone = lit
     ? "bg-accent/12 text-accent inset-ring-accent/35"
@@ -74,41 +85,82 @@ function Bar({ box }: { box: ContextBox }) {
   // Struck through, not hidden: the human still sees what is in front, and that it is staying behind.
   const struck = sending ? "" : "line-through decoration-from-font"
   return (
-    <div ref={strip} data-editor-context-bar data-editor-context-sending={reading ? String(sending) : undefined} className="flex items-center gap-2 px-1.5 pt-1.5">
-      {reading && <SendToggle sending={sending} />}
+    <div
+      ref={strip}
+      data-editor-context-bar
+      data-editor-context-sending={reading ? String(share) : undefined}
+      data-editor-context-left-out={reading && share ? String(leftOut) : undefined}
+      className="flex items-center gap-2 px-1.5 pt-1.5"
+    >
+      {reading && <SendToggle sending={share} />}
       <div data-editor-context-control className={`flex h-6 min-w-0 items-stretch rounded-md text-[11.5px] leading-6 inset-ring transition-colors ${tone} ${reading ? "max-w-full" : ""}`}>
         {reading && (
-          <button
-            type="button"
-            data-editor-context={reading.kind}
-            // Keep the caret where it is: the add comes back to this box and puts it after the chip.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={add}
-            // The readings are separate spans spaced by the row's gap, so the text alone would read
-            // "r2-private.ts:91-11626 lines" to a screen reader.
-            aria-label={`Add ${reading.name}${reading.range}${reading.count ? `, ${reading.count},` : ""} to the prompt`}
-            // The chord is the editor's: pressed here, it goes back to the editor (lib/embedHost.ts). ⌘I adds
-            // from a box here, as the `?` sheet says (App.tsx app.details).
-            title={active?.untitled ? `${reading.where} isn't saved, so it can't be added here` : `Add ${reading.where}${reading.range} at the caret (${chord} in the editor)`}
-            // 7px, not 6, on the right when the chevron follows: its glyph carries 0.88px of side
-            // bearing, and the rule between them should sit centred in ink (6.88 | 6.88, sans).
-            className={`flex min-w-0 items-baseline gap-1 pl-1.5 transition-colors ${FOCUS} ${more ? "rounded-l-md pr-[7px]" : "rounded-md pr-1.5"} ${hover}`}
-          >
-            {/* One glyph in both states: it is the same file either way, and the pill lighting up IS the
-                news that lines are selected. (Lucide's TextSelect was tried for the selection: at this
-                size its dashed box reads as a smudge.) */}
-            <FileCode2 aria-hidden size="1em" strokeWidth={2.25} className={MARK} />
-            {/* The name truncates and the range does not: `very-long-na…:1204-1288` still says which lines. */}
-            <span className={`min-w-0 truncate ${struck}`}>{reading.name}</span>
-            {reading.range && <span className={`-ml-1 shrink-0 ${struck}`}>{reading.range}</span>}
-            {reading.count && <span className={`shrink-0 ${lit ? "text-accent/70" : ""} ${struck}`}>{reading.count}</span>}
-          </button>
+          // The reading's half of the split: the glyph (the × on hover) and the label, one hover surface,
+          // so pointing anywhere on the reading shows the × where the glyph was.
+          <div data-editor-context-reading className={`group/reading flex min-w-0 items-baseline transition-colors ${more ? "rounded-l-md" : "rounded-md"} ${hover}`}>
+            {share ? <LeaveOutToggle reading={reading} leftOut={leftOut} /> : <span className="flex shrink-0 items-baseline pl-1.5 pr-1"><span aria-hidden>{"\u200b"}</span><FileCode2 aria-hidden size="1em" strokeWidth={2.25} className={MARK} /></span>}
+            <button
+              type="button"
+              data-editor-context={reading.kind}
+              // Keep the caret where it is: the add comes back to this box and puts it after the chip.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={add}
+              // The readings are separate spans spaced by the row's gap, so the text alone would read
+              // "r2-private.ts:91-11626 lines" to a screen reader.
+              aria-label={`Add ${reading.name}${reading.range}${reading.count ? `, ${reading.count},` : ""} to the prompt`}
+              // The chord is the editor's: pressed here, it goes back to the editor (lib/embedHost.ts). ⌘I adds
+              // from a box here, as the `?` sheet says (App.tsx app.details).
+              title={active?.untitled ? `${reading.where} isn't saved, so it can't be added here` : `Add ${reading.where}${reading.range} at the caret (${chord} in the editor)`}
+              // 7px, not 6, on the right when the chevron follows: its glyph carries 0.88px of side
+              // bearing, and the rule between them should sit centred in ink (6.88 | 6.88, sans).
+              className={`flex min-w-0 items-baseline gap-1 transition-colors ${FOCUS} ${more ? "pr-[7px]" : "rounded-r-md pr-1.5"}`}
+            >
+              {/* The name truncates and the range does not: `very-long-na…:1204-1288` still says which lines. */}
+              <span className={`min-w-0 truncate ${struck}`}>{reading.name}</span>
+              {reading.range && <span className={`-ml-1 shrink-0 ${struck}`}>{reading.range}</span>}
+              {reading.count && <span className={`shrink-0 ${lit ? "text-accent/70" : ""} ${struck}`}>{reading.count}</span>}
+            </button>
+          </div>
         )}
         {reading && more && <span aria-hidden className="my-1.5 w-px shrink-0 bg-current opacity-20" />}
         {more && <OpenFiles box={box} open={open} extras={extras} labelled={!reading} hover={hover} />}
       </div>
       {hints.length > 0 && <Hint variants={hints} />}
     </div>
+  )
+}
+
+/**
+ * The reading's glyph, which is also its × (the header says why a hover affordance): at rest the file
+ * glyph — one glyph in both states, since it is the same file either way and the pill lighting up IS the
+ * news that lines are selected (Lucide's TextSelect was tried for the selection: at this size its dashed
+ * box reads as a smudge) — and, while the reading is pointed at or this has the keyboard, a × that leaves
+ * what is in front out of the messages, or, once it is left out, the arrow that puts it back.
+ *
+ * The glyph's 4px to the name is this button's right padding, the gap the reading's own row used to give
+ * it, so the reading measures as it did before it had two halves.
+ */
+function LeaveOutToggle({ reading, leftOut }: { reading: ContextBarReading; leftOut: boolean }) {
+  const what = reading.kind === "selection" ? "this selection" : "this file"
+  const title = leftOut ? `Include ${what} in your message again` : `Leave ${what} out of your message`
+  return (
+    <button
+      type="button"
+      data-editor-context-leave-out
+      aria-pressed={leftOut}
+      aria-label={`Leave ${reading.name}${reading.range} out of your message`}
+      title={title}
+      // Keep the caret in the box, as the eye does: the human is mid-sentence.
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={() => leaveOut(!leftOut)}
+      className={`group/glyph flex h-6 shrink-0 items-baseline rounded-l-md pl-1.5 pr-1 transition-colors ${FOCUS} hover:text-fg`}
+    >
+      <span aria-hidden>{"\u200b"}</span>
+      <FileCode2 aria-hidden size="1em" strokeWidth={2.25} className={`${MARK} group-hover/reading:hidden group-focus-visible/glyph:hidden`} />
+      {leftOut
+        ? <Undo2 aria-hidden size="1em" strokeWidth={2.25} className={`${MARK} hidden group-hover/reading:block group-focus-visible/glyph:block`} />
+        : <X aria-hidden size="1em" strokeWidth={2.25} className={`${MARK} hidden group-hover/reading:block group-focus-visible/glyph:block`} />}
+    </button>
   )
 }
 

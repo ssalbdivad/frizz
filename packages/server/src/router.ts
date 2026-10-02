@@ -796,6 +796,16 @@ function requestedPosition(input: { line?: number; column?: number; endLine?: nu
 const EditorWindowSummaryOutput = z.object({ app: z.string(), kind: z.enum(["vscode", "cursor", "windsurf", "other"]), acceptsOpens: z.boolean(), reviews: z.literal(true).optional() })
 const EditorComposeItemOutput = EditorComposeInputSchema.extend({ id: z.string(), app: z.string(), at: z.string() })
 const EditorStateCheckoutOutput = z.object({ dir: z.string(), root: z.string(), kind: z.enum(["worktree", "folder"]) })
+const EditorFrontOutput = z.object({
+  app: z.string(),
+  kind: z.enum(["vscode", "cursor", "windsurf", "other"]),
+  path: z.string(),
+  untitled: z.literal(true).optional(),
+  dirty: z.literal(true).optional(),
+  cursorLine: z.number(),
+  selection: z.object({ startLine: z.number(), endLine: z.number() }).optional(),
+  withheld: z.literal(true).optional(),
+})
 const EditorStateOutput = z.object({
   windows: z.array(z.object({
     app: z.string(),
@@ -4707,6 +4717,23 @@ export function createRouter(ctx: AppContext) {
         const checkout = input.slug ? editorCheckoutOf(input.slug) : undefined
         const state = ctx.editors?.editorState(workDir, checkout ? [checkout.dir] : []) ?? { windows: [], connected: 0 }
         return checkout ? { ...state, checkout } : state
+      },
+    }),
+
+    // WHAT A BROWSER TAB SHOWS OF THE EDITOR BESIDE IT (shared editor-protocol.ts EditorFront): the file
+    // in front of the window this project's agents' `editor` tool would read, and its selection's lines,
+    // for the quiet `VS Code: a.ts:12-20` line over the tab's prompt boxes (web EditorLine.tsx). Never the
+    // text, until the human clicks the line: `text: true` adds `item`, what an editor's own "Add to Frizz
+    // prompt" would send, which the page turns into the same chip. The `editor-front` event says when to
+    // ask again. Project-scoped by the URL prefix, like `editorState`, so the window is the one that has
+    // THIS project open.
+    editorFront: query({
+      input: z.object({ text: z.boolean().optional() }).strict(),
+      output: z.object({ front: EditorFrontOutput.nullable(), item: EditorComposeInputSchema.optional() }),
+      handler: async ({ input }) => {
+        const front = ctx.editors?.front(workDir) ?? null
+        const item = input.text && front ? ctx.editors?.frontItem(workDir) ?? undefined : undefined
+        return { front, ...(item ? { item } : {}) }
       },
     }),
 

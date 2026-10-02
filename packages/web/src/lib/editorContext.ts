@@ -15,7 +15,8 @@ import { basename } from "./paths.ts"
 //
 // And the extension's own state the page shows (`frizz:host-state`): whether the human shares the editor
 // with Frizz — the one switch, `frizz.shareEditorState`, which the bar's eye shows and flips — and whether
-// Alt+K is Frizz's in this window.
+// Alt+K is Frizz's in this window. And the page's own one-shot exception to that switch: what is in front
+// right now, left out of the messages by the bar's × until it changes (`leaveOut`).
 
 export interface EditorContextState {
   active: EmbedEditorContextMessage["active"]
@@ -28,14 +29,60 @@ export interface EditorContextState {
   share: boolean
   /** Alt+K in the editor is Frizz's here (not while Claude Code's extension holds it). */
   altK: boolean
+  /**
+   * What the human left out with the bar's × (`leaveOut`), by its `leaveOutKey` — kept while the editor
+   * still shows THAT, and dropped the moment it shows anything else. Null: nothing is left out.
+   */
+  leftOut: string | null
 }
 
-export const editorContext = proxy<EditorContextState>({ active: null, open: [], share: true, altK: true })
+export const editorContext = proxy<EditorContextState>({ active: null, open: [], share: true, altK: true, leftOut: null })
 
-/** A `frizz:editor-context` from the host replaces the last one whole. */
+/**
+ * A `frizz:editor-context` from the host replaces the last one whole — and ends a leave-out the moment the
+ * editor shows something else (`leaveOutKey`), so a new selection goes with the message again on its own.
+ * Dropped rather than merely compared: selecting other lines and then the same lines again is a new choice
+ * to point at them, and the human should not find them still left out from before.
+ */
 export function setEditorContext(message: EmbedEditorContextMessage): void {
   editorContext.active = message.active
   editorContext.open = message.open
+  if (editorContext.leftOut !== null && editorContext.leftOut !== leaveOutKey(message.active)) editorContext.leftOut = null
+}
+
+// ── leaving this one out ──────────────────────────────────────────────────────────────────────────
+//
+// THE ONE-SHOT EXCEPTION TO THE EYE. Claude Code's VS Code extension lets the human drop the selection in
+// front from the next message without turning the feature off: the indicator is clicked, the selection
+// stays home, and the next selection goes as usual. The eye cannot be that — it is a VS Code setting, it
+// holds in every window and across reloads, and it also keeps the agents' editor tool out — and turning it
+// off for one question and remembering to turn it back on is exactly the chore that makes a privacy switch
+// get left in the wrong position. So the bar's reading has a × of its own (EditorContextBar): THIS
+// selection, or with nothing selected this file, is left out of every message sent from the sidebar until
+// the editor shows something else. It is the page's alone and lasts no longer than the page: the agents'
+// tool still reads the editor (the eye is still on, and the human can see that it is), and a click on the
+// struck reading still adds it as a chip, on purpose.
+
+/**
+ * What a leave-out holds on to: the selection — its file, lines and size, so another drag over the same
+ * lines that takes more or less of them is a new selection — or, with nothing selected, the file alone.
+ * NOT the caret's line: with nothing selected the human moves the caret as they type and read, and a file
+ * left out must not come back on every arrow key. Null with nothing in front.
+ */
+export function leaveOutKey(active: EditorContextState["active"]): string | null {
+  if (!active) return null
+  const selection = active.selection
+  return selection ? `selection\n${active.path}\n${selection.startLine}-${selection.endLine}\n${selection.chars}` : `file\n${active.path}`
+}
+
+/** Whether what the editor shows now is what the human left out. Pure, for its test. */
+export function isLeftOut(state: Pick<EditorContextState, "active" | "leftOut">): boolean {
+  return state.leftOut !== null && state.leftOut === leaveOutKey(state.active)
+}
+
+/** The bar's ×: leave what is in front out of the messages (`on`), or put it back. */
+export function leaveOut(on: boolean): void {
+  editorContext.leftOut = on ? leaveOutKey(editorContext.active) : null
 }
 
 /** A `frizz:host-state`: what the extension's settings say now — the truth, over anything the eye assumed. */
@@ -118,9 +165,12 @@ export function editorAddChord(platform: Platform): string {
  * short as `a.ts`). The chord is the editor's; pressed in the page it goes back to the editor, and the
  * reading's own tooltip says "in the editor" for the human who wonders.
  */
-export function barHints(state: { sending: boolean; selection: boolean; withheld: boolean; chord: string }): string[] {
-  const { sending, selection, withheld, chord } = state
+export function barHints(state: { sending: boolean; selection: boolean; withheld: boolean; chord: string; leftOut?: boolean }): string[] {
+  const { sending, selection, withheld, chord, leftOut } = state
   if (!sending) return selection ? [`Not shared · ${chord} still adds it`, "Not shared"] : ["Not shared with Frizz", "Not shared"]
+  // Left out with the ×: what brings it back is the editor moving on, which is what the human will do next
+  // anyway — so that is what the hint says, and the ×'s own hover says a click puts it back.
+  if (leftOut) return selection ? ["Left out until you select something else", "Left out"] : ["Left out until you switch files", "Left out"]
   if (selection && withheld) return ["Lines only: the file may hold secrets", "Lines only"]
   if (selection) return [`Goes with your message · ${chord} puts it at the caret`, "Goes with your message"]
   return [`Selections go with your message · ${chord} puts one at the caret`, `${chord} puts a selection at the caret`, `Select + ${chord}`]
@@ -231,12 +281,14 @@ export function addEditorContextByKey(focused: Element | null, drawerOpen: boole
 // ── sending: what the editor has in front goes with the message ───────────────────────────────────
 
 /**
- * Whether a send from this page carries the editor's context: in an editor's sidebar, while the human
- * shares the editor (the bar's eye — the extension's `frizz.shareEditorState`, a VS Code setting, so it
- * holds across reloads and windows, and the same switch keeps the agents' tool out of the editor).
+ * What a send from this page carries of the editor: what is in front, in an editor's sidebar, while the
+ * human shares the editor (the bar's eye — the extension's `frizz.shareEditorState`, a VS Code setting, so
+ * it holds across reloads and windows, and the same switch keeps the agents' tool out of the editor), and
+ * unless what is in front now is what the human left out with the bar's × (`leaveOut`). Null: nothing of
+ * the editor goes. Pure — `inSidebar` is `embedded()` — for its test.
  */
-export function sendsEditorContext(): boolean {
-  return embedded() && editorContext.share
+export function sentEditorFront(state: Pick<EditorContextState, "active" | "share" | "leftOut">, inSidebar: boolean): EditorContextState["active"] {
+  return inSidebar && state.share && !isLeftOut(state) ? state.active : null
 }
 
 /**
@@ -264,7 +316,7 @@ export function outgoingMessage(
   editor: boolean,
   thread: { history?: readonly { role: string; text: string; displayText?: string }[]; checkout?: ThreadCheckout | null } = {},
 ): string {
-  const active = editor && sendsEditorContext() ? editorContext.active : null
+  const active = editor ? sentEditorFront(editorContext, embedded()) : null
   const { history, checkout } = thread
   const previous = active && history ? previousEditorQuote(history.map((message) => ({ role: message.role, text: messagePresentationText(message).replace(/\r\n?/g, "\n") }))) : null
   return outgoingMessageWith(value, staged, projectDir, active, checkout, previous)
