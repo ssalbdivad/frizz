@@ -523,6 +523,12 @@ to say you cannot help. Never reply just to acknowledge.
 Wherever the human reads about another thread or a sub-agent, write its `@` address
 (`@shell-budgets`, `@port-the-parser.cache-keys`): the board links it, and a description or bold name opens nothing.
 
+## The human's editor
+
+When the human points at code they have not pasted — "this", "the selected code", "the error" — call
+`mcp__frizz__editor`: it returns what they have in front of them in VS Code or Cursor, the selection and
+its text, their open tabs and the editor's errors and warnings.
+
 ## Spawning a separate frizz thread
 
 `mcp__frizz__spawn_thread` dispatches a brand-new, SEPARATE top-level frizz thread — its own board card,

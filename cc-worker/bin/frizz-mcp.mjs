@@ -9,6 +9,8 @@
  *   goal — arm ONE piece of text frizz re-sends the caller, at every rest and/or on a clock
  *                      and/or after every compaction; and READ BACK what is currently armed.
  *   timer            — arm a ONE-OFF prompt for a single instant; a thread may hold many at once.
+ *   editor           — READ what the human has in front of them in VS Code / Cursor / Windsurf: the
+ *                      file, the selection and its text, the open tabs, the errors and warnings.
  *
  * Future worker-facing frizz tools join the TOOLS registry below rather than mounting a second server:
  * one server keeps the worker's tool namespace coherent and the server-level pre-approval single.
@@ -898,6 +900,29 @@ const MESSAGE_THREAD = {
   },
 }
 
+// THE HUMAN'S EDITOR, ON DEMAND. The Frizz extension (packages/vscode) reports what each VS Code / Cursor /
+// Windsurf window shows over its editor socket, whole, on every change; this reads the window that has
+// THIS project open (server: editor-bridge.ts `editorState`). It is the agent's half of what Claude Code's
+// IDE integration gives its own agent (getCurrentSelection, getOpenEditors, getDiagnostics): without it a
+// human in the Frizz sidebar who asked "can you see the highlighted code?" was told no, because the only
+// way a selection reached a worker was as a chip the human added by hand. The description is written to
+// be REACHED FOR on the words humans actually use for code they have not pasted.
+const EDITOR = {
+  name: "editor",
+  description:
+    "WHAT THE HUMAN HAS IN FRONT OF THEM in VS Code, Cursor or Windsurf right now: the file in front and the " +
+    "lines they have SELECTED, with the selected text; where the caret is and which lines are on screen; " +
+    "their other open tabs, unsaved ones marked; and the editor's errors and warnings (the Problems panel). " +
+    "CALL IT WHENEVER THE HUMAN POINTS AT CODE THEY HAVE NOT PASTED — \"this\", \"here\", \"this function\", " +
+    "\"the selected code\", \"what I highlighted\", \"the error\", \"why is this red\", \"what I'm looking " +
+    "at\" — and before asking them which file or lines they mean. The text it returns is what they SEE, " +
+    "which differs from the file on disk when the file has unsaved changes. It reads the editor window " +
+    "that has this project open (the one they used last, if several do), takes nothing and changes nothing; " +
+    "call it again whenever you need the current picture, since the human keeps moving.",
+  inputSchema: { type: "object", properties: {}, required: [] },
+  annotations: { title: "Read the human's editor", readOnlyHint: true, openWorldHint: false },
+}
+
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
 // Adding a worker-facing frizz tool = one entry here + one handler in `HANDLERS` — never a second
 // MCP server, so every frizz tool stays under the same `mcp__frizz__*` namespace and the same
@@ -952,8 +977,8 @@ const UNLINK = {
 
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
-// EXTEND_SHELL is appended after it for the same reason (2026-09-29).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP]
+// EXTEND_SHELL is appended after it for the same reason (2026-09-29), and EDITOR after KEEP (2026-10-02).
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -975,6 +1000,7 @@ const HANDLERS = {
   [EXTEND_SHELL.name]: extendShell,
   [READ_THREAD.name]: readThread,
   [MESSAGE_THREAD.name]: messageThread,
+  [EDITOR.name]: editor,
 }
 
 /** The `read_thread` handler: another thread's request, status, approach and newest message, by handle.
@@ -1183,6 +1209,151 @@ async function activity() {
     "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line." +
     askedBlock + linksBlock
   )
+}
+
+// What `editor` says when it has nothing to show — each says WHY, because "no selection" and "no editor"
+// and "the human switched it off" call for different next moves, and every one ends with the move that
+// is always open: ask the human to paste it.
+const EDITOR_FALLBACK = "Ask the human to paste the code, or to name the file and lines they mean."
+
+/** The `editor` handler: the editor window that has this project open, as readable text.
+ * @returns {Promise<string>} */
+async function editor() {
+  let result
+  try {
+    result = (await callRpc("editorState", {}))?.result
+  } catch (err) {
+    // A Frizz from before this tool answers an unknown procedure with 404; the MCP server outlives
+    // restarts, so a worker can hold this tool while the server it talks to does not have it yet.
+    if (/HTTP 404/.test(err instanceof Error ? err.message : String(err))) {
+      return `The running Frizz cannot read the editor yet: it predates this tool. Restart Frizz to enable this. Until then: ${EDITOR_FALLBACK}`
+    }
+    throw err
+  }
+  const windows = Array.isArray(result?.windows) ? result.windows : []
+  const connected = typeof result?.connected === "number" ? result.connected : 0
+  if (!windows.length) {
+    if (!connected) {
+      return (
+        "No editor is connected to Frizz, so there is nothing to read: the human is not running VS Code, " +
+        `Cursor or Windsurf with the Frizz extension. ${EDITOR_FALLBACK}`
+      )
+    }
+    const elsewhere = Array.isArray(result?.elsewhere) ? result.elsewhere : []
+    const listed = elsewhere.map((w) => `- ${w.app}: ${w.folders?.length ? w.folders.join(", ") : "no folder open"}`).join("\n")
+    return (
+      `${connected} editor window${connected === 1 ? " is" : "s are"} connected to Frizz, but none has this project open` +
+      `${listed ? `:\n${listed}` : "."}\n\nWhat those show is not read here. ${EDITOR_FALLBACK}`
+    )
+  }
+  const [front, ...others] = windows
+  const parts = [editorWindowReport(front)]
+  if (others.length) {
+    parts.push(
+      `Also open in ${others.length} other window${others.length === 1 ? "" : "s"} (not read in full; the one above was used last):\n` +
+      others.map((w) => `- ${editorWindowHead(w)}${w.editor?.active ? ` — ${editorActiveLine(w.editor.active)}` : ""}`).join("\n"),
+    )
+  }
+  return parts.join("\n\n")
+}
+
+/** "VS Code, focused now, folder /repo" — which window this is. @param {any} w */
+function editorWindowHead(w) {
+  const focus = w.focused ? "focused now" : typeof w.focusedAgoMs === "number" ? `last focused ${agoLabel(w.focusedAgoMs)}` : "not focused since it connected"
+  const folders = Array.isArray(w.folders) && w.folders.length ? `, ${w.folders.length === 1 ? "folder" : "folders"} ${w.folders.join(", ")}` : ""
+  return `${w.app} (${focus}${folders})`
+}
+
+/** "/repo/src/a.ts (typescript, unsaved changes), lines 12-20 selected" @param {any} a */
+function editorActiveLine(a) {
+  const traits = [a.languageId, a.untitled ? "untitled, not saved to disk" : a.dirty ? "unsaved changes" : ""].filter(Boolean).join(", ")
+  const sel = a.selection ? `, ${editorLines(a.selection)} selected` : `, caret on line ${a.cursorLine}`
+  return `${a.path}${traits ? ` (${traits})` : ""}${sel}`
+}
+
+/** @param {{ startLine: number, endLine: number }} r */
+function editorLines(r) {
+  return r.startLine === r.endLine ? `line ${r.startLine}` : `lines ${r.startLine}-${r.endLine}`
+}
+
+/** "just now", "12s ago", "3m ago", "2h 5m ago" — the house grammar (durationLabel). @param {number} ms */
+function agoLabel(ms) {
+  return ms < 1_000 ? "just now" : `${durationLabel(Math.round(ms / 1_000))} ago`
+}
+
+/** One window, in full: the file in front with its selection, the tabs, the problems. @param {any} w */
+function editorWindowReport(w) {
+  const head = editorWindowHead(w)
+  const e = w.editor
+  if (!e) {
+    return (
+      `${head} has this project open, but it has not reported what it shows: its Frizz extension predates ` +
+      `this, or it connected a moment ago. Updating the extension (\`nub run vscode:install\` in a Frizz ` +
+      `checkout) enables it. ${EDITOR_FALLBACK}`
+    )
+  }
+  if (!e.shared) {
+    return (
+      `${head} has this project open, but the human turned off sharing their editor with Frizz's agents ` +
+      `(the \`frizz.shareEditorState\` setting), so nothing of it is read. ${EDITOR_FALLBACK}`
+    )
+  }
+  // "Last changed", not "as of": the extension reports every change, so an old report is a quiet editor.
+  const lines = [`${head}, last changed ${agoLabel(e.reportedAgoMs ?? 0)}.`]
+  const a = e.active
+  if (!a) {
+    lines.push("", "No file is in front: the editor area is empty, or shows something that is not a file (a diff's old side, an output pane, a webview).")
+  } else {
+    lines.push("", `In front: ${editorActiveLine(a)}.`)
+    if (a.selection) {
+      const s = a.selection
+      const count = s.endLine - s.startLine + 1
+      if (typeof s.text === "string") {
+        lines.push(`Selected text (${count} line${count === 1 ? "" : "s"}${s.truncated ? `; ONLY THE START — the selection was too large to carry whole, so read the file for the rest` : ""}):`)
+        lines.push(codeFence(s.text, a.languageId))
+      } else {
+        lines.push(`The selection was too large to carry its text; read ${editorLines(s)} of the file.`)
+      }
+    }
+    lines.push(`Caret on line ${a.cursorLine}; lines ${a.visible.startLine}-${a.visible.endLine} on screen; ${a.lineCount} line${a.lineCount === 1 ? "" : "s"} in all.`)
+  }
+  const open = Array.isArray(e.open) ? e.open : []
+  if (open.length) {
+    lines.push("", `Other open tabs, most recent first (${open.length}):`)
+    for (const f of open) lines.push(`- ${f.path}${f.untitled ? " (untitled, not saved to disk)" : f.dirty ? " (unsaved changes)" : ""}`)
+  }
+  const diagnostics = Array.isArray(e.diagnostics) ? e.diagnostics : []
+  const errors = e.problems?.errors ?? 0
+  const warnings = e.problems?.warnings ?? 0
+  if (!errors && !warnings) {
+    lines.push("", "Problems: no errors or warnings.")
+  } else {
+    const total = `${errors} error${errors === 1 ? "" : "s"}, ${warnings} warning${warnings === 1 ? "" : "s"}`
+    const shown = diagnostics.length < errors + warnings ? ` (the first ${diagnostics.length}: the file in front first, errors before warnings)` : ""
+    lines.push("", `Problems: ${total}${shown}.`)
+    // Grouped by file, in the order they arrived — the file in front first — so a path is written once.
+    /** @type {Map<string, any[]>} */
+    const byFile = new Map()
+    for (const d of diagnostics) {
+      if (!byFile.has(d.path)) byFile.set(d.path, [])
+      byFile.get(d.path).push(d)
+    }
+    for (const [path, ds] of byFile) {
+      lines.push(path)
+      for (const d of ds) {
+        const tag = d.source || d.code ? ` [${[d.source, d.code].filter(Boolean).join(" ")}]` : ""
+        lines.push(`  ${d.line}: ${d.severity}: ${String(d.message).replace(/\s+/g, " ")}${tag}`)
+      }
+    }
+  }
+  return lines.join("\n")
+}
+
+/** `text` in a Markdown fence longer than any backtick run inside it. @param {string} text @param {string} [lang] */
+function codeFence(text, lang) {
+  const longest = Math.max(0, ...[...text.matchAll(/`+/g)].map((m) => m[0].length))
+  const fence = "`".repeat(Math.max(3, longest + 1))
+  return `${fence}${lang && /^[\w+#.-]+$/.test(lang) ? lang : ""}\n${text}\n${fence}`
 }
 
 /** "budget: 42m left (ends <iso>)" in the house duration grammar (`2h 35m`), or the overrun. The ISO

@@ -127,3 +127,13 @@ test("the contract puts a question's answer in the prose, and the card below it"
     assert.match(prompt, /renders\s+BELOW your last message/)
   }
 })
+
+// A worker asked "can you see the highlighted code?" answered that it could not: its MCP tools are
+// deferred, so `mcp__frizz__editor` reaches it only if the contract names it, with the words that should
+// make it reach for the tool.
+test("every backend's contract names the editor tool, and when to call it", () => {
+  for (const backend of ["claude", "codex", "acp"] as const) {
+    const prompt = buildWorkerPrompt(backend).replace(/\s+/g, " ")
+    assert.match(prompt, /When the human points at code they have not pasted — "this", "the selected code", "the error" — call `mcp__frizz__editor`/)
+  }
+})
