@@ -32,7 +32,8 @@ import { settledQuestionPositions } from "../lib/settledQuestions.ts"
 import { FrizzWake, ShellWakeText } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
 import { LinkifiedText } from "./LinkifiedText.tsx"
-import { parseSentContext, splitProseByTokens, tokenLabel, type SentContextItem } from "../lib/composerContext.ts"
+import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, type SentContextItem } from "../lib/composerContext.ts"
+import { SentEditorContextChip } from "./SentEditorContext.tsx"
 import { AnswersCard } from "./AnswersCard.tsx"
 import { MentionIndexProvider } from "./MentionLinks.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
@@ -3238,7 +3239,15 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
   // the trailing run, so a path typed mid-sentence stays the human's own words, and (unlike
   // splitProseAttachments, the agent-prose splitter) it never swallows a ::directive or mermaid line.
   // `text` itself stays whole for the unqueue payload below — restoreDraft must hand the paths back.
-  const { prose, attachments } = useMemo(() => splitComposerValue(text), [text])
+  const { prose: sentProse, attachments } = useMemo(() => splitComposerValue(text), [text])
+  // What an editor's sidebar attached on its own — the editor block at the very END of the prose — comes
+  // off first and is drawn as a chip under the bubble (SentEditorContext.tsx); everything below reads
+  // what is left, so the ⌘I parse keeps its strictness and the bubble holds only what the human wrote.
+  const editorSent = useMemo(() => parseSentEditorContext(sentProse), [sentProse])
+  const prose = editorSent ? editorSent.body : sentProse
+  // Taken back, the message goes into the prompt box WITHOUT that block: the re-send attaches the editor
+  // of its own moment, rather than carrying this one as words the human never typed.
+  const restoreText = useMemo(() => withoutEditorContext(text), [text])
   // ⌘I selected context, recovered from the serialization the composer sent. Null for everything
   // else — including pre-footnote-era sends, which keep their plain-text rendering.
   const sentContext = useMemo(() => parseSentContext(prose), [prose])
@@ -3269,12 +3278,12 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
             // bubble used to take the message back. A live selection means the human is reading.
             onClick: (e: ReactMouseEvent<HTMLDivElement>) => {
               if (window.getSelection()?.toString()) return
-              unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
+              unqueue({ deliveryId: deliveryId!, text: restoreText, rawText: rawText ?? text, from: e.currentTarget })
             },
             onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
               if (e.key !== "Enter" && e.key !== " ") return
               e.preventDefault()
-              unqueue({ deliveryId: deliveryId!, text, rawText: rawText ?? text, from: e.currentTarget })
+              unqueue({ deliveryId: deliveryId!, text: restoreText, rawText: rawText ?? text, from: e.currentTarget })
             },
           } : {})}
           // A retractable bubble LIFTS to FULL opacity under the pointer — so the one message in the
@@ -3317,6 +3326,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryId, so
         )}
         </div>
       )}
+      {editorSent && <SentEditorContextChip editor={editorSent.editor} queued={queued} />}
       {/* Below the words, mirroring the composer (prose in the textarea, chips along its bottom edge) —
           and OUTSIDE the bubble, on the dark page, so BlockImage/BlockFile carry their normal styling
           instead of a light-bubble fork, and so the delegated open-local-file click can't collide with a

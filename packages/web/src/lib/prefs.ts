@@ -42,6 +42,13 @@ export interface Prefs {
   // known. Until 2026-10-01 the default was "frizz" and only a one-time 12s toast switched it, so a
   // human who missed the toast clicked a link with VS Code connected and got the reader.
   codeFiles: CodeFiles
+  // IN AN EDITOR'S SIDEBAR, whether a message sent from a box with a context bar carries what the editor
+  // has in front — the selection's text, or the file and the caret's line (lib/editorContext.ts
+  // outgoingMessage). On by default, as in Claude Code's extension and Cursor: an agent beside the editor
+  // that cannot see the highlighted code is the complaint this answers. The bar's eye turns it off and on.
+  // Only the sidebar reads it, and the sidebar's frame keeps its own localStorage, so a browser tab never
+  // holds a value for it that means anything.
+  sendEditorContext: boolean
 }
 
 export type CodeFiles = "auto" | "frizz" | "editor"
@@ -69,6 +76,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     railFilesCollapsed: false,
     keybindings: {},
     codeFiles: "auto",
+    sendEditorContext: true,
     diffsRedefaulted: true,
     snoozeRedefaulted: true,
     codeFilesRedefaulted: true,
@@ -106,6 +114,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
       keybindings: sanitizeOverrides(stored.keybindings),
       codeFiles: stored.codeFiles === "editor" || stored.codeFiles === "frizz" ? stored.codeFiles : "auto",
+      sendEditorContext: typeof stored.sendEditorContext === "boolean" ? stored.sendEditorContext : fallback.sendEditorContext,
     }
   } catch {
     return fallback

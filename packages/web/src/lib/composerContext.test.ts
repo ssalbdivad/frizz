@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
+  appendEditorContext,
   buildMessageWithContext,
   contextChipLabel,
   contextDisplayPath,
@@ -9,7 +10,10 @@ import {
   insertTokenIntoProse,
   locateInSource,
   parseSentContext,
+  parseSentEditorContext,
   serializeContextItems,
+  serializeEditorContext,
+  withoutEditorContext,
   splitProseByTokens,
   tokenLabel,
   uniqueToken,
@@ -198,4 +202,94 @@ test("contextDisplayPath: a Windows project shortens the same way, in the path's
   assert.equal(contextDisplayPath("c:/Users/x/proj/docs/guide.md", "C:\\Users\\x\\proj\\"), "docs/guide.md")
   assert.equal(contextDisplayPath("D:\\elsewhere\\guide.md", "C:\\Users\\x\\proj"), "D:\\elsewhere\\guide.md")
   assert.equal(contextChipLabel({ path: "C:\\Users\\x\\proj\\docs\\guide.md", startLine: 3, endLine: 3 }), "guide.md:3")
+})
+
+// ── the editor block ─────────────────────────────────────────────────────────────────────────────
+
+const HEADER = "Editor context (attached automatically: what the human had in front of them in their editor when they sent this; it may or may not be related):"
+const editorFile = { path: "/repo/src/a.ts" }
+
+test("the editor block quotes a selection under a header that says it was automatic and may be unrelated", () => {
+  const block = serializeEditorContext({ ...editorFile, selection: { startLine: 12, endLine: 14, text: "for (const x of xs) {\n\n  total += x\n" } }, [], "/repo")
+  assert.equal(block, `${HEADER}\n\nSelected in src/a.ts, lines 12-14:\n> for (const x of xs) {\n> \n>   total += x`)
+  assert.equal(serializeEditorContext({ ...editorFile, selection: { startLine: 7, endLine: 7, text: "x" } }, [], "/repo"), `${HEADER}\n\nSelected in src/a.ts, line 7:\n> x`)
+  // Outside the project: the absolute path, which the agent can still open.
+  assert.match(serializeEditorContext({ path: "/elsewhere/b.ts", selection: { startLine: 1, endLine: 1, text: "y" } }, [], "/repo"), /Selected in \/elsewhere\/b\.ts, line 1:/)
+})
+
+test("a selection without its text names its lines; a caret names the file and its line; nothing is nothing", () => {
+  assert.equal(serializeEditorContext({ ...editorFile, selection: { startLine: 1, endLine: 900 } }, [], "/repo"), `${HEADER}\n\nSelected in src/a.ts, lines 1-900 (not quoted here; read it from the file)`)
+  assert.equal(serializeEditorContext({ ...editorFile, cursorLine: 40 }, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts (cursor on line 40)`)
+  assert.equal(serializeEditorContext(editorFile, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts`)
+  // Whitespace selected is nothing to quote: the file, the caret where the selection starts.
+  assert.equal(serializeEditorContext({ ...editorFile, selection: { startLine: 3, endLine: 4, text: "  \n " } }, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts (cursor on line 3)`)
+  assert.equal(serializeEditorContext(null, [], "/repo"), "")
+})
+
+test("a chip that already carries the selection, or names the file, leaves the block out", () => {
+  const selection = { startLine: 12, endLine: 14, text: "  total += x" }
+  const chip = (over: Partial<ComposerContextItem>) => item({ path: editorFile.path, token: "@a.ts:12-14", startLine: 12, endLine: 14, text: "for…\n  total += x\n}", ...over })
+  // ⌘I on the selection, sent with the selection still up: the chip says it.
+  assert.equal(serializeEditorContext({ ...editorFile, selection }, [chip({})], "/repo"), "")
+  // A wider chip takes it in; a chip whose quote holds the text does too, located or not.
+  assert.equal(serializeEditorContext({ ...editorFile, selection }, [chip({ startLine: 1, endLine: 30 })], "/repo"), "")
+  assert.equal(serializeEditorContext({ ...editorFile, selection }, [chip({ startLine: undefined, endLine: undefined })], "/repo"), "")
+  // A chip on other lines of the file, or the same lines of another file, does not.
+  assert.notEqual(serializeEditorContext({ ...editorFile, selection }, [chip({ startLine: 13, endLine: 20, text: "other" })], "/repo"), "")
+  assert.notEqual(serializeEditorContext({ ...editorFile, selection }, [chip({ path: "/repo/src/b.ts" })], "/repo"), "")
+  // With nothing selected, any chip on the file covers it.
+  assert.equal(serializeEditorContext({ ...editorFile, cursorLine: 3 }, [chip({ startLine: 90, endLine: 91, text: "z" })], "/repo"), "")
+})
+
+test("the block goes after the prose and the chips' definitions, before the attachment lines, and parses back", () => {
+  const staged = [item({ token: "@guide.md:3", path: "/repo/docs/guide.md", text: "a quote" })]
+  const withChips = buildMessageWithContext("look at @guide.md:3 please\n/tmp/shot.png", staged, "/repo")
+  const block = serializeEditorContext({ ...editorFile, selection: { startLine: 2, endLine: 3, text: "let a = 1\nlet b = 2" } }, [], "/repo")
+  const sent = appendEditorContext(withChips, block)
+  assert.equal(sent, `look at @guide.md:3 please\n\nSelected context:\n\n@guide.md:3 (docs/guide.md, line 3):\n> a quote\n\n${HEADER}\n\nSelected in src/a.ts, lines 2-3:\n> let a = 1\n> let b = 2\n/tmp/shot.png`)
+  // Back: the attachment line peels off, the block comes off the end, and the chips parse from what is left.
+  const prose = sent.slice(0, sent.lastIndexOf("\n/tmp/shot.png"))
+  const parsed = parseSentEditorContext(prose)
+  assert.deepEqual(parsed?.editor, { kind: "selection", display: "src/a.ts", startLine: 2, endLine: 3, text: "let a = 1\nlet b = 2" })
+  assert.deepEqual(parseSentContext(parsed!.body)?.items.map((each) => each.token), ["@guide.md:3"])
+  assert.equal(parseSentContext(parsed!.body)?.body, "look at @guide.md:3 please")
+  // The human's prose alone, with the block: never touched.
+  assert.equal(appendEditorContext("why is this slow?  ", block), `why is this slow?\n\n${block}`)
+  assert.equal(appendEditorContext("unchanged", ""), "unchanged")
+})
+
+test("each reading parses back to what the chip shows", () => {
+  const back = (active: Parameters<typeof serializeEditorContext>[0]) => parseSentEditorContext(appendEditorContext("hi", serializeEditorContext(active, [], "/repo")))
+  assert.deepEqual(back({ ...editorFile, selection: { startLine: 7, endLine: 7, text: "x" } }), { body: "hi", editor: { kind: "selection", display: "src/a.ts", startLine: 7, endLine: 7, text: "x" } })
+  assert.deepEqual(back({ ...editorFile, selection: { startLine: 1, endLine: 900 } }), { body: "hi", editor: { kind: "selection", display: "src/a.ts", startLine: 1, endLine: 900 } })
+  assert.deepEqual(back({ ...editorFile, cursorLine: 40 }), { body: "hi", editor: { kind: "file", display: "src/a.ts", cursorLine: 40 } })
+  assert.deepEqual(back(editorFile), { body: "hi", editor: { kind: "file", display: "src/a.ts" } })
+  // A path with a comma and spaces, and code that quotes the header and a blank line, still round trip.
+  const odd = back({ path: "/repo/my dir/a, b.ts", selection: { startLine: 3, endLine: 5, text: `${HEADER}\n\nOpen in the editor: x` } })
+  assert.deepEqual(odd?.editor, { kind: "selection", display: "my dir/a, b.ts", startLine: 3, endLine: 5, text: `${HEADER}\n\nOpen in the editor: x` })
+  // A trailing newline from the transport is not the block's.
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nOpen in the editor: src/a.ts\n`)?.editor.display, "src/a.ts")
+})
+
+test("a message that only quotes an editor block, or garbles one, stays plain text", () => {
+  const block = serializeEditorContext({ ...editorFile, cursorLine: 2 }, [], "/repo")
+  // Not at the end: the human (or an agent's words pasted back) went on after it.
+  assert.equal(parseSentEditorContext(`see this:\n\n${block}\n\nwhat does it mean?`), null)
+  // Not its own paragraph.
+  assert.equal(parseSentEditorContext(`see this: ${block}`), null)
+  // Anything after the reading, or a reading that is not one of the three.
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nOpen in the editor: src/a.ts\nmore`), null)
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nSelected in src/a.ts, lines 2-3:`), null)
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nSelected in src/a.ts, lines 2-3:\nnot a quote`), null)
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nSomething else`), null)
+  assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\nOpen in the editor: src/a.ts`), null)
+  assert.equal(parseSentEditorContext("no block at all"), null)
+})
+
+test("a message taken back loses its editor block and keeps everything the human put in it", () => {
+  const block = serializeEditorContext({ ...editorFile, cursorLine: 2 }, [], "/repo")
+  const withChips = buildMessageWithContext("fix @guide.md:3\n/tmp/shot.png", [item({})], "/repo")
+  const sent = appendEditorContext(withChips, block)
+  assert.equal(withoutEditorContext(sent), withChips)
+  assert.equal(withoutEditorContext("plain"), "plain")
 })

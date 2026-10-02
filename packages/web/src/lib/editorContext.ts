@@ -1,14 +1,17 @@
 import type { EmbedEditorContextMessage } from "@frizz/shared"
 import { proxy, useSnapshot } from "valtio"
-import { contextChipLabel } from "./composerContext.ts"
-import { postToHost } from "./embed.ts"
+import { appendEditorContext, buildMessageWithContext, contextChipLabel, hasToken, serializeEditorContext, type ComposerContextItem } from "./composerContext.ts"
+import { embedded, postToHost } from "./embed.ts"
+import { splitComposerValue } from "./imagePaths.ts"
 import { formatChord, type Chord, type Platform } from "./keybindings.ts"
 import { basename } from "./paths.ts"
+import { prefs } from "./prefs.ts"
 
 // WHAT THE EDITOR AROUND THE SIDEBAR HAS OPEN — the latest `frizz:editor-context` (packages/shared/src/
 // embed-protocol.ts), kept for the context bar over the sidebar's composers (components/
-// EditorContextBar.tsx). Paths and line numbers only: the selected text crosses when the human adds it
-// (`frizz:add-context`). Empty outside embed mode, where nothing ever writes it.
+// EditorContextBar.tsx) and for the send, which carries it (`outgoingMessage`): the file in front, its
+// selection with the primary selection's text, or the caret's line. Empty outside embed mode, where
+// nothing ever writes it.
 
 export interface EditorContextState {
   active: EmbedEditorContextMessage["active"]
@@ -198,4 +201,43 @@ export function addEditorContextByChord(focused: Element | null, drawerOpen: boo
   pending = null
   postToHost({ type: "frizz:add-context", ...what })
   return "added"
+}
+
+// ── sending: what the editor has in front goes with the message ───────────────────────────────────
+
+/**
+ * Whether a send from this page carries the editor's context: in an editor's sidebar, while the human
+ * leaves the context bar's eye on (prefs.sendEditorContext, on by default — the frame's own storage, so
+ * it is the sidebar's setting and no browser tab's).
+ */
+export function sendsEditorContext(): boolean {
+  return embedded() && prefs.sendEditorContext
+}
+
+/**
+ * THE message a box with a context bar sends — the one helper behind both of the sidebar's send paths, a
+ * thread's reply box (ThreadComposerBox) and the new-thread box (NewThreadModal: dispatch, a dispatch held
+ * for sign-in, and a lazy thread): the chips' definitions (`buildMessageWithContext`), then, when `editor`
+ * says this box shows the bar and the human has not turned it off, the editor block
+ * (composerContext.ts `serializeEditorContext`) — read NOW, at send, which is the moment its header
+ * describes. Nothing is taken from any store, so a send the server refuses loses nothing: the draft
+ * comes back as the human typed it, and the next send reads the editor afresh.
+ *
+ * `editor` is the caller's to say because only a box that SHOWS the bar may carry what it reads — a
+ * thread's reply box on a queue card has no bar, and context the human could not see go out is context
+ * they could not turn off.
+ */
+export function outgoingMessage(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, editor: boolean): string {
+  return outgoingMessageWith(value, staged, projectDir, editor && sendsEditorContext() ? editorContext.active : null)
+}
+
+/** `outgoingMessage` with the editor's context passed in, for its test. */
+export function outgoingMessageWith(value: string, staged: readonly ComposerContextItem[], projectDir: string | null | undefined, active: EditorContextState["active"]): string {
+  const withChips = buildMessageWithContext(value, [...staged], projectDir)
+  if (!active) return withChips
+  // The chips that serialize — the ones whose token is still in the prose — are the ones that can say
+  // what the editor block would (composerContext.ts editorContextCovered).
+  const { prose } = splitComposerValue(value)
+  const present = staged.filter((item) => hasToken(prose, item.token))
+  return appendEditorContext(withChips, serializeEditorContext(active, present, projectDir))
 }

@@ -283,3 +283,157 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
   if (!items.every((item) => hasToken(body, item.token))) return null
   return { body, items }
 }
+
+// ── what the EDITOR had in front: the block a sidebar send carries on its own ─────────────────────
+//
+// In an editor's sidebar every send carries what the editor around it has in front — the selection, or
+// with nothing selected the file and the caret's line — unless the human turns that off at the context
+// bar's eye (lib/editorContext.ts outgoingMessage; plans/vscode-extension.md § The editor in the
+// sidebar). Claude Code's VS Code extension and Cursor both work this way, and the maintainer called it
+// "the #1 feature": an agent in the sidebar that cannot see the highlighted code is not beside the editor
+// at all. Asked "can you see the highlighted code?", the first cut's agent said no, because the selection
+// reached a message only when the human made a chip of it.
+//
+// It is a block of its OWN, after the chips' "Selected context:" block, rather than one more chip
+// definition. A chip is a reference the human placed in their sentence; this is not, and the agent must
+// be able to tell the two apart: what the human pointed at is the subject, what merely happened to be
+// selected may be nothing to do with the question (the human scrolled away, the selection is a leftover
+// from an hour ago). So the header says it was attached automatically and may be unrelated — Claude Code
+// frames its own the same way ("this may or may not be related to the current task") — and no `@` token
+// stands for it in the prose. Like the chips it is text in the message, never a side channel: the worker
+// reads the same transcript the human does.
+//
+// Three readings, each one line under the header (the selection's quote under its line):
+//
+//   Selected in src/a.ts, lines 12-20:        (then the text as a blockquote, as a chip's is)
+//   Selected in src/a.ts, lines 12-900 (not quoted here; read it from the file)
+//   Open in the editor: src/a.ts (cursor on line 40)
+//
+// The second is a selection past the feed's ceiling (EMBED_MAX_SELECTION_TEXT): its place, not its text.
+
+const EDITOR_HEADER = "Editor context (attached automatically: what the human had in front of them in their editor when they sent this; it may or may not be related):"
+const NOT_QUOTED = "(not quoted here; read it from the file)"
+
+/** What the editor had in front, as the feed has it (embed-protocol.ts `EmbedEditorContextMessage.active`). */
+export interface EditorContextInput {
+  path: string
+  selection?: { startLine: number; endLine: number; text?: string }
+  cursorLine?: number
+}
+
+/** The block, parsed back out of a sent message, for the transcript's chip. */
+export interface SentEditorContext {
+  kind: "selection" | "file"
+  /** The path as serialized (project-relative, or absolute outside the project). */
+  display: string
+  /** A selection's lines. */
+  startLine?: number
+  endLine?: number
+  /** A file's caret line, when the editor said it. */
+  cursorLine?: number
+  /** The quoted selection; absent for a file, and for a selection that was not quoted. */
+  text?: string
+}
+
+function linesPhrase(startLine: number, endLine: number): string {
+  return startLine === endLine ? `line ${startLine}` : `lines ${startLine}-${endLine}`
+}
+
+/**
+ * Whether a chip the message already carries says what the editor block would: one on the same file whose
+ * lines take in the whole selection, or whose quote holds its text — ⌘I on the selection, then send, with
+ * the selection still up. A file with nothing selected is covered by any chip on that file: the human
+ * pointed at it already, and "the editor shows this file too" beside it is noise. Only chips whose token is
+ * still in the prose count — `present`, the ones that serialize.
+ */
+export function editorContextCovered(active: EditorContextInput, present: readonly ComposerContextItem[]): boolean {
+  const same = present.filter((item) => item.path === active.path)
+  const selection = active.selection
+  if (!selection) return same.length > 0
+  const text = selection.text?.trim()
+  return same.some((item) =>
+    (item.startLine !== undefined && item.endLine !== undefined && item.startLine <= selection.startLine && item.endLine >= selection.endLine)
+    || (!!text && item.text.includes(text)))
+}
+
+/**
+ * The block for what the editor has in front, or "" when there is nothing to say — no editor in front, or
+ * a chip already says it (`editorContextCovered`). A selection whose text is blank (whitespace selected)
+ * reads as the file with the caret on its first line: there is nothing in it to quote.
+ */
+export function serializeEditorContext(active: EditorContextInput | null | undefined, present: readonly ComposerContextItem[], projectDir?: string | null): string {
+  if (!active || editorContextCovered(active, present)) return ""
+  const display = contextDisplayPath(active.path, projectDir)
+  const selection = active.selection
+  let reading: string
+  if (selection && selection.text !== undefined && !selection.text.trim()) {
+    reading = `Open in the editor: ${display} (cursor on line ${selection.startLine})`
+  } else if (selection) {
+    const where = `Selected in ${display}, ${linesPhrase(selection.startLine, selection.endLine)}`
+    reading = selection.text === undefined
+      ? `${where} ${NOT_QUOTED}`
+      : `${where}:\n${selection.text.replace(/\s+$/, "").split("\n").map((line) => `> ${line}`).join("\n")}`
+  } else {
+    reading = `Open in the editor: ${display}${active.cursorLine ? ` (cursor on line ${active.cursorLine})` : ""}`
+  }
+  return `${EDITOR_HEADER}\n\n${reading}`
+}
+
+/**
+ * Put the block at the END of an outgoing value — after the prose and any "Selected context:" block, and
+ * BEFORE the trailing attachment-path lines, which several surfaces find by their trailing position
+ * (imagePaths.ts). The human's prose is never touched: the block goes after it, a blank line between.
+ */
+export function appendEditorContext(value: string, block: string): string {
+  if (!block) return value
+  const { prose, attachments } = splitComposerValue(value)
+  const body = prose.trimEnd() ? `${prose.trimEnd()}\n\n${block}` : block
+  return joinComposerValue(body, attachments.map((attachment) => attachment.path))
+}
+
+const SELECTED_LINE = /^Selected in (.+), (?:line (\d+)|lines (\d+)-(\d+))(:| \(not quoted here; read it from the file\))$/
+const OPEN_LINE = /^Open in the editor: (.+?)(?: \(cursor on line (\d+)\))?$/
+
+/**
+ * The editor block at the END of a sent message's prose (attachment lines already peeled), and the prose
+ * before it — on which `parseSentContext` then runs, so a message with both renders both. Strict, like
+ * `parseSentContext`: the header must open its own paragraph and everything after it must be exactly one
+ * reading, so a message that QUOTES a block somewhere in its middle (an agent's words pasted back, this
+ * comment) keeps its plain-text rendering. A blockquote line can never be blank (`> ` at least), so a
+ * blank line inside the quoted code cannot end the block early.
+ */
+export function parseSentEditorContext(prose: string): { body: string; editor: SentEditorContext } | null {
+  // The LAST header that opens a paragraph. One inside the quoted code cannot: every quoted line opens with
+  // `>`, so no blank line precedes it.
+  const opens = prose.lastIndexOf(`\n\n${EDITOR_HEADER}`)
+  const at = opens !== -1 ? opens + 2 : prose.startsWith(EDITOR_HEADER) ? 0 : -1
+  if (at === -1) return null
+  // Trailing whitespace is the transport's, never the block's: the serializer trims the quote's end.
+  const rest = prose.slice(at + EDITOR_HEADER.length).trimEnd()
+  if (!rest.startsWith("\n\n")) return null
+  const [head, ...quote] = rest.slice(2).split("\n")
+  const body = prose.slice(0, Math.max(0, at - 2))
+  const selected = head?.match(SELECTED_LINE)
+  if (selected) {
+    const startLine = Number(selected[2] ?? selected[3])
+    const endLine = Number(selected[2] ?? selected[4])
+    const quoted = selected[5] === ":"
+    if (quoted ? !quote.length || !quote.every((line) => line.startsWith(">")) : quote.length > 0) return null
+    const text = quoted ? quote.map((line) => line.replace(/^> ?/, "")).join("\n") : undefined
+    return { body, editor: { kind: "selection", display: selected[1], startLine, endLine, ...(text !== undefined ? { text } : {}) } }
+  }
+  const open = head?.match(OPEN_LINE)
+  if (!open || quote.length) return null
+  return { body, editor: { kind: "file", display: open[1], ...(open[2] !== undefined ? { cursorLine: Number(open[2]) } : {}) } }
+}
+
+/**
+ * A sent message as the human wrote it, the editor block taken off — what goes back into the prompt box
+ * when a queued message is taken back, so the re-send attaches the editor's context of THAT moment rather
+ * than carrying the old one as prose under a new one. Attachment lines stay. Unchanged when there is none.
+ */
+export function withoutEditorContext(value: string): string {
+  const { prose, attachments } = splitComposerValue(value)
+  const parsed = parseSentEditorContext(prose)
+  return parsed ? joinComposerValue(parsed.body, attachments.map((attachment) => attachment.path)) : value
+}

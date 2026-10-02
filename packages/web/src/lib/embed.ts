@@ -5,6 +5,7 @@ import {
   EMBED_PROTOCOL_VERSION,
   EMBED_MAX_NOTE,
   EMBED_MAX_OPEN_FILES,
+  EMBED_MAX_SELECTION_TEXT,
   EMBED_THEME_PARAM,
   EMBED_VSCODE,
   type EmbedCommandMessage,
@@ -196,15 +197,23 @@ export function parseHostMessage(data: unknown): EmbedHostMessage | null {
     if (active === null) return { type: "frizz:editor-context", active: null, open: files }
     const file = editorFile(active)
     if (!file || !isRecord(active)) return null
-    const { selection } = active
-    if (selection === undefined) return { type: "frizz:editor-context", active: file, open: files }
+    const { selection, cursorLine } = active
+    if (selection === undefined) {
+      // The caret's line rides only a file with nothing selected; a bad one is dropped with the message,
+      // like any other field that is not the contract's.
+      if (!optionalLine(cursorLine)) return null
+      return { type: "frizz:editor-context", active: { ...file, ...(cursorLine !== undefined ? { cursorLine: cursorLine as number } : {}) }, open: files }
+    }
     if (!isRecord(selection)) return null
-    const { startLine, endLine, chars } = selection
+    const { startLine, endLine, chars, text } = selection
     if (startLine === undefined || endLine === undefined || !optionalLine(startLine) || !optionalLine(endLine) || (endLine as number) < (startLine as number)) return null
     if (!Number.isSafeInteger(chars) || (chars as number) < 1) return null
+    // The selection's text goes into a message the human sends, so it is held to the feed's own ceiling:
+    // a host that sends more is not the extension this page speaks to.
+    if (text !== undefined && (typeof text !== "string" || text.length > EMBED_MAX_SELECTION_TEXT)) return null
     return {
       type: "frizz:editor-context",
-      active: { ...file, selection: { startLine: startLine as number, endLine: endLine as number, chars: chars as number } },
+      active: { ...file, selection: { startLine: startLine as number, endLine: endLine as number, chars: chars as number, ...(text !== undefined ? { text: text as string } : {}) } },
       open: files,
     }
   }

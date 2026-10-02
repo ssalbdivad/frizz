@@ -3,7 +3,7 @@ import { useSnapshot } from "valtio"
 import type { AccountBackend, ThreadSkill, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
-import { buildMessageWithContext } from "../lib/composerContext.ts"
+import { outgoingMessage } from "../lib/editorContext.ts"
 import { restoreContextItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { Composer } from "./Composer.tsx"
@@ -154,9 +154,11 @@ export function ThreadComposerBox({
       return
     }
     // Staged ⌘I context items ride the send: serialized into the text (before any trailing
-    // attachment paths) and cleared with it — restored on a rejected send exactly like the draft.
+    // attachment paths) and cleared with it — restored on a rejected send exactly like the draft. In an
+    // editor's sidebar the drawer's box — the one that shows the context bar — also carries what the
+    // editor has in front, read now; the queue card's copy shows no bar and so carries none of it.
     const staged = takeContextItems(key)
-    const outgoing = buildMessageWithContext(text, staged, projectDir)
+    const outgoing = outgoingMessage(text, staged, projectDir, surface === "chatComposer")
     const callbacks: EagerFollowUpCallbacks = {
       onOptimistic: clearMessage,
       // Never clobber a newer draft typed while the request was in flight.

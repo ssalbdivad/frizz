@@ -104,18 +104,47 @@ export interface EmbedEditorSelection {
   endLine: number
   /** Characters selected, across every selection the editor holds (multi-cursor counts each). */
   chars: number
+  /**
+   * The PRIMARY selection's text, newlines as `\n` — what a message sent from the sidebar carries when the
+   * human leaves "send the editor selection" on (packages/web/src/lib/editorContext.ts outgoingMessage).
+   * Absent past `EMBED_MAX_SELECTION_TEXT` characters, and then the message names the lines without
+   * quoting them. Optional for an extension from before it, whose selections then go as references too.
+   */
+  text?: string
 }
 
 /**
- * THE EDITOR'S LIVE CONTEXT — what the sidebar's context bar shows: the file in front and its selection,
- * and the other files open in tabs. Sent after `frizz:ready` and again on every change (active editor,
- * selection — debounced, so a drag is not a message per pixel — and the tab set). Paths and line numbers
- * only, never the selected text: the text crosses only when the human adds it (`frizz:add-context`).
+ * The longest selection the feed carries as text, in UTF-16 characters: 16 Ki, a quarter of what an
+ * explicit add carries (EDITOR_COMPOSE_MAX_TEXT, 64 Ki). The feed is not an explicit add: it is re-sent
+ * on every settled selection change, through two postMessage hops and a JSON dedupe key, whether or not
+ * the human sends anything, so its ceiling is set by what is cheap to repeat. And what it carries rides
+ * a message the human did not assemble by hand: 16 Ki is about 400 lines of code (the quote ceiling of
+ * the extension's own messages, message.ts QUOTE_MAX_LINES) and ~4k tokens — context, not a payload. A
+ * select-all on a large file goes as its file and lines, which the agent can read itself; ⌘I still
+ * quotes up to 64 Ki for the human who means it.
+ */
+export const EMBED_MAX_SELECTION_TEXT = 16 * 1024
+
+/**
+ * THE EDITOR'S LIVE CONTEXT — what the sidebar's context bar shows, and what a message sent from the
+ * sidebar carries unless the human turns that off (the bar's eye): the file in front, its selection WITH
+ * the primary selection's text (or its caret's line, with nothing selected), and the other files open in
+ * tabs. Sent after `frizz:ready` and again on every change (active editor, selection or caret line —
+ * debounced, so a drag is not a message per pixel — and the tab set). The text crosses to the page so the
+ * page can attach it at send time without asking the host, which would put a round trip between Enter and
+ * the send; it reaches the agent only inside a message the human sends from the box that shows it.
  */
 export interface EmbedEditorContextMessage {
   type: "frizz:editor-context"
   /** The text editor in front, or null when none is (a terminal has focus with no editor beside it, a diff, nothing open). */
-  active: (EmbedEditorFile & { selection?: EmbedEditorSelection }) | null
+  active: (EmbedEditorFile & {
+    selection?: EmbedEditorSelection
+    /**
+     * The caret's line, 1-based, when NOTHING is selected — a message with no selection says where in the
+     * file the human was ("cursor on line 40"). Absent beside a selection, whose own lines say it.
+     */
+    cursorLine?: number
+  }) | null
   /** Every OTHER file open in a tab, most recently active first, at most `EMBED_MAX_OPEN_FILES`. */
   open: EmbedEditorFile[]
 }
@@ -195,9 +224,10 @@ export interface EmbedKeyMessage {
 
 /**
  * Put the editor's context in the composer in front — a click on the context bar (the selection, or the
- * file in front when nothing is selected) or a pick from its open files. The page cannot do it alone: it
- * holds paths and line numbers, never the text. The host answers with a `frizz:compose` (target "front",
- * focus true) carrying the text as the editor has it at that moment, or with nothing when the file or
+ * file in front when nothing is selected) or a pick from its open files. The page asks rather than using
+ * the feed's copy: a whole file is never in the feed, a selection may be past the feed's ceiling, and a
+ * chip is the editor's text at the moment of the click. The host answers with a `frizz:compose` (target
+ * "front", focus true) carrying the text as the editor has it then, or with nothing when the file or
  * selection is gone.
  */
 export interface EmbedAddContextMessage {
