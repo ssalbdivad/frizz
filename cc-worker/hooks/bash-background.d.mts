@@ -6,3 +6,8 @@ export function evaluateBashBackgroundHook(
 export const LONG_FOREGROUND_MS: number
 export function longForegroundContext(timeoutMs: number): string
 export function isDirectHookExecution(argv1: unknown, moduleUrl: string, realpath?: (path: string) => string): boolean
+export function bashHookResponse(
+  stdin: string,
+  argv?: string[],
+  env?: Record<string, string | undefined>,
+): Record<string, unknown>
