@@ -1090,6 +1090,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
     // so consulting it per tick costs a live request only every few minutes.
     readQuota,
+    refreshBoard: () => board.refresh(),
     // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
     // lives and is unlinked when it dies (liveBrokerRecords checks the pid), so "did the process that
     // took this wake survive" is one directory read. Codex and any row whose session moved on answer

@@ -1347,6 +1347,9 @@ export interface SchedulerDeps {
     stoppable(slug: string, shellId: string): boolean
     stop(slug: string, shellId: string, reason: ShellStopReason, opts: { notify: boolean }): Promise<{ stopped: boolean; note: string | null } | undefined>
   }
+  // Re-project the board after a pass changed what it shows without a tailer event to trigger it — today
+  // only evalSetAsideQuestions' withdrawals. Absent ⇒ the board's own reconcile picks the change up.
+  refreshBoard?: () => void
   // Deterministic hard-crash fault injection. Throwing here escapes tick without compensating writes,
   // exactly like process death at the named durability boundary. Never configured in production.
   crashPoint?: (point: SchedulerCrashPoint, delivery: WakeDelivery) => void
@@ -2256,6 +2259,50 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // A shell under an armed `watch` is kept on purpose and is not listed. Nothing is killed here — a dev
   // server the human is about to open looks exactly like a forgotten poller from outside, so the worker,
   // which knows which one it is, decides.
+  // ---- A QUESTION THE HUMAN WROTE PAST IS WITHDRAWN AT THE WORKER'S NEXT REST ---------------------
+  //
+  // A typed message sets every open question aside (shared questionRepliedPast). Until 2026-10-02 a
+  // set-aside card then stayed open and answerable in the thread's history indefinitely, which the
+  // maintainer found far too persistent: "questions shouldn't hang around if I progress the
+  // conversation … unless the agent determines the question is directly relevant to what I said, it
+  // should be withdrawn and a new question can be asked if needed."
+  //
+  // So the set-aside state now lasts exactly ONE TURN — the one the message started. While it runs the
+  // card stays answerable (the human may still be mid-answer), and the worker, which reads the message as
+  // frizz cannot, `keep`s whatever is directly relevant to it. At the first rest after the message, every
+  // question still set aside is withdrawn. A danger question never reads as set aside, so it is never
+  // withdrawn here.
+  //
+  // THE REST GUARDS ARE THE SIGN-OFF NUDGE'S: idle, and the agent spoke after the human's message AND
+  // after the last user record — so a message delivered but not yet read, or a wake landing on top of the
+  // rest, waits for the rest that follows it. A failed turn is not a rest.
+  //
+  // `settled_at` is stamped with the MESSAGE's instant, not now: the message is what withdrew it. That
+  // also keeps the row out of router.pivotTwin, which refuses re-asking a question withdrawn AFTER the
+  // human's newest message — the worker's own unask on reading it. An expiry is nobody's decision, so a
+  // later turn that genuinely needs the answer may ask again.
+  function evalSetAsideQuestions(): void {
+    let withdrew = 0
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.turn !== "idle" || !tele.lastHumanAt || !tele.lastAssistantAt) continue
+      if (tele.authFault || tele.apiFault) continue
+      const humanMs = Date.parse(tele.lastHumanAt)
+      const spokeMs = Date.parse(tele.lastAssistantAt)
+      if (!(spokeMs > humanMs)) continue
+      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= spokeMs) continue
+      for (const q of deps.storage.listThreadQuestions(row.slug, { openOnly: true })) {
+        if (!questionRepliedPast(q, tele.lastHumanAt)) continue
+        if (deps.storage.withdrawThreadQuestion(row.slug, q.id, humanMs)) withdrew++
+      }
+    }
+    if (withdrew > 0) {
+      log(`waker: withdrew ${withdrew} question(s) the human wrote past`)
+      deps.refreshBoard?.()
+    }
+  }
+
   function evalStrayShellNudges(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
@@ -4398,6 +4445,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt schedule pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalSetAsideQuestions()
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: set-aside question pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     // THE REMINDER MINTS BEFORE THE GOAL'S REST PASS (2026-08-28): SOURCE 5 stands down on a rest the
     // reminder took, and it reads that off the outbox — so the reminder has to be there first. Before

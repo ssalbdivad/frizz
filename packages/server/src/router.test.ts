@@ -798,7 +798,7 @@ test("a typed follow-up to a thread with questions open names the ones it sets a
   await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "should we use this thread or the other one?" } })
   const [, noted] = sent
   assert.equal(noted, `should we use this thread or the other one?\n\n${openQuestionsNote([{ id: "qst_open0000001", question: "SQLite or a JSON file?" }])}`)
-  assert.match(noted, /now set aside by this message: .*`keep` it/)
+  assert.match(noted, /now set aside by this message: .*`keep` one only if/)
   assert.doesNotMatch(noted, /qst_answered001/, "an answered question is not open")
   // The human's own bubble, once the transcript reads it back, is their words and nothing else.
   assert.equal(stripFollowUpRiders(noted), "should we use this thread or the other one?")

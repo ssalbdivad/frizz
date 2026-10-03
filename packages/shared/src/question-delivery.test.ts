@@ -49,7 +49,7 @@ test("the open-questions note names each question by text and id, and comes back
   ])!
   assert.doesNotMatch(note, /\n/, "one line, so the stripper can anchor on it")
   assert.match(note, /^❓ Frizz: 2 questions you registered are now set aside by this message: “Should the settings store use SQLite or a JSON file\?” \(qst_aaaaaaaaaaaa\), “x{99}…” \(qst_bbbbbbbbbbbb\)\./)
-  assert.match(note, /If the message above did not move past one, `keep` it — reworded with `question`/)
+  assert.match(note, /frizz WITHDRAWS every one still set aside when you next come to rest\. `keep` one only if it is directly relevant/)
   assert.match(openQuestionsNote([{ id: "qst_1", question: "Merge it?" }])!, /^❓ Frizz: 1 question you registered is now set aside by this message: “Merge it\?” \(qst_1\)\./)
 
   // ROUND TRIP, as the router appends it — after the gap note, so "the message above" stays the human's.
@@ -63,4 +63,7 @@ test("the open-questions note names each question by text and id, and comes back
   // A transcript written under the 2026-09-29 wording keeps coming back off the bubble too.
   const older = "❓ Frizz: 1 question you registered is still open: “Merge it?” (qst_1). If the message above made any of them moot, `unask` exactly those and say so; leave the rest open — they are still the human's to answer, and still your sign-off."
   assert.equal(stripOpenQuestionsNote(`ship it\n\n${older}`), "ship it")
+  // …and the 2026-09-30 one, when a set-aside card stayed answerable indefinitely.
+  const sept30 = "❓ Frizz: 1 question you registered is now set aside by this message: “Merge it?” (qst_1). Their cards stay answerable where they were asked, but no longer hold this thread. If the message above did not move past one, `keep` it — reworded with `question` if the direction changed — and it rides to the bottom of your next handoff; otherwise leave it."
+  assert.equal(stripOpenQuestionsNote(`ship it\n\n${sept30}`), "ship it")
 })

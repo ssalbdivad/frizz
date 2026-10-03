@@ -1879,7 +1879,7 @@ test("`activity` reads the open questions back, with the ids `unask` takes", asy
     // `keep` named as the way back in.
     assert.match(text, /2 questions still owed an answer:\n\n {2}question: qst_ab12cd34ef56\n.*\n {2}question: qst_0011223344ff\n/)
     assert.match(text, /1 question set aside — the human wrote to you since, without answering:\n\n {2}question: qst_99887766aabb\n/)
-    assert.match(text, /If the conversation still needs one, `keep` it/)
+    assert.match(text, /frizz withdraws each one when you next come to rest\. `keep` only one directly relevant/)
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
     // The fence block names the SHELL and nothing else — no question id may appear inside it.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))

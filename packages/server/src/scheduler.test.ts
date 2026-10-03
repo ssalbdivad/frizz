@@ -321,6 +321,43 @@ function askQ(h: Harness, slug: string, id: string, question: string) {
   return id
 }
 
+// A QUESTION THE HUMAN WROTE PAST LASTS ONE TURN (2026-10-02): the worker's first rest after the message
+// withdraws every question still set aside — not a danger one, not one it kept, and not before it has
+// actually read the message and rested.
+test("question: the first rest after a typed message withdraws the questions it set aside", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const t0 = h.clock.ms
+  askQ(h, "t", "qst_plain", "SQLite or a JSON file?")
+  h.storage.askThreadQuestion({ id: "qst_danger", slug: "t", spec: JSON.stringify({ question: "Force-push main?", kind: "question", danger: true, options: [{ label: "A" }] }), askedAtMs: t0 })
+  askQ(h, "t", "qst_kept", "Which dist-tag?")
+  const humanAt = t0 + 1_000
+  let refreshes = 0
+  const s = h.make({ refreshBoard: () => void refreshes++ })
+  const open = () => h.storage.listThreadQuestions("t").filter((q) => q.state === "open").map((q) => q.id).sort()
+
+  // Negative controls: the message is delivered but the turn it started is still running…
+  h.tele.set("t", { ...tele(undefined, "in-flight"), lastHumanAt: iso(humanAt), lastUserAt: iso(humanAt), lastAssistantAt: iso(t0) })
+  await s.tick()
+  // …and an idle reading whose last word PREDATES the message (not yet read) is no rest after it.
+  h.tele.set("t", { ...tele(), lastHumanAt: iso(humanAt), lastUserAt: iso(humanAt), lastAssistantAt: iso(t0) })
+  await s.tick()
+  assert.deepEqual(open(), ["qst_danger", "qst_kept", "qst_plain"], "nothing withdrawn before the rest")
+  assert.equal(refreshes, 0)
+
+  // The worker keeps one mid-turn, then rests.
+  h.storage.keepThreadQuestion("t", "qst_kept", undefined, humanAt + 500)
+  h.tele.set("t", { ...tele(), lastHumanAt: iso(humanAt), lastUserAt: iso(humanAt), lastAssistantAt: iso(humanAt + 2_000) })
+  await s.tick()
+  assert.deepEqual(open(), ["qst_danger", "qst_kept"])
+  const gone = h.storage.getThreadQuestion("qst_plain")
+  assert.equal(gone?.state, "withdrawn")
+  assert.equal(gone?.settled_at, humanAt, "stamped with the message's instant, so a later turn may re-ask it")
+  assert.equal(refreshes, 1)
+  assert.equal(h.resumes.length, 0, "a withdrawal wakes nobody")
+  h.storage.close()
+})
+
 test("question: an answer is handed over once, and the row is not re-delivered", async () => {
   const h = harness()
   h.storage.upsertSession(row("t"))

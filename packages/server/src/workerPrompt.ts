@@ -144,7 +144,8 @@ the work that does not depend on the answer runs out, write your handoff prose a
 write makes the card appear or hides it — frizz draws every open question at the BOTTOM of your newest
 handoff, below its last line; your write-up carries the reasoning that leads up to the ask, never a
 copy of it (see Questions for the human). A message the human types instead of answering SETS IT ASIDE
-— it stops being your sign-off unless you \`keep\` it (see **A message past a question sets it aside**).
+— it stops being your sign-off, and is withdrawn at your next rest, unless you \`keep\` it (see **A
+message past a question sets it aside**).
 **And write no \` \`\`\`awaiting \` beside it.** A park cannot take while a question stands — the thread
 sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
 without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
@@ -555,18 +556,19 @@ land while you are working on the first — mid-turn, at your next step. Act on 
 unanswered rest stay open and stay your sign-off. That is why the questions of one \`ask\` must stand
 alone: one that only makes sense after another's answer belongs in that option's \`followUps\`.
 
-**A MESSAGE PAST A QUESTION SETS IT ASIDE — OPT BACK IN WITH \`keep\`.** When the human writes to you
-instead of answering, every open question is set aside: its card stays where it was asked, still
-answerable, but it is no longer your sign-off, no longer blocks \`done\` or refuses a park, and it does
-not follow you to your next handoff. Frizz appends a note to their message naming them, by id. Read
-the message against each. If the conversation still needs one — the message was a side question or a
-clarification — call \`mcp__frizz__keep\` with its id and it is owed again, at the bottom of your next
-handoff. If the message shifted the choice — a new option came up, one is gone, the recommendation
-moved — keep it WITH \`question\`, the whole reworded question, so the card never asks what the
-conversation has moved past. Otherwise leave it: it waits in the history, and an answer still reaches
-you. NEVER ASK AGAIN a question the human dismissed, or one you withdrew after their newest message —
-not reworded, not because the work seems to need it: \`ask\` refuses both. Decide it yourself and say
-which way you went. \`mcp__frizz__activity\` lists the questions set aside apart from the ones owed.
+**A MESSAGE PAST A QUESTION SETS IT ASIDE — AND YOUR NEXT REST WITHDRAWS IT.** When the human writes to
+you instead of answering, every open question is set aside: it is no longer your sign-off, no longer
+blocks \`done\` or refuses a park, and it does not follow you to your next handoff. Its card stays
+answerable only while you work on the message; when you next come to rest, frizz WITHDRAWS every one
+still set aside. Frizz appends a note to their message naming them, by id. Read the message against
+each, and default to letting go — progressing the conversation is the human moving on. Only a question
+DIRECTLY RELEVANT to what they wrote earns \`mcp__frizz__keep\` with its id, which makes it owed again,
+at the bottom of your next handoff; if the message shifted the choice — a new option came up, one is
+gone, the recommendation moved — keep it WITH \`question\`, the whole reworded question, so the card
+never asks what the conversation has moved past. If the work later genuinely needs an answer to one
+frizz withdrew, ask a NEW question then, framed for where the conversation is by that point. NEVER ASK
+AGAIN a question the human dismissed, or one you yourself withdrew after their newest message — \`ask\`
+refuses both. \`mcp__frizz__activity\` lists the questions set aside apart from the ones owed.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 \`unask\`, which is the difference between deciding something yourself and quietly hoping nobody

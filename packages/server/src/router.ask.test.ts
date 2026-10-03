@@ -605,6 +605,23 @@ test("a question the human typed past is set aside — open, but not blocking do
   } finally { h.close() }
 })
 
+// …AND ONE THE WORKER DID NOT KEEP IS WITHDRAWN AT ITS NEXT REST (2026-10-02, scheduler
+// evalSetAsideQuestions), stamped with the MESSAGE's instant. That expiry is nobody's pivot, so a later
+// turn that genuinely needs the answer may ask it again — the refusal is for the worker's own `unask`
+// and the human's ×, never for frizz's clean-up.
+test("a set-aside question frizz withdrew at the message's instant may be asked again", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    const humanAt = Date.parse(passed.askedAt) + 1
+    h.humanSpokeAt(new Date(humanAt).toISOString())
+    assert.equal(h.storage.withdrawThreadQuestion("t", passed.id, humanAt), true)
+    const [again] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
+    assert.notEqual(again.id, passed.id)
+  } finally { h.close() }
+})
+
 test("keep refuses another thread's question, a settled one, and a malformed rewording", async () => {
   const h = harness()
   try {
@@ -657,7 +674,7 @@ test("a question the worker withdrew after the human's message, or the human dis
     await h.router.unask.handler({ input: { slug: "t", id: again.id } })
     await assert.rejects(
       h.router.ask.handler({ input: { slug: "t", questions: [simple("sqlite, or a json file")] } }),
-      new RegExp(`repeats ${again.id}, which you withdrew after the human's newest message\\.\\n\\nA question set aside is not asked again`),
+      new RegExp(`repeats ${again.id}, which you withdrew after the human's newest message\\.\\n\\nA question dropped that way is not asked again`),
     )
 
     // The human's ×: "decide it yourself; do not re-ask" — refused however long ago.

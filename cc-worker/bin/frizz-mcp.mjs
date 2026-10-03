@@ -681,14 +681,14 @@ const ASK = {
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
-    "WHEN THE HUMAN WRITES INSTEAD OF ANSWERING, THE MESSAGE SETS YOUR OPEN QUESTIONS ASIDE. Each card " +
-    "stays answerable where it was asked, but no longer holds your thread: it is not your sign-off, does " +
-    "not block `done`, and does not follow you to your next handoff. The message comes with a note naming " +
-    "them. If it was a side question, or the conversation still needs one, `keep` it — reworded if the " +
-    "direction changed, above all to name an option the conversation has since raised — and it rides to " +
-    "the bottom of your next handoff again. Otherwise leave it where it is. Never ask again a question the " +
-    "human dismissed, or one you withdrew after their newest message — `ask` refuses both; decide it " +
-    "yourself and say which way you went.\n\n" +
+    "WHEN THE HUMAN WRITES INSTEAD OF ANSWERING, THE MESSAGE SETS YOUR OPEN QUESTIONS ASIDE, AND YOUR " +
+    "NEXT REST WITHDRAWS THEM. A set-aside question no longer holds your thread: it is not your sign-off, " +
+    "does not block `done`, and does not follow you to your next handoff; its card stays answerable only " +
+    "while you work on the message. The message comes with a note naming them. Only one DIRECTLY " +
+    "RELEVANT to what the human wrote earns `keep` — reworded if the direction changed, above all to name " +
+    "an option the conversation has since raised — and it rides to the bottom of your next handoff again. " +
+    "Let the rest go; if the work later needs one, ask a new question then. Never ask again a question the " +
+    "human dismissed, or one you yourself withdrew after their newest message — `ask` refuses both.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL — register them together, so they render as one stack. Each must stand " +
     "alone (a question that only makes sense after another's answer is that option's `followUps`), " +
     "because ANSWERS ARRIVE ONE AT A TIME: each card is sent the moment the human completes it, so you " +
@@ -744,11 +744,12 @@ const KEEP = {
   name: "keep",
   description:
     "KEEP A QUESTION CURRENT after the human wrote to you without answering it. Their message set it " +
-    "aside: its card stays answerable where it was asked, but it no longer holds your thread or follows " +
-    "you to your next handoff. `keep` opts it back in — it is your sign-off again, blocks `done` again, " +
+    "aside: it no longer holds your thread or follows you to your next handoff, and frizz WITHDRAWS it " +
+    "when you next come to rest. `keep` opts it back in — it is your sign-off again, blocks `done` again, " +
     "and its card rides to the bottom of your next handoff.\n\n" +
-    "Keep only what the conversation STILL needs from the human. A side question or a clarification " +
-    "usually leaves an ask standing; a new direction usually does not. If the direction shifted the " +
+    "Keep only a question DIRECTLY RELEVANT to what the human just wrote. Writing past a question is " +
+    "usually the human moving on, so the default is to let it go; if the work later needs the answer, " +
+    "ask a new question then. If the direction shifted the " +
     "choice — a new option came up, one is gone, the recommendation changed — pass `question` with the " +
     "full reworded question, which replaces the card's wording. A card still reading as it did before " +
     "the human's message is the stale ask this exists to avoid.\n\n" +
@@ -1138,8 +1139,8 @@ async function activity() {
   // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
   // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
   //
-  // OWED vs SET ASIDE (2026-09-30). A typed message sets every open question aside: its card stays
-  // answerable where it was asked, but it holds nothing until the worker `keep`s it. The readout lists
+  // OWED vs SET ASIDE (2026-09-30). A typed message sets every open question aside: it holds nothing
+  // until the worker `keep`s it, and the worker's next rest withdraws it (2026-10-02). The readout lists
   // the two apart so the worker knows which ones are still its sign-off.
   const questionLine = (q) =>
     `  question: ${q.id}\n` +
@@ -1157,10 +1158,10 @@ async function activity() {
   const passedBlock = passed.length === 0 ? "" : (
     `\n\n${passed.length} question${passed.length === 1 ? "" : "s"} set aside — the human wrote to you since, without answering:\n\n` +
     passed.map(questionLine).join("\n") +
-    "\n\nTheir cards stay answerable where they were asked, but hold nothing: not your sign-off, not a " +
-    "block on `done`. If the conversation still needs one, `keep` it — reworded with `question` if the " +
-    "direction changed — and it is owed again. A question you withdraw after their message, or one they " +
-    "dismiss, cannot be asked again."
+    "\n\nThey hold nothing — not your sign-off, not a block on `done` — and frizz withdraws each one " +
+    "when you next come to rest. `keep` only one directly relevant to the human's message — reworded with " +
+    "`question` if the direction changed — and it is owed again. One you withdraw yourself after their " +
+    "message, or one they dismiss, cannot be asked again."
   )
   const askedBlock = owedBlock + passedBlock
   if (!items.length) {
@@ -2184,7 +2185,7 @@ async function unwatch(args) {
 function openQuestionList(result) {
   const open = Array.isArray(result?.open) ? result.open : []
   if (!open.length) return "Nothing else is open on this thread — the human owes you no answer."
-  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}${q.repliedPast ? "  (set aside — `keep` to bring it forward)" : ""}`)
+  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}${q.repliedPast ? "  (set aside — withdrawn at your next rest unless you `keep` it)" : ""}`)
   return `Open on this thread now:\n${lines.join("\n")}`
 }
 

@@ -53,7 +53,8 @@
 // second fix it did not mention (maintainer 2026-09-30: "the questions feel out of date"). Now a typed
 // message sets the question aside (shared questionRepliedPast, surfaced here as `repliedPast`): its card
 // stays at the bottom of the last rest BEFORE that message, still answerable, and rides forward again
-// only if the worker `keep`s it — which stamps `keptAt`, and a kept question reads from there.
+// only if the worker `keep`s it — which stamps `keptAt`, and a kept question reads from there. One it does
+// not keep is withdrawn at its next rest (server scheduler evalSetAsideQuestions, 2026-10-02), and leaves.
 //
 // So a CURRENT open question renders at the bottom of the NEWEST REST — the last "Agent rested" boundary the
 // server emits (transcript.ts restMessage) — at or after it was asked. While a turn is running past that

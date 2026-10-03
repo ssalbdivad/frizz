@@ -2784,10 +2784,11 @@ export const RegisteredQuestionView = z.object({
    *  optionally with new wording. Absent on a question never kept. */
   keptAt: z.string().optional(),
   /** SET ASIDE: the human has TYPED to the worker since this was asked (or last kept), without answering
-   *  it (questionRepliedPast). A set-aside question is still OPEN — its card stays answerable where it
-   *  was, in the thread's history — but it no longer holds the thread: it does not block `done`, refuse a
-   *  park, sign off a rest or queue the thread, and its card stops riding to the newest handoff. The
-   *  worker opts one back in with `keep`. Absent means it is current. */
+   *  it (questionRepliedPast). A set-aside question is still OPEN for the turn that message started — its
+   *  card stays answerable where it was — but it no longer holds the thread: it does not block `done`,
+   *  refuse a park, sign off a rest or queue the thread, and its card stops riding to the newest handoff.
+   *  The worker opts one back in with `keep`; at its next rest, frizz withdraws every one it did not
+   *  (scheduler evalSetAsideQuestions). Absent means it is current. */
   repliedPast: z.literal(true).optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
@@ -2802,9 +2803,10 @@ export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
  *  every open question stay owed and ride to the newest handoff until the worker `unask`ed it — and the
  *  card then sat under handoffs about something else, asking a question the conversation had moved past
  *  (maintainer 2026-09-30: "it often leads to weird scenarios like this where the questions feel out of
- *  date"). Now the default is to leave the card where it was asked, still answerable, and let the worker
- *  opt a question back in — `keep`, with new wording when the direction changed — when the message did
- *  not move past it (openQuestionsNote tells it which are open).
+ *  date"). Since then the card stays where it was asked, and the worker opts a question back in — `keep`,
+ *  with new wording when the direction changed — when it is directly relevant to the message
+ *  (openQuestionsNote tells it which are open). One it does not keep is WITHDRAWN at the worker's next
+ *  rest (2026-10-02, scheduler evalSetAsideQuestions: "currently questions are far too persistent").
  *
  *  A DANGER QUESTION NEVER READS AS WRITTEN PAST: `danger` is the irreversible call that must stay the
  *  human's, and nothing about the human typing makes it less so. */
@@ -5342,9 +5344,10 @@ export function stripHumanGapNote(text: string): string {
  *  them — appended to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
  *
  *  THE MESSAGE SETS THEM ASIDE, AND THE WORKER OPTS BACK IN (2026-09-30, see questionRepliedPast). The
- *  cards stay answerable where they were asked; the worker reading the message decides whether any is
- *  still what the conversation needs, and `keep`s exactly those — reworded if the message changed the
- *  options. Frizz cannot tell a pivot from a side question; the worker can.
+ *  cards stay answerable only until the worker's next rest, when frizz withdraws every one it did not
+ *  `keep` (scheduler evalSetAsideQuestions, 2026-10-02); the worker reading the message keeps exactly
+ *  those directly relevant to it — reworded if the message changed the options. Frizz cannot tell a
+ *  pivot from a side question; the worker can.
  *
  *  Each question is named by its text AND its id, because `keep` takes the id and the worker never
  *  chose one. Folded to one line and clipped, so the note stays ONE line and its stripper can anchor on
@@ -5360,6 +5363,14 @@ export function openQuestionsNote(open: readonly { id: string; question: string 
 }
 
 const OPEN_QUESTIONS_NOTE_TAIL =
+  " They no longer hold this thread, and frizz WITHDRAWS every one still set aside when you next come to " +
+  "rest. `keep` one only if it is directly relevant to the message above — reworded with `question` if " +
+  "the direction changed — and it rides to the bottom of your next handoff; let the rest go. If the work " +
+  "later needs one of them, ask a new question then."
+
+// The note's tail from 2026-09-30, when a set-aside card stayed answerable in the history indefinitely.
+// Still stripped, so a transcript written then does not start showing it in the human's bubble.
+const OPEN_QUESTIONS_NOTE_TAIL_2026_09_30 =
   " Their cards stay answerable where they were asked, but no longer hold this thread. If the message " +
   "above did not move past one, `keep` it — reworded with `question` if the direction changed — and it " +
   "rides to the bottom of your next handoff; otherwise leave it."
@@ -5375,7 +5386,7 @@ const OPEN_QUESTIONS_NOTE_TAIL_2026_09_29 =
 // its own and to the note's fixed opening AND closing words, so a message that quotes one keeps it.
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const OPEN_QUESTIONS_NOTE_LINE = new RegExp(
-  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) (?:still open|now set aside by this message): [^\\n]*(?:${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_29)})[ \\t]*$`,
+  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) (?:still open|now set aside by this message): [^\\n]*(?:${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_30)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_29)})[ \\t]*$`,
 )
 
 /** Display projection: the human's message without the open-questions note frizz appended for the

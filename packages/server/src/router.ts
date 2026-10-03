@@ -1684,8 +1684,8 @@ export function createRouter(ctx: AppContext) {
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
   // Each carries `repliedPast` exactly as the board's does: the human has typed past it, so it is set
-  // aside — still answerable where it was asked, holding nothing — until the worker `keep`s it
-  // (shared questionRepliedPast).
+  // aside — still answerable where it was asked, holding nothing — until the worker `keep`s it, or its
+  // next rest withdraws it (shared questionRepliedPast, scheduler evalSetAsideQuestions).
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
     const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
@@ -2839,8 +2839,8 @@ export function createRouter(ctx: AppContext) {
         const gapNote = side ? undefined : humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
         // …AND THE QUESTIONS THIS MESSAGE SETS ASIDE, the same way and for the same reader. A typed
         // message sets every current question aside (shared questionRepliedPast, 2026-09-30): its card
-        // stays answerable where it was asked, and the worker — which reads the message, as frizz cannot
-        // — opts back in with `keep` the ones the conversation still needs. So it is told, here, which
+        // stays answerable until the worker's next rest withdraws it (2026-10-02), and the worker — which
+        // reads the message, as frizz cannot — opts back in with `keep` the ones directly relevant to it. So it is told, here, which
         // ones and by what id. Read BEFORE the message moves `lastHumanAt`, so this names the questions
         // that were current up to now, not ones an earlier message already set aside. Appended AFTER the
         // gap note, so that note's "the message above" still means the human's words.
@@ -4212,7 +4212,7 @@ export function createRouter(ctx: AppContext) {
         })
         if (reasked.length > 0) {
           throw new Error(
-            `${reasked.join("\n")}\n\nA question set aside is not asked again, in these words or any others: ` +
+            `${reasked.join("\n")}\n\nA question dropped that way is not asked again, in these words or any others: ` +
             "decide it yourself — do what the human's newest message asks — and say which way you went in " +
             "your write-up.",
           )
@@ -4349,7 +4349,7 @@ export function createRouter(ctx: AppContext) {
         // unreachable for any thread that left a log tail running.
         //
         // A QUESTION THE HUMAN TYPED PAST DOES NOT BLOCK (2026-09-30, shared questionRepliedPast): it is
-        // set aside — its card stays answerable in the thread's history — unless the worker `keep`s it.
+        // set aside, and withdrawn at the worker's next rest, unless the worker `keep`s it.
         const blockingQuestions = heldQuestions(input.slug)
         const blockingWatches = [
           ...armedOwnWatchViews(input.slug).map((w) => ({

@@ -63,12 +63,13 @@ test("the contract teaches that a registered question draws itself at the bottom
     assert.match(c, /THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
     assert.match(c, /frizz draws every open question at the BOTTOM of your newest handoff, below its last line/)
     // An open question rides to the newest handoff through a wake or another card's answer — not a typed
-    // message, which sets it aside until the worker keeps it (2026-09-30). A question dismissed, or
-    // withdrawn after the human's message, is never asked again.
+    // message, which sets it aside until the worker keeps it (2026-09-30) and withdraws it at the next
+    // rest (2026-10-02). A question dismissed, or withdrawn by the worker after the human's message, is
+    // never asked again.
     assert.match(c, /AN OPEN QUESTION RIDES TO YOUR NEWEST HANDOFF/)
-    assert.match(c, /A MESSAGE PAST A QUESTION SETS IT ASIDE — OPT BACK IN WITH `keep`/)
+    assert.match(c, /A MESSAGE PAST A QUESTION SETS IT ASIDE — AND YOUR NEXT REST WITHDRAWS IT/)
     assert.match(c, /keep it WITH `question`, the whole reworded question/)
-    assert.match(c, /NEVER ASK AGAIN a question the human dismissed, or one you withdrew after their newest message/)
+    assert.match(c, /NEVER ASK\s+AGAIN a question the human dismissed, or one you yourself withdrew after their newest message/)
     assert.doesNotMatch(c, /A REPLY PAST A QUESTION IS A PIVOT/)
     assert.doesNotMatch(c, /`unask` the old id and `ask` again/)
     // Answers come a question at a time, so the worker must act on each as it lands — the reason the

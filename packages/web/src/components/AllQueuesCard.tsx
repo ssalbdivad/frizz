@@ -292,8 +292,8 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
   const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
   // THIS CARD IS THE NEWEST HANDOFF, and every CURRENT question rides to the bottom of the newest handoff
-  // (lib/questionAnchor). One the human typed past is set aside — it stays in the thread's history until
-  // the worker `keep`s it — so it is not this handoff's ask.
+  // (lib/questionAnchor). One the human typed past is set aside — answerable where it was asked until the
+  // worker's next rest withdraws it, unless the worker `keep`s it — so it is not this handoff's ask.
   const owedQuestions = useMemo(() => questionsOwed(thread.questions), [thread.questions])
   const placeHref = crossProjectThreadHref(project, thread.id)
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn, hold: onHold }), [onLeave, onReturn, onHold])
