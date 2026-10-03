@@ -23,11 +23,27 @@ import { log as frizzLog } from "./logging.ts"
 //
 // The request is held by a CHILD PROCESS, never by this one, for two reasons: Node has no binding to
 // any of the three platform APIs, and a child ties the request's lifetime to its own. Each helper
-// below exits when its stdin closes, so a server that crashes or is SIGKILLed releases the request
-// with it — the OS never sees an orphaned hold.
+// below notices when its stdin closes — a release, a shutdown, a crash or a SIGKILL alike — and then
+// keeps holding for WAKE_LOCK_LINGER_S before it exits, so the OS never sees an orphaned hold, only a
+// bounded one.
+//
+// The linger is the fix for the second overnight stop (2026-10-03): with agents running and Windows
+// past its idle timeout since 08:23, the dev supervisor restarted the control plane at 10:15:40 on
+// another agent's edit. Shutdown released the hold, and Windows logged "entering sleep, Sleep Reason:
+// System Idle" ONE SECOND later — before the new server could take it back — and slept until 11:35.
+// Once the idle timer has run out, any gap in the request is a sleep, however short, so the hold has to
+// bridge a restart (a slow drain plus a boot is ~20s; the linger allows minutes). The helper is spawned
+// detached and unref'd so a Ctrl-C to the server's process group cannot cut the linger short either.
 
 /** How often the server re-reads whether anything is running. Idle timers are minutes; this is plenty. */
 export const WAKE_LOCK_POLL_MS = 30_000
+
+/**
+ * How long a helper keeps holding after its stdin closes: long enough to bridge a server restart and a
+ * poll or two of a thread flickering idle between turns; short enough that a machine with nothing
+ * running sleeps soon after anyway.
+ */
+export const WAKE_LOCK_LINGER_S = 300
 
 /** The parts of a thread's telemetry that say whether it has work running on this machine. */
 export type WakeTelemetry = Pick<SessionTelemetry, "turn" | "subAgents" | "bgShells" | "permPrompt" | "pendingAsk">
@@ -74,7 +90,6 @@ export interface WakeLockPlatform {
   env: NodeJS.ProcessEnv
   /** `os.release()` — the only place a WSL kernel says so when WSL_DISTRO_NAME was not inherited. */
   kernelRelease: string
-  pid: number
 }
 
 export function isWsl(p: Pick<WakeLockPlatform, "platform" | "env" | "kernelRelease">): boolean {
@@ -84,11 +99,15 @@ export function isWsl(p: Pick<WakeLockPlatform, "platform" | "env" | "kernelRele
 // ES_CONTINUOUS | ES_SYSTEM_REQUIRED (0x80000001): hold "the system is in use" on this thread until it
 // is cleared or the thread exits — and nothing ever clears it, so it lasts exactly as long as the
 // process. Measured on the maintainer's machine with CallNtPowerInformation(SystemExecutionState):
-// 0x0 before, 0x1 while held, 0x0 once stdin closed. ES_DISPLAY_REQUIRED is left out on purpose.
+// 0x0 before, 0x1 while held, 0x0 once the process exited. ES_DISPLAY_REQUIRED is left out on purpose.
 const WINDOWS_HOLD_SCRIPT =
   `$k=Add-Type -Name WakeLock -Namespace Frizz -PassThru -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);';` +
   `[void]$k::SetThreadExecutionState([uint32]2147483649);` +
-  `[void][Console]::In.ReadToEnd()`
+  `[void][Console]::In.ReadToEnd();` +
+  `Start-Sleep -Seconds ${WAKE_LOCK_LINGER_S}`
+
+/** The POSIX helpers' body: wait for stdin to close, then linger. */
+const POSIX_HOLD_SCRIPT = `cat >/dev/null; sleep ${WAKE_LOCK_LINGER_S}`
 
 /**
  * The helper that holds the request on this platform, or undefined where there is none to hold.
@@ -98,10 +117,10 @@ const WINDOWS_HOLD_SCRIPT =
  *   script goes over -EncodedCommand because WSL interop re-quotes arguments and mangles the double
  *   quotes the P/Invoke signature needs. On native Windows the path is anchored to %SystemRoot%,
  *   never resolved through PATH, for the reason tailer.ts windowsShellHolderCommand gives.
- * - macOS: `caffeinate -i`, which prevents idle system sleep only. `-w` ties it to this server's pid
- *   as well, since caffeinate does not read stdin.
- * - Linux: `systemd-inhibit --what=idle` around a `cat` that ends with stdin. `idle` and not `sleep`:
- *   a sleep inhibitor would also block a suspend the human asks for.
+ * - macOS: `caffeinate -i`, which prevents idle system sleep only, for as long as the shell it runs
+ *   does. (`-w <pid>` would end it the instant the server died, which is the gap the linger exists for.)
+ * - Linux: `systemd-inhibit --what=idle` around the same shell. `idle` and not `sleep`: a sleep
+ *   inhibitor would also block a suspend the human asks for.
  */
 export function wakeLockCommand(p: WakeLockPlatform): [string, string[]] | undefined {
   const encoded = Buffer.from(WINDOWS_HOLD_SCRIPT, "utf16le").toString("base64")
@@ -110,9 +129,9 @@ export function wakeLockCommand(p: WakeLockPlatform): [string, string[]] | undef
     return [win32.join(p.env.SystemRoot ?? "C:\\Windows", "System32", "WindowsPowerShell", "v1.0", "powershell.exe"), psArgs]
   }
   if (isWsl(p)) return ["powershell.exe", psArgs]
-  if (p.platform === "darwin") return ["caffeinate", ["-i", "-w", String(p.pid)]]
+  if (p.platform === "darwin") return ["caffeinate", ["-i", "/bin/sh", "-c", POSIX_HOLD_SCRIPT]]
   if (p.platform === "linux") {
-    return ["systemd-inhibit", ["--what=idle", "--who=Frizz", "--why=An agent is working", "--mode=block", "cat"]]
+    return ["systemd-inhibit", ["--what=idle", "--who=Frizz", "--why=An agent is working", "--mode=block", "/bin/sh", "-c", POSIX_HOLD_SCRIPT]]
   }
   return undefined
 }
@@ -133,7 +152,11 @@ const QUICK_EXITS_MAX = 3
 
 export function createWakeLock(
   command: [string, string[]] | undefined,
-  spawn: Spawn = (cmd, args) => nodeSpawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"], windowsHide: true }),
+  spawn: Spawn = (cmd, args) => {
+    const c = nodeSpawn(cmd, args, { stdio: ["pipe", "ignore", "ignore"], windowsHide: true, detached: true })
+    c.unref()
+    return c
+  },
   log: Pick<typeof frizzLog, "info" | "warn"> = frizzLog,
 ): WakeLock {
   let child: ChildProcess | undefined
@@ -143,10 +166,9 @@ export function createWakeLock(
     const c = child
     child = undefined
     if (!c) return
-    // Closing stdin is the release every helper but caffeinate honours; the kill covers caffeinate,
-    // and a helper that ignored the close.
+    // Closing stdin is the release; the helper lingers and then exits on its own. Never kill it — a
+    // killed helper drops the request NOW, and the gap is the sleep (see the header).
     c.stdin?.end()
-    c.kill()
   }
   const acquire = () => {
     if (child || disabled || !command) return
@@ -204,7 +226,7 @@ export interface WakeLockLoop {
  */
 export function startWakeLockLoop(
   sources: () => Iterable<WakeSource>,
-  lock: WakeLock = createWakeLock(wakeLockCommand({ platform: process.platform, env: process.env, kernelRelease: osRelease(), pid: process.pid })),
+  lock: WakeLock = createWakeLock(wakeLockCommand({ platform: process.platform, env: process.env, kernelRelease: osRelease() })),
   intervalMs = WAKE_LOCK_POLL_MS,
   log: Pick<typeof frizzLog, "info"> = frizzLog,
 ): WakeLockLoop {

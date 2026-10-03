@@ -38,16 +38,16 @@ test("archived rows and rows with no telemetry are skipped", () => {
 })
 
 test("each platform gets the helper that reaches the thing that actually sleeps", () => {
-  const base = { env: {}, kernelRelease: "6.8.0-generic", pid: 42 }
+  const base = { env: {}, kernelRelease: "6.8.0-generic" }
   const [winCmd, winArgs] = wakeLockCommand({ ...base, platform: "win32", env: { SystemRoot: "D:\\Win" } })!
   assert.equal(winCmd, "D:\\Win\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
   const script = Buffer.from(winArgs.at(-1)!, "base64").toString("utf16le")
   assert.match(script, /SetThreadExecutionState\(\[uint32\]2147483649\)/) // ES_CONTINUOUS | ES_SYSTEM_REQUIRED
-  assert.match(script, /ReadToEnd/) // released when stdin closes
+  assert.match(script, /ReadToEnd\(\);Start-Sleep -Seconds 300$/) // released a linger after stdin closes
   // WSL: the HOST sleeps, so the request goes to Windows through interop — by kernel string or by env.
   assert.equal(wakeLockCommand({ ...base, platform: "linux", kernelRelease: "5.15.153.1-microsoft-standard-WSL2" })![0], "powershell.exe")
   assert.equal(wakeLockCommand({ ...base, platform: "linux", env: { WSL_DISTRO_NAME: "Ubuntu" } })![0], "powershell.exe")
-  assert.deepEqual(wakeLockCommand({ ...base, platform: "darwin" }), ["caffeinate", ["-i", "-w", "42"]])
+  assert.deepEqual(wakeLockCommand({ ...base, platform: "darwin" }), ["caffeinate", ["-i", "/bin/sh", "-c", "cat >/dev/null; sleep 300"]])
   const [linuxCmd, linuxArgs] = wakeLockCommand({ ...base, platform: "linux" })!
   assert.equal(linuxCmd, "systemd-inhibit")
   assert.ok(linuxArgs.includes("--what=idle"), "idle only, so a suspend the human asks for still happens")
@@ -66,7 +66,7 @@ class FakeChild extends EventEmitter {
 
 const quiet = { info: () => {}, warn: () => {} }
 
-test("the lock spawns one helper while held and releases it by closing stdin", () => {
+test("the lock spawns one helper while held and releases it by closing stdin, never by killing it", () => {
   const spawned: FakeChild[] = []
   const lock = createWakeLock(["helper", []], () => {
     const c = new FakeChild()
@@ -80,7 +80,7 @@ test("the lock spawns one helper while held and releases it by closing stdin", (
   lock.set(false)
   assert.equal(lock.held, false)
   assert.equal(spawned[0]!.stdinEnded, true)
-  assert.equal(spawned[0]!.killed, true)
+  assert.equal(spawned[0]!.killed, false, "a kill drops the request at once; the linger is what bridges a restart")
   lock.set(true)
   assert.equal(spawned.length, 2, "re-acquires after a release")
   lock.stop()
