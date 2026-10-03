@@ -253,7 +253,7 @@ function ParkDivider({ wake, sourceId, at }: { wake: ParkWake; sourceId?: string
   // Terse, because every sibling on this rule is ("PR merged on …", "Agent terminal «…» finished"). The
   // first draft read "The declared wait is over — its work finished" and was the longest line on the
   // page by half again.
-  const label = wake.kind === "expired" ? "Wait expired — nothing resolved" : "Wait over — its work finished"
+  const label = wake.kind === "expired" ? "Wait expired — nothing resolved" : wake.kind === "requested" ? "Update requested" : "Wait over — its work finished"
   // No disclosure without items: an empty aside is a control that opens onto nothing.
   if (!wake.items.length) {
     return (

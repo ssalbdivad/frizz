@@ -4437,6 +4437,28 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // ASK FOR AN UPDATE — the resting card's verb for a parked thread. A park on sub-agents already wakes
+    // its worker hourly to check in (AGENT_PARK_FOR_MAX_MS); this is the same wake on demand, so the
+    // human need not wait out the hour to hear where a long orchestration stands. The scheduler mints it
+    // (SOURCE 12) rather than this handler, so it shares the expiry's status lines, its check-in steps and
+    // its dedupe. Refused unless the thread is resting on an awaiting fence: anything else has no park
+    // to check in on, and a working thread will report on its own.
+    requestParkCheckIn: mutation({
+      input: z.object({ slug: ThreadSlug, sessionId: z.string().min(1) }).strict(),
+      handler: async ({ input }) => {
+        currentOwnedSession(input.slug, input.sessionId)
+        const tele = ctx.tailer.get(input.slug)
+        const restedAt = tele?.lastAssistantAt
+        if (!tele || tele.turn !== "idle" || tele.lastFence?.kind !== "awaiting" || !restedAt) {
+          throw new Error("This thread is not waiting on anything; there is no update to ask for")
+        }
+        if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(restedAt)) {
+          throw new Error("This thread already has a message on its way")
+        }
+        ctx.scheduler.requestCheckIn(input.slug, restedAt)
+      },
+    }),
+
     // SNOOZE UNTIL ALL SUB-AGENTS RETURN — the event-snooze above, widened from ONE rest to the whole
     // batch. That one is spent by the parent's next rest, and a parent resting on N background children
     // rests N times, so a human snoozing it met the card again after every return. This arms the instant
@@ -5728,7 +5750,7 @@ const HUMAN_THREAD_ACTS = [
   "followUp", "unqueueFollowUp", "deliverQueuedNow", "setThreadPermission", "setThreadProfile", "upgradeThreadModel",
   "archiveThread", "markRead", "threadSeen", "setThreadState", "completeThread", "markComplete", "setThreadStatus",
   "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
-  "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "answerQuestions", "dismissQuestions", "renameThread",
+  "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
   "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateLazyPrompt", "startLazyThread",
 ] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]

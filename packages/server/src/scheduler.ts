@@ -1356,6 +1356,11 @@ export interface Scheduler {
    *  FRIZZ_WAKERS_OFF and never calls `start()`, and a kick that ran the sweep anyway would deliver
    *  wakes the operator explicitly turned off. `tick()` stays the unconditional one, for tests and boot. */
   kick(): void
+  /** THE HUMAN'S "Ask for update" (router.requestParkCheckIn): treat the park this thread rested on at
+   *  `restedAt` as expired NOW, so SOURCE 12 sends the same check-in wake the hour would — early, and
+   *  headed as the human's request. Keyed on the rest, so a new rest makes a stale request inert; held
+   *  in memory, so a restart before the next pass drops the click rather than replaying it later. */
+  requestCheckIn(slug: string, restedAt: string): void
 }
 
 /** The FENCE key a wire kind is written as. The wire kinds stayed SINGULAR through the 2026-08-24 YAML
@@ -2358,6 +2363,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return `${message}\n\n${wakeTimeHeader(now(), spokeAt)}`
   }
 
+  /** Rests the human asked to hear from early (requestCheckIn): slug → the rest instant it was asked of. */
+  const checkInRequests = new Map<string, string>()
+
   function evalParkIntegrity(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
@@ -2432,7 +2440,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       )
       const dead = unaccountedItems(park.items, live)
       const expiresAt = parkExpiresAt(park, Date.parse(spokeAt))
-      const expired = expiresAt !== null && nowMs >= expiresAt
+      const requested = checkInRequests.get(row.slug) === spokeAt
+      const expired = requested || (expiresAt !== null && nowMs >= expiresAt)
       // NAMES NOTHING — the loudest case, and it was the silent one. A fence carrying only `for:` and
       // `reason:` is a worker declaring a wait with NOTHING that can wake it: frizz refuses the park, the
       // thread queues, and until 2026-08-16 nobody told the worker why. It was routed to the sign-off
@@ -2630,7 +2639,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // fallback and prints its agent-facing body verbatim as a bordered card. The wording is
         // unchanged — only its address is.
         : expired
-        ? parkExpiredWakeMessage(status, park.items.some((i) => i.kind === "agent"))
+        ? parkExpiredWakeMessage(status, park.items.some((i) => i.kind === "agent"), requested)
         : allFinished
         ? parkFinishedWakeMessage(status, dead.length !== 1)
         : dead.every(silentItem)
@@ -2695,7 +2704,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (cause !== "expired" && (row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
       // Keyed on the REST plus which failure it is, so one fence gets one bump per cause: a park that is
       // bumped for a dead id and later expires is two different pieces of news.
-      const fenceId = parkFenceId(cause, spokeAt)
+      // A requested check-in keys apart from the natural expiry of the same rest: one click, one wake,
+      // and the hour still owes its own if the worker somehow never re-rests.
+      const fenceId = parkFenceId(requested && cause === "expired" ? "requested" : cause, spokeAt)
+      if (requested) checkInRequests.delete(row.slug)
       const messageWithClock = `${message}\n\n${clock}`
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       if (outbox.get(deliveryId)) continue
@@ -2706,7 +2718,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         fenceId,
         hintKey: fenceId,
         message: messageWithClock,
-        reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : expired ? "awaiting park expired" : allFinished ? "the work you parked on finished" : `awaiting park named ${dead.length} dead item(s)`,
+        reason: retired.length > 0 ? `awaiting fence uses retired kind(s): ${retired.join(", ")}` : nameless ? "awaiting park names nothing" : requested ? "the human asked for an update" : expired ? "awaiting park expired" : allFinished ? "the work you parked on finished" : `awaiting park named ${dead.length} dead item(s)`,
       }, nowMs).delivery
       // COUNTED AT ENQUEUE, not at delivery — the one place the sign-off nudge's idiom does not transfer.
       // A nudge counts when it lands because it fires on a rest the thread is dispatchable for; a
@@ -4656,7 +4668,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     return task
   }
 
-  return {
+  const scheduler: Scheduler = {
     start() {
       if (timer) return
       if (stopped) throw new ProducerStoppedError("wake scheduler")
@@ -4675,6 +4687,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (draining) await draining
     },
     tick,
+    requestCheckIn(slug, restedAt) {
+      checkInRequests.set(slug, restedAt)
+      scheduler.kick()
+    },
     kick() {
       if (stopped || !timer) return
       // A KICK DURING A TICK RUNS ONE MORE AFTER IT. `tick` joins a running pass rather than starting a
@@ -4699,4 +4715,5 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       void tick().catch((error) => log(`waker: kick failed: ${error instanceof Error ? error.message : String(error)}`))
     },
   }
+  return scheduler
 }

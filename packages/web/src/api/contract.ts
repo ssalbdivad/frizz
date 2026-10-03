@@ -331,6 +331,8 @@ export interface Api {
   // Hide the thread until ALL its running sub-agents have returned: each return still wakes the parent,
   // but only the last one (or a question, a crash, a done) re-queues it. Refused with none running.
   snoozeUntilSubAgentsReturn(input: { slug: string; sessionId: string; clear?: boolean }): Promise<void>
+  // Wake a parked thread now with its check-in, as the hourly expiry would, asking it to report.
+  requestParkCheckIn(input: { slug: string; sessionId: string }): Promise<void>
   // Hard-delete any thread (a live worker is stopped first): its rows, its terminals, its scratch
   // directory. Frees its slug and @handle (server router.ts deleteOwnedThread).
   deleteThread(input: { slug: string }): Promise<void>
@@ -556,6 +558,7 @@ export const PROCEDURES = {
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
   snoozeUntilSubAgentsReturn: "mutation",
+  requestParkCheckIn: "mutation",
   deleteThread: "mutation",
   deleteDoneThreads: "mutation",
   threadTerminalCommand: "query",

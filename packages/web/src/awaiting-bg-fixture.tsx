@@ -194,6 +194,11 @@ window.fetch = async (input, init) => {
     // A void mutation serializes as {result:null} (rpc/server.ts) — mirror that so the web client parses success.
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
+  // Ask for update (2026-10-03): announced for a harness to count, answered as a void mutation.
+  if (url.pathname === "/_frizz/rpc/requestParkCheckIn") {
+    window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: "requestParkCheckIn", body: JSON.parse(String(init?.body ?? "{}")) } }))
+    return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
+  }
   // The footer's Stop (2026-09-29): answered as a real stop, and announced for a harness to count.
   if (url.pathname === "/_frizz/rpc/stopBackgroundOp") {
     window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: "stopBackgroundOp", body: JSON.parse(String(init?.body ?? "{}")) } }))

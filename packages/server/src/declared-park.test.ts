@@ -16,7 +16,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
 import { parkExpiresAt, parkForMaxMs, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
-import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, isParkCorrection, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, isParkCorrection, parseParkWake, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -276,7 +276,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
   })
   const queued = () => storage.db.prepare("SELECT fence_id, message FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; message: string; state: string }[]
   const state = () => storage.db.prepare("SELECT fence_id, state FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; state: string }[]
-  return { s, storage, queued, state, sent, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  return { s, storage, queued, state, sent, restedAt, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 test("a park naming something that is NOT running bumps the worker, and says which", async () => {
@@ -574,6 +574,32 @@ test("a fence naming a timer that was never registered reaches the worker", asyn
     await h.s.tick()
     assert.equal(h.sent.length, 1)
     assert.match(h.sent[0], /`timers: \[none\]` — NOT RUNNING/)
+  } finally { h.close() }
+})
+
+// THE HUMAN'S "Ask for update": the hourly sub-agent check-in, on demand. It lands on a park that has not
+// run out, carries the same check-in steps, asks for a `needs_input: true` report, and is spent by one
+// wake — a later tick on the same rest sends nothing more, and a request for a rest the worker has moved
+// past is inert.
+test("requestCheckIn wakes a live agent park early with the check-in, once", async () => {
+  const live = { id: "toolu_A", taskId: "a01b2d20b32feab11", label: "the reviewer", startedAt: "2026-10-03T10:00:00.000Z", state: "running" as const }
+  const h = parkHarness([{ kind: "agent", value: "a01b2d20b32feab11" }, { kind: "for", value: "1h" }], { agents: [live] })
+  try {
+    await h.s.tick()
+    assert.equal(h.sent.length, 0, "a live park inside its hour is left alone")
+    h.s.requestCheckIn("parked", "2000-01-01T00:00:00.000Z")
+    await h.s.tick()
+    assert.equal(h.sent.length, 0, "a request for another rest is inert")
+    h.s.requestCheckIn("parked", h.restedAt)
+    await h.s.tick()
+    assert.equal(h.sent.length, 1)
+    assert.match(h.sent[0], /^👋 The human asked for an update/)
+    assert.match(h.sent[0], /SUB-AGENT CHECK-IN/)
+    assert.match(h.sent[0], /needs_input: true/)
+    assert.deepEqual(parseParkWake(h.sent[0]), { kind: "requested", items: ["- `agents: [a01b2d20b32feab11]` — still running"] })
+    assert.match(h.queued()[0].fence_id, /^park:requested:/)
+    for (let i = 0; i < 3; i++) await h.s.tick()
+    assert.equal(h.sent.length, 1, "one click, one wake")
   } finally { h.close() }
 })
 

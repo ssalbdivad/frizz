@@ -1129,6 +1129,44 @@ function AwaitingStopShells({ slug, ids }: { slug: string; ids: readonly string[
   )
 }
 
+/** THE CARD'S THIRD VERB: wake the worker now with its check-in. A park on sub-agents already checks in
+ *  hourly (server AGENT_PARK_FOR_MAX_MS); this is the same wake on demand, for the human who wants to
+ *  know where a long run stands without waiting out the hour (router.requestParkCheckIn). The worker
+ *  answers with a progress note and re-parks, so the card comes back with that note on top.
+ *
+ *  Outlined, as the Stop is: Snooze keeps the card's one white verb. Spent once per rest — `restedAt`
+ *  keys it, so a re-park hands back a fresh button. */
+function AwaitingAskUpdate({ thread }: { thread: Pick<ThreadView, "id" | "sessionId"> }) {
+  const api = useThreadApi()
+  const [state, setState] = useState<"idle" | "pending" | "asked">("idle")
+  const ask = () => {
+    setState("pending")
+    api
+      .requestParkCheckIn({ slug: thread.id, sessionId: thread.sessionId ?? "" })
+      .then(() => {
+        setState("asked")
+        showToast("Asked for an update")
+      })
+      .catch((error) => {
+        setState("idle")
+        showToast(`Couldn’t ask for an update: ${(error as Error).message.slice(0, 80)}`)
+      })
+  }
+  return (
+    <button
+      type="button"
+      data-awaiting-ask-update
+      onClick={ask}
+      disabled={state !== "idle"}
+      onMouseDown={(e) => e.preventDefault()}
+      title="Wake the agent now to check on its work and report back"
+      className={`shrink-0 ${CARD_ACTION_RADIUS} border border-border-strong px-2 py-[3px] text-[11px] font-medium text-fg/90 outline-none transition-colors hover:bg-fg/[0.06] focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45`}
+    >
+      {state === "asked" ? "Update requested" : state === "pending" ? "Asking…" : "Ask for update"}
+    </button>
+  )
+}
+
 export function AwaitingBackgroundCard({ thread, fence }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
@@ -1142,7 +1180,7 @@ export function AwaitingBackgroundCard({ thread, fence }: {
   // OPTIONAL since 2026-09-04: a fence card in a SUB-AGENT's own transcript has no owning thread, so it
   // has no rows and no verb — but it is still this card, at this heading, with this prose.
   // `checkout` joined on 2026-09-30: an agent terminal's row names its folder where the strip would.
-  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence" | "checkout">
+  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence" | "checkout" | "lastAssistantAt">
   /** The fence this card STATES, when it is not the one the board is holding. Defaults to the thread's
    *  own `lastFence` — which is the at-rest case, and the only one until 2026-09-04.
    *
@@ -1195,6 +1233,10 @@ export function AwaitingBackgroundCard({ thread, fence }: {
   // stopping, even though it has no rest left to park. Owned and not archived, though: a foreign thread
   // is another tool's session, and an archived one has no verbs at all (threadLifecycleAvailability).
   const stopIds = thread !== undefined && threadLifecycleAvailability(thread).archive ? stoppableShellIds(thread, hints) : []
+  // ASK FOR UPDATE rides the same gate as the Snooze — a parked rest the human owns — and additionally
+  // needs the board's own awaiting fence: a card drawn from a fence the thread has moved past has no
+  // park left to check in on.
+  const askable = snoozable && fence === undefined && thread?.lastFence?.kind === "awaiting"
   const footer = snoozable || stopIds.length > 0
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
@@ -1306,6 +1348,7 @@ export function AwaitingBackgroundCard({ thread, fence }: {
               <AwaitingSnooze thread={thread!} />
             </div>
           )}
+          {askable && <AwaitingAskUpdate key={thread!.lastAssistantAt ?? ""} thread={thread!} />}
           {stopIds.length > 0 && <AwaitingStopShells key={stopIds.join(" ")} slug={thread!.id} ids={stopIds} />}
         </CardActions>
       ) : null}

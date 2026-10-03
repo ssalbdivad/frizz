@@ -2258,12 +2258,21 @@ export function parseLimitResumeWake(text: string): { window: LimitWindow } | nu
 
 /** Scheduler SOURCE 12, cause `expired`: the `for:` ran out and nothing resolved. `status` is the live
  *  readout of what the fence named, already formatted by the caller. */
-export function parkExpiredWakeMessage(status: readonly string[], checkIn = false): string {
+export function parkExpiredWakeMessage(status: readonly string[], checkIn = false, requested = false): string {
   return [
-    "⏰ Your wait expired, nothing resolved. Check back in on everything.",
+    requested ? PARK_REQUESTED_LEAD : "⏰ Your wait expired, nothing resolved. Check back in on everything.",
     "",
     ...status,
     "",
+    // THE HUMAN PRESSED "Ask for update" on the resting card (router.requestParkCheckIn): the same wake as
+    // the expiry, early, and with a reader waiting on the answer — so the note is owed to the queue.
+    ...(requested
+      ? [
+        "The human is waiting to read this one: write the progress note — what landed, what is running,",
+        "what changed — and re-park with `needs_input: true` so it reaches them.",
+        "",
+      ]
+      : []),
     // A park on sub-agents expires on AGENT_PARK_FOR_MAX_MS, so this wake is the parent's regular
     // check-in. No line here may open with "- ": parkWakeItems reads those as the parked items.
     ...(checkIn
@@ -2332,10 +2341,12 @@ export function ownWatchExpiredWakeMessage(kind: "shell" | "agent", target: stri
 /** One park-integrity wake, read back out of its delivery. `items` is the status readout the message
  *  carried — the only part of the body a human has any use for, and the reason the divider can open. */
 export interface ParkWake {
-  kind: "expired" | "finished"
+  kind: "expired" | "finished" | "requested"
   items: string[]
 }
 
+/** The head of an expiry wake the HUMAN asked for early (parkExpiredWakeMessage's `requested`). */
+const PARK_REQUESTED_LEAD = "👋 The human asked for an update before your wait ran out. Check back in on everything."
 const PARK_EXPIRED_HEAD = /^⏰ Your wait expired, nothing resolved\./
 const PARK_FINISHED_HEAD = /^✅ (?:The work you parked on has|Everything you parked on has) FINISHED, so the park is over/
 
@@ -2348,6 +2359,7 @@ function parkWakeItems(body: string): string[] {
 export function parseParkWake(text: string): ParkWake | null {
   const trimmed = text.trim()
   if (PARK_EXPIRED_HEAD.test(trimmed)) return { kind: "expired", items: parkWakeItems(trimmed) }
+  if (trimmed.startsWith(PARK_REQUESTED_LEAD)) return { kind: "requested", items: parkWakeItems(trimmed) }
   if (PARK_FINISHED_HEAD.test(trimmed)) return { kind: "finished", items: parkWakeItems(trimmed) }
   return null
 }
