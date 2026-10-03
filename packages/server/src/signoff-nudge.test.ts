@@ -313,8 +313,8 @@ test("a registered watch alone is NOT a sign-off for a needs_input thread — th
     await h.s.tick()
     const nudges = h.nudges()
     assert.equal(nudges.length, 1)
-    assert.match(nudges[0].message, /needs_input: true\|false/, "the live-ops footer names the required answer")
-    assert.match(nudges[0].message, /In a fence: `shells: \[bzvtnt3ig\]`/, "and the id to name")
+    assert.match(nudges[0].message, /shells: \[bzvtnt3ig\]\nneeds_input: false\n/, "the fence to write, the id and the answer in it")
+    assert.match(nudges[0].message, /make it `true`/, "and when the answer is true")
   } finally { h.close() }
 })
 
@@ -745,11 +745,15 @@ test("an armed Goal does not silence the reminder — the reminder is what lands
 // Workflow is one) already parks, so it draws no nudge at all; a running shell does NOT park — a
 // forgotten dev server would hide its thread forever — so it draws a SHORT nudge naming the shell, with
 // its fence written out. A rest with nothing running keeps the long protocol.
+//
+// THESE ARE THE LEGACY CONTRACT'S RULES (a thread dispatched before NEEDS_INPUT_REQUIRED_AT), so each test
+// below that leans on "a child parks" pins a legacy spawn. Under `needs_input:` a child no longer parks on
+// its own, and the short variant asks for the fence behind one too — pinned at the end of this section.
 const shell = (over: Record<string, unknown> = {}) => ({ label: "nub run typecheck", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_shell1", taskId: "bzvtnt3ig", ...over })
 const child = (over: Record<string, unknown> = {}) => ({ label: "scout the tailer", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_agent1", taskId: "a01b2d20b32feab11", ...over })
 
 test("a rest behind a running shell gets the short variant: the shell by its runtime id, and its fence written out", async () => {
-  const h = nudger({ bgShells: [shell()] } as Partial<SessionTelemetry>)
+  const h = nudger({ bgShells: [shell()] } as Partial<SessionTelemetry>, { spawnedAt: LEGACY_SPAWN })
   try {
     await h.s.tick()
     assert.equal(h.nudges().length, 1)
@@ -811,7 +815,7 @@ for (const [what, agents] of [
   ["a running sub-agent beside a running shell", [child()]],
 ] as Array<[string, unknown[]]>) {
   test(`${what} already parks the rest, so it is not nudged — and the allowance is neither spent nor given back`, async () => {
-    const h = nudger({ subAgents: agents, bgShells: what.includes("shell") ? [shell()] : [] } as Partial<SessionTelemetry>)
+    const h = nudger({ subAgents: agents, bgShells: what.includes("shell") ? [shell()] : [] } as Partial<SessionTelemetry>, { spawnedAt: LEGACY_SPAWN })
     try {
       h.storage.countSignoffNudge(h.slug, "signoff:2026-08-11T00:00:00.000Z")
       await h.s.tick()
@@ -824,11 +828,34 @@ for (const [what, agents] of [
 
 test("a Workflow's own agents and a retired child's grandchildren do not park, and are never offered as `agents:`", async () => {
   // depth 2 — not a direct child, so neither the queue excusal nor the park check answers to it.
-  const h = nudger({ subAgents: [child({ id: "wf-agent-1", taskId: undefined, depth: 2, parentId: "toolu_gone" })] } as Partial<SessionTelemetry>)
+  const h = nudger({ subAgents: [child({ id: "wf-agent-1", taskId: undefined, depth: 2, parentId: "toolu_gone" })] } as Partial<SessionTelemetry>, { spawnedAt: LEGACY_SPAWN })
   try {
     await h.s.tick()
     assert.equal(h.nudges().length, 1)
     assert.doesNotMatch(h.nudges()[0].message, /wf-agent-1|agents: \[/)
+  } finally { h.close() }
+})
+
+test("under needs_input a running child no longer parks: the rest gets the short variant, its fence answering needs_input", async () => {
+  const h = nudger({ subAgents: [child()], bgShells: [shell()] } as Partial<SessionTelemetry>)
+  try {
+    await h.s.tick()
+    assert.equal(h.nudges().length, 1)
+    const msg = h.nudges()[0].message
+    assert.match(msg, /```awaiting\nshells: \[bzvtnt3ig\]\nagents: \[a01b2d20b32feab11\]\nneeds_input: false\nfor: 1h\n```/, "a quiet park, the fence alone")
+    assert.match(msg, /make it `true`/, "and when to say true")
+    assert.doesNotMatch(msg, /keeps you out of the queue on its own/, "no promise the contract withdrew")
+    // The fence it hands over is one the needs_input park check honours while the work runs.
+    const { parseSignalFence } = await import("./tailer.ts")
+    const { liveActivityOf, needsInputParkHolds } = await import("./awaiting.ts")
+    const open = msg.indexOf("```awaiting")
+    const fence = parseSignalFence(`${msg.slice(open, msg.indexOf("```", open + 3) + 3)}`)
+    assert.equal(fence?.kind, "awaiting")
+    const live = liveActivityOf({ bgShells: [shell()], subAgents: [child()] }, new Set(), new Set())
+    const spoke = Date.parse("2026-08-12T00:00:00.000Z")
+    assert.equal(needsInputParkHolds(fence!.hints, live, spoke, spoke + 60_000), true)
+    // Negative control: once the child has returned, the same fence no longer holds.
+    assert.equal(needsInputParkHolds(fence!.hints, liveActivityOf({ bgShells: [shell()], subAgents: [] }, new Set(), new Set()), spoke, spoke + 60_000), false)
   } finally { h.close() }
 })
 
@@ -859,7 +886,7 @@ test("the short variant spends the same consecutive allowance as the long one", 
 // prompts). So a Goal thread is still asked behind a child — in the SHORT form, with the child's own
 // `agents:` fence written out — and the Goal yields to it exactly as it yields to the long reminder.
 test("a Goal thread resting behind a running child gets the short variant with its `agents:` fence, and the Goal stands down", async () => {
-  const h = nudger({ subAgents: [child()] } as Partial<SessionTelemetry>)
+  const h = nudger({ subAgents: [child()] } as Partial<SessionTelemetry>, { spawnedAt: LEGACY_SPAWN })
   try {
     h.storage.setRecurringPromptBySlug(h.slug, {
       prompt: "keep going until the migration is done", stopHook: true, heartbeat: false, postCompaction: false,
@@ -922,7 +949,9 @@ test("a rest behind a child is not nudged in the window between the child's noti
   const childOut = join(dir, "a01b2d20b32feab11.output")
   writeFileSync(childOut, "")
   storage.upsertSession({
-    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: at(0),
+    // A legacy spawn: under `needs_input:` a running child no longer parks, so "not nudged while it runs"
+    // would not hold — the window this pins is the one after it returns, which both contracts share.
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: LEGACY_SPAWN,
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
