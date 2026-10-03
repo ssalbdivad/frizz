@@ -238,9 +238,9 @@ export function describeClaudeBrokerExit(record: ClaudeBrokerExitRecord | null):
  * The DELIVERY id a drop diagnostic names, when it names one.
  *
  * This is what turns the drop from a log line into something frizz can act on: the id is the ledger row
- * the operator's message is sitting in, so the server can retire exactly that row instead of leaving it
- * to `ageDeliveries`, which holds a queue entry for an hour on the (here false) premise that an enqueue
- * proves the provider is holding it.
+ * the operator's message is sitting in, so the server can mark exactly that row failed (text kept, with
+ * Retry / Edit / Dismiss) instead of leaving it to `ageDeliveries`, which holds a queue entry for an hour
+ * on the (here false) premise that an enqueue proves the provider is holding it.
  *
  * Returns undefined for a drop from a daemon too old to carry the id — those still log, still surface,
  * and still age out the slow way, which is the pre-existing behaviour rather than a regression.
@@ -249,6 +249,14 @@ export function droppedDeliveryId(diagnostic: ClaudeDiagnostic): string | undefi
   if (diagnostic.kind !== "stderr") return undefined
   if (!diagnostic.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX)) return undefined
   return diagnostic.message.match(/\bid=([0-9a-fA-F-]{36})\b/)?.[1]
+}
+
+/** Why the daemon dropped the input — the session's own refusal, after the prefix and the id ("Claude
+ *  outstanding input limit exceeded", "input UUID is already outstanding"). Shown to the operator under
+ *  the failed bubble, so it is the refusal alone, not the log line. Empty for anything but a drop. */
+export function droppedDeliveryReason(diagnostic: ClaudeDiagnostic): string {
+  if (diagnostic.kind !== "stderr" || !diagnostic.message.startsWith(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX)) return ""
+  return diagnostic.message.slice(CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX.length).replace(/^:\s*/, "").replace(/^id=\S+\s*/, "").trim()
 }
 
 export function describeClaudeBrokerDiagnostic(diagnostic: ClaudeDiagnostic): string | undefined {

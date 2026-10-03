@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn } from "@frizz/shared"
+import { NEEDS_INPUT_REQUIRED_AT, QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn, SIGNOFF_NUDGE_MESSAGE } from "@frizz/shared"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { applyRecord, createTailer, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
@@ -26,12 +26,15 @@ import { createWakeDeliveryStore } from "./wake-store.ts"
 // path. In PRODUCTION the runtime is always knowable, so the sent-and-confirm-later path is the only one
 // that ever runs. A cap that is only spent on the path tests take is not a cap; see the two tests at the
 // bottom of this file.
-function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string; runtime?: "alive" | "dead" } = {}) {
+// A dispatch instant BEFORE the `needs_input:` cut, for the cases that pin the legacy contract.
+const LEGACY_SPAWN = new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) - 86_400_000).toISOString()
+
+function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string; runtime?: "alive" | "dead"; spawnedAt?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-signoff-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const slug = "resting"
   storage.upsertSession({
-    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: new Date().toISOString(),
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: opts.spawnedAt ?? new Date().toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
@@ -105,8 +108,15 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // THE CURRENT FENCE GRAMMAR, not the deleted `watch:` one — this reminder is the last thing many
     // workers read before writing a fence, so a stale example here teaches the wrong syntax to exactly
     // the audience that most needs the right one.
-    assert.match(h.delivered[0], /shells: \[<the id your runtime gave you>\]/)
-    assert.match(h.delivered[0], /prs: \[owner\/repo#123\]/)
+    //
+    // This fixture spawns NOW, so it is a `needs_input:` thread (NEEDS_INPUT_REQUIRED_AT) and is taught
+    // the key with a fence that needs no prose; the legacy example is pinned against the legacy text.
+    assert.match(h.delivered[0], /agents: \[<the id your runtime gave you>\]/)
+    assert.match(h.delivered[0], /needs_input: false/)
+    assert.match(h.delivered[0], /you owe NO write-up/)
+    assert.match(SIGNOFF_NUDGE_MESSAGE, /shells: \[<the id your runtime gave you>\]/)
+    assert.match(SIGNOFF_NUDGE_MESSAGE, /prs: \[owner\/repo#123\]/)
+    assert.doesNotMatch(SIGNOFF_NUDGE_MESSAGE, /needs_input/, "a pre-cut worker is not taught a key its contract never had")
     // …and never the SINGULAR keys the 2026-08-24 YAML cutover retired. The example kept them for a
     // month after the park check started refusing them by name, so a worker that copied the reminder's
     // own fence was bumped for it.
@@ -116,7 +126,7 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // below it. This pinned `reason:` — the ONE-LINE form that shape replaced — for two days after the
     // parser stopped needing it, which is the same staleness the comment above is about: the example
     // kept teaching the superseded field to the audience least able to know it was superseded.
-    assert.match(h.delivered[0], /^\s*---\s*$/m, "the delimiter, which is what makes the prose prose")
+    assert.match(SIGNOFF_NUDGE_MESSAGE, /^\s*---\s*$/m, "the delimiter, which is what makes the prose prose")
     assert.doesNotMatch(h.delivered[0], /reason:/, "and not the one-line form it replaced")
     assert.doesNotMatch(h.delivered[0], /`watch: <id>`/, "the deleted grammar must not come back")
     // THE GOAL'S VERBIAGE LIVES HERE NOW. A new thread no longer arms the default Goal (2026-08-16) —
@@ -263,7 +273,9 @@ for (const [what, arrange] of [
     st.armThreadWatch({ id: "wch_x", slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })],
 ] as Array<[string, (st: ReturnType<typeof createStorage>, slug: string) => unknown]>) {
   test(`${what} is already a sign-off, so nothing is injected`, async () => {
-    const h = nudger({})
+    // A watch is a sign-off only for a thread dispatched BEFORE the `needs_input:` cut — see the next
+    // test — so that case runs on a legacy thread; `done` and `ask` are sign-offs on every contract.
+    const h = nudger({}, what === "a registered watch" ? { spawnedAt: LEGACY_SPAWN } : {})
     try {
       arrange(h.storage, h.slug)
       await h.s.tick()
@@ -289,6 +301,21 @@ test("a prose-only reply to the human after a registered done is not nudged; one
     assert.deepEqual(talked.nudges(), [])
     assert.equal(worked.nudges().length, 1)
   } finally { talked.close(); worked.close() }
+})
+
+// UNDER THE `needs_input:` CONTRACT A WATCH IS NOT A SIGN-OFF (2026-10-01). It says when the worker
+// wakes; whether the human is needed meanwhile is the fence's answer, so a rest behind a watch with no
+// fence queues (board.needsInputQueues) — and is told about the fence that would have kept it out.
+test("a registered watch alone is NOT a sign-off for a needs_input thread — the rest is taught the fence", async () => {
+  const h = nudger({ bgShells: [{ label: "the suite", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_x", taskId: "bzvtnt3ig" }] as SessionTelemetry["bgShells"] })
+  try {
+    h.storage.armThreadWatch({ id: "wch_x", slug: h.slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })
+    await h.s.tick()
+    const nudges = h.nudges()
+    assert.equal(nudges.length, 1)
+    assert.match(nudges[0].message, /needs_input: true\|false/, "the live-ops footer names the required answer")
+    assert.match(nudges[0].message, /In a fence: `shells: \[bzvtnt3ig\]`/, "and the id to name")
+  } finally { h.close() }
 })
 
 // AND THE MOMENT THE HUMAN ANSWERS, EVERY GUARD ABOVE OPENS. The row leaves `open`, the done row is

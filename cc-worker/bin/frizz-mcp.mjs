@@ -428,11 +428,13 @@ const WATCH = {
   name: "watch",
   description:
     "REGISTER A WAIT on something this thread already has running — a background shell, a sub-agent — " +
-    "and frizz holds your thread out of the queue until it finishes, then brings you back.\n\n" +
-    "IT IS THE WAIT, NOT A STATEMENT ABOUT ONE. A ```awaiting fence NAMES what you are waiting on and " +
-    "has the lifetime of the message carrying it, so it has to be rewritten at every single rest and is " +
-    "wrong the moment anything changes. This creates a ROW: it survives your turn ending, a compaction " +
-    "and a frizz restart, and it keeps holding your thread whatever you say next.\n\n" +
+    "and frizz brings you back when it finishes, or when `for` runs out.\n\n" +
+    "IT IS A ROW, NOT A SENTENCE. A ```awaiting fence has the lifetime of the message carrying it; this " +
+    "survives your turn ending, a compaction and a frizz restart.\n\n" +
+    "IT DOES NOT REPLACE THE FENCE. Whether the human is needed while you wait is an answer about each " +
+    "REST, so every rest on running work still ends with a ```awaiting fence that names the work and " +
+    "answers `needs_input: true|false` — `false` keeps the thread out of the human's queue, and a rest " +
+    "with no fence lands in it.\n\n" +
     "`for` IS REQUIRED and it is a DURATION, never an instant. When it runs out the row is CANCELLED " +
     "and you are woken to re-decide — that is deliberate, and it is what stops a wait outliving the " +
     "reason you made it. Register again if you still mean it.\n\n" +
@@ -440,12 +442,12 @@ const WATCH = {
     "live answers to is REFUSED rather than stored, and so is a `kind` that disagrees with what frizz " +
     "can see — a sub-agent registered as a shell is refused and told what it actually is. If you have " +
     "lost an id (a compaction, a long turn), call `activity` rather than guessing.\n\n" +
-    "A SUB-AGENT ALREADY HOLDS YOUR THREAD without any registration, so the case this exists for is a " +
+    "A SUB-AGENT NEEDS NO REGISTRATION — its return re-invokes you — so the case this exists for is a " +
     "background SHELL: frizz cannot tell a build you are waiting on from a dev server you started and " +
     "moved on from, and only you know which it is.\n\n" +
     "NEVER WATCH SOMETHING YOU INTEND TO OUTLIVE. A dev server, a log tail, a file watcher — those are " +
-    "things you started, not things you are waiting for, and registering one parks your thread on work " +
-    "that will never finish.\n\n" +
+    "things you started, not things you are waiting for, and registering one is a wait on work that " +
+    "will never finish.\n\n" +
     "REGISTERING IS IDEMPOTENT per (kind, target): asking twice returns the SAME id, says it was " +
     "already armed, and leaves the original expiry alone — so re-registering after a compaction is safe " +
     "and is the right instinct. Use `unwatch` to withdraw one. A PULL REQUEST is `watch_pr`, not this: " +
@@ -529,11 +531,10 @@ const EXTEND_SHELL = {
 const UNWATCH = {
   name: "unwatch",
   description:
-    "WITHDRAW A WATCH you registered with `watch`, by its id. It stops holding your thread out of the " +
-    "queue and it will not wake you.\n\n" +
+    "WITHDRAW A WATCH you registered with `watch`, by its id. It will not wake you any more.\n\n" +
     "Use it the moment a wait stops mattering — you decided not to wait for that build after all, or " +
-    "you are about to end the thread. A watch you no longer care about still parks you, and a thread " +
-    "parked on a wait nobody is waiting for is invisible to the human.\n\n" +
+    "you are about to end the thread. A watch you no longer care about still wakes you for nothing, and " +
+    "it blocks `done` until it is withdrawn.\n\n" +
     "You do NOT need this when the work simply finishes: frizz settles the row itself and wakes you. " +
     "`activity` prints the id of everything you hold. A `watch_pr` / `watch_issue` id (`prw_…` / " +
     "`isw_…`) or a `timer` id (`tmr_…`) is withdrawn here too.",
@@ -1202,12 +1203,15 @@ async function activity() {
   return selfLine + (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
-    "PLURAL key per kind, taking a list — plus a required `for:` duration, and your handoff prose BELOW " +
-    "the `---` (there is no `reason:` key).\n\nEverything above, as a fence:\n\n```awaiting\n" +
-    `${block.join("\n")}\n  for: 2h\n  ---\n  <what you are waiting for, and what you will do when it lands>\n` +
+    "PLURAL key per kind, taking a list — plus a required `for:` duration and a required " +
+    "`needs_input:` answer. `needs_input: false` (the human has nothing to act on yet) keeps the thread " +
+    "out of their queue and needs no prose at all; `needs_input: true` puts it in their queue, with what " +
+    "to look at BELOW a `---` line (there is no `reason:` key).\n\nEverything above, as a fence:\n\n" +
+    "```awaiting\n" +
+    `${block.join("\n")}\n  needs_input: false\n  for: 2h\n` +
     "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
-    "\n\nBETTER THAN NAMING A SHELL IN THE FENCE: `watch` REGISTERS the wait, so it survives your turn " +
-    "ending and you never restate it. Anything already marked `[watched as …]` above needs no fence line." +
+    "\n\nA `watch` registration (marked `[watched as …]` above) keeps the WAKE across a compaction and a " +
+    "restart, but it does not replace the fence: name the work in the fence all the same." +
     askedBlock + linksBlock
   )
 }

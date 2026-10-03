@@ -1,4 +1,4 @@
-import { renderQrLines } from "@frizz/server/qr";
+import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import { installPaneHost, type Pane } from "./pane-host.ts";
 
 /**
@@ -43,6 +43,32 @@ function secondsUntil(expiresAt: number, now: number): number {
   return Math.max(0, Math.ceil((expiresAt - now) / 1000));
 }
 
+/** A screen line that may be dropped when the window is too short; lower `drop` goes first. */
+export interface OptionalLine {
+  text: string;
+  drop: number;
+}
+
+/**
+ * The text of a full-screen paint that never scrolls. Past its last row the alternate screen SCROLLS,
+ * and on a QR screen what scrolls away first is the code's own quiet zone: an 80x24 window lost all
+ * four light rows above the finder patterns, which then touched the window's edge and stopped being
+ * findable. So the lines are joined with no trailing newline, and optional lines are dropped, lowest
+ * `drop` first, until what is left fits `rows` at the height each line wraps to in `columns`.
+ */
+export function fitScreen(entries: Array<string | OptionalLine>, rows: number | undefined, columns: number | undefined): string {
+  const width = columns ?? 80;
+  const height = (text: string) => Math.max(1, Math.ceil([...text.replace(/\x1b\[[0-9;]*m/g, "")].length / width));
+  const kept = entries.map((entry) => (typeof entry === "string" ? { text: entry, drop: Infinity } : entry));
+  const total = () => kept.reduce((sum, entry) => sum + height(entry.text), 0);
+  while (rows && total() > rows) {
+    const next = kept.reduce<number>((lowest, entry, index) => (entry.drop < (kept[lowest]?.drop ?? Infinity) ? index : lowest), -1);
+    if (next < 0) break;
+    kept.splice(next, 1);
+  }
+  return kept.map((entry) => entry.text).join("\n");
+}
+
 export function createAccessPane(options: AccessPaneOptions): AccessPane {
   const output = options.output ?? process.stdout;
   const now = options.now ?? Date.now;
@@ -60,11 +86,30 @@ export function createAccessPane(options: AccessPaneOptions): AccessPane {
       : remaining === 0
         ? "This link has expired. Press L for another."
         : `Single use, expires in ${remaining}s.`;
+    const footer = `${status}  Press any other key to close.`;
+    const width = output.columns ?? 80;
+    const wrapped = (text: string) => Math.max(1, Math.ceil((text.length + 2) / width));
+    // The code gets the window minus the URL and the status at the height they wrap to and one blank
+    // line between it and them. A terminal that does not draw block elements itself gets the
+    // glyph-free code when that fits (see qr.ts).
+    const qr = renderQrLines(shown.url, { area: qrAreaOf(output, { indent: 2, rows: wrapped(shown.url) + wrapped(footer) + 1 }) });
     output.write(CLEAR);
-    output.write("\n");
-    for (const row of renderQrLines(shown.url)) output.write(`  ${row}\n`);
-    output.write(`\n  ${shown.url}\n`);
-    output.write(`\n  ${DIM}${status}  Press any other key to close.${RESET}\n`);
+    // As the window shrinks the top margin goes first, then the gap above the status, the gap below
+    // the code last; the code itself never scrolls (see fitScreen).
+    output.write(
+      fitScreen(
+        [
+          { text: "", drop: 1 },
+          ...qr.map((row) => `  ${row}`),
+          { text: "", drop: 3 },
+          `  ${shown.url}`,
+          { text: "", drop: 2 },
+          `  ${DIM}${footer}${RESET}`,
+        ],
+        output.rows,
+        output.columns,
+      ),
+    );
   };
 
   return {

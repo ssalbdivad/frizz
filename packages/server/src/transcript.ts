@@ -4778,6 +4778,20 @@ export function withForkedSpinoffRequests(
   return out
 }
 
+// The latest page of a thread with NO transcript behind it yet — and it still carries the delivery
+// ledger. This used to be the bare empty page, so every send made before the provider wrote its first
+// byte was in the database and on no screen: a just-dispatched Claude thread whose JSONL does not exist
+// yet, a worker that died before writing one, a codex thread whose rollout has not materialized (its
+// transcriptPath answers nothing until codex mints the id, so there is no `source` at all). A FAILED
+// send there is exactly the "my words silently vanished" loss the write-ahead exists to prevent: the
+// ledger kept the text, then this reader dropped it. readThreadTranscript never had the gap (it projects
+// onto `[]` on every branch); the /ws push and the RPC page both read through HERE, so both had it.
+function emptyLatestTranscriptPage(storage: Storage, slug: string, source?: TranscriptSourceBinding): TranscriptPage {
+  const page = emptyTranscriptPage(source)
+  const row = storage.getSession(slug)
+  return row ? { ...page, messages: projectDeliveryLedger([], parseDeliveryLedger(row.delivery_ledger)) } : page
+}
+
 export function readLatestThreadTranscriptPage(
   project: Project,
   storage: Storage,
@@ -4790,12 +4804,12 @@ export function readLatestThreadTranscriptPage(
   opts: { editedFiles?: boolean } = {},
 ): TranscriptPage {
   let source = sourceForThread(project, storage, slug, backendFor)
-  if (!source) return emptyTranscriptPage()
+  if (!source) return emptyLatestTranscriptPage(storage, slug)
   let snapshot = fixedSnapshot(source)
   if (!snapshot) {
     const discovered = discoveredClaudeSource(project, storage, slug)
     const discoveredSnapshot = discovered ? fixedSnapshot(discovered) : undefined
-    if (!discoveredSnapshot) return emptyTranscriptPage(source)
+    if (!discoveredSnapshot) return emptyLatestTranscriptPage(storage, slug, source)
     source = discovered!
     snapshot = discoveredSnapshot
   }

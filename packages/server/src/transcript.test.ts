@@ -28,6 +28,7 @@ import {
   readThreadTranscript,
 } from "./transcript.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
+import { beginDelivery, recordDeliveryFailure } from "./delivery-ledger.ts"
 import { createCodexBackend } from "./backend/codex.ts"
 import { acpTranscriptPath, createAcpBackend } from "./backend/acp-transcript.ts"
 import type { Project } from "./project.ts"
@@ -2044,6 +2045,62 @@ test("paged reader: a genuinely missing transcript still pages empty — the sib
     assert.deepEqual(readLatestThreadTranscriptPage(h.project, h.store, "t").messages, [])
   } finally {
     h.cleanup()
+  }
+})
+
+// The failed-send write-ahead (delivery-ledger.ts) keeps the operator's words when a delivery throws —
+// and the paged reader is what the drawer loads AND what the /ws push sends. Until 2026-10-01 its two
+// no-transcript returns handed back the bare empty page, so a send that failed before the provider wrote
+// its first byte was in the database and on no screen at all.
+const failedFirstSend = (store: ReturnType<typeof createStorage>, text: string) => {
+  beginDelivery(store, "t", { id: "d-first", text })
+  recordDeliveryFailure(store, "t", "d-first", { error: "Claude broker exited before it became ready", retryable: false })
+}
+
+test("paged reader: a FAILED first send on a thread with no JSONL yet still renders — within the spin-up grace and past it", () => {
+  for (const spawnedAgo of [0, DGRACE_MS + 5_000]) {
+    const h = txHarness()
+    try {
+      h.store.upsertSession(txRow({ spawned_at: new Date(Date.now() - spawnedAgo).toISOString() }))
+      failedFirstSend(h.store, "the operator's whole dictated steer")
+      const page = readLatestThreadTranscriptPage(h.project, h.store, "t")
+      assert.deepEqual(
+        page.messages.map((m) => ({ text: m.text, id: m.deliveryId, state: m.deliveryState, queued: m.queued, error: m.deliveryError })),
+        [{ text: "the operator's whole dictated steer", id: "d-first", state: "failed", queued: false, error: "Claude broker exited before it became ready" }],
+        `spawned ${spawnedAgo}ms ago: the failed bubble is on the page`,
+      )
+      assert.deepEqual(
+        page.messages.map((m) => m.sourceId),
+        readThreadTranscript(h.project, h.store, "t").map((m) => m.sourceId),
+        "the page and the whole-transcript reader agree",
+      )
+      // A send still in flight renders too — gray, like any send not yet read.
+      beginDelivery(h.store, "t", { id: "d-second", text: "a second send, still sending" })
+      const second = readLatestThreadTranscriptPage(h.project, h.store, "t").messages.find((m) => m.deliveryId === "d-second")
+      assert.equal(second?.deliveryState, "sending")
+      assert.equal(second?.queued, true)
+    } finally {
+      h.cleanup()
+    }
+  }
+})
+
+test("paged reader: a FAILED send on a codex thread whose rollout has not materialized still renders", () => {
+  // No `agent_session_id` and an empty codex home: transcriptPath answers nothing, so the reader has no
+  // source at all — the other no-transcript return.
+  const h = txHarness()
+  const codexHome = mkdtempSync(join(tmpdir(), "frizz-tx-codex-"))
+  try {
+    h.store.upsertSession(txRow({}))
+    h.store.setBackend("t", "codex")
+    failedFirstSend(h.store, "steer the codex thread")
+    const backendFor = () => createCodexBackend({ codexHome })
+    const page = readLatestThreadTranscriptPage(h.project, h.store, "t", backendFor)
+    assert.deepEqual(page.messages.map((m) => [m.text, m.deliveryState]), [["steer the codex thread", "failed"]])
+    assert.equal(page.beforeCursor, null)
+  } finally {
+    h.cleanup()
+    rmSync(codexHome, { recursive: true, force: true })
   }
 })
 

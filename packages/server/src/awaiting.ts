@@ -1,4 +1,4 @@
-import { AWAITING_FOR_MAX_MS, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, awaitingNeedsInput, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -98,6 +98,46 @@ const LIVE_SET: Record<AwaitingItemKind, keyof LiveActivity> = {
   shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues",
 }
 
+/** One shell or sub-agent as the fold reports it — the handles it answers to and whether it still runs. */
+interface LiveHandleRow {
+  state: string
+  id?: string
+  taskId?: string
+  label?: string
+}
+
+/** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
+ *  Here rather than in the scheduler since 2026-10-01, because the BOARD reads it too: a
+ *  `needs_input: false` park keeps its thread out of the queue only while it is honoured, and the board
+ *  and the scheduler's integrity pass must agree on what "honoured" means (needsInputParkHolds).
+ *
+ *  A shell and a sub-agent each answer to THREE handles, because the fence names whichever string the
+ *  worker was shown: the runtime id it was handed ("Command running in background with ID: bzvtnt3ig";
+ *  "agentId: a01b2d20b32feab11" in the Agent launch ack), the launch tool_use id, or the label it reads
+ *  back in its own transcript. The runtime id is the one a worker actually has — the tool_use id never
+ *  appears in its context — and until 2026-08-28 a sub-agent answered to only the latter two, so a
+ *  worker that named the id it was handed was bumped "nothing by that name", then re-fenced with the id
+ *  the correction printed and asked why there were two. Refusing a
+ *  correct-but-label-shaped name would make the fence unusable for the case it exists for. */
+export function liveActivityOf(
+  tele: { bgShells?: readonly LiveHandleRow[]; subAgents?: readonly LiveHandleRow[] } | undefined,
+  registeredPrWatches: ReadonlySet<string>,
+  armedTimerIds: ReadonlySet<string>,
+  registeredIssueWatches: ReadonlySet<string> = new Set(),
+): LiveActivity {
+  const shells = new Set<string>()
+  for (const sh of tele?.bgShells ?? []) {
+    if (sh.state !== "running") continue
+    for (const h of [sh.taskId, sh.id, sh.label]) if (h) shells.add(h)
+  }
+  const agents = new Set<string>()
+  for (const a of tele?.subAgents ?? []) {
+    if (a.state !== "running") continue
+    for (const h of [a.taskId, a.id, a.label]) if (h) agents.add(h)
+  }
+  return { shells, agents, timers: armedTimerIds, prs: registeredPrWatches, issues: registeredIssueWatches }
+}
+
 /** The items this fence names that frizz CANNOT account for — dead, unknown, or another thread's.
  *
  *  This is the whole safety property of the grammar. A park is honoured only when this comes back empty;
@@ -134,6 +174,22 @@ export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean 
   if (park.items.length === 0) return false
   if (park.forMs === null) return false
   return unaccountedItems(park.items, live).length === 0
+}
+
+/** Does this fence keep a NEW-CONTRACT thread out of the queue (see `needsInputRequired` in
+ *  @frizz/shared)? The worker answered `needs_input: false`, and the park is one frizz can honour and has
+ *  not run out. Anything less — `true`, no answer, a dead name, an elapsed `for:` — and the thread
+ *  queues, which is the safe direction: a wrong `false` must never be a way to disappear.
+ *
+ *  `fenceAtMs` is when the fence landed (the worker's last word). An unknown instant does NOT hold —
+ *  without it there is no `for:` to run out, and a park that cannot run out is the stall this grammar
+ *  was built to make impossible. */
+export function needsInputParkHolds(hints: readonly AwaitingHint[], live: LiveActivity, fenceAtMs: number, nowMs: number): boolean {
+  if (awaitingNeedsInput(hints) !== false) return false
+  const park = readAwaitingPark(hints)
+  if (!parkIsHonoured(park, live)) return false
+  const expiresAt = parkExpiresAt(park, fenceAtMs)
+  return expiresAt !== null && nowMs < expiresAt
 }
 
 /** The ceiling this park's `for:` may reach, which depends on WHAT IT NAMES.

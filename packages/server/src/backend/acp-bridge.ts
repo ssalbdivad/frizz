@@ -247,6 +247,8 @@ export function buildAcpPermissionInteraction(
 
 export class AcpBridge {
   private readonly sessions = new Map<string, LiveSession>()
+  // Opens in flight, by Frizz session id. See `openOnce`.
+  private readonly opening = new Map<string, ReturnType<AcpBridge["open"]>>()
   private readonly unsubscribe: (() => void) | undefined
   private closed = false
 
@@ -404,6 +406,27 @@ export class AcpBridge {
     return { live, resumed }
   }
 
+  /**
+   * ONE open per session at a time; every concurrent caller shares it. The session's daemon is keyed by
+   * session id — one record path, one socket path — so two opens racing for a session with no live
+   * agent (the waker delivering answers while the operator sends, a boot `warmUp` under a follow-up)
+   * each found no daemon and FORKED one. The second took the record and the socket path, and the two
+   * attaches could reach the SAME daemon, which serves one client at a time: the later one hung up the
+   * earlier, whose next stdin write failed with EPIPE — an unhandled stream error that took the whole
+   * process down until acp-rpc.ts listened for it. Short of that, a failed open `stopAcpDaemon`s
+   * whatever the record names (the other caller's agent), and the loser of the two `sessions.set`s
+   * runs its turn on a second agent nobody tracks, appending to the same transcript.
+   * The same race forked two Claude daemons on 2026-09-30 (claude-agent-broker-bridge.ts `attachOnce`);
+   * scripts/verify-daemon-socket-takeover.mjs, scenario D, reproduces it here.
+   */
+  private openOnce(input: Parameters<AcpBridge["open"]>[0]): ReturnType<AcpBridge["open"]> {
+    const inflight = this.opening.get(input.sessionId)
+    if (inflight) return inflight
+    const opening = this.open(input).finally(() => { if (this.opening.get(input.sessionId) === opening) this.opening.delete(input.sessionId) })
+    this.opening.set(input.sessionId, opening)
+    return opening
+  }
+
   /** The agent's model option (`category: "model"`, else the one literally named `model`). */
   private modelOption(configOptions: AcpNewSessionResult["configOptions"]): AcpConfigOption | undefined {
     return configOptions?.find((o) => o.category === "model") ?? configOptions?.find((o) => o.id === "model")
@@ -512,7 +535,7 @@ export class AcpBridge {
 
   async spawnDispatch(input: AcpSpawnDispatchInput): Promise<AcpSessionInfo> {
     if (this.closed) throw new Error("ACP bridge is closed")
-    const { live } = await this.open(input)
+    const { live } = await this.openOnce(input)
     void this.runTurn(live, input.prompt, input.userText, undefined)
     return this.info(live)
   }
@@ -524,7 +547,9 @@ export class AcpBridge {
     let live = this.sessions.get(input.sessionId)
     let resumed: AcpFollowUpResult["resumed"] = "live"
     if (!live || live.exited || live.conn.closed) {
-      const opened = await this.open(input)
+      // Shared with any open already in flight for this session. The first caller to resume runs its
+      // turn (runTurn claims `live.turn` before its first await); every other one then queues behind it.
+      const opened = await this.openOnce(input)
       live = opened.live
       // A reattach IS the live session — the agent never went away, only the socket did.
       resumed = opened.resumed === "reattached" ? "live" : opened.resumed
@@ -574,7 +599,7 @@ export class AcpBridge {
       if (!liveAcpDaemonRecord(this.options.stateDir, row.sessionId)) continue
       if (this.sessions.has(row.sessionId)) continue
       try {
-        await this.open(row)
+        await this.openOnce(row)
       } catch (err) {
         this.diagnostic(row.threadSlug, "reattach", `could not reattach to the running agent: ${(err as Error).message}`)
       }

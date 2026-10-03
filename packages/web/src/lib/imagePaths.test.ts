@@ -51,6 +51,27 @@ test("complete Mermaid fences become diagrams while incomplete or nested directi
   assert.deepEqual(splitProseAttachments(fencedDirective), [{ kind: "md", text: fencedDirective }])
 })
 
+test("a closed lightbox fence becomes one gallery part; quoted, unterminated or empty ones do not", () => {
+  assert.deepEqual(splitProseAttachments("Here they are:\n```lightbox\n/tmp/a.png Before\n\n/tmp/b.png After\n```\nThat's all."), [
+    { kind: "md", text: "Here they are:" },
+    { kind: "lightbox", entries: [{ target: "/tmp/a.png", caption: "Before" }, { target: "/tmp/b.png", caption: "After" }] },
+    { kind: "md", text: "That's all." },
+  ])
+  assert.deepEqual(splitProseAttachments("~~~ Lightbox\n/tmp/a.png\n~~~"), [
+    { kind: "lightbox", entries: [{ target: "/tmp/a.png", caption: undefined }] },
+  ])
+  // A worker SHOWING the human the fence, inside another code block, is quoting it.
+  const quoted = "````md\n```lightbox\n/tmp/a.png\n```\n````"
+  assert.deepEqual(splitProseAttachments(quoted), [{ kind: "md", text: quoted }])
+  // Still being written: the paths stay code — never peeled into a bare image of their own.
+  const unterminated = "```lightbox\n/tmp/a.png"
+  assert.deepEqual(splitProseAttachments(unterminated), [{ kind: "md", text: unterminated }])
+  assert.deepEqual(splitProseAttachments("Before\n```lightbox\n\n```\nAfter"), [
+    { kind: "md", text: "Before" },
+    { kind: "md", text: "After" },
+  ])
+})
+
 test("backtick-wrapped path lines are detected and unwrapped", () => {
   const parts = splitProseAttachments("`/tmp/a.jpeg`")
   assert.deepEqual(parts, [{ kind: "image", path: "/tmp/a.jpeg" }])

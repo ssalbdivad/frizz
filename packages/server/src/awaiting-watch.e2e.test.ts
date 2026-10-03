@@ -29,6 +29,7 @@ import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { GITHUB_STATUS_SETTING, readGithubStatusBook } from "./awaiting.ts"
 import { deriveNeedsYou, deriveAwaitingBackground, fenceWatchViews } from "./board.ts"
+import { NEEDS_INPUT_REQUIRED_AT } from "@frizz/shared"
 
 const SLUG = "watcher"
 const SESSION = "aaaaaaaa-bbbb-cccc-dddd-000000000001"
@@ -73,6 +74,9 @@ function parkRecord(at: string, target?: string): string {
       "",
       "```awaiting",
       `shells: [${target}]`,
+      // The answer every park owes since 2026-10-01 (NEEDS_INPUT_REQUIRED_AT) — without it the park is
+      // corrected for that, which is not what these cases are about.
+      "needs_input: false",
       "Waiting on the test run.",
       "```",
     ].join("\n")
@@ -176,7 +180,7 @@ test("a park on a LIVE shell stays parked, then wakes on the shell's own retirem
     const parked = h.tele()
     assert.equal(parked?.bgShells.some((sh) => sh.taskId === TASK_ID && sh.state === "running"), true, "the shell folded as live")
     assert.equal(parked?.lastFence?.kind, "awaiting", "the fence folded")
-    assert.deepEqual(parked?.lastFence?.hints, [{ kind: "shell", value: TASK_ID }], "…carrying the watch hint")
+    assert.deepEqual(parked?.lastFence?.hints, [{ kind: "shell", value: TASK_ID }, { kind: "needs_input", value: "false" }], "…carrying the watch hint and the answer")
 
     await h.s.tick()
     assert.deepEqual(h.delivered, [], "the shell is still running — nothing to say")
@@ -237,8 +241,11 @@ test("a poll publishes a reading the BOARD can actually read, and the queue rule
   }))
   const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off")
+  // A thread dispatched BEFORE the `needs_input:` cut, because "CI running holds the thread out of the
+  // queue" is the LEGACY rule this seam feeds. A new-contract worker says where its rest belongs itself
+  // (board.needsInputQueues), and no PR reading moves it.
   storage.upsertSession({
-    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: at,
+    slug: SLUG, session_id: SESSION, thread_name: `frizz-${SLUG}`, spawned_at: new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) - 86_400_000).toISOString(),
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: at, title_auto: 1,
     title: SLUG, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)

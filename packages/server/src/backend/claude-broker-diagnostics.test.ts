@@ -8,6 +8,7 @@ import {
   createClaudeBrokerDiagnosticWriter,
   describeClaudeBrokerDiagnostic,
   droppedDeliveryId,
+  droppedDeliveryReason,
   readClaudeBrokerDiagnostics,
 } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
@@ -96,12 +97,14 @@ test("a dropped input and a daemon death earn a log line; ordinary provider stde
 })
 
 // A log line told frizz that SOMETHING was thrown away; it could not say WHICH, so the ledger could not
-// retire the row and the operator's message sat at `enqueued` for the hour `ageDeliveries` grants a
+// act on the row and the operator's message sat at `enqueued` for the hour `ageDeliveries` grants a
 // queue entry — un-clickable, because unqueue asks the current daemon to cancel an id the dead one held.
-test("a drop names the delivery id it killed, so the ledger can retire exactly that row", () => {
+test("a drop names the delivery id it killed, so the ledger can mark exactly that row failed", () => {
   const id = "a57251eb-7683-457c-9055-f6814679f9db"
   const drop = `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}: id=${id} Claude outstanding input limit exceeded`
   assert.equal(droppedDeliveryId({ kind: "stderr", message: drop, truncated: false }), id)
+  // …and the refusal alone, which is what the operator reads under the failed bubble.
+  assert.equal(droppedDeliveryReason({ kind: "stderr", message: drop, truncated: false }), "Claude outstanding input limit exceeded")
   // Still a loggable drop — naming the id must not change which diagnostics earn their line.
   assert.equal(describeClaudeBrokerDiagnostic({ kind: "stderr", message: drop, truncated: false }), drop)
 })
@@ -111,9 +114,11 @@ test("only a real drop yields an id — noise, deaths, and a pre-id daemon yield
   // seen in production. It must degrade to the old behaviour (log + slow age-out), never to a wrong id.
   const old = `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}: Claude outstanding input limit exceeded`
   assert.equal(droppedDeliveryId({ kind: "stderr", message: old, truncated: false }), undefined)
+  assert.equal(droppedDeliveryReason({ kind: "stderr", message: old, truncated: false }), "Claude outstanding input limit exceeded")
+  assert.equal(droppedDeliveryReason({ kind: "stderr", message: "npm warn deprecated", truncated: false }), "")
   assert.equal(droppedDeliveryId({ kind: "stderr", message: "npm warn deprecated id=nope", truncated: false }), undefined)
   assert.equal(droppedDeliveryId({ kind: "lifecycle", phase: "crashed", message: "boom" }), undefined)
-  // A non-UUID id is not a delivery id, and cancelling on it would tombstone nothing (or worse, guess).
+  // A non-UUID id is not a delivery id, and acting on it would match nothing (or worse, guess).
   const bogus = `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}: id=12345 Claude outstanding input limit exceeded`
   assert.equal(droppedDeliveryId({ kind: "stderr", message: bogus, truncated: false }), undefined)
 })

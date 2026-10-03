@@ -9,7 +9,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, isDirectSubAgent, queueUrgency, questionAnswerMessage, questionRepliedPast, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
@@ -24,7 +24,7 @@ import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
 import { firstTextLine } from "./tailer.ts"
 import type { InteractionChange } from "./interaction-store.ts"
 import { frizzDirExists } from "./frizz.ts"
-import { githubStatusKey, parkExpiresAt, parkIsHonoured, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
+import { githubStatusKey, liveActivityOf, needsInputParkHolds, parkExpiresAt, parkIsHonoured, parseIssueRef, parsePrRef, readAwaitingPark, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, type GithubIssueStatusBook, type GithubStatusBook } from "./awaiting.ts"
 import { findByPath } from "./project-registry.ts"
 import { homeWorkspaceSlug, isHomeWorkspace } from "./home-workspace.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
@@ -631,9 +631,10 @@ export function safeQuestionAnswer(raw: string | null): QuestionAnswer | undefin
  *  2026-08-27). This is what fills it: the human's own answer, from the registry, at 50% until the worker
  *  actually has it.
  *
- *  SPENT BY THE WORKER RECEIVING IT, not by the outbox claiming it. `delivered` is set at ENQUEUE, which
- *  is a whole delivery ahead of the transcript, so keying on it would reopen the same hole a second
- *  wide. The newest USER record is the honest test — frizz's delivery IS one — and it is the same test
+ *  SPENT BY THE WORKER RECEIVING IT, as the transcript shows it. `delivered` is the OUTBOX's verdict on
+ *  the carrying wake (scheduler.evalQuestionAnswers) and can lead the transcript — a daemon's
+ *  acknowledgement files the wake before the record lands — so keying on it would reopen the same hole
+ *  a moment wide. The newest USER record is the honest test — frizz's delivery IS one — and it is the same test
  *  `registeredDoneFence` uses for the same reason. A dismissal alone shows nothing: nobody is being
  *  woken for it, so there is no arrival to bridge to — UNLESS `wakeOnDismissals` says one is. On an
  *  AUTONOMOUS thread (a Goal armed on rest — the exact gate evalQuestionAnswers wakes on) the
@@ -680,7 +681,7 @@ export type SignoffNudgeVerdict = "ineligible" | "signed-off" | "nudge"
  *  each guard lives at SOURCE 9 in scheduler.ts. Not covered here: the kill switch, and the outbox's own
  *  one-per-rest dedupe, which only the scheduler can see. */
 export function signoffNudgeVerdict(
-  row: Pick<SessionRow, "signoff_nudges" | "recurring_on_rest" | "recurring_prompt">,
+  row: Pick<SessionRow, "signoff_nudges" | "recurring_on_rest" | "recurring_prompt"> & Partial<Pick<SessionRow, "spawned_at">>,
   tele: SessionTelemetry | undefined,
   // LAZY, because the scheduler asks this of every idle row on every tick and most of them have a fence,
   // which settles it before any registry is read.
@@ -704,7 +705,11 @@ export function signoffNudgeVerdict(
     registeredDoneFence(facts.done(), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
     facts.questionRows().some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt)) ||
     answersInFlight(facts.questionRows(), tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
-    facts.armedWatchCount() > 0 ||
+    // EXCEPT A WATCH, UNDER THE `needs_input:` CONTRACT (2026-10-01). A registration says WHEN the worker
+    // wakes; it cannot say whether the human is needed meanwhile, and on a thread dispatched at or after
+    // NEEDS_INPUT_REQUIRED_AT that answer lives only in the fence. So a rest behind a `watch` with no fence
+    // is a bare rest there — it queues (needsInputQueues), and the reminder teaches the fence.
+    (!needsInputRequired(row.spawned_at) && facts.armedWatchCount() > 0) ||
     facts.replyWaitArmed() ||
     facts.threadMessageInFlight?.() === true
   ) return "signed-off"
@@ -725,7 +730,11 @@ export function signoffNudgeVerdict(
   // to quiet it — reproduced by the 2026-10-02 review: five rests, five Goal prompts, where main sent the
   // reminder first and the fence it taught held the Goal. So a Goal thread is still asked, in the short
   // waiting form, with the child's `agents:` fence written out (signoffWaitingNudgeMessage).
-  if (hasLiveBackgroundWork(tele) && !restGoalArmed(row)) return "ineligible"
+  //
+  // AND EXCEPT UNDER THE `needs_input:` CONTRACT (2026-10-01), where a child no longer parks on its own:
+  // a fenceless rest behind one queues (needsInputQueues), so it is asked for the fence that would keep it
+  // out, in the same short waiting form.
+  if (hasLiveBackgroundWork(tele) && !restGoalArmed(row) && !needsInputRequired(row.spawned_at)) return "ineligible"
   // A CHILD THAT JUST RETURNED IS ABOUT TO WAKE ITS PARENT, so the rest it interrupted is not bare either.
   // The fold retires the child on the `queue-operation` record that enqueues its <task-notification> —
   // metadata, so `turn` stays idle and `lastUserAt` does not move — and the USER record that actually
@@ -786,8 +795,9 @@ export function signoffNudgeDue(verdict: SignoffNudgeVerdict, tele: SessionTelem
 /** How long a stored answer excuses its thread from the queue while the wake carrying it has not landed.
  *  The delivery normally lands within seconds (answerQuestions kicks the scheduler at once); a worker
  *  that has to be resumed first takes longer. The cap is what keeps the excusal honest: a wake the
- *  outbox EXHAUSTS never produces the user record that ends it, and without a bound that thread would
- *  sit out of the queue, answered and unwoken, with nothing on screen to say so. */
+ *  outbox EXHAUSTS never produces the user record that ends it — the answer stays undelivered and is
+ *  offered again later (scheduler ANSWER_REOFFER_BACKOFF_MS), but not soon — and without a bound that
+ *  thread would sit out of the queue, answered and unwoken, with nothing on screen to say so. */
 export const ANSWER_IN_FLIGHT_EXCUSAL_MS = 60_000
 
 /** Has the human answered a registered question that the worker has not received yet, recently enough
@@ -1467,6 +1477,19 @@ export function deriveNeedsYou(
   // blink in and out — see signoffNudgeDue. After every hard member above, so nothing that IS the
   // human's waits behind it.
   if (signoffNudgePending) return false
+  // THE WORKER'S OWN ANSWER (2026-10-01). A thread dispatched at or after NEEDS_INPUT_REQUIRED_AT says
+  // with `needs_input:` whether its rest needs the human, and every per-wait rule below is the guess that
+  // answer replaces — so none of them is consulted for it. Placed after every hard gate above: an ask, a
+  // crash, a limit stop and the human's own snooze are facts about the thread, not guesses about a wait.
+  //
+  // AN ANSWER IS HONOURED FROM ANY THREAD, not only a new-contract one. A cold resume re-applies the
+  // CURRENT worker prompt (router followUp / context.ts), so a thread dispatched before the cut can read
+  // the key after an upgrade and start writing it — and a `needs_input: true` it wrote must queue it, where
+  // the legacy park rule would have excused it. The cut decides only whether the answer is REQUIRED.
+  const answered = tele?.lastFence?.kind === "awaiting" && awaitingNeedsInput(tele.lastFence.hints) !== null
+  if (answered || needsInputRequired(row.spawned_at)) {
+    return needsInputQueues(row, tele, runtime, nowMs, excuseLiveOwnWork, registeredPrWatches, armedTimerIds)
+  }
   // Declared parks are STRONGER excusals than the awaiting-background card below, so they are checked
   // first: a worker that declared an awaiting-human fence stays held even if a child of its is still
   // live (it explicitly said what it is waiting on).
@@ -1569,6 +1592,43 @@ export function deriveNeedsYou(
   if (tele?.lastFence?.kind === "done") return true
   // Bare rest is itself the handoff. It remains queued until the human explicitly sends more work,
   // snoozes it, or archives it; merely opening/seeing the thread cannot silently clear the card.
+  return true
+}
+
+// THE QUEUE RULE FOR A THREAD THAT ANSWERS FOR ITSELF — the at-rest tail of deriveNeedsYou for a worker
+// dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT in @frizz/shared). Three rules,
+// where the legacy tail has one per kind of wait:
+//
+//  1. `needs_input: false` on a park frizz can honour keeps the thread OUT of the queue. The rail draws it
+//     in the Active band, as it drew every excused rest before. "Honour" is the scheduler's own reading
+//     (awaiting.needsInputParkHolds): every named item live and the `for:` not yet run out — so a wrong
+//     `false` cannot hide a thread that nothing will wake.
+//  2. Any other rest on running work QUEUES, with the resting card and its event-snooze: `true`, a fence
+//     with no answer (the scheduler bumps it), and a rest with work out and no fence at all (the sign-off
+//     nudge teaches the fence). This is where a live sub-agent, a registered watch and a PR whose CI is
+//     still running used to excuse the thread on frizz's guess; the worker says so now, or it queues.
+//  3. A `done` handoff and a rest with nothing out queue as they always did.
+//
+// `excuseLiveOwnWork` false is deriveAwaitingBackground asking for the FACT, as it does of the legacy
+// tail: rule 1 is the queue's alone, so the card can still say what the thread waits on.
+function needsInputQueues(
+  row: SessionRow,
+  tele: SessionTelemetry | undefined,
+  runtime: RuntimeState,
+  nowMs: number,
+  excuseLiveOwnWork: boolean,
+  registeredPrWatches: ReadonlySet<string>,
+  armedTimerIds: ReadonlySet<string>,
+): boolean {
+  const fence = tele?.lastFence
+  if (
+    excuseLiveOwnWork &&
+    runtime !== "exited" &&
+    fence?.kind === "awaiting" &&
+    // `registeredPrWatches` carries both kinds' refs (see hasParkedPrWatch), so it answers for `issues:` too.
+    needsInputParkHolds(fence.hints, liveActivityOf(tele, registeredPrWatches, armedTimerIds, registeredPrWatches), Date.parse(tele?.lastAssistantAt ?? ""), nowMs)
+  ) return false
+  if (runtime !== "exited" && fence?.kind !== "done" && (hasLiveOwnWork(tele, registeredPrWatches) || hasParkedTimerWatch(tele, armedTimerIds))) return !bgSnoozeArmed(row)
   return true
 }
 

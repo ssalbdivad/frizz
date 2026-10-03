@@ -129,6 +129,11 @@ export interface DeliveryLedgerItem {
   // The refusal was raised strictly upstream of any write to the worker, so a replay of the SAME
   // deliveryId provably cannot double-send and may re-open the entry (beginDelivery).
   retryable?: boolean
+  // Set on a `failed` item the Claude broker daemon itself reported throwing away (recordDeliveryDropped).
+  // Unlike every other failure this one is NOT ambiguous: the daemon's session refused the input before
+  // a byte of it reached the CLI, so no transcript record matched by TEXT can be this send, and nothing
+  // but the operator (or the SDK echoing this exact id) may move it out of `failed`.
+  dropped?: boolean
 }
 
 // The form every text comparison in this module runs in.
@@ -235,6 +240,9 @@ export function appendDelivery(
   if (index >= 0) {
     const existing = items[index]
     if (existing.state !== "sending" && existing.state !== "failed") return
+    // A DROPPED send stays failed. From a daemon that acknowledges nothing, the "receipt" here is only
+    // the frame having reached its socket, and the daemon's own refusal outranks that.
+    if (existing.dropped) return
     const { error: _error, retryable: _retryable, ...rest } = existing
     items[index] = { ...rest, state, updatedAt: now }
     storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
@@ -315,6 +323,47 @@ export function recordDeliveryFailure(
     updatedAt: now,
   }
   if (!failure.retryable) delete items[index].retryable
+  storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
+  return true
+}
+
+/**
+ * The Claude broker daemon reported that it THREW THIS SEND AWAY (the `input dropped` diagnostic, named
+ * by its delivery id): keep the words as a `failed` send the operator can retry, edit or dismiss.
+ *
+ * This used to tombstone the row (`cancelled`), which kept the text in the row and rendered nothing —
+ * so the operator's message simply vanished from the conversation. A tombstone is the record of a
+ * deliberate take-back (unqueue); a drop is the opposite, a send the operator still wants and the agent
+ * never got, which is what `failed` already means everywhere else.
+ *
+ * Any live state may turn: a write-ahead `sending` (an acknowledging daemon reports the drop beside
+ * its refusal, and either may be read first — recordDeliveryFailure keeps the flag when it lands
+ * second), a `pending`/`enqueued`/`delivered` one (a daemon too old to acknowledge an input, where the
+ * router already recorded success the moment the frame was written), or an `unconfirmed` one. A
+ * `cancelled` tombstone stays as it is: the operator took that one back.
+ *
+ * `dropped` is what keeps the row honest afterwards. The session refuses the input before any of it is
+ * written to the CLI (ClaudeAgentSdkSession.send throws ahead of its `input.push`), so the transcript
+ * can never carry this send — and a record that merely repeats its WORDS (a boot replay folding the
+ * JSONL again, or another send of the same text) must not upgrade it to `enqueued` or retire it the
+ * way a plain `failed` item would be. See accountFor and projectDeliveryLedger.
+ */
+export function recordDeliveryDropped(storage: Storage, slug: string, id: string, reason: string, now?: number): boolean {
+  const row = storage.getSession(slug)
+  if (!row) return false
+  const items = parseDeliveryLedger(row.delivery_ledger)
+  const index = items.findIndex((existing) => existing.id === id)
+  if (index < 0 || items[index].state === "cancelled") return false
+  const { retryable: _retryable, ...rest } = items[index]
+  items[index] = {
+    ...rest,
+    state: "failed",
+    // The same words the acknowledged path's own refusal carries (claude-broker-client.ts), so the line
+    // under the bubble reads the same whichever of the two reached the ledger last.
+    error: deliveryErrorLine(`The Claude session refused this message: ${reason.trim() || "it was dropped"}`),
+    dropped: true,
+    updatedAt: new Date(now ?? Date.now()).toISOString(),
+  }
   storage.setDeliveryLedger(slug, serializeDeliveryLedger(trimLedger(items)))
   return true
 }
@@ -553,7 +602,9 @@ export function correlateDeliveryRecord(
     // enqueue → dequeue → user in that order, and the receipt already proved the message went straight
     // into the turn.
     // A write-ahead item (`sending`, or a `failed` one whose transport threw AFTER the provider took the
-    // text) upgrades too: this record is the provider's own receipt, and it outranks the error.
+    // text) upgrades too: this record is the provider's own receipt, and it outranks the error. A
+    // DROPPED one never gets here — accountFor refuses to match it, because the provider's receipt for
+    // it cannot exist (recordDeliveryDropped) — which is what keeps a boot replay from re-queueing it.
     return items.map((item, index) => {
       if (!matched.has(index)) return item
       if (item.state !== "pending" && item.state !== "unconfirmed" && item.state !== "sending" && item.state !== "failed") return item
@@ -657,7 +708,9 @@ export function accountFor(
     // the text path decide, rather than resolving an arbitrary one of them.
     const owners = new Map<number, number[]>()
     items.forEach((item, index) => {
-      if (item.state === "cancelled") return // a tombstone is never evidence of its own delivery
+      // A tombstone is never evidence of its own delivery, and a DROPPED send never reached the CLI to
+      // be evidenced at all (recordDeliveryDropped).
+      if (item.state === "cancelled" || item.dropped) return
       const tag = deliveryTag(item.id)
       if (wanted.has(tag)) owners.set(tag, [...(owners.get(tag) ?? []), index])
     })
@@ -724,6 +777,12 @@ export function matchComposedText(
     // record can be evidence of its delivery, and matching one would silently retire the very row that
     // keeps its orphaned enqueue bubble suppressed.
     if (item.state === "cancelled") return null
+    // Nor is a DROPPED send: the daemon refused it before any of it reached the CLI, so a record carrying
+    // the same words is another send's (or a boot replay re-folding one), never this one's receipt.
+    // Excluded here, the one place every text path runs through, so an `enqueue` cannot upgrade it, a
+    // `remove` cannot retire it and a delivery record cannot consume it. The echoed-id path above is
+    // left open on purpose: that is the SDK naming this exact send, which no refusal can fake.
+    if (item.dropped) return null
     if (!contemporaneous(item)) return null
     const text = canon(item.text)
     return text || null
@@ -926,7 +985,8 @@ function dropCancelled(
 //  • a delivered copy already renders (correlation prune races a read by ≤1 tick) → skip entirely;
 //  • otherwise append a bubble at the tail, where a just-sent follow-up belongs — including a `sending`
 //    one (gray, like any send not yet read) and a `failed` one (not gray; it carries `deliveryError`, and
-//    the client draws the failure line and its Retry / Edit / Dismiss actions from it).
+//    the client draws the failure line and its Retry / Edit / Dismiss actions from it);
+//  • a `dropped` failed item always takes that last branch — see the note in the loop.
 export function projectDeliveryLedger(messages: TranscriptMessage[], items: DeliveryLedgerItem[]): TranscriptMessage[] {
   if (!items.length) return messages
   const cancelled = dropCancelled(messages, items)
@@ -945,7 +1005,13 @@ export function projectDeliveryLedger(messages: TranscriptMessage[], items: Deli
     const text = renderMatchKey(item.text)
     const tag = deliveryTag(item.id)
     let handled = false
-    for (let i = messages.length - 1; i >= 0; i--) {
+    // A DROPPED send claims no rendering at all: the daemon refused it before the CLI saw a byte, so a
+    // bubble with the same words is another send's, and adopting it would either draw that message as
+    // undelivered or — once transcript.ts's FIFO backstop un-grays it — read as "already delivered" and
+    // hide the failure. It always projects its own failed bubble. Nor does it SUPPRESS a match the way
+    // a cancelled tombstone does: there is no orphaned enqueue record of its own to hide, so the only
+    // bubble a suppression could ever remove is another send, one that did reach the agent.
+    for (let i = item.dropped ? -1 : messages.length - 1; i >= 0; i--) {
       const m = messages[i]
       if (m.role !== "user" || claimed.has(i)) continue
       // A write-ahead item has no receipt to vouch for it, so only a CONTEMPORANEOUS rendering may stand

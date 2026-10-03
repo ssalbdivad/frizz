@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID, createHash } from "node:crypto"
+import net from "node:net"
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { runClaudeBroker } from "./claude-agent-broker.ts"
@@ -129,6 +130,28 @@ test("a refused input is relayed to the attached client, not just written to the
   } finally {
     await b.close()
   }
+})
+
+// A daemon shut down with a client still attached must not re-arm its idle timer. shutdown() clears the
+// timer and destroys the client, and that socket's 'close' fires a tick later into the handler that
+// arms the idle timer for an unattached daemon — so every embedded broker closed under a live client
+// left a REF'D six-hour timer behind. Nothing failed: this file passed every test and then never exited
+// (2026-10-01), which the runner reports only as a cancelled file once something kills it. Counted with
+// a RAW socket rather than the broker client, whose reconnect timers would muddy the count, and through
+// `getActiveResourcesInfo`, whose `Timeout` entries are exactly the ref'd timers that keep a process up.
+test("a daemon shut down under an attached client leaves no timer holding the process open", { timeout: 15_000 }, async () => {
+  const b = startBroker("basic")
+  const refTimers = (): number => process.getActiveResourcesInfo().filter((r) => r === "Timeout").length
+  const sock = net.connect(b.socketPath)
+  try {
+    await new Promise<void>((res, rej) => { sock.once("data", () => res()); sock.once("error", rej) })
+    const before = refTimers()
+    const gone = new Promise<void>((res) => sock.once("close", () => res()))
+    await b.close()
+    await gone
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r)) // let the daemon side's 'close' land
+    assert.ok(refTimers() <= before, `no ref'd timer outlives the daemon (before=${before}, after=${refTimers()})`)
+  } finally { sock.destroy() }
 })
 
 // The composer typeahead's data path, end to end over the REAL socket: client `list-skills` frame →

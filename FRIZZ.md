@@ -49,6 +49,8 @@ your scratch directory — notes are optional crash insurance, never a handoff, 
 when the human asked for X is not progress on X. Two rows above describe INCOMPLETE work resting; both mean
 "nothing further is possible right now", never "I stopped at a good spot".
 
+**A quiet park is not a write-up at all.** When you rest on work that is still running — a sub-agent, a build, CI — and the maintainer has nothing to act on yet, end with the ` ```awaiting ` fence alone, answering `needs_input: false`: no verdict token, no progress report, no prose. The thread stays out of the queue, so nobody is meant to read that message (maintainer 2026-10-01: an agent that rests without needing input "doesn't need to … give some big write-up of its progress so far"). The table above belongs to the rest that DOES need the maintainer — `needs_input: true`, a question, or the finished work — and that write-up covers everything since their last message, the quiet stretches included.
+
 The token and the sign-off must agree; the sign-off is the glance-level signal and the token is its
 one-line caption. `**Fixed** — the divider now shows the child's description, `749a37b` on `main`.`
 

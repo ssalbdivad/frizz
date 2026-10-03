@@ -38,6 +38,24 @@ test("^C is dispatched to the process's SIGINT listeners, and raw mode is restor
   }
 });
 
+// An exiting control-plane child resets the shared terminal to what it saw at its own fork — cooked,
+// for the first one. libuv skips a switch to the mode it believes is current, so only a write through
+// cooked puts raw back.
+test("reclaim rewrites raw mode through cooked, and stops once the host is disposed", () => {
+  const input = fakeTty();
+  const writes: boolean[] = [];
+  const setRawMode = input.setRawMode;
+  input.setRawMode = (on) => { writes.push(on); setRawMode(on); };
+  const host = installPaneHost({ bindings: {}, input: input as never, output: { isTTY: true } as NodeJS.WriteStream });
+  assert.ok(host);
+  host.reclaim();
+  assert.deepEqual(writes, [true, false, true]);
+  assert.equal(input.raw, true);
+  host.dispose();
+  host.reclaim();
+  assert.deepEqual(writes, [true, false, true, false], "a disposed host leaves the shell cooked");
+});
+
 test("with no SIGINT listener the interrupt falls through to a real signal", () => {
   const listeners = process.listeners("SIGINT");
   for (const listener of listeners) process.off("SIGINT", listener as never);

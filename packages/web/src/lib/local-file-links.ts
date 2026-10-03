@@ -159,6 +159,12 @@ export function imageGalleryFor(from: Element): string[] {
   return paths
 }
 
+/** Open a file in the machine's own app for it, skipping the reader and the image viewer — the
+ *  lightbox's "Open in default viewer" (components/Lightbox.tsx). */
+export function openLocalPathExternally(path: string, project?: string): void {
+  void openExternally(path, project)
+}
+
 // The cooldown key carries the line: a second link into the same file at ANOTHER line, clicked within
 // the cooldown, is a new place to go, not a double-click to swallow (lib/externalOpen.ts).
 async function openExternally(path: string, project?: string, fallback?: () => void, position?: FilePosition) {

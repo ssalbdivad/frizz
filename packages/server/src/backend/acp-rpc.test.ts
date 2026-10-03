@@ -207,3 +207,25 @@ test("acp-rpc: every pending request settles when the agent exits", async () => 
   h.conn.process.kill("SIGKILL")
   await assert.rejects(p, (err: unknown) => err instanceof AcpConnectionClosed && /SIGKILL/.test(err.reason))
 })
+
+// Over the daemon transport stdin is a socket the daemon can hang up — it does, to the older client,
+// the moment a newer one attaches — and a write that then fails does so ASYNCHRONOUSLY, as an `error`
+// event on stdin. Nobody listened for it, so it was thrown out of the event loop and ended the server
+// (scripts/verify-daemon-socket-takeover.mjs, scenario D). It must close the connection instead.
+// Negative control: without the listener this test dies on the uncaught EPIPE.
+test("acp-rpc: a stdin write that fails asynchronously closes the connection instead of escaping", async () => {
+  const { PassThrough, Writable } = await import("node:stream")
+  const stdin = new Writable({
+    write(_chunk, _encoding, callback) {
+      setImmediate(() => callback(Object.assign(new Error("write EPIPE"), { code: "EPIPE" })))
+    },
+  })
+  const proc = {
+    stdin, stdout: new PassThrough(), stderr: new PassThrough(), pid: 1,
+    kill: () => true,
+    on() { return proc },
+  }
+  const conn = new AcpConnection(proc as never, { onRequest: async () => ({}), onNotification: () => {}, requestTimeoutMs: 5_000 })
+  await assert.rejects(conn.request("initialize", {}), (err: unknown) => err instanceof AcpConnectionClosed && /EPIPE/.test((err as Error).message))
+  assert.equal(conn.closed, true)
+})

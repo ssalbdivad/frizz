@@ -623,9 +623,16 @@ export interface ThreadQuestionRow {
   /** The structured answer as JSON — keyed by question id and restating each question's text, because
    *  the worker never saw the id. Null until the human sends, and forever on a settled-unanswered row. */
   answer: string | null
-  /** 0 until the worker has been handed the answer. Answering and DELIVERING are separate, exactly as
-   *  they are for a wake: an answer given while the worker's process was down must survive the gap. */
+  /** 0 until the worker has RECEIVED the answer — set when the wake carrying it reaches the outbox's
+   *  `delivered` state (scheduler.settleQuestionAnswers), never when the wake is merely queued.
+   *  Answering and DELIVERING are separate, exactly as they are for a wake: an answer given while the
+   *  worker's process was down must survive the gap. */
   delivered: number
+  /** The `wake_delivery` row currently carrying this settlement, or null before its first offer. Kept
+   *  after a failed delivery (exhausted or superseded) as the record of that failure, which is what
+   *  lets the scheduler re-offer the settlement rather than leave it stranded — see
+   *  scheduler.evalQuestionAnswers. Absent from a row written before 2026-10-01 (null). */
+  delivery_id: string | null
   asked_at: number
   settled_at: number | null
   /** When the worker last `keep`-ed it current; null if never. See questionRepliedPast. */
@@ -956,6 +963,12 @@ export interface Storage {
    *  because a dismissal is news the worker needs ("decide it yourself") even though it wakes nobody on
    *  its own: it rides the next answer's wake. A withdrawal is absent because the worker DID that. */
   undeliveredSettlements(): ThreadQuestionRow[]
+  /** Record which outbox row is carrying this settlement. Guarded on `delivered = 0`: a settlement the
+   *  worker already has is never re-attached to a new delivery. */
+  assignSettlementDelivery(id: string, deliveryId: string): boolean
+  /** Mark every settlement the named delivery carried as RECEIVED; the count of rows it flipped. Called
+   *  only once that delivery reached the outbox's `delivered` state. */
+  markSettlementsDeliveredBy(deliveryId: string): number
   markSettlementDelivered(id: string): boolean
   /** The worker's own `unask`, thread-scoped so one thread can never withdraw another's question. */
   withdrawThreadQuestion(slug: string, id: string, atMs: number): boolean
@@ -1488,10 +1501,13 @@ export const STORAGE_SCHEMA = `
       -- worker never saw the id -- frizz minted it -- so an id alone cannot be correlated back. Null
       -- until the human sends; null forever on a withdrawn or dismissed row.
       answer      TEXT,
-      -- Has the worker been handed this answer yet? A question is answered by the human and DELIVERED
+      -- Has the worker RECEIVED this answer yet? A question is answered by the human and DELIVERED
       -- separately, exactly as a wake is: the row must survive the gap, or an answer given while the
       -- worker's process was down is lost in the same silence the fence used to lose the question in.
+      -- Set when the carrying wake is confirmed delivered, not when it is queued (2026-10-01).
       delivered   INTEGER NOT NULL DEFAULT 0,
+      -- The wake_delivery row carrying it (ThreadQuestionRow.delivery_id). Added by ALTER on older files.
+      delivery_id TEXT,
       asked_at    INTEGER NOT NULL,
       settled_at  INTEGER,
       -- When the worker last KEPT the question current (keep) after the human typed past it — what
@@ -1632,6 +1648,10 @@ export function ensureStorageSchema(db: Database): void {
   // watcher's table, and every live file predates the column.
   for (const [table, column] of [
     ["pr_watch", "kind TEXT NOT NULL DEFAULT 'pull'"],
+    // `thread_question.delivery_id` (2026-10-01): `delivered` used to be set when the answer was QUEUED,
+    // so a wake that then failed every attempt left the answer reading delivered and nothing re-offered
+    // it. The column names the carrying wake, so `delivered` can wait for that wake to land.
+    ["thread_question", "delivery_id TEXT"],
     // `command_thread.state` (2026-09-23): a finished command queues like a rested thread and is
     // marked done the same way; the table shipped the same day without it.
     ["command_thread", "state TEXT NOT NULL DEFAULT 'open'"],
@@ -2455,6 +2475,12 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   const markSettlementDeliveredStmt = scope.prepare(
     "UPDATE thread_question SET delivered = 1 WHERE project_id = @project_id AND id = ? AND delivered = 0",
+  )
+  const assignSettlementDeliveryStmt = scope.prepare(
+    "UPDATE thread_question SET delivery_id = ? WHERE project_id = @project_id AND id = ? AND delivered = 0",
+  )
+  const markSettlementsDeliveredByStmt = scope.prepare(
+    "UPDATE thread_question SET delivered = 1 WHERE project_id = @project_id AND delivery_id = ? AND delivered = 0",
   )
   const withdrawThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'withdrawn', settled_at = ?
@@ -3294,6 +3320,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     openThreadQuestions: () => openThreadQuestionsStmt.all(),
     answerThreadQuestion: (id, answer, atMs) => answerThreadQuestionStmt.run(answer, atMs, id).changes === 1,
     undeliveredSettlements: () => undeliveredSettlementsStmt.all(),
+    assignSettlementDelivery: (id, deliveryId) => assignSettlementDeliveryStmt.run(deliveryId, id).changes === 1,
+    markSettlementsDeliveredBy: (deliveryId) => Number(markSettlementsDeliveredByStmt.run(deliveryId).changes),
     markSettlementDelivered: (id) => markSettlementDeliveredStmt.run(id).changes === 1,
     withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
     keepThreadQuestion: (slug, id, spec, atMs) => keepThreadQuestionStmt.run({ slug, id, spec: spec ?? null, atMs }).changes === 1,

@@ -195,7 +195,9 @@ try {
   let currentVersion = server.manifest.version
   if (update) {
     const api = createRpcClient(base)
-    await api.mutate("settingsSet", { ...await api.query("settingsGet"), font: "sans" })
+    // A machine-level setting with no visual effect. This was `font` until that key left Settings on
+    // 2026-09-19; the schema strips a stored `font`, so the check below failed on every update after it.
+    await api.mutate("settingsSet", { ...await api.query("settingsGet"), localFileOpener: "copy" })
     let thread, daemon
     const started = join(project, "worker-started"), finished = join(project, "worker-finished"), resumed = join(project, "worker-resumed")
     if (worker) {
@@ -230,7 +232,7 @@ try {
     assert.equal(ownerAddress().pid, owner.pid)
     assert.equal(ownerAddress().port, publicPort)
     assert.ok(alive(owner.pid))
-    assert.equal((await api.query("settingsGet")).font, "sans", "settings survive server update")
+    assert.equal((await api.query("settingsGet")).localFileOpener, "copy", "settings survive server update")
     currentVersion = update.manifest.version
     evidence.update = { status: updated, child: next, owner: ownerAddress(), selection: selected(), integrity: update.integrity }
     if (worker) {
@@ -250,7 +252,9 @@ try {
     evidence.listenerSamples = samples; assert.ok(samples > 0)
     restartRequested = false
     await page.reload({ waitUntil: "networkidle2" })
-    await page.hover('button[aria-label="Restart Frizz"]')
+    // The update installed the newest version the registry offers, so the button is in its greyed
+    // "up to date" state (1ea81aa1, 2026-09-25), not the plain "Restart Frizz" one.
+    await page.hover('button[aria-label="Frizz is up to date"]')
     await page.waitForSelector("#update-restart-popover", { visible: true })
     await until("updated version in browser", () => page.$eval("#update-restart-popover .font-mono", (el, version) => el.textContent.replace(/^Server /, "") === version, currentVersion))
     const popover = await page.$("#update-restart-popover")

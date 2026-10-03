@@ -6,6 +6,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import { mkdtempSync, writeFileSync, existsSync, unlinkSync } from "node:fs"
+import { connect } from "node:net"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { setTimeout as delay } from "node:timers/promises"
@@ -17,6 +18,7 @@ import {
   daemonCodexAppServerHost,
   killCodexAppServerDaemon,
   liveDaemonRecord,
+  readDaemonExitBreadcrumb,
   readDaemonRecord,
 } from "./codex-app-server-host.ts"
 import {
@@ -633,5 +635,83 @@ test("codex daemon: an overflowing detached queue reports its losses on the next
     third.process.kill()
   } finally {
     killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+/** The generation in the `hello` a fresh connection to `socketPath` is greeted with, or null when
+ *  nothing answers there. (Connecting is a client takeover; only call it on a daemon you own.) */
+function helloGeneration(socketPath: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const sock = connect(socketPath)
+    let buf = ""
+    const done = (value: string | null): void => { sock.destroy(); resolve(value) }
+    sock.on("data", (chunk: Buffer) => {
+      buf += chunk.toString("utf8")
+      const i = buf.indexOf("\n")
+      if (i < 0) return
+      try { done((JSON.parse(buf.slice(0, i)) as { generation?: string }).generation ?? null) } catch { done(null) }
+    })
+    sock.on("error", () => done(null))
+  })
+}
+
+const NO_UNIX_SOCKET = process.platform === "win32" && "a named pipe has no file to lose and no inode to compare"
+
+// Discoverable takes BOTH halves: the record naming this daemon, and the socket path it names still
+// leading here. A daemon whose socket FILE is gone (a successor's sweep before binding, a $TMPDIR
+// cleaner) still owns its record, yet every attach to it fails — so it used to hold its app-server for
+// the full six-hour idle expiry. Negative control: against the pre-fix daemon it never exits here.
+test("codex daemon: a recorded daemon whose socket file is gone collects itself as socket-lost", { skip: NO_UNIX_SOCKET }, async () => {
+  const h = harness()
+  const attachment = await daemonCodexAppServerHost({ ...options(h), reachabilityCheckMs: 150 })
+  const record = liveDaemonRecord(h.stateDir, PROJECT)!
+  try {
+    attachment.process.kill()
+    await delay(200)
+    assert.ok(alive(record.daemonPid), "alive while record and socket both lead to it")
+
+    unlinkSync(codexAppServerSocketPath(h.stateDir, PROJECT))
+
+    await waitForExit(record.daemonPid, 5_000, "the daemon nobody can reach")
+    await waitForExit(record.childPid, 5_000, "its app-server child")
+    assert.equal(readDaemonExitBreadcrumb(h.stateDir, PROJECT)?.reason, "self-collected-socket-lost")
+    assert.equal(readDaemonRecord(h.stateDir, PROJECT), null, "it removed its own record, so the next attach forks at once")
+  } finally {
+    killCodexAppServerDaemon(h.stateDir, PROJECT)
+  }
+})
+
+// Two daemons for one project bind ONE socket path; the second unlinks the first's file and binds its
+// own. The record-only owner check let a dying loser unlink the path whenever the record was ABSENT —
+// and every host makes it absent on purpose right before it forks (forkDaemon), on a failed attach,
+// and on stop. Whatever file the path led to by then, the successor's included, went with the loser.
+// The socket is now checked by inode. Negative control: against the pre-fix daemon the existsSync
+// below fails and nothing answers at the path.
+test("codex daemon: a loser dying while the record is absent leaves its successor's socket alone", { skip: NO_UNIX_SOCKET }, async () => {
+  const h = harness()
+  const recordFile = codexAppServerDaemonRecordPath(h.stateDir, PROJECT)
+  const socketPath = codexAppServerSocketPath(h.stateDir, PROJECT)
+  // Default reachability interval (30s): neither daemon may collect itself while the test runs, so the
+  // only thing that can touch the survivor's socket is the loser's own teardown.
+  const first = await daemonCodexAppServerHost(options(h))
+  const loser = liveDaemonRecord(h.stateDir, PROJECT)!
+  first.process.kill()
+  unlinkSync(recordFile)
+  const second = await daemonCodexAppServerHost(options(h))
+  const survivor = liveDaemonRecord(h.stateDir, PROJECT)!
+  try {
+    assert.equal(second.reattached, false)
+    assert.notEqual(survivor.daemonPid, loser.daemonPid, "two daemons for one project, one socket path")
+
+    unlinkSync(recordFile) // the window: a host about to fork has removed the record
+    process.kill(loser.daemonPid, "SIGTERM")
+    await waitForExit(loser.daemonPid, 5_000, "the loser")
+
+    assert.ok(existsSync(socketPath), "the survivor's socket file outlived the loser's teardown")
+    second.process.kill()
+    assert.equal(await helloGeneration(socketPath), survivor.generation, "and a new connection reaches the survivor")
+  } finally {
+    for (const pid of [loser.daemonPid, survivor.daemonPid]) { try { process.kill(pid, "SIGTERM") } catch {} }
+    await waitForExit(survivor.daemonPid, 5_000, "the survivor, at teardown")
   }
 })

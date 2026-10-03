@@ -6,8 +6,9 @@
 // code block stays code (see the fence tracking below). Detection happens on the raw markdown BEFORE
 // the sanitizer runs, so nothing loosens the HTML allowlist.
 
-import { ATTACHMENT_DOC_EXTENSIONS } from "@frizz/shared"
+import { ATTACHMENT_DOC_EXTENSIONS, insideFence } from "@frizz/shared"
 import { parseCodexHostDirective, type CodexHostDirective } from "./codexHostDirectives.ts"
+import { parseLightboxBody, type LightboxEntry } from "./lightbox.ts"
 
 export type ProsePart =
   | { kind: "md"; text: string }
@@ -16,6 +17,7 @@ export type ProsePart =
   | { kind: "visualization"; file: string }
   | { kind: "directive"; directive: CodexHostDirective }
   | { kind: "mermaid"; source: string }
+  | { kind: "lightbox"; entries: LightboxEntry[] }
 
 // Path characters: any non-whitespace/non-backtick, plus a literal space when NOT followed by "/".
 // Paths with spaces are real and common — macOS screenshots ("Screen Shot … at 1.23.45 PM.png"),
@@ -33,11 +35,15 @@ const IMAGE_LINE = new RegExp(String.raw`^\s*\`?(/${PATH_CHARS}\.(?:png|jpe?g|gi
 // is NOT already an image line.
 const DOC_LINE = new RegExp(String.raw`^\s*\`?(/${PATH_CHARS}\.(?:${ATTACHMENT_DOC_EXTENSIONS.join("|")}))\`?\s*$`, "i")
 // A fenced-code delimiter line: ``` or ~~~ (3+), optionally indented, optionally with an info string.
-// Toggling on each such line keeps a standalone absolute path that lives INSIDE a code block (an agent
-// pasting `ls`/`git`/`tree` output is common) as ordinary code, instead of ripping it into a chip and
-// orphaning the fence markers.
+// A standalone absolute path that lives INSIDE a code block (an agent pasting `ls`/`git`/`tree` output
+// is common) stays ordinary code, instead of being ripped into a chip that orphans the fence markers.
+// The composer's splitter finds those blocks by toggling on each such line; the prose splitter asks
+// @frizz/shared's CommonMark scanner instead (see splitProseAttachments).
 const FENCE_LINE = /^\s{0,3}(?:```|~~~)/
-const MERMAID_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*mermaid\s*$/i
+// A fence whose language the transcript draws as something other than code: a ```mermaid diagram, or a
+// ```lightbox gallery of the image paths it lists (lib/lightbox.ts). Only a CLOSED fence is taken; an
+// unterminated one stays Markdown and renders as the code block it is until its closing line arrives.
+const RICH_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*(mermaid|lightbox)\s*$/i
 // Codex's Visualize skill emits one host directive whose basename resolves inside the owning
 // thread's `.codex/visualizations/YYYY/MM/DD/<session-id>/` directory. Keep the grammar exact:
 // arbitrary attributes, paths, uppercase names, and inline occurrences remain ordinary prose.
@@ -47,7 +53,18 @@ export function splitProseAttachments(md: string): ProsePart[] {
   const lines = md.split("\n")
   const parts: ProsePart[] = []
   let buf: string[] = []
-  let inFence = false
+  // Which lines sit INSIDE a fenced code block, by CommonMark's rules (@frizz/shared code-fences): a
+  // fence closes only on a bare run of its own character at least as long as its opener. A toggle on
+  // every ``` line got that wrong exactly when it mattered — a worker quoting a ```lightbox or ```mermaid
+  // sample inside a ```` block had the sample's inner ``` read as the CLOSE, so its image paths were
+  // peeled out as live pictures and the rest of the message was read inside out.
+  const quoted = insideFence(md)
+  const starts: number[] = []
+  let offset = 0
+  for (const line of lines) {
+    starts.push(offset)
+    offset += line.length + 1
+  }
   const flush = () => {
     if (buf.length) {
       const text = buf.join("\n")
@@ -57,26 +74,32 @@ export function splitProseAttachments(md: string): ProsePart[] {
   }
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i]
-    if (!inFence) {
-      const opener = line.match(MERMAID_FENCE)?.[1]
-      if (opener) {
-        const close = new RegExp(`^\\s{0,3}${opener[0] === "`" ? "`" : "~"}{${opener.length},}\\s*$`)
-        let end = i + 1
-        while (end < lines.length && !close.test(lines[end])) end++
-        if (end < lines.length) {
-          flush()
-          parts.push({ kind: "mermaid", source: lines.slice(i + 1, end).join("\n") })
-          i = end
-          continue
-        }
-      }
-    }
-    if (FENCE_LINE.test(line)) {
-      inFence = !inFence
+    if (quoted(starts[i])) {
       buf.push(line)
       continue
     }
-    if (inFence) {
+    const rich = line.match(RICH_FENCE)
+    if (rich) {
+      const opener = rich[1]
+      const close = new RegExp(`^\\s{0,3}${opener[0] === "`" ? "`" : "~"}{${opener.length},}\\s*$`)
+      let end = i + 1
+      while (end < lines.length && !close.test(lines[end])) end++
+      if (end < lines.length) {
+        flush()
+        const body = lines.slice(i + 1, end).join("\n")
+        if (rich[2].toLowerCase() === "mermaid") parts.push({ kind: "mermaid", source: body })
+        else {
+          // An empty gallery has nothing to draw, so the fence goes with it rather than leaving an
+          // empty frame (and the spacer either side of it) in the transcript.
+          const entries = parseLightboxBody(body)
+          if (entries.length > 0) parts.push({ kind: "lightbox", entries })
+        }
+        i = end
+        continue
+      }
+    }
+    // An opening or closing fence line: code-block syntax, never a path of its own.
+    if (FENCE_LINE.test(line)) {
       buf.push(line)
       continue
     }

@@ -60,8 +60,8 @@ import {
   type ClaudeAgentBrokerBridge,
 } from "./backend/claude-agent-broker-bridge.ts"
 import { createClaudeRuntimeIngest, type ClaudeRuntimeIngest } from "./backend/claude-runtime-ingest.ts"
-import { describeClaudeBrokerDiagnostic, droppedDeliveryId } from "./backend/claude-broker-diagnostics.ts"
-import { cancelDelivery } from "./delivery-ledger.ts"
+import { describeClaudeBrokerDiagnostic, droppedDeliveryId, droppedDeliveryReason } from "./backend/claude-broker-diagnostics.ts"
+import { recordDeliveryDropped } from "./delivery-ledger.ts"
 import {
   ADOPTION_RECONCILE_INTERVAL_MS,
   adoptionRuntimeBinding,
@@ -875,13 +875,18 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           // message has already left the queue", which is exactly backwards (maintainer 2026-08-05: "If
           // they've been dequeued and swallowed, then they shouldn't be showing up in the fucking UI").
           //
-          // Tombstoning is SAFE here for the very reason the unqueue path is otherwise careful: the whole
-          // content of this diagnostic is the provider stating it never received the message, so there is
-          // no chance of hiding words the agent is about to read. cancelDelivery also drops the orphaned
-          // JSONL enqueue bubble, and hands the text back for a re-send.
+          // …and retiring it must not make the message VANISH, which is what this did until 2026-10-01: it
+          // tombstoned the row (`cancelled`), the state for an operator's deliberate unqueue, which keeps the
+          // text in the row and renders nothing. The operator's words simply disappeared from the thread.
+          // A drop is a send the operator still wants and the agent never got — `failed`, with the text on
+          // screen and Retry / Edit / Dismiss under it, exactly like a send whose transport threw. The
+          // `dropped` mark keeps a later JSONL record with the same words from re-queueing it (see
+          // recordDeliveryDropped). Push the transcript frame too: the ledger is not JSONL bytes, so no
+          // tailer tick would carry this change to an open tab.
           const dropped = droppedDeliveryId(diagnostic)
-          if (dropped) {
-            cancelDelivery(storage, slug, dropped)
+          if (dropped && recordDeliveryDropped(storage, slug, dropped, droppedDeliveryReason(diagnostic))) {
+            frizzLog.warn("broker", `claude broker ${slug}: follow-up ${dropped} was dropped by the daemon and is kept for the operator`)
+            transcriptChange.emit([slug])
             resources.board?.refresh()
           }
         },

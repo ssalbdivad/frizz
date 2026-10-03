@@ -199,7 +199,9 @@ export function killCodexAppServerDaemon(stateDir: string, projectId: string): v
  * The wait is not politeness, it is correctness: a dying daemon's exit handler unlinks the record
  * and the socket, and both paths are DERIVED (same stateDir + projectId ⇒ same paths). Fork a
  * replacement before the old one finishes dying and the corpse deletes the new daemon's socket and
- * record on its way out, leaving a daemon nobody can ever find.
+ * record on its way out, leaving a daemon nobody can ever find. (A daemon forked by a current build
+ * checks the socket by inode and no longer does — socket-ownership.ts — but one forked by an older
+ * build can outlive an update, and the native listener is codex's own process; so the wait stays.)
  *
  * It covers BOTH transports because the bridge has no idea which one is in play, and neither stale
  * state is the daemon's alone. The native listener (FRIZZ_CODEX_NATIVE_LISTEN,

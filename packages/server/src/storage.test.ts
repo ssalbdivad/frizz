@@ -1422,6 +1422,46 @@ test("the batched registry reads answer exactly what the per-thread reads answer
   s.close()
 })
 
+// ---- thread_question.delivery_id (2026-10-01) ---------------------------------------------------------
+// `delivered` used to flip when the answer was QUEUED, so a wake that then failed every attempt left the
+// answer reading delivered and nothing re-offered it. The row now names the wake carrying it, and only
+// that wake landing flips `delivered` (scheduler.evalQuestionAnswers).
+test("thread_question.delivery_id: a pre-column file is migrated, and only the carrying wake marks a settlement received", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-qdeliv-"))
+  const path = join(dir, "ui.db")
+  try {
+    // THE FILE EVERY LIVE INSTALL HAS, built from the real DDL with the one line stripped, so the ALTER
+    // in ensureStorageSchema is what must add it back.
+    const pre = new Database(path)
+    const stripped = STORAGE_SCHEMA.replace(/^\s*delivery_id\s+TEXT,\n/m, "")
+    assert.notEqual(stripped, STORAGE_SCHEMA, "the strip found the column line (keep this regex with the DDL)")
+    pre.exec(stripped)
+    pre.prepare("INSERT INTO thread_question (project_id, id, thread_slug, spec, state, answer, delivered, asked_at, settled_at) VALUES ('p', 'q_old', 't', '{}', 'answered', '{}', 0, 1, 2)").run()
+    pre.close()
+    const s = createStorage(path, "p")
+    try {
+      assert.equal(s.getThreadQuestion("q_old")?.delivery_id, null, "an old row reads as never offered")
+      s.askThreadQuestion({ id: "q_new", slug: "t", spec: "{}", askedAtMs: 3 })
+      s.answerThreadQuestion("q_new", "{}", 4)
+      assert.equal(s.assignSettlementDelivery("q_old", "wd_a"), true)
+      assert.equal(s.assignSettlementDelivery("q_new", "wd_b"), true)
+      // Only the named wake's settlements flip.
+      assert.equal(s.markSettlementsDeliveredBy("wd_a"), 1)
+      assert.equal(s.getThreadQuestion("q_old")?.delivered, 1)
+      assert.equal(s.getThreadQuestion("q_new")?.delivered, 0)
+      assert.equal(s.markSettlementsDeliveredBy("wd_a"), 0, "and only once")
+      // A settlement the worker already has is never re-attached to a new delivery.
+      assert.equal(s.assignSettlementDelivery("q_old", "wd_c"), false)
+      assert.equal(s.getThreadQuestion("q_old")?.delivery_id, "wd_a")
+      assert.deepEqual(s.undeliveredSettlements().map((q) => [q.id, q.delivery_id]), [["q_new", "wd_b"]])
+    } finally {
+      s.close()
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // ---- pr_watch.kind (2026-09-14) -----------------------------------------------------------------------
 test("pr_watch.kind: an issue watcher stores its kind, an older caller means pull, and a pre-column file is migrated", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-kind-"))

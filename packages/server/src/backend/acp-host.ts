@@ -148,7 +148,9 @@ export function liveAcpDaemonSessionIds(stateDir: string): string[] {
  * End the daemon AND its agent, and WAIT for it to actually be gone. Only for an explicit teardown —
  * never for a restart. The wait is correctness, not politeness: a dying daemon unlinks its record and
  * socket, both DERIVED from (stateDir, sessionId), so a replacement forked before the corpse finishes
- * dying would have its own paths deleted from under it.
+ * dying would have its own paths deleted from under it. (A daemon forked by a current build checks the
+ * socket by inode and spares a successor's — socket-ownership.ts — but one forked by an older build can
+ * outlive an update, so the wait stays.)
  */
 export async function stopAcpDaemon(stateDir: string, sessionId: string, timeoutMs = 10_000): Promise<void> {
   const record = liveAcpDaemonRecord(stateDir, sessionId)

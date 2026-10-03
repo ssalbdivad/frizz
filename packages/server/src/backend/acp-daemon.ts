@@ -34,6 +34,7 @@ import { dirname } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { sweepStaleSockets } from "./stale-socket-sweep.ts"
 import { daemonBirthMarker } from "./daemon-identity.ts"
+import { socketPathOwnership } from "./socket-ownership.ts"
 
 interface DaemonConfig {
   threadSlug: string
@@ -115,6 +116,9 @@ function main(): void {
   let dropped = 0
   let idleTimer: NodeJS.Timeout | null = null
   let published = false
+  // Whether the socket PATH still leads to the socket this daemon bound — by inode, not by name, since
+  // every daemon for this session binds the same path (socket-ownership.ts). "Ours" until listen.
+  let socketPathIsOurs: () => boolean = () => true
 
   /** The pid the record file currently names, or null when there is no readable record. */
   const recordOwner = (): number | null => {
@@ -133,7 +137,10 @@ function main(): void {
     const owner = recordOwner()
     if (owner === process.pid) { try { unlinkSync(config.recordPath) } catch {} }
     if (published && owner !== null && owner !== process.pid) return
-    if (published && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
+    // The socket is checked by inode too: the record is ABSENT exactly while a host forks a successor
+    // (forkDaemon unlinks it first), and "no owner" is not "mine". Never `server.close()` here either —
+    // libuv unlinks a unix socket's path by name on close. See codex-app-server-daemon.ts's cleanup.
+    if (published && process.platform !== "win32" && socketPathIsOurs()) { try { unlinkSync(config.socketPath) } catch {} }
   }
 
   // Why this daemon — and the agent + every turn inside it — is about to end. The bridge only ever SEES
@@ -160,16 +167,18 @@ function main(): void {
   }
 
   // ---- self-collection (see codex-app-server-daemon.ts for the full reasoning) ------------------
-  // Discoverable only through the record file; a daemon whose record vanished or names a successor can
-  // never be attached to again. Gated on being UNATTACHED, so the restart window — record untouched —
-  // is invisible to it, and two strikes so one unlucky stat cannot end a turn.
+  // Discoverable only through the record file AND the socket path it names; a daemon whose record
+  // vanished or names a successor, or whose socket file is gone, can never be attached to again.
+  // Gated on being UNATTACHED, so the restart window — record and socket untouched — is invisible to
+  // it, and two strikes so one unlucky stat cannot end a turn.
   let unreachableStrikes = 0
   const checkReachable = (): void => {
     if (client) { unreachableStrikes = 0; return }
-    if (recordOwner() === process.pid) { unreachableStrikes = 0; return }
+    const recorded = recordOwner() === process.pid
+    if (recorded && socketPathIsOurs()) { unreachableStrikes = 0; return }
     if (++unreachableStrikes < REACHABILITY_STRIKES) return
     try { child.kill("SIGTERM") } catch {}
-    die(0, "self-collected-record-reassigned")
+    die(0, recorded ? "self-collected-socket-lost" : "self-collected-record-reassigned")
   }
 
   // ---- child -> client ----------------------------------------------------------------------------
@@ -323,6 +332,7 @@ function main(): void {
     server.on("error", () => die(6, "socket-listen-error"))
     server.listen(config.socketPath, () => {
       published = true
+      socketPathIsOurs = socketPathOwnership(config.socketPath)
       writeRecord()
       armIdleExit()
       const reachability = setInterval(checkReachable, config.reachabilityCheckMs ?? REACHABILITY_CHECK_MS)

@@ -118,6 +118,15 @@ export class AcpConnection {
         resolve({ code: null, signal: null })
       })
     })
+    // A write the far end will never read — the agent exited, or (over the daemon transport) the
+    // daemon hung this socket up, which it does to the older client the moment a newer one attaches —
+    // fails ASYNCHRONOUSLY, as an `error` event on stdin (EPIPE), after `write()` has returned. An
+    // `error` event nobody listens for is thrown out of the event loop, and that ends the server: two
+    // concurrent opens of one ACP session did exactly that (scripts/verify-daemon-socket-takeover.mjs,
+    // scenario D, before acp-bridge.ts's `openOnce`). The codex transport has always listened
+    // (codex-app-server.ts `JsonlRpcConnection`). A broken stdin is a closed connection: fail the
+    // waiters now; the exit event follows.
+    process.stdin?.on("error", (err: Error) => this.settleClosed(`stdin: ${err.message}`))
     process.stdout?.on("data", (chunk: Buffer | string) => {
       this.buffer += typeof chunk === "string" ? chunk : this.decoder.write(chunk)
       let nl: number

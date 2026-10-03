@@ -476,11 +476,21 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     //
     // The RULE is pinned, not the sentence it was written in. It read "ALWAYS SIGN OFF WITH A FENCE"
     // until 2026-08-27, when a fence stopped being the only way to say it: `done`, `ask` and `watch`
-    // each record a row frizz reads as a sign-off and will not bump for (scheduler SOURCE 9 again). The
+    // each recorded a row frizz read as a sign-off and would not bump for (scheduler SOURCE 9 again). The
     // instruction that must survive is "always sign off", plus the fact that a registration is one.
+    //
+    // `watch` LEFT THAT LIST ON 2026-10-01. A registration says when the worker wakes; whether the human
+    // is needed meanwhile is the fence's `needs_input:` answer, so a rest on running work always takes
+    // the fence (board.needsInputQueues, scheduler evalSignoffNudges).
     assert.match(c, /ALWAYS SIGN OFF/)
     assert.doesNotMatch(c, /ALWAYS SIGN OFF WITH A FENCE/, "a fence is no longer the only way to sign off")
-    assert.match(c, /mcp__frizz__done[\s\S]{0,200}frizz reads all three as a sign-off/)
+    assert.match(c, /mcp__frizz__done` and `mcp__frizz__ask` each record a ROW, and frizz reads both as a sign-off/)
+    assert.doesNotMatch(c, /frizz reads all three as a sign-off/, "a watch alone is no longer a sign-off")
+    assert.match(c, /A WAIT IS THE ONE EXCEPTION, and it always takes the fence/)
+    assert.match(c, /`needs_input:` — REQUIRED, `true` or `false`/)
+    // A rest the human is not queued to read owes them nothing to read (maintainer 2026-10-01).
+    assert.match(c, /A QUIET PARK NEEDS NO WRITE-UP/)
+    assert.doesNotMatch(c, /parks you on its own/, "a live sub-agent no longer parks the thread by itself")
     assert.match(c, /bare rest[\s\S]{0,90}item nobody can triage/i) // the window widened when "no fence" became "nothing said about where you stand"
     assert.doesNotMatch(c, /bare rest[^.]*ordinary handoff/i)
     // Still says WHERE a fenceless rest lands — the worker has to know the cost of not signing off.

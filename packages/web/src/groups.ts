@@ -442,11 +442,12 @@ export function parkedAwaitingHint(_hints: readonly AwaitingHint[], _nowMs = Dat
 // the parent's indicator speaks for the parent. A queued row therefore sits in the rested band AND
 // reads as rested.
 //
-// SINCE 2026-07-30 the live-SUB-AGENT case no longer reaches here at all: the server now excuses such a
-// thread from the queue entirely (board.deriveNeedsYou), so `needsYou` is false and the row keeps its
-// spinner in the running band — which is the point, since a row that never leaves that band never
-// churns between the two. The maintainer's ellipsis rule was scoped to a row that "shows up in the
-// queue", and one that no longer does has no reason to change appearance on resting.
+// From 2026-07-30 the live-SUB-AGENT case did not reach here at all: the server excused such a thread
+// from the queue entirely (board.deriveNeedsYou), so `needsYou` was false and the row kept its spinner in
+// the running band. That still holds for a thread dispatched before the `needs_input:` cut, and for a
+// later one whose fence answers `needs_input: false`. It reaches here AGAIN (2026-10-01) for a worker that
+// answers `true` with a child still out, or rests on one with no fence: it asked for the human, so it
+// sits in the rested band with this ellipsis, and the child keeps its own spinner on its indented row.
 //
 // Still load-bearing for the EXITED parent whose children keep reading "running" until their transcript
 // goes stale. Without this it would resolve to "working" and hide the [!] stall mark behind a spinner

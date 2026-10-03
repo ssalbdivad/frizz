@@ -23,7 +23,7 @@
 // exit, reachability self-collection). The recovered session-broker daemon's NAIVE unconditional
 // cleanup is exactly the corpse-deletes-successor bug this guards against.
 import net from "node:net"
-import { readFileSync, realpathSync, statSync, unlinkSync, writeFileSync } from "node:fs"
+import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
 import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
@@ -32,6 +32,7 @@ import { leaseRuntime } from "../runtime-lease.ts"
 import { daemonBirthMarker } from "./daemon-identity.ts"
 import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
 import { WORKER_DISALLOWED_TOOLS, claudeCompactionWindowOf } from "./types.ts"
+import { socketPathOwnership } from "./socket-ownership.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_CANCEL_INPUT, CLAUDE_BROKER_CAPABILITY_INPUT_ACK, CLAUDE_BROKER_CAPABILITY_LIST_SKILLS, CLAUDE_BROKER_CAPABILITY_RELOAD_PLUGINS, CLAUDE_BROKER_CAPABILITY_RENAME, CLAUDE_BROKER_CAPABILITY_STOP_TASK, CLAUDE_BROKER_CAPABILITY_SUBAGENT_STEER, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX } from "./claude-agent-sdk-protocol.ts"
 import type {
@@ -320,10 +321,12 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     (error) => shutdown(0, "event-pump-failed", error instanceof Error ? error.message : String(error)),
   )
 
-  // `closed` guards the re-arm: shutdown() clears this timer and THEN destroys the client, whose async
-  // "close" handler lands here. Unguarded, that re-armed a fresh 6h timer on a dead broker — invisible
-  // in the standalone daemon (process.exit follows) but it held an in-process host's event loop open
-  // for 6h, which is how `claude-agent-broker.test.ts` hung a `nub --test` run for hours.
+  // Never once shut down. shutdown() clears this timer and then destroys the attached client, and that
+  // socket's 'close' lands a tick LATER — its handler below nulls `client` and calls back in here. Without
+  // the `closed` check that re-armed a fresh, REF'D six-hour timer on a daemon already torn down. The
+  // standalone daemon exits straight past it, but the embedded form (every broker in the tests) has no
+  // exit: each such timer held the test process open, so claude-agent-broker.test.ts passed every test
+  // and then never exited (measured 2026-10-01: twelve live `armIdle` timers once the last test ended).
   const armIdle = () => { if (client || closed) return; clearTimeout(idleTimer); idleTimer = setTimeout(() => shutdown(0, "idle-timeout"), IDLE_EXIT_MS) }
 
   const server = net.createServer((sock) => {
@@ -377,11 +380,11 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
             const detail = error instanceof Error ? error.message : String(error)
             if (requestId) write(sock, { t: "input-result", requestId, error: detail })
             // NAME THE MESSAGE. The prefix alone told frizz that *something* was thrown away, which is
-            // one grep better than silence but still leaves the ledger unable to act: it cannot tombstone
+            // one grep better than silence but still leaves the ledger unable to act: it cannot act on
             // a row it cannot identify, so a refused send sat at `enqueued` for the full hour
             // `ageDeliveries` grants a queue entry — pretending to be held by a daemon that had in fact
             // refused it. The id is the DELIVERY id frizz opened the ledger row under, so carrying it here
-            // is what lets the server retire exactly that row and hand the operator their text back.
+            // is what lets the server mark exactly that row failed, its text on screen for a retry.
             // Ids only, never the text — same rule as the `input received` line above.
             const droppedId = typeof message?.id === "string" ? ` id=${message.id}` : ""
             const diagnostic = { kind: "stderr" as const, message: `${CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX}:${droppedId} ${detail}`, truncated: false }
@@ -472,19 +475,12 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     sock.on("error", () => {})
   })
 
-  // WHICH socket file this daemon bound, by identity rather than by name. The name is shared: every
-  // daemon ever forked for this session binds the same path, and a second one unlinks the first's file
-  // before binding its own (see the sweep before `listen` below). So "the path exists" says nothing
-  // about whether it still leads HERE — only the inode does. Null until listen succeeds, and on Windows,
-  // where a named pipe has no inode to compare and nothing unlinks it by name.
-  let socketIdentity: { dev: number; ino: number } | null = null
-  const socketPathIsOurs = (): boolean => {
-    if (!socketIdentity) return true // unknown ⇒ the pre-identity behaviour, which assumed ours
-    try {
-      const now = statSync(config.socketPath)
-      return now.dev === socketIdentity.dev && now.ino === socketIdentity.ino
-    } catch { return false } // deleted: nothing leads here any more
-  }
+  // WHICH socket file this daemon bound, by identity rather than by name (socket-ownership.ts, shared
+  // with the codex and ACP daemons). The name is shared: every daemon ever forked for this session binds
+  // the same path, and a second one unlinks the first's file before binding its own (see the sweep
+  // before `listen` below). Answers "ours" until listen succeeds — unknown ⇒ the pre-identity
+  // behaviour, which assumed ours — and always on Windows, where nothing unlinks a pipe by name.
+  let socketPathIsOurs: () => boolean = () => true
 
   const recordOwner = (): number | null => {
     if (!config.recordPath) return null
@@ -562,9 +558,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
   try { unlinkSync(config.socketPath) } catch {} // sweep a stale unix socket before binding
   server.listen(config.socketPath, () => {
     published = true
-    if (process.platform !== "win32") {
-      try { const bound = statSync(config.socketPath); socketIdentity = { dev: bound.dev, ino: bound.ino } } catch {}
-    }
+    socketPathIsOurs = socketPathOwnership(config.socketPath)
     if (config.recordPath) {
       const processStart = daemonBirthMarker() // see daemon-identity.ts
       const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv), ...(processStart ? { processStart } : {}) }

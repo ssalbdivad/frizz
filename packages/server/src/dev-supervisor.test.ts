@@ -86,6 +86,12 @@ test("dev supervisor classifies runtime and launcher/config changes without touc
     "child",
     "custom roots classify against their own workspace rather than the source checkout",
   )
+  // The ignore list names directories INSIDE a checkout, never the path TO one: a worktree in
+  // ~/.cache/… is still source. Judged on the absolute path, every file in it was dropped.
+  const cachedRoot = join(tmpdir(), ".cache", "frizz-worktree")
+  assert.equal(classifyDevChange(join(cachedRoot, "packages", "server", "src", "router.ts"), [cachedRoot]), "child")
+  assert.equal(classifyDevChange(join(cachedRoot, "src", "index.ts"), [cachedRoot]), "launcher")
+  assert.equal(classifyDevChange(join(cachedRoot, "packages", "server", "src", ".cache", "generated.ts"), [cachedRoot]), null)
 })
 
 test("dev child inherits the complete environment and adds only the child markers", () => {
@@ -1279,6 +1285,7 @@ test("the foreground launcher is told when the board restarts, recovers, and fai
   const port = await freeSupervisorPort()
   const activity: SupervisorActivity[] = []
   let usableEntry = true
+  let childExits = 0
   let supervisor: DevSupervisor | undefined
   try {
     supervisor = await startDevSupervisor({
@@ -1295,11 +1302,13 @@ test("the foreground launcher is told when the board restarts, recovers, and fai
       log: () => {},
       error: () => {},
       onActivity: (event) => activity.push(event),
+      onChildExit: () => { childExits += 1 },
     })
     const first = await supervisor.firstBoot
     // The boot readout is still painting its own region here, and a beat written into it would be
     // erased by the next repaint. Nothing is announced until there is something to announce.
     assert.equal(activity.length, 0, "the first boot is the readout's story, not a lifecycle beat")
+    assert.equal(childExits, 0)
 
     const restart = await fetch(`http://127.0.0.1:${port}/_frizz/control/restart`, {
       method: "POST",
@@ -1311,6 +1320,9 @@ test("the foreground launcher is told when the board restarts, recovers, and fai
     assert.deepEqual(activity.map((event) => event.kind), ["restarting", "ready"])
     assert.match(activity[0]!.message, /requested from browser/)
     assert.ok(typeof activity[1]!.ms === "number", "the closing beat carries the restart's duration")
+    // The launcher reclaims its raw-mode terminal on every child exit, because the exiting child hands
+    // the terminal back as it found it at its fork (PaneHost.reclaim).
+    assert.equal(childExits, 1, "the replaced child's exit is reported")
 
     activity.length = 0
     usableEntry = false
@@ -1322,6 +1334,8 @@ test("the foreground launcher is told when the board restarts, recovers, and fai
     const reported = activity.filter((event) => event.kind === "failed")
     assert.equal(reported.length, 1, "a failure written twice reaches the terminal once")
     assert.match(reported[0]!.message, /failed manifest verification/)
+    await supervisor.close()
+    assert.equal(childExits, 2, "a stop reports the last child's exit too")
   } finally {
     await supervisor?.close()
     owner.release()

@@ -2411,7 +2411,7 @@ test("a registered question does NOT degrade a running thread to turn-idle", () 
 // 2026-08-27). This is what fills it, and its whole subtlety is WHEN IT STOPS.
 
 const askedRow = (over: Partial<ThreadQuestionRow> = {}): ThreadQuestionRow => ({
-  id: "qst_1", thread_slug: "t", state: "answered", delivered: 0, asked_at: 1000, settled_at: 2000, kept_at: null,
+  id: "qst_1", thread_slug: "t", state: "answered", delivered: 0, delivery_id: null, asked_at: 1000, settled_at: 2000, kept_at: null,
   spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question", options: [{ label: "SQLite" }] }),
   answer: JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }),
   ...over,
@@ -2427,10 +2427,11 @@ test("an answered row in flight composes the exact message the delivery will car
 })
 
 test("the WORKER RECEIVING it spends it — not the outbox claiming it", () => {
-  // `delivered` is set at ENQUEUE, a whole delivery ahead of the transcript, so keying on it would
-  // reopen the same hole a second wide. The newest user record is the honest test: frizz's delivery IS
-  // a user record, so the moment the worker has it, the card the transcript draws takes over.
-  assert.ok(answersInFlight([askedRow({ delivered: 1 })], new Date(1999).toISOString()), "enqueued is not received")
+  // `delivered` is the OUTBOX's verdict — it can flip on the daemon's acknowledgement, before the
+  // transcript has the record — so keying on it would reopen the same hole a moment wide. The newest
+  // user record is the honest test: frizz's delivery IS a user record, so the moment the worker has it,
+  // the card the transcript draws takes over.
+  assert.ok(answersInFlight([askedRow({ delivered: 1 })], new Date(1999).toISOString()), "acknowledged is not on screen")
   assert.equal(answersInFlight([askedRow()], new Date(2000).toISOString()), undefined, "the record landed")
   assert.equal(answersInFlight([askedRow()], new Date(9000).toISOString()), undefined, "…and stays spent")
 })
@@ -2477,7 +2478,7 @@ test("one unreadable row never blanks the card the others earned", () => {
 test("answerAwaitingDelivery: an answer the worker has not received excuses the thread, for a bounded window", () => {
   const settled = 2000
   assert.equal(answerAwaitingDelivery([askedRow()], undefined, settled + 1), true)
-  assert.equal(answerAwaitingDelivery([askedRow({ delivered: 1 })], new Date(1999).toISOString(), settled + 1), true, "enqueued is not received")
+  assert.equal(answerAwaitingDelivery([askedRow({ delivered: 1 })], new Date(1999).toISOString(), settled + 1), true, "acknowledged is not on screen")
   assert.equal(answerAwaitingDelivery([askedRow()], new Date(settled).toISOString(), settled + 1), false, "the record landed")
   // THE CAP: a wake the outbox exhausts never lands, and the thread must come back to the queue rather
   // than sit out of it forever, answered and unwoken.

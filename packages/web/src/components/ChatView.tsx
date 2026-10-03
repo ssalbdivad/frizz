@@ -2,6 +2,7 @@ import { createContext, memo, useCallback, useContext, useEffect, useId, useLayo
 import { createPortal } from "react-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
+import { useSnapshot } from "valtio"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
 import { parseRecurringPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
@@ -115,6 +116,7 @@ import { buildVirtualTranscriptMessageRows, earlierLoadGate, nextTailFollow, TAI
 import { withoutRedundantRestDividers } from "../lib/restDividers.ts"
 import { coalesceToolActivityMessages, editedFileCount, historicalToolActivityMessages, isPictureTool, isSettledAsk, isToolActivityException, liveRuntimeStartedAt, liveToolActivityRun, liveToolActivityTail, settledToolActivityLabel, thinkingToolActivityLabel, toolActivityLabel, toolActivityStampAt } from "../lib/toolActivity.ts"
 import { CodexDirectiveCard, MermaidDiagram } from "./CodexRichOutput.tsx"
+import { LightboxGallery } from "./Lightbox.tsx"
 import { META_CARD_STEP, PICTURE_STEP, STEP, USER_TAIL_EXTRA, VSpace } from "./rhythm.tsx"
 import { SpinoffButton, SpinoffCard, SpinoffOf, SpinoffOriginCard } from "./Spinoff.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
@@ -214,6 +216,11 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const phone = useIsMobile() && onClose !== undefined
+  // THE RAIL IS BESIDE THIS THREAD — the /full page's own column (`showReturnToQueue` is passed by
+  // StandaloneThreadPage alone), at a width that draws its side pane. `splitFileViewer` is that width:
+  // the page sets it off the same SPLIT_MIN_PX the `split:` variant shows the pane at. A thread opened
+  // in a drawer over /full is not the rail's thread, so it keeps its own ops strip.
+  const { splitFileViewer } = useSnapshot(store)
   return (
     <div className="flex-1 min-h-0 flex flex-col">
       {phone ? (
@@ -226,7 +233,7 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
           CheckoutBaseContext). */}
       <MentionIndexProvider>
         <CheckoutBaseContext.Provider value={thread?.checkout?.dir ?? null}>
-          <ChatView slug={slug} virtualized={virtualized} phone={phone} />
+          <ChatView slug={slug} virtualized={virtualized} phone={phone} railBeside={showReturnToQueue && splitFileViewer} />
         </CheckoutBaseContext.Provider>
       </MentionIndexProvider>
       {thread && !phone && <ThreadLifecycleFooter thread={thread} sticky safeArea onArchived={onStatusApplied} />}
@@ -234,7 +241,7 @@ export function ThreadView({ slug, onStatusApplied, onClose, virtualized = false
   )
 }
 
-function ChatView({ slug, virtualized, phone = false }: { slug: string; virtualized: boolean; phone?: boolean }) {
+function ChatView({ slug, virtualized, phone = false, railBeside = false }: { slug: string; virtualized: boolean; phone?: boolean; railBeside?: boolean }) {
   const board = useBoard()
   // The same just-sent overlay the rail rows wear (lib/steering.ts): a reply sets the thread to work the
   // instant it is committed, so the tail's rest card (a registered done, the rested card, a resting
@@ -657,7 +664,11 @@ function ChatView({ slug, virtualized, phone = false }: { slug: string; virtuali
           onTerminal={copyTerminalCommand}
           // The phone draws no ops rows under the prompt (mockup v2 §2): a sub-agent is already a row
           // in the transcript and on the board, and the registered files and links are the ⋯ sheet's.
-          ops={phone ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
+          // Nor does /full while its rail stands beside the column (maintainer 2026-10-02: "in the full
+          // screen view we don't need to show … the active shells and subagents and all of that beneath
+          // the prompt box anymore 'cause it's already showing up in the sidebar to the right"). The
+          // rail (FocusRail) lists every row this strip would, its saved links and Codex shells included.
+          ops={phone || railBeside ? undefined : <BackgroundOpsStrip slug={slug} transcriptShells={liveTranscriptShells} className="px-1 pt-1.5" />}
           phoneBarOverride={phone && openQuestions.length > 0
             ? (api) => <PhoneAnswerBar count={openQuestions.length} onAnswer={() => setAnswerSheetOpen(true)} onReply={api.editReply} />
             : undefined}
@@ -3706,6 +3717,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
               : p.kind === "visualization" ? <InlineVisualization key={partKey} file={p.file} />
               : p.kind === "directive" ? <CodexDirectiveCard key={partKey} directive={p.directive} />
               : p.kind === "mermaid" ? <MermaidDiagram key={partKey} source={p.source} />
+              : p.kind === "lightbox" ? <LightboxGallery key={partKey} entries={p.entries} />
               : <ProseHtml key={partKey} md={p.text} wrap={dense} />,
             )
           }
@@ -4323,6 +4335,7 @@ export function PermPolicyDenialCard({ policy, denies }: { policy: NonNullable<T
 // position under the composer reads as ambient status rather than transcript content). A 30s tick keeps
 // elapsed fresh even when no board push arrives (a steadily-running op changes nothing to re-push).
 // Saved links/files follow their own divider; they keep the strip visible without starting that tick.
+// The /full page draws none of it while its rail is on screen: the rail carries the same rows.
 export function BackgroundOpsStrip({
   slug,
   className = "px-4 pb-2 pt-1",

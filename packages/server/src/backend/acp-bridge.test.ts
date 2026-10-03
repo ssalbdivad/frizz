@@ -7,7 +7,7 @@ import { fileURLToPath } from "node:url"
 import Database from "../sqlite.ts"
 import { createInteractionStore, type InteractionStore } from "../interaction-store.ts"
 import { createAcpBridge, type AcpBridge } from "./acp-bridge.ts"
-import { liveAcpDaemonRecord, liveAcpDaemonSessionIds, stopAcpDaemon } from "./acp-host.ts"
+import { daemonAcpHost, liveAcpDaemonRecord, liveAcpDaemonSessionIds, stopAcpDaemon, type AcpHost } from "./acp-host.ts"
 import { spawnAcpChild } from "./acp-rpc.ts"
 import { processStartTime } from "../process-generation.ts"
 import { acpTranscriptPath, parseAcpRecord, projectAcpTranscript, type AcpRecord } from "./acp-transcript.ts"
@@ -21,7 +21,7 @@ const FAKE = fileURLToPath(new URL("./acp.fixtures/fake-acp-agent.mjs", import.m
 
 interface Rig { bridge: AcpBridge; stateDir: string; store: InteractionStore; status: number; diagnostics: string[] }
 
-function rig(mode = "", opts: { customCommand?: string; stateDir?: string; direct?: boolean } = {}): Rig {
+function rig(mode = "", opts: { customCommand?: string; stateDir?: string; direct?: boolean; host?: AcpHost; agentLog?: string } = {}): Rig {
   const stateDir = opts.stateDir ?? mkdtempSync(join(tmpdir(), "acp-bridge-"))
   const store = createInteractionStore(new Database(":memory:"))
   const r: Rig = { stateDir, store, status: 0, diagnostics: [], bridge: undefined as unknown as AcpBridge }
@@ -29,7 +29,7 @@ function rig(mode = "", opts: { customCommand?: string; stateDir?: string; direc
     projectId: "proj-1",
     stateDir,
     interactions: store,
-    env: { ...process.env, FAKE_ACP_MODE: mode },
+    env: { ...process.env, FAKE_ACP_MODE: mode, ...(opts.agentLog ? { FAKE_ACP_LOG: opts.agentLog } : {}) },
     // The fake is "installed" as an operator-configured agent whose command is node itself.
     customAgents: () => [{ id: "fake", label: "Fake agent", command: opts.customCommand ?? process.execPath, args: opts.customCommand ? [] : [FAKE] }],
     frizzMcp: { scriptPath: "/opt/frizz/frizz-mcp.mjs", stateDir: "/opt/state", projectId: "proj-1" },
@@ -40,6 +40,7 @@ function rig(mode = "", opts: { customCommand?: string; stateDir?: string; direc
     // The default host forks a REAL detached daemon per session — the production transport — so every
     // test below exercises the daemon too; `direct` is the pre-daemon plain child, for the control.
     ...(opts.direct ? { spawn: spawnAcpChild } : {}),
+    ...(opts.host ? { host: opts.host } : {}),
   })
   return r
 }
@@ -363,5 +364,27 @@ test("acp-bridge: releasing a session ends its daemon, and a new open starts a n
     await untilIdle(r, "s1")
     const second = liveAcpDaemonRecord(r.stateDir, "s1")
     assert.ok(second && second.generation !== first.generation, "a fresh daemon for the re-opened session")
+  } finally { await teardown(r) }
+})
+
+// The 2026-09-30 race, ACP edition: the waker delivering answers and the operator's own send reach a
+// session with no live agent in the same instant. Each open found no daemon and forked one; both
+// attaches reached the same daemon, which serves one client at a time, so the later hung up the earlier
+// (whose next write then failed EPIPE) and BOTH follow-ups failed. Now concurrent opens of one session
+// share one. Negative control: against the pre-fix bridge the host is asked twice and both reject.
+test("acp-bridge: two concurrent follow-ups to a session with no live agent share ONE open, and both reach it", async () => {
+  let hostCalls = 0
+  const stateDir = mkdtempSync(join(tmpdir(), "acp-bridge-"))
+  const agentLog = join(stateDir, "agent-frames.jsonl")
+  const r = rig("", { stateDir, agentLog, host: async (o) => { hostCalls++; return daemonAcpHost(o) } })
+  try {
+    const input = (text: string) => ({ threadSlug: "t1", sessionId: "s1", cwd: r.stateDir, agentId: "fake", text, deliveryId: text })
+    const [a, b] = await Promise.all([r.bridge.followUp(input("the waker's answers")), r.bridge.followUp(input("the operator's send"))])
+    assert.equal(hostCalls, 1, "one open, shared")
+    assert.deepEqual([a.state, b.state], ["delivered", "queued"], "the first runs, the second queues behind it")
+    await untilIdle(r, "s1")
+    const frames = readFileSync(agentLog, "utf8").split("\n").filter(Boolean).map((l) => JSON.parse(l) as { method?: string; params?: { prompt?: Array<{ text?: string }> } })
+    assert.equal(frames.filter((f) => f.method === "initialize").length, 1, "one agent process")
+    assert.deepEqual(frames.filter((f) => f.method === "session/prompt").map((f) => f.params?.prompt?.[0]?.text), ["the waker's answers", "the operator's send"])
   } finally { await teardown(r) }
 })

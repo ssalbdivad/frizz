@@ -474,7 +474,7 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
    *  is right, because the whole row is the link. */
   ghRef?: string
   title?: string
-  testKind: "github" | "shell" | "terminal" | "agent" | "timer" | "file"
+  testKind: "github" | "shell" | "terminal" | "agent" | "timer" | "file" | "link"
   testId: string
 }) {
   const tree = indent !== undefined

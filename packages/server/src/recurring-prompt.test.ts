@@ -250,8 +250,9 @@ const at = (iso: string) => () => Date.parse(iso)
 // Every fence built here carries the REQUIRED `for:` unless a case overrides it — the 2026-08-15
 // grammar treats a fence with no duration as not-a-park, which is a different thing from the thing most
 // of these cases are about.
+// The same goes for `needs_input:`, which every park owes since 2026-10-01 (NEEDS_INPUT_REQUIRED_AT).
 const awaiting = (...hints: FenceView["hints"]): FenceView =>
-  ({ kind: "awaiting", body: "", hints: hints.length ? [...hints, { kind: "for" as const, value: "2h" }] : [] })
+  ({ kind: "awaiting", body: "", hints: hints.length ? [...hints, { kind: "for" as const, value: "2h" }, { kind: "needs_input" as const, value: "false" }] : [] })
 const child = (state: "running" | "stale" | "rested") =>
   ({ label: "worker", startedAt: "2026-08-02T00:00:00.000Z", state, id: `t-${state}` })
 

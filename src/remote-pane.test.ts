@@ -155,6 +155,26 @@ test("a private name claims on the spot — no form, no GitHub, QR straight away
   assert.equal(pane.key("x"), "close");
 });
 
+test("in an 80x24 window the done screen keeps the whole code on screen", async () => {
+  // Message, code, URL, note and the way back were 31 rows; the alternate screen scrolled the top of
+  // the code, finder patterns and all, off an 80x24 window. The screen now sheds its blank lines and
+  // the note instead, and never ends on a newline.
+  const { pane, out } = build();
+  Object.assign(out.stream, { columns: 80, rows: 24 });
+  pane.open();
+  pane.key("1");
+  pane.key("\r");
+  await settle();
+  const screen = out.text().split("\x1b[2J\x1b[H").pop()!.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+  const rows = screen.split("\n");
+  assert.ok(rows.length <= 24, `the done screen is ${rows.length} rows in a 24-row window`);
+  assert.match(rows[0]!, /Serving/, "the message is the top line once the margin is dropped");
+  const quiet = rows.findIndex((row) => /^ {2}\s+$/.test(row) && row.length > 30);
+  assert.ok(quiet >= 0 && quiet <= 2, "the code's top quiet zone sits right under the message");
+  assert.ok(rows.some((row) => row.includes("frizz_code=c0de")), "the URL still fits");
+  assert.ok(rows.some((row) => row.includes("press any key to return")), "and the way back");
+});
+
 test("a saved private name shows as the current setup on the private row", () => {
   const config: CloudConfig = { hostname: "abcdefghjkmnpqrstuvw.frizz.sh", claim: "abcdefghjkmnpqrstuvw", serve: "relay" };
   const { pane, out } = build({ current: () => config });

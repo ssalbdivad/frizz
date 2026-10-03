@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { EventEmitter } from "node:events";
-import { installAccessPane, type AccessLink } from "./access-pane.ts";
+import { renderQrLines } from "@frizz/server/qr";
+import { fitScreen, installAccessPane, type AccessLink } from "./access-pane.ts";
 
 /** A stand-in TTY pair, so the pane can be driven without a real terminal. */
 function fakeTty(isTty = true) {
@@ -49,7 +50,7 @@ test("L opens a pane with a scannable code, and any other key closes it", () => 
   assert.match(opened, /\x1b\[\?1049h/, "uses the alternate screen, so the QR is not left in scrollback");
   assert.match(opened, /frizz_code=abc/, "prints the URL for anyone who cannot scan");
   assert.match(opened, /Single use, expires in 300s/);
-  assert.match(opened, /▀/, "renders the QR itself");
+  assert.match(opened, /[▀▄]/, "renders the QR itself");
 
   tty.written.length = 0;
   tty.input.emit("data", "x");
@@ -208,4 +209,41 @@ test("a board with no public origin has nothing to show and opens nothing", () =
   tty.input.emit("data", "l");
   assert.doesNotMatch(tty.all(), /\x1b\[\?1049h/, "no empty pane flashes up");
   pane.dispose();
+});
+
+/** What is on screen after the pane's last repaint, colour codes stripped. */
+function lastScreen(written: string): string {
+  return written.split("\x1b[2J\x1b[H").pop()!.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, "");
+}
+
+test("in an 80x24 window the whole code stays on screen, quiet zone included", () => {
+  // The alternate screen scrolls when a paint runs past its last row, and the first thing to go is the
+  // code's own quiet zone: an 80x24 window (Terminal.app's default) lost all four light rows above the
+  // finder patterns, which then touched the window edge. The paint must fit, and never end on a newline.
+  const tty = fakeTty();
+  Object.assign(tty.output, { columns: 80, rows: 24 });
+  const pane = installAccessPane({ issue: () => link(), input: tty.input, output: tty.output, now: () => 0 });
+  assert.ok(pane);
+  tty.input.emit("data", "l");
+  const screen = lastScreen(tty.all());
+  assert.ok(!screen.endsWith("\n"), "the paint does not end on a newline");
+  const rows = screen.split("\n");
+  assert.ok(rows.length <= 24, `the paint is ${rows.length} rows in a 24-row window`);
+  const code = renderQrLines(link().url, { style: "half" }).map((row) => `  ${row.replace(/\x1b\[[0-9;]*m/g, "")}`);
+  const top = rows.indexOf(code[0]!);
+  assert.ok(top >= 0, "the code's top quiet-zone row is on screen");
+  assert.deepEqual(rows.slice(top, top + code.length), code, "every row of the code, in order");
+  assert.ok(rows.some((row) => row.includes("frizz_code=abc")), "the URL still fits");
+  pane.dispose();
+});
+
+test("fitScreen drops optional lines lowest first, and only as far as the window needs", () => {
+  const entries = ["a", { text: "", drop: 2 }, "b", { text: "", drop: 1 }, "c"];
+  assert.equal(fitScreen(entries, undefined, 80), "a\n\nb\n\nc", "an unsized stream keeps everything");
+  assert.equal(fitScreen(entries, 5, 80), "a\n\nb\n\nc");
+  assert.equal(fitScreen(entries, 4, 80), "a\n\nb\nc", "drop 1 goes first");
+  assert.equal(fitScreen(entries, 3, 80), "a\nb\nc");
+  assert.equal(fitScreen(entries, 2, 80), "a\nb\nc", "required lines are never dropped");
+  // A line counts at the height it wraps to, colour codes excluded.
+  assert.equal(fitScreen(["\x1b[2m" + "x".repeat(81) + "\x1b[0m", { text: "", drop: 1 }, "y"], 3, 80), "\x1b[2m" + "x".repeat(81) + "\x1b[0m\ny");
 });

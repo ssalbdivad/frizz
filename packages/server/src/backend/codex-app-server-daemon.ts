@@ -21,6 +21,7 @@ import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs"
 import { dirname } from "node:path"
 import { StringDecoder } from "node:string_decoder"
 import { sweepStaleSockets } from "./stale-socket-sweep.ts"
+import { socketPathOwnership } from "./socket-ownership.ts"
 import { leaseRuntime } from "../runtime-lease.ts"
 import { daemonBirthMarker } from "./daemon-identity.ts"
 
@@ -122,6 +123,9 @@ function main(): void {
   let idleTimer: NodeJS.Timeout | null = null
 
   let published = false
+  // Whether the socket PATH still leads to the socket this daemon bound — by inode, not by name, since
+  // every daemon for this project binds the same path (socket-ownership.ts). "Ours" until listen.
+  let socketPathIsOurs: () => boolean = () => true
 
   /** The pid the record file currently names, or null when there is no readable record. */
   const recordOwner = (): number | null => {
@@ -141,7 +145,16 @@ function main(): void {
     const owner = recordOwner()
     if (owner === process.pid) { try { unlinkSync(config.recordPath) } catch {} }
     if (published && owner !== null && owner !== process.pid) return
-    if (published && process.platform !== "win32") { try { unlinkSync(config.socketPath) } catch {} }
+    // The record is not enough to decide the SOCKET: it is ABSENT exactly while a host is forking a
+    // successor (forkDaemon unlinks it first; a failed attach and stop* drop it too), and a corpse that
+    // died in that window took "no owner" for "mine" and unlinked whatever file the path led to — a
+    // successor's, if one had already bound (scripts/verify-daemon-socket-takeover.mjs, scenario B).
+    // So the socket is checked by inode as well.
+    //
+    // And this daemon never calls `server.close()`, on purpose: closing a unix-socket server makes
+    // libuv unlink its path BY NAME, whoever's file that is now — the 2026-09-30 Claude loss
+    // (0dc073b7). `process.exit` releases the listening fd without touching the filesystem.
+    if (published && process.platform !== "win32" && socketPathIsOurs()) { try { unlinkSync(config.socketPath) } catch {} }
   }
 
   // Why this daemon — and the app-server + every in-flight sub-agent turn inside it — is about to end.
@@ -186,16 +199,23 @@ function main(): void {
   // — the one moment nobody is attached — is invisible to this check, because the record still names
   // us throughout it. Two consecutive strikes on top of that, so a single unlucky stat cannot end a
   // turn on its own.
+  //
+  // Discoverable takes BOTH halves: a record naming us, and a socket path that still leads here. A
+  // daemon whose socket file is gone — a successor's sweep before its bind, a $TMPDIR cleaner — still
+  // owns the record, but every attach to it fails (the host then drops the record and forks afresh),
+  // so it is exactly as unreachable as one whose record was reassigned, and it used to sit out the
+  // full IDLE_EXIT_MS holding its app-server. The restart window never touches the socket file either.
   let unreachableStrikes = 0
   const checkReachable = (): void => {
     if (client) { unreachableStrikes = 0; return }
-    if (recordOwner() === process.pid) { unreachableStrikes = 0; return }
+    const recorded = recordOwner() === process.pid
+    if (recorded && socketPathIsOurs()) { unreachableStrikes = 0; return }
     if (++unreachableStrikes < REACHABILITY_STRIKES) return
     try { child.kill("SIGTERM") } catch {}
-    // The record no longer names us and nobody is attached: a successor daemon replaced us (a boot
-    // race or a stale-record fork). If a turn was mid-flight when that happened, it dies here — this
-    // reason is the fingerprint of that class of loss.
-    die(0, "self-collected-record-reassigned")
+    // Nobody is attached and nobody can attach. Record reassigned: a successor daemon replaced us (a
+    // boot race or a stale-record fork). Socket lost: our path is gone or leads to another daemon. If a
+    // turn was mid-flight when that happened it dies here — the reason is the fingerprint of which.
+    die(0, recorded ? "self-collected-socket-lost" : "self-collected-record-reassigned")
   }
 
   // ---- server -> client ---------------------------------------------------------------------------
@@ -330,6 +350,7 @@ function main(): void {
     server.on("error", () => die(6, "socket-listen-error"))
     server.listen(config.socketPath, () => {
       published = true
+      socketPathIsOurs = socketPathOwnership(config.socketPath)
       writeRecord()
       armIdleExit()
       const reachability = setInterval(checkReachable, config.reachabilityCheckMs ?? REACHABILITY_CHECK_MS)

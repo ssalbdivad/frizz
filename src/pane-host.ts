@@ -24,6 +24,14 @@ export interface PaneHost {
   dispose(): void;
   /** Whether a pane currently has the screen. */
   isOpen(): boolean;
+  /**
+   * Put raw mode back after another process on this terminal took it away. Call it whenever a process
+   * that inherited the terminal exits: Node restores every TTY on its stdio to the settings it saw when
+   * IT started, so a control-plane child forked before raw mode was on hands the terminal back cooked
+   * on its way out — R then echoes and waits for Enter, and never reaches the host. Safe at any time,
+   * and a no-op once disposed.
+   */
+  reclaim(): void;
 }
 
 export interface PaneHostOptions {
@@ -97,6 +105,18 @@ export function installPaneHost(options: PaneHostOptions): PaneHost | null {
     process.off("exit", restore);
   };
 
+  const reclaim = () => {
+    if (disposed) return;
+    // Through cooked and back, because libuv skips a switch to the mode it believes is current: a bare
+    // setRawMode(true) here writes nothing and the terminal stays cooked (measured on a real pty).
+    try {
+      input.setRawMode(false);
+      input.setRawMode(true);
+    } catch {
+      // The terminal is gone (its window closed); there is nothing left to reclaim.
+    }
+  };
+
   input.setRawMode(true);
   input.resume();
   input.setEncoding("utf8");
@@ -104,5 +124,5 @@ export function installPaneHost(options: PaneHostOptions): PaneHost | null {
   // Belt and braces: an unexpected exit must not leave the shell in raw mode.
   process.on("exit", restore);
 
-  return { dispose: restore, isOpen: () => active !== null };
+  return { dispose: restore, isOpen: () => active !== null, reclaim };
 }

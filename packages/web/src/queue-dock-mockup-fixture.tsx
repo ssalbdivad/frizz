@@ -1,16 +1,20 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import { Fragment, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react"
+import { Fragment, useEffect, useId, useLayoutEffect, useReducer, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode, type RefObject } from "react"
 import {
-  ArrowUp, Check, ChevronDown, ChevronUp, ChevronsDownUp, ExternalLink, FileText, GitPullRequest, Maximize2,
-  MessageSquare, MessageSquarePlus, Paperclip, Pencil, RotateCcw, TerminalSquare, Trash2,
+  AlarmClock, AlarmClockOff, ArrowUp, Check, ChevronDown, ChevronUp, ChevronsDownUp, ExternalLink, FileText, GitPullRequest,
+  Maximize2, MessageSquare, MessageSquarePlus, Paperclip, Pencil, Plug, RefreshCw, RotateCcw, TerminalSquare, Trash2,
 } from "lucide-react"
 import type { ChatMessage } from "./hooks.ts"
 import { Message, withMessageSpacers } from "./components/ChatView.tsx"
 import { VSpace } from "./components/rhythm.tsx"
 import { STATUS_BOX } from "./components/BoxSpinner.tsx"
-import { TooltipProvider } from "./components/Tooltip.tsx"
+import { Tooltip, TooltipProvider } from "./components/Tooltip.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./components/ui/Menu.tsx"
+import { GoalMark } from "./components/RecurringPromptControl.tsx"
 import { HEADER_ICON_CLASS } from "./lib/headerIcon.ts"
+import { OPAQUE_PORTAL_SURFACE_CLASS } from "./lib/overlaySurface.ts"
+import { formatSnoozeWake, SNOOZE_PRESETS, snoozePresetInstant } from "./lib/snooze.ts"
 import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS } from "./lib/childOps.ts"
 import {
   boxesOf, fullText, HIGHLIGHT_CSS, inUi, MESSAGES, offsetsToRange, paints, rangeToOffsets, repaint, S2, S3, trimmed,
@@ -18,19 +22,21 @@ import {
 } from "./inline-comments-mockup-kit.ts"
 import "./styles.css"
 
-// MOCKUP SHEET — THE QUEUE CARD WITH A STICKY PROMPT BOX, and the card's controls given one rule per edge.
+// MOCKUP SHEET — THE QUEUE CARD: MANAGE THE THREAD AT THE TOP, STEER THE RUN AT THE BOTTOM.
 //
-// Not shipped UI and not a test. The ask (maintainer 2026-10-01, after the inline-comments sheet):
-//   · a comment leaves its passage LIGHTLY HIGHLIGHTED YELLOW; hovering shows the comment in a popover;
-//   · a pending count above the prompt box is useless on the queue, because the prompt box scrolls away
-//     while the header is sticky — so consider a prompt box STICKY AT THE BOTTOM, as on /full;
-//   · compress the card's bottom: the sub-agent / shell / file rows become a condensed count at the
-//     UPPER RIGHT of the prompt box, details on hover;
-//   · rethink where the context pie and the goal button live — "I'm not sure there's much logic to it".
+// Not shipped UI and not a test. Round three of the queue-card study (maintainer 2026-10-01):
+//   · round two docked the prompt box to the bottom of the screen and moved Snooze and Mark as done into
+//     the sticky header — kept;
+//   · simplify those two to icons: Snooze becomes an ALARM CLOCK whose click opens a menu of durations
+//     (no remembered "last picked" preset — the sticky one is disliked), Mark as done becomes a CHECK;
+//   · the goal moves to the prompt box's bottom right;
+//   · the context meter moves up into the header: "Last active 2m ago · 64% context";
+//   · the rule, loosely: whole-thread management on top, this run and how to steer it at the bottom.
 //
-// The transcript is the REAL Message renderer; the header, prompt box, op rows and lifecycle buttons are
-// copies of TodosView's QueueCard / Composer / ChildOpRow / ThreadLifecycleFooter (the op rows import the
-// real lib/childOps.ts tokens). The comment highlights use the shared kit's Highlight API engine.
+// The transcript is the REAL Message renderer; the menus, tooltips and goal mark are the real
+// components (ui/Menu, Tooltip, GoalMark) and lib/snooze.ts's presets. The header, prompt box and op
+// rows are copies of TodosView's QueueCard / Composer / ChildOpRow. Comment highlights use the shared
+// kit's Highlight API engine.
 //
 //   http://localhost:5478/queue-dock-mockup-fixture.html   (?theme=light for the light palette)
 const params = new URLSearchParams(location.search)
@@ -56,6 +62,10 @@ interface CardData {
   context: number
   goal?: string
   retry?: boolean
+  restart?: boolean
+  plugins?: boolean
+  snoozedUntil?: string
+  done?: boolean
 }
 
 const text = (sourceId: string, role: "user" | "assistant", body: string): ChatMessage => ({ sourceId, role, tools: [], text: body, parts: role === "user" ? [] : [{ kind: "text", text: body }] })
@@ -124,30 +134,15 @@ const CARDS = [CACHE, PRICING, RELEASE]
 
 // ── small marks ───────────────────────────────────────────────────────────────────────────────────
 
-// Tabler's target-arrow, the goal mark (RecurringPromptControl.tsx keeps the provenance).
-function GoalGlyph({ size = 13, className = "" }: { size?: number; className?: string }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" className={className} aria-hidden>
-      <path d="M11 12a1 1 0 1 0 2 0a1 1 0 1 0 -2 0" />
-      <path d="M12 7a5 5 0 1 0 5 5" />
-      <path d="M13 3.055a9 9 0 1 0 7.941 7.945" />
-      <path d="M15 6v3h3l3 -3h-3v-3l-3 3" />
-      <path d="M15 9l-3 3" />
-    </svg>
-  )
-}
-
 // ContextMeter's ring: same 16-unit grid, same 1.25 stroke, a filled arc for the share used.
 function ContextRing({ percent, size = 15 }: { percent: number; size?: number }) {
   const r = 7.5 - 1.25 / 2
   const c = 2 * Math.PI * r
   return (
-    <span title={`Context ${percent}% full`} className="flex shrink-0 items-center text-muted-60">
-      <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden>
-        <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.25" />
-        <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeWidth="1.25" strokeDasharray={`${(c * percent) / 100} ${c}`} transform="rotate(-90 8 8)" />
-      </svg>
-    </span>
+    <svg viewBox="0 0 16 16" width={size} height={size} aria-hidden className="shrink-0">
+      <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeOpacity="0.3" strokeWidth="1.25" />
+      <circle cx="8" cy="8" r={r} fill="none" stroke="currentColor" strokeWidth="1.25" strokeDasharray={`${(c * percent) / 100} ${c}`} transform="rotate(-90 8 8)" />
+    </svg>
   )
 }
 
@@ -183,19 +178,27 @@ function summarize(items: readonly Activity[]) {
     .map((g) => ({ ...g, word: words[g.kind][g.n === 1 ? 0 : 1] }))
 }
 
-// THE CONDENSED ACTIVITY: one line of counts at the prompt box's upper right; the ⤷ rows on hover.
-function ActivitySummary({ items, forceOpen, align = "right" }: { items: readonly Activity[]; forceOpen?: boolean; align?: "right" | "left" }) {
+// A hover surface that stays up while the pointer travels from its trigger into it.
+function useHover(delay = 160) {
   const [open, setOpen] = useState(false)
   const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
+  useEffect(() => () => clearTimeout(timer.current), [])
+  return {
+    open,
+    handlers: {
+      onMouseEnter: () => { clearTimeout(timer.current); setOpen(true) },
+      onMouseLeave: () => { timer.current = setTimeout(() => setOpen(false), delay) },
+    },
+  }
+}
+
+// THE CONDENSED ACTIVITY: one line of counts at the prompt box's upper right; the ⤷ rows on hover.
+function ActivitySummary({ items, forceOpen }: { items: readonly Activity[]; forceOpen?: boolean }) {
+  const hover = useHover()
   if (!items.length) return null
-  const show = forceOpen || open
+  const show = forceOpen || hover.open
   return (
-    <div
-      data-ic-ui
-      className="relative"
-      onMouseEnter={() => { clearTimeout(timer.current); setOpen(true) }}
-      onMouseLeave={() => { timer.current = setTimeout(() => setOpen(false), 160) }}
-    >
+    <div data-ic-ui className="relative" {...hover.handlers}>
       <button type="button" className={`flex items-center gap-3 rounded-md px-1.5 py-0.5 text-[11.5px] transition-colors ${show ? "bg-panel-2 text-fg/85" : "text-muted-70 hover:bg-panel-2 hover:text-fg/85"}`}>
         {summarize(items).map((g) => (
           <span key={g.kind} className="flex items-center gap-1.5 whitespace-nowrap">
@@ -205,7 +208,7 @@ function ActivitySummary({ items, forceOpen, align = "right" }: { items: readonl
         ))}
       </button>
       {show && (
-        <div className={`absolute bottom-full z-40 mb-1.5 w-[420px] rounded-lg border border-border bg-elevated px-3 py-2 shadow-xl shadow-black/40 ${align === "right" ? "right-0" : "left-0"}`}>
+        <div className="absolute bottom-full right-0 z-40 mb-1.5 w-[420px] rounded-lg border border-border bg-elevated px-3 py-2 shadow-xl shadow-black/40">
           <div className="flex flex-col gap-0.5">
             {(["agent", "shell", "pr", "file", "link"] as const).flatMap((k) => items.filter((a) => a.kind === k)).map((a, i) => <OpRow key={i} a={a} />)}
           </div>
@@ -230,29 +233,167 @@ function PendingChip({ n, onNav }: { n: number; onNav: (dir: 1 | -1) => void }) 
   )
 }
 
-function HeaderCount({ n, onNav }: { n: number; onNav: (dir: 1 | -1) => void }) {
-  if (n === 0) return null
-  return (
-    <button type="button" data-ic-ui title={`${n} pending comment${n === 1 ? "" : "s"} — show the next`} onClick={() => onNav(1)} className="mr-1 flex h-7 items-center gap-1 rounded-md px-1.5 text-[12px] text-[var(--ic-ink)] hover:bg-panel-2">
-      <MessageSquare size={13} className="translate-y-px" />
-      <span className="font-medium tabular-nums">{n}</span>
-    </button>
-  )
-}
+// ── the top bar: the thread as a whole ────────────────────────────────────────────────────────────
 
-const PILL = "rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80"
-function LifecycleButtons() {
+const WINDOW = 200_000
+
+// The forced states the static frames pin open; the live queue reaches every one of them by pointer.
+interface Force { tip?: "alarm" | "check" | "restart"; menu?: boolean; context?: boolean; goal?: boolean; activity?: boolean }
+
+// The real Tooltip's surface and arrow, pinned open for a static frame.
+function TipBubble({ label, align = "center" }: { label: string; align?: "center" | "end" }) {
   return (
-    <span className="flex items-center gap-2">
-      <span className="inline-flex items-stretch rounded-md border border-border-strong bg-panel-2/60 text-[12px]">
-        <span className="flex items-center rounded-l-md px-2.5 py-1 font-medium text-fg/75">Snooze 1d</span>
-        <span aria-hidden className="my-1 w-px bg-border" />
-        <span className="flex items-center px-2 text-fg/75"><ChevronDown size={12} /></span>
-      </span>
-      <span className={`flex items-center gap-1 font-medium ${PILL}`}><Check size={12} />Mark as done</span>
+    <span className={`pointer-events-none absolute bottom-full z-40 mb-[5px] whitespace-nowrap rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-shadow-ink/40 ${align === "end" ? "-right-1" : "left-1/2 -translate-x-1/2"}`}>
+      {label}
+      <svg width="10" height="5" viewBox="0 0 10 5" aria-hidden className={`absolute top-full fill-elevated ${align === "end" ? "right-[13px]" : "left-1/2 -translate-x-1/2"}`}><polygon points="0,0 10,0 5,5" /></svg>
     </span>
   )
 }
+
+// lib/headerIcon.ts's square, with its resting ink swapped when the mark carries a state.
+function iconClass(tone?: string, pressed?: boolean) {
+  const base = tone ? HEADER_ICON_CLASS.replace(/(^| )text-muted( |$)/, `$1${tone}$2`) : HEADER_ICON_CLASS
+  return `${base} ${pressed ? "bg-panel-2" : ""}`
+}
+
+function HeaderIcon({ label, icon: Icon, size = 14, forceTip, tipAlign, onClick }: { label: string; icon: ComponentType<{ size?: number; strokeWidth?: number }>; size?: number; forceTip?: boolean; tipAlign?: "center" | "end"; onClick?: () => void }) {
+  const button = (
+    <button type="button" aria-label={label} onMouseDown={(e) => e.preventDefault()} onClick={onClick} className={iconClass()}>
+      <Icon size={size} strokeWidth={2} />
+    </button>
+  )
+  if (forceTip) return <span className="relative flex">{button}<TipBubble label={label} align={tipAlign} /></span>
+  return <Tooltip label={label}>{button}</Tooltip>
+}
+
+// THE SNOOZE MENU: every preset, every time, each with the moment it would wake. No remembered choice —
+// today's split button relabels itself to whatever was picked last ("Snooze 1d", "Snooze until
+// tomorrow"), so the one-click half silently changes meaning between visits.
+function snoozeRows() {
+  return SNOOZE_PRESETS.map((p) => {
+    const wake = formatSnoozeWake(snoozePresetInstant(p.value))
+    return p.value === "tomorrow" ? { value: p.value, label: "Tomorrow", wake: wake.replace(/^Tomorrow at /, "") } : { value: p.value, label: p.label, wake }
+  })
+}
+const MENU_ITEM = "flex cursor-pointer select-none items-center gap-2 rounded-md px-2.5 py-1.5 text-[12px] outline-none transition-colors"
+
+function SnoozeMenuBody({ snoozedUntil, onPick, onWake, Item, Separator, hot }: {
+  snoozedUntil?: string
+  onPick: (until: string) => void
+  onWake: () => void
+  Item: (p: { children: ReactNode; onSelect: () => void; icon?: ReactNode; hot?: boolean }) => ReactNode
+  Separator: () => ReactNode
+  hot?: string
+}) {
+  return (
+    <>
+      <div className="px-2.5 pb-1 pt-1.5 text-[11px] text-muted-60">{snoozedUntil ? `Snoozed until ${formatSnoozeWake(snoozedUntil)}` : "Snooze until"}</div>
+      {snoozedUntil && (
+        <>
+          <Item onSelect={onWake} icon={<AlarmClockOff size={12} />} hot={hot === "wake"}>Wake now</Item>
+          <Separator />
+        </>
+      )}
+      {snoozeRows().map((r) => (
+        <Item key={r.value} onSelect={() => onPick(snoozePresetInstant(r.value))} icon={<AlarmClock size={12} />} hot={hot === r.value}>
+          <span className="flex min-w-0 flex-1 items-center justify-between gap-6">
+            <span>{r.label}</span>
+            <span className="text-[10.5px] text-muted-55">{r.wake}</span>
+          </span>
+        </Item>
+      ))}
+      <Separator />
+      <Item onSelect={() => {}}>Custom time &amp; prompt…</Item>
+    </>
+  )
+}
+
+function StaticItem({ children, icon, hot }: { children: ReactNode; onSelect: () => void; icon?: ReactNode; hot?: boolean }) {
+  return (
+    <div className={`${MENU_ITEM} ${hot ? "bg-panel-2 text-fg" : "text-muted"}`}>
+      {icon && <span className="flex w-3.5 shrink-0 items-center justify-center">{icon}</span>}
+      {children}
+    </div>
+  )
+}
+const LiveItem = ({ children, onSelect, icon }: { children: ReactNode; onSelect: () => void; icon?: ReactNode }) => <MenuItem onSelect={onSelect} icon={icon}>{children}</MenuItem>
+const StaticSeparator = () => <div className="my-1 h-px bg-border" />
+
+function SnoozeControl({ snoozedUntil, force, onSnooze }: { snoozedUntil?: string; force?: Force; onSnooze: (until: string | undefined) => void }) {
+  const [open, setOpen] = useState(false)
+  const label = snoozedUntil ? `Snoozed until ${formatSnoozeWake(snoozedUntil)}` : "Snooze"
+  // Amber while a snooze is armed — the goal mark's "something is set" tone — so the clock doubles as the
+  // presence marker the footer's grey alarm glyph used to be.
+  const tone = snoozedUntil ? "text-attention-90" : undefined
+  if (force?.menu || force?.tip === "alarm") {
+    return (
+      <span className="relative flex">
+        <span className={iconClass(tone, force.menu)}><AlarmClock size={14} strokeWidth={2} /></span>
+        {force.tip === "alarm" && <TipBubble label={label} />}
+        {force.menu && (
+          <div className={`${OPAQUE_PORTAL_SURFACE_CLASS} absolute right-0 top-full mt-1.5 w-max min-w-[184px] overflow-hidden rounded-lg p-1`}>
+            <SnoozeMenuBody snoozedUntil={snoozedUntil} onPick={() => {}} onWake={() => {}} Item={StaticItem} Separator={StaticSeparator} hot={snoozedUntil ? "wake" : "tomorrow"} />
+          </div>
+        )}
+      </span>
+    )
+  }
+  return (
+    <Menu open={open} onOpenChange={setOpen}>
+      <Tooltip label={label} disabled={open}>
+        <MenuTrigger asChild>
+          <button type="button" aria-label={label} onMouseDown={(e) => e.preventDefault()} className={iconClass(tone, open)}>
+            <AlarmClock size={14} strokeWidth={2} />
+          </button>
+        </MenuTrigger>
+      </Tooltip>
+      <MenuContent align="end">
+        <SnoozeMenuBody snoozedUntil={snoozedUntil} onPick={(until) => onSnooze(until)} onWake={() => onSnooze(undefined)} Item={LiveItem} Separator={MenuSeparator} />
+      </MenuContent>
+    </Menu>
+  )
+}
+
+// What a finished thread says where its two verbs were — ThreadLifecycleFooter's DoneReadout, moved up.
+function DoneReadout({ onReopen }: { onReopen?: () => void }) {
+  return (
+    <Tooltip label="Marked done — send a message to reopen it">
+      <button type="button" onClick={onReopen} className="flex h-7 items-center gap-1 rounded-md px-2 text-[12px] font-medium text-muted">
+        <Check size={12} />Done
+      </button>
+    </Tooltip>
+  )
+}
+
+type ContextLook = "ring" | "words" | "bare"
+
+// THE CONTEXT READING, now a fact in the header's second line. Same popover as ContextMeter: the
+// exact numbers, and Compact now.
+function ContextReading({ percent, look = "ring", forceOpen }: { percent: number; look?: ContextLook; forceOpen?: boolean }) {
+  const hover = useHover()
+  const show = forceOpen || hover.open
+  const tokens = Math.round((WINDOW * percent) / 100)
+  return (
+    <span className="relative flex shrink-0 items-center" {...hover.handlers}>
+      <button type="button" aria-label={`Context ${percent}% full`} className={`flex items-center gap-1 rounded transition-colors ${show ? "text-fg/85" : "hover:text-fg/85"}`}>
+        {look !== "words" && <ContextRing percent={percent} size={11} />}
+        {look === "ring" && <span>{percent}% context</span>}
+        {look === "words" && <span>Context {percent}%</span>}
+      </button>
+      {show && (
+        <div className="absolute left-[-12px] top-full z-40 mt-2 flex w-max flex-col gap-2 rounded-lg border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-xl shadow-black/40">
+          <div className="flex flex-col">
+            <span>Context {percent}% full</span>
+            <span className="text-muted">{tokens.toLocaleString()} of {WINDOW.toLocaleString()} tokens</span>
+          </div>
+          <span className="flex items-center justify-center rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80">Compact now</span>
+        </div>
+      )}
+    </span>
+  )
+}
+
+// ── the bottom: this run, and how to steer it ─────────────────────────────────────────────────────
 
 function ProfileChips() {
   const chip = "inline-flex items-center gap-[3px] rounded-md border border-border/50 px-2 py-1 text-muted"
@@ -264,15 +405,25 @@ function ProfileChips() {
   )
 }
 
-// The goal, as a prompt box control: a bare mark while unset; a lit chip saying what it does once armed.
-function GoalChip({ goal }: { goal?: string }) {
-  if (!goal) {
-    return <span title="Set a goal — a standing instruction sent each time the worker rests" className="flex h-[26px] w-[26px] items-center justify-center rounded-md text-muted-60 hover:bg-panel-2 hover:text-fg"><GoalGlyph size={13} /></span>
-  }
+// THE GOAL, beside attach and send: a standing message is something you send. Grey while unset, amber
+// while armed (RecurringPromptControl's two tones); the hover preview is that control's GoalPreview.
+function GoalButton({ goal, forceOpen }: { goal?: string; forceOpen?: boolean }) {
+  const hover = useHover()
+  const show = forceOpen || hover.open
   return (
-    <span title={`Goal: ${goal}`} className="inline-flex min-w-0 items-center gap-1 rounded-md border border-accent/40 bg-accent/10 px-2 py-1 text-accent">
-      <GoalGlyph size={12} className="shrink-0" />
-      <span className="petite-caps truncate text-[11px] tracking-wide">Goal · each rest</span>
+    <span className="relative flex" {...hover.handlers}>
+      <button type="button" aria-label={goal ? "Goal (on)" : "Goal"} className={`flex h-7 w-7 items-center justify-center rounded-lg transition-colors hover:bg-panel-2 ${goal ? "text-attention-90" : "text-muted hover:text-fg"}`}>
+        <GoalMark size={15} />
+      </button>
+      {show && (
+        <div className="absolute bottom-full right-0 z-40 mb-1.5 w-[300px] rounded-lg border border-border bg-elevated p-2.5 text-[11px] leading-snug text-fg shadow-xl shadow-black/40">
+          <div className="mb-1 flex items-baseline gap-2">
+            <span className="font-medium">Goal</span>
+            <span className="text-muted-70">{goal ? "sent at every rest" : "not set"}</span>
+          </div>
+          <p className={`line-clamp-4 whitespace-pre-wrap ${goal ? "text-fg/90" : "text-muted"}`}>{goal || "Click to write what this thread is trying to achieve."}</p>
+        </div>
+      )}
     </span>
   )
 }
@@ -283,10 +434,10 @@ interface PromptBoxProps {
   onSend: () => void
   placeholder: string
   goal?: string | false
-  context?: number | false
+  goalOpen?: boolean
   sendCount?: number
 }
-function PromptBox({ value, onChange, onSend, placeholder, goal, context, sendCount = 0 }: PromptBoxProps) {
+function PromptBox({ value, onChange, onSend, placeholder, goal, goalOpen, sendCount = 0 }: PromptBoxProps) {
   const enabled = Boolean(value.trim()) || sendCount > 0
   return (
     <div className="group relative rounded-xl border border-border bg-bg transition-colors focus-within:border-accent">
@@ -305,10 +456,13 @@ function PromptBox({ value, onChange, onSend, placeholder, goal, context, sendCo
       />
       <div className="flex min-w-0 items-center gap-1 pb-1.5 pl-1.5 pr-2">
         <ProfileChips />
-        {goal !== false && <GoalChip goal={goal} />}
+        {/* Paperclip → send is today's gap-2, which draws 14.75px of ink against the filled button. The
+            target's box overlaps the paperclip's by 1px (-mr-[9px]) so target → paperclip draws the
+            same 14.75px: their glyphs carry 7 and 8.25px of dead box between them. Only one hover square
+            fills at a time, and the overlap is empty padding on both sides. */}
         <span className="ml-auto flex shrink-0 items-center gap-2">
-          {context !== false && context !== undefined && <span className="mr-1"><ContextRing percent={context} /></span>}
-          <span className="flex h-7 w-7 items-center justify-center rounded-lg text-muted"><Paperclip size={15} strokeWidth={2} /></span>
+          {goal !== false && <span className="-mr-[9px] flex"><GoalButton goal={goal} forceOpen={goalOpen} /></span>}
+          <span data-attach className="flex h-7 w-7 items-center justify-center rounded-lg text-muted"><Paperclip size={15} strokeWidth={2} /></span>
           <button
             type="button"
             title={sendCount ? `Send with ${sendCount} comment${sendCount === 1 ? "" : "s"}` : "Send"}
@@ -638,8 +792,7 @@ function SentBubble({ s }: { s: SentNote }) {
 
 // ── the card ──────────────────────────────────────────────────────────────────────────────────────
 
-type Layout = "today" | "dock" | "header" | "page"
-type ContextAt = "box" | "header" | "tabs"
+type Layout = "today" | "new"
 
 interface CardApi { pending: number; send: (note: string) => boolean; nav: (dir: 1 | -1) => void }
 
@@ -648,31 +801,38 @@ interface CardProps {
   layout: Layout
   scrollerRef: RefObject<HTMLDivElement | null>
   layer?: LayerOptions
-  contextAt?: ContextAt
-  activityOpen?: boolean
-  targeted?: boolean
-  onTarget?: (id: string) => void
+  force?: Force
+  contextLook?: ContextLook
+  // A header study: no dock, and a body tall enough for the snooze menu to open over it.
+  bare?: boolean
   register?: (id: string, api: CardApi) => void
   onPending?: (id: string, n: number) => void
 }
 
-function QueueCard({ data, layout, scrollerRef, layer: layerOpts = {}, contextAt = "box", activityOpen, targeted, onTarget, register, onPending }: CardProps) {
+function QueueCard({ data, layout, scrollerRef, layer: layerOpts = {}, force, contextLook, bare, register, onPending }: CardProps) {
   const bodyRef = useRef<HTMLDivElement>(null)
   const layer = useCommentLayer(bodyRef, scrollerRef, layerOpts)
   const [draft, setDraft] = useState("")
+  const [snoozedUntil, setSnoozedUntil] = useState(data.snoozedUntil)
+  const [done, setDone] = useState(Boolean(data.done))
   const n = layer.pending.length
   register?.(data.id, { pending: n, send: layer.send, nav: layer.nav })
   useEffect(() => { onPending?.(data.id, n) }, [n])
-  const send = () => { if (layer.send(draft)) setDraft("") }
-  const sticky = layout === "dock" || layout === "header"
+  // Sending un-parks and reopens, as a follow-up does today (router.followUp, resume.ts).
+  const send = () => { if (layer.send(draft)) { setDraft(""); setDone(false); setSnoozedUntil(undefined) } }
   return (
-    <div
-      data-card={data.id}
-      onPointerDown={() => onTarget?.(data.id)}
-      className={`relative flex min-w-0 flex-col rounded-xl border bg-panel shadow-lg shadow-shadow-ink/25 transition-[border-color] ${targeted ? "border-accent/45" : "border-border-strong"}`}
-    >
-      <CardHeader data={data} pending={n} onNav={layer.nav} lifecycle={layout === "header"} contextAt={contextAt} />
-      <div ref={bodyRef} data-ic-root className="relative flex flex-col px-5 pb-5 pt-5" {...layer.rootHandlers}>
+    <div data-card={data.id} className={`relative flex min-w-0 flex-col rounded-xl border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25 transition-opacity ${done && !bare ? "opacity-60" : ""}`}>
+      <CardHeader
+        data={data}
+        layout={layout}
+        force={force}
+        contextLook={contextLook}
+        snoozedUntil={snoozedUntil}
+        done={done}
+        onSnooze={setSnoozedUntil}
+        onDone={() => setDone((d) => !d)}
+      />
+      <div ref={bodyRef} data-ic-root className="relative flex flex-col px-5 pb-5 pt-5" style={bare ? { minHeight: force?.menu ? 290 : 150 } : undefined} {...layer.rootHandlers}>
         {withMessageSpacers(data.messages, (m) => <Message key={m.sourceId} m={m} />)}
         {layer.sent.map((s) => (
           <Fragment key={s.id}>
@@ -683,86 +843,79 @@ function QueueCard({ data, layout, scrollerRef, layer: layerOpts = {}, contextAt
         {layer.overlay}
       </div>
       {layout === "today" && <TodayBottom data={data} draft={draft} setDraft={setDraft} send={send} />}
-      {sticky && (
-        <div
-          className={`${sticky ? "sticky bottom-0" : ""} z-30 rounded-b-[11px] border-t border-border/60 bg-panel px-5 pb-3 pt-1 shadow-[0_-12px_18px_-14px_var(--dock-shade)]`}
-        >
-          <TabRow data={data} pending={n} onNav={layer.nav} activityOpen={activityOpen} contextAt={contextAt} />
+      {layout === "new" && !bare && (
+        <div className="sticky bottom-0 z-30 rounded-b-[11px] border-t border-border/60 bg-panel px-5 pb-3 pt-1 shadow-[0_-12px_18px_-14px_var(--dock-shade)]">
+          <div className="flex h-7 min-w-0 items-center gap-3 px-0.5">
+            <PendingChip n={n} onNav={layer.nav} />
+            <span className="ml-auto"><ActivitySummary items={data.activity} forceOpen={force?.activity} /></span>
+          </div>
           <PromptBox
             value={draft}
             onChange={setDraft}
             onSend={send}
             sendCount={n}
             placeholder={n ? `Add a note to go with ${n === 1 ? "the comment" : `the ${n} comments`} (optional)…` : "Reply to the agent…"}
-            goal={contextAt === "tabs" ? false : data.goal}
-            context={contextAt === "box" ? data.context : false}
+            goal={data.goal}
+            goalOpen={force?.goal}
           />
-          {layout === "dock" && (
-            <div className="flex items-center justify-end pt-2.5">
-              <LifecycleButtons />
-            </div>
-          )}
-        </div>
-      )}
-      {layout === "page" && (
-        <div className="flex min-h-10 items-center gap-3 rounded-b-[11px] border-t border-border/60 px-4 py-2">
-          <ActivitySummary items={data.activity} align="left" />
-          <PendingChip n={n} onNav={layer.nav} />
-          <span className="ml-auto"><LifecycleButtons /></span>
         </div>
       )}
     </div>
   )
 }
 
-function CardHeader({ data, pending, onNav, lifecycle, contextAt }: { data: CardData; pending: number; onNav: (dir: 1 | -1) => void; lifecycle: boolean; contextAt: ContextAt }) {
+function CardHeader({ data, layout, force, contextLook = "ring", snoozedUntil, done, onSnooze, onDone }: {
+  data: CardData
+  layout: Layout
+  force?: Force
+  contextLook?: ContextLook
+  snoozedUntil?: string
+  done: boolean
+  onSnooze: (until: string | undefined) => void
+  onDone: () => void
+}) {
+  const isNew = layout === "new"
   return (
     <div className="sticky top-0 z-20 flex items-center gap-2 rounded-t-[11px] border-b border-border/60 bg-panel px-5 py-3.5">
       <div className="min-w-0 flex-1">
         <div className="truncate text-[15px] font-semibold leading-snug text-fg/95">{data.title}</div>
-        <div className="mt-0.5 flex items-center gap-1.5 truncate text-[11px] leading-tight text-muted-75">
-          {data.sub}
-          {contextAt === "header" && (
+        <div className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-75">
+          <span className="truncate">{data.sub}</span>
+          {isNew && (
             <>
               <span className="text-muted-45">·</span>
-              <ContextRing percent={data.context} size={11} />
-              <span>{data.context}% context</span>
+              <ContextReading percent={data.context} look={contextLook} forceOpen={force?.context} />
             </>
           )}
         </div>
       </div>
       <div className="flex shrink-0 items-center gap-0.5">
-        <HeaderCount n={pending} onNav={onNav} />
-        <span className={HEADER_ICON_CLASS}><TerminalSquare size={14} strokeWidth={2} /></span>
-        <span className={HEADER_ICON_CLASS}><ChevronsDownUp size={14} strokeWidth={2} /></span>
-        <span className={HEADER_ICON_CLASS}><Maximize2 size={13} strokeWidth={2} /></span>
+        <HeaderIcon label="Copy terminal command" icon={TerminalSquare} />
+        <HeaderIcon label="Collapse" icon={ChevronsDownUp} size={13} />
+        {data.plugins && <HeaderIcon label="Reload plugins — hooks, skills, agents and MCP re-read from disk, same conversation" icon={Plug} />}
+        {data.restart && <HeaderIcon label="Restart worker" icon={RefreshCw} forceTip={force?.tip === "restart"} />}
+        <HeaderIcon label="Open fullscreen" icon={Maximize2} size={13} />
         {data.retry && (
-          <span className="ml-1.5 flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent"><RotateCcw size={12} />Retry</span>
+          <Tooltip label="Retry — resume this session where it left off">
+            <button type="button" className="ml-1 flex items-center gap-1.5 rounded-md border border-accent/45 bg-accent/10 px-2.5 py-1 text-[12px] font-medium text-accent hover:border-accent/70 hover:bg-accent/15"><RotateCcw size={12} />Retry</button>
+          </Tooltip>
         )}
-        {lifecycle && (
+        {isNew && (
           <>
-            <span className="mx-2 h-4 w-px bg-border" />
-            <LifecycleButtons />
+            {/* mx-2.5 puts ~20px of ink either side of the rule, the strip's own icon-to-icon rhythm (18–21px
+                measured), so the rule separates the groups without crowding either one. */}
+            <span aria-hidden data-header-rule className="mx-2.5 h-4 w-px bg-border" />
+            {done ? (
+              <DoneReadout onReopen={onDone} />
+            ) : (
+              <>
+                <SnoozeControl snoozedUntil={snoozedUntil} force={force} onSnooze={onSnooze} />
+                <HeaderIcon label="Mark as done" icon={Check} size={15} forceTip={force?.tip === "check"} tipAlign="end" onClick={onDone} />
+              </>
+            )}
           </>
         )}
       </div>
-    </div>
-  )
-}
-
-// The row that rides the prompt box's top edge: what is pending from YOU on the left, what is live
-// under the WORKER on the right.
-function TabRow({ data, pending, onNav, activityOpen, contextAt }: { data: CardData; pending: number; onNav: (dir: 1 | -1) => void; activityOpen?: boolean; contextAt: ContextAt }) {
-  return (
-    <div className="flex h-7 min-w-0 items-center gap-3 px-0.5">
-      <PendingChip n={pending} onNav={onNav} />
-      {contextAt === "tabs" && (
-        <span className="flex items-center gap-3 text-[11.5px] text-muted-70">
-          <span className="flex items-center gap-1.5"><ContextRing percent={data.context} size={12} />{data.context}% context</span>
-          {data.goal && <span className="flex min-w-0 items-center gap-1.5 text-accent"><GoalGlyph size={11.5} /><span className="truncate">Goal each rest</span></span>}
-        </span>
-      )}
-      <span className="ml-auto"><ActivitySummary items={data.activity} forceOpen={activityOpen} /></span>
     </div>
   )
 }
@@ -772,7 +925,7 @@ function TodayBottom({ data, draft, setDraft, send }: { data: CardData; draft: s
   return (
     <>
       <div className="px-5 pb-3">
-        <PromptBox value={draft} onChange={setDraft} onSend={send} placeholder="Reply to the agent…" goal={false} context={false} />
+        <PromptBox value={draft} onChange={setDraft} onSend={send} placeholder="Reply to the agent…" goal={false} />
         <div className="flex flex-col gap-0.5 px-1 pt-1.5">
           {data.activity.filter((a) => a.kind !== "file" && a.kind !== "link").map((a, i) => <OpRow key={i} a={a} />)}
         </div>
@@ -783,11 +936,16 @@ function TodayBottom({ data, draft, setDraft, send }: { data: CardData; draft: s
         )}
       </div>
       <footer className="flex min-h-10 items-center justify-end gap-3 rounded-b-[11px] border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]">
-        <span className="mr-auto flex items-center gap-3">
+        <span className="mr-auto flex items-center gap-3 text-muted-60">
           <ContextRing percent={data.context} />
-          <span className={data.goal ? "text-accent" : "text-muted-60"}><GoalGlyph size={12} /></span>
+          <span className={data.goal ? "text-attention-90" : ""}><GoalMark size={12} /></span>
         </span>
-        <LifecycleButtons />
+        <span className="inline-flex items-stretch rounded-md border border-border-strong bg-panel-2/60 text-[12px]">
+          <span className="flex items-center rounded-l-md px-2.5 py-1 font-medium text-fg/75">Snooze 1d</span>
+          <span aria-hidden className="my-1 w-px bg-border" />
+          <span className="flex items-center px-2 text-fg/75"><ChevronDown size={12} /></span>
+        </span>
+        <span className="flex items-center gap-1 rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] font-medium text-fg/80"><Check size={12} />Mark as done</span>
       </footer>
     </>
   )
@@ -819,99 +977,45 @@ function SidebarGhost({ pendingByCard }: { pendingByCard: Record<string, number>
   )
 }
 
-function QueueViewport({ layout, height = 780, seeds = [S2, S3], contextAt = "box" }: { layout: Layout; height?: number; seeds?: Seed[]; contextAt?: ContextAt }) {
+function QueueViewport({ layout, height = 780, seeds = [S2, S3] }: { layout: Layout; height?: number; seeds?: Seed[] }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
-  const apis = useRef(new Map<string, CardApi>())
-  const [target, setTarget] = useState(CARDS[0].id)
   const [pendingByCard, setPendingByCard] = useState<Record<string, number>>({})
-  const [pageText, setPageText] = useState("")
-  const register = (id: string, api: CardApi) => { apis.current.set(id, api) }
-  // Each card reports its pending count up, for the rail and the page dock.
+  // Each card reports its pending count up, for the rail.
   const onPending = (id: string, n: number) => setPendingByCard((prev) => (prev[id] === n ? prev : { ...prev, [id]: n }))
-  // C · the page dock answers whichever card crosses the line 45% down the viewport.
-  useEffect(() => {
-    const sc = scrollerRef.current
-    if (!sc || layout !== "page") return
-    const onScroll = () => {
-      const line = sc.getBoundingClientRect().top + sc.clientHeight * 0.45
-      for (const el of sc.querySelectorAll<HTMLElement>("[data-card]")) {
-        const r = el.getBoundingClientRect()
-        if (r.top <= line && r.bottom >= line) { setTarget(el.dataset.card!); return }
-      }
-    }
-    sc.addEventListener("scroll", onScroll, { passive: true })
-    onScroll()
-    return () => sc.removeEventListener("scroll", onScroll)
-  }, [layout])
-  const targetCard = CARDS.find((c) => c.id === target) ?? CARDS[0]
-  const targetPending = pendingByCard[target] ?? 0
   return (
     <div className="relative overflow-hidden rounded-xl border border-border bg-bg" style={{ width: 1100, height }}>
       <div ref={scrollerRef} className="absolute inset-0 overflow-y-auto">
         <div className="flex items-start gap-9 pl-7 pr-7">
           <div className="sticky top-0"><SidebarGhost pendingByCard={pendingByCard} /></div>
-          <div className="flex w-[720px] min-w-0 flex-col gap-10 py-5" style={{ paddingBottom: layout === "page" ? 190 : 60 }}>
+          <div className="flex w-[720px] min-w-0 flex-col gap-10 py-5" style={{ paddingBottom: 60 }}>
             {CARDS.map((c, i) => (
-              <QueueCard
-                key={c.id}
-                data={c}
-                layout={layout}
-                scrollerRef={scrollerRef}
-                layer={i === 0 ? { seeds } : {}}
-                contextAt={contextAt}
-                targeted={layout === "page" && target === c.id}
-                onTarget={layout === "page" ? setTarget : undefined}
-                register={register}
-                onPending={onPending}
-              />
+              <QueueCard key={c.id} data={c} layout={layout} scrollerRef={scrollerRef} layer={i === 0 ? { seeds } : {}} onPending={onPending} />
             ))}
           </div>
         </div>
       </div>
-      {layout === "page" && (
-        <div className="pointer-events-none absolute bottom-0 left-[344px] w-[720px]">
-          <div className="h-6 bg-gradient-to-t from-bg to-transparent" />
-          <div className="pointer-events-auto bg-bg pb-4">
-            <div className="flex h-7 items-center gap-3 px-0.5">
-              <span className="flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted-70">
-                <span className="text-muted-50">Replying to</span>
-                <span className="truncate font-medium text-fg/85">{targetCard.title}</span>
-              </span>
-              <PendingChip n={targetPending} onNav={(d) => apis.current.get(target)?.nav(d)} />
-            </div>
-            <PromptBox
-              value={pageText}
-              onChange={setPageText}
-              onSend={() => { if (apis.current.get(target)?.send(pageText)) setPageText("") }}
-              sendCount={targetPending}
-              placeholder={`Reply to “${targetCard.title}”…`}
-              goal={targetCard.goal}
-              context={targetCard.context}
-            />
-          </div>
-        </div>
-      )}
     </div>
   )
 }
 
-// A single card, scrolled to its end, inside a fixed window — for side-by-side comparison.
-function CardEnd({ data, layout, height = 560, layer, contextAt, activityOpen, scroll = "end" }: { data: CardData; layout: Layout; height?: number | "fit"; layer?: LayerOptions; contextAt?: ContextAt; activityOpen?: boolean; scroll?: "end" | "middle" }) {
+// A single card, scrolled to its end, inside a fixed window — for side-by-side comparison. The dashed
+// edge is the screen, the solid one the card.
+function CardEnd({ data, height = 560, layer, force, contextLook, bare }: { data: CardData; height?: number | "fit"; layer?: LayerOptions; force?: Force; contextLook?: ContextLook; bare?: boolean }) {
   const scrollerRef = useRef<HTMLDivElement>(null)
   useLayoutEffect(() => {
     const sc = scrollerRef.current
     if (!sc || height === "fit") return
-    const settle = () => { sc.scrollTop = scroll === "end" ? sc.scrollHeight : sc.scrollHeight * 0.3 }
+    const settle = () => { sc.scrollTop = sc.scrollHeight }
     settle()
     const t = setTimeout(settle, 400)
     return () => clearTimeout(t)
-  }, [scroll, height])
-  const card = <QueueCard data={data} layout={layout} scrollerRef={scrollerRef} layer={layer} contextAt={contextAt} activityOpen={activityOpen} />
-  // The dashed edge is the screen, the solid one the card. A short card gets a frame that fits it, so
-  // nothing scrolls and no half-message peeks out under the sticky header.
+  }, [height])
+  const card = <QueueCard data={data} layout="new" scrollerRef={scrollerRef} layer={layer} force={force} contextLook={contextLook} bare={bare} />
+  // A short card gets a frame that fits it, so nothing scrolls and no half-message peeks out under the
+  // sticky header. A header study leaves room above for the tooltips, which open upward.
   if (height === "fit") {
     return (
-      <div ref={scrollerRef} className="relative overflow-hidden rounded-xl border border-dashed border-muted-45 bg-bg p-4" style={{ width: 754 }}>
+      <div ref={scrollerRef} className={`relative overflow-hidden rounded-xl border border-dashed border-muted-45 bg-bg px-4 pb-4 ${force?.tip ? "pt-12" : "pt-4"}`} style={{ width: 754 }}>
         {card}
       </div>
     )
@@ -964,27 +1068,18 @@ function Seg<T extends string>({ label, value, options, onChange }: { label: str
   )
 }
 
-const LAYOUTS: { value: Layout; label: string }[] = [
-  { value: "today", label: "Today" },
-  { value: "header", label: "B · verbs in the header" },
-  { value: "dock", label: "A · verbs stay at the bottom" },
-  { value: "page", label: "C · one dock for the page" },
-]
-
 const LAYOUT_NOTES: Record<Layout, string> = {
-  today: "The prompt box, one row per live op, then the lifecycle strip — all at the card's end. On a long card none of it is on screen while you read.",
-  header: "The prompt box docks to the bottom of the screen while you read the card, the way the header docks to the top. Snooze and Mark as done move up into the sticky header beside the thread's other verbs, so the dock is only the prompt box and the line above it.",
-  dock: "The same dock, one row taller: Snooze and Mark as done stay under the prompt box, and ride the dock with it.",
-  page: "One prompt box for the whole page, as on /full. It replies to whichever card is under it and names that card; each card ends in one slim row of counts and verbs.",
+  new: "The top bar manages the thread: what it is, how full its context is, the views onto it, and the two verbs that park or finish it — an alarm clock and a check. The bottom steers this run: what is outstanding, then the prompt box with the goal beside attach and send. Both edges stick while you read.",
+  today: "The prompt box, one row per live op, then the lifecycle strip with the context pie, the goal and the Snooze and Mark as done buttons — all at the card's end. On a long card none of it is on screen while you read.",
 }
 
 function Playground() {
-  const [layout, setLayout] = useState<Layout>("header")
+  const [layout, setLayout] = useState<Layout>("new")
   const [reset, bump] = useReducer((x: number) => x + 1, 0)
   return (
     <div>
       <div className="mb-3 flex flex-wrap items-center gap-x-6 gap-y-2">
-        <Seg label="Layout" value={layout} onChange={setLayout} options={LAYOUTS} />
+        <Seg label="Card" value={layout} onChange={setLayout} options={[{ value: "new", label: "New" }, { value: "today", label: "Today" }]} />
         <button type="button" onClick={bump} className="rounded-md border border-border px-2 py-0.5 text-[12px] text-muted hover:text-fg">Reset</button>
       </div>
       <p className="mb-4 max-w-[900px] text-[12px] leading-[18px] text-muted-80">{LAYOUT_NOTES[layout]}</p>
@@ -993,11 +1088,12 @@ function Playground() {
         <div className="w-[300px]">
           <h3 className="mb-2 text-[12px] font-medium text-fg/85">How to drive it</h3>
           <ol className="list-decimal space-y-1 pl-4 text-[12px] leading-[18px] text-muted">
-            <li>Scroll the queue. The header sticks to the top, the prompt box to the bottom, and both let go where the card ends.</li>
-            <li>Hover the yellow passages in the first card — the comment shows in a popover. Click one to keep it open.</li>
-            <li>Select any text and click Comment (or press ⌘I) to add another. The counts in the header, above the prompt box and in the rail all move.</li>
-            <li>Hover the counts at the prompt box's upper right for the live ops behind them.</li>
-            <li>Press Enter in a prompt box: the note and every pending comment go as one message.</li>
+            <li>Scroll the queue. The top bar sticks to the top and the prompt box to the bottom; both let go where the card ends.</li>
+            <li>Point at the clock and the check for their names. Click the clock for the snooze menu; pick a time and the clock turns amber, pick Wake now to clear it. Click the check to mark the thread done.</li>
+            <li>Point at “64% context” in the top bar for the token count and Compact now.</li>
+            <li>Point at the target at the prompt box's bottom right for the goal; the second card has one armed.</li>
+            <li>Point at the counts above the prompt box for the live sub-agents, shells and files.</li>
+            <li>Point at a yellow passage for its comment. Select text and press ⌘I to add one; Enter sends the note and every comment as one message.</li>
           </ol>
         </div>
       </div>
@@ -1007,28 +1103,48 @@ function Playground() {
 
 function RuleTable() {
   const rows: [string, string, string][] = [
-    ["Sticky header", "Which thread, and what you can do TO it", "Title, last active · terminal, collapse, fullscreen · Retry, restart · Snooze, Mark as done (B) · the pending-comment count"],
-    ["Line above the prompt box", "What is outstanding — yours on the left, the worker's on the right", "Pending comments ↑ ↓ · live agents, shells, PR watches, files and links as counts, rows on hover"],
-    ["Prompt box", "What you SAY to it, and how it runs", "The message · model and effort · permission mode · the goal (a standing message) · attach, send · the context pie (room left for the next message)"],
+    ["Top bar", "The thread as a whole — what it is, and managing it", "Title · last active · context fullness (Compact now on hover) · terminal command, collapse, fullscreen · Retry, restart worker, reload plugins · snooze (alarm clock) · mark as done (check)"],
+    ["Line above the prompt box", "What this run has outstanding — yours on the left, the worker's on the right", "Pending comments ↑ ↓ · live agents, shells, PR watches, files and links as counts, rows on hover"],
+    ["Prompt box", "What you say next, and how it runs", "The message · model and effort · permission mode · the goal (a standing message) · attach · send"],
   ]
   return (
-    <table className="w-full max-w-[1100px] border-collapse text-left text-[12.5px]">
-      <thead>
-        <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-60">
-          <th className="py-2 pr-6 font-normal">Edge</th><th className="py-2 pr-6 font-normal">Holds</th><th className="py-2 font-normal">So it carries</th>
-        </tr>
-      </thead>
-      <tbody>
-        {rows.map(([edge, rule, items]) => (
-          <tr key={edge} className="border-b border-border/60 align-top">
-            <td className="py-2.5 pr-6 font-medium text-fg/90">{edge}</td>
-            <td className="py-2.5 pr-6 text-fg/80">{rule}</td>
-            <td className="py-2.5 text-muted">{items}</td>
+    <div className="max-w-[1100px]">
+      <table className="w-full border-collapse text-left text-[12.5px]">
+        <thead>
+          <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-60">
+            <th className="py-2 pr-6 font-normal">Edge</th><th className="py-2 pr-6 font-normal">Holds</th><th className="py-2 font-normal">So it carries</th>
           </tr>
-        ))}
-      </tbody>
-    </table>
+        </thead>
+        <tbody>
+          {rows.map(([edge, rule, items]) => (
+            <tr key={edge} className="border-b border-border/60 align-top">
+              <td className="py-2.5 pr-6 font-medium text-fg/90">{edge}</td>
+              <td className="py-2.5 pr-6 text-fg/80">{rule}</td>
+              <td className="py-2.5 text-muted">{items}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p className="mt-3 max-w-[900px] text-[12px] leading-[18px] text-muted-80">
+        Two calls the rule made. The pending-comment count left the top bar: comments steer the next message, and with the prompt box docked the line above it is always on screen — the rail still counts them for cards you cannot see. The context reading went up, not down: it is a fact about the whole session, even though what it measures is the room left for the next message.
+      </p>
+    </div>
   )
+}
+
+const DONE_ONLY = MESSAGES.filter((m) => m.sourceId === "a4")
+const HEADER_REST: CardData = { ...CACHE, id: "h-rest", messages: DONE_ONLY, activity: [] }
+const HEADER_SNOOZED: CardData = { ...HEADER_REST, id: "h-snoozed", snoozedUntil: snoozePresetInstant("3d") }
+const HEADER_DONE: CardData = { ...HEADER_REST, id: "h-done", done: true }
+const HEADER_BUSY: CardData = {
+  ...HEADER_REST,
+  id: "h-busy",
+  title: "Migrate the billing webhooks to the new event bus and backfill the missed deliveries",
+  sub: "Last active 3h 12m ago",
+  context: 88,
+  retry: true,
+  restart: true,
+  plugins: true,
 }
 
 function Page() {
@@ -1038,9 +1154,9 @@ function Page() {
     <main className="min-h-screen bg-bg pb-24 text-fg">
       <style>{HIGHLIGHT_CSS + SHEET_CSS}</style>
       <header className="mx-auto max-w-[1640px] px-8 pb-6 pt-9">
-        <h1 className="text-[22px] font-semibold tracking-tight">The queue card with a sticky prompt box</h1>
+        <h1 className="text-[22px] font-semibold tracking-tight">The queue card: manage at the top, steer at the bottom</h1>
         <p className="mt-1.5 max-w-[900px] text-[13px] leading-[20px] text-muted">
-          The prompt box docks to the bottom of the screen the way the header already docks to the top, so the reply, the pending comments and the live ops stay in view however long the card is. The rows of sub-agents, shells and files under it shrink to one line of counts at its upper right. Comments now leave their passage lightly highlighted in yellow and show on hover.
+          Round three. Snooze becomes an alarm clock that opens a menu of times, with no remembered default; Mark as done becomes a check. Both join the sticky top bar, where the context reading now sits after “Last active”. The goal moves to the prompt box's bottom right, beside attach and send. The prompt box stays docked to the bottom of the screen.
         </p>
       </header>
       <nav className="sticky top-0 z-50 border-y border-border bg-bg/95 backdrop-blur">
@@ -1048,73 +1164,85 @@ function Page() {
           <Seg label="Theme" value={theme} onChange={setTheme} options={[{ value: "dark", label: "Dark" }, { value: "light", label: "Light" }]} />
           <span className="ml-auto flex gap-5 text-muted">
             <a href="#scroll" className="hover:text-fg">Scroll it</a>
-            <a href="#bottom" className="hover:text-fg">The card's end</a>
-            <a href="#activity" className="hover:text-fg">Live ops</a>
-            <a href="#context" className="hover:text-fg">Context and goal</a>
+            <a href="#top" className="hover:text-fg">The top bar</a>
+            <a href="#bottom" className="hover:text-fg">The bottom</a>
+            <a href="#context" className="hover:text-fg">The context reading</a>
             <a href="#comments" className="hover:text-fg">Comments</a>
             <a href="#rule" className="hover:text-fg">The rule</a>
           </span>
         </div>
       </nav>
       <div className="mx-auto max-w-[1640px] px-8 pt-10">
-        <Section id="scroll" title="Scroll it" note="The queue page as it would behave, three cards deep. Switch layouts to compare; every one of them is live.">
+        <Section id="scroll" title="Scroll it" note="The queue page as it would behave, three cards deep. Every control in it is live; switch to Today to compare.">
           <Playground />
         </Section>
 
-        <Section id="bottom" title="1 · The end of a card" note="The same card — one live sub-agent, two shells, a PR watch, a file and a link — scrolled to its end. Today that is six rows under the prompt box plus the strip under them.">
-          <Candidate letter="" title="Today" note={`Prompt box, six ${CHILD_ARROW} rows, then the context pie and the goal on the left of the lifecycle strip.`}>
-            <CardEnd data={CACHE} layout="today" height={600} />
+        <Section id="top" title="1 · The top bar: the thread as a whole" note="Everything that manages the thread rather than this run. The two lifecycle verbs are bare icons in the header's own 28px squares, after a rule that holds them apart from the view controls; the check is last because it is the verb a resting card most often ends on.">
+          <Candidate letter="i" title="At rest" note="Context reads as a fact after “Last active”. The clock and the check carry no label; their names show the instant the pointer reaches them.">
+            <CardEnd data={HEADER_REST} height="fit" bare />
           </Candidate>
-          <Candidate letter="B" pick title="Verbs in the header" note="The bottom edge is one line of counts and the prompt box. Snooze and Mark as done sit in the header with Retry and the other thread verbs, so the card's verbs all live on the one edge that is always on screen.">
-            <CardEnd data={CACHE} layout="header" height={600} />
+          <Candidate letter="ii" title="Pointing at the clock" note="The same immediate tooltip every header icon has.">
+            <CardEnd data={HEADER_REST} height="fit" bare force={{ tip: "alarm" }} />
           </Candidate>
-          <Candidate letter="A" title="Verbs stay at the bottom" note="The least change in habit: the lifecycle buttons keep their place under the prompt box. The dock is one row taller, and that row is on screen for the whole card.">
-            <CardEnd data={CACHE} layout="dock" height={600} />
+          <Candidate letter="iii" title="Clicking the clock" note="Every time, the whole list — each row says when the thread would come back. Nothing is remembered from the last pick, so there is no one-click snooze whose length changes between visits. Custom time & prompt… opens today's dialog.">
+            <CardEnd data={HEADER_REST} height="fit" bare force={{ menu: true }} />
           </Candidate>
-          <Candidate letter="C" title="One dock for the page" note="Cards stop carrying a prompt box at all and end in one slim row; the page's single prompt box, pinned to the bottom, answers the card under it. Most compact; costs a moment of “which card am I replying to?”, which the dock answers in words.">
-            <QueueViewport layout="page" height={600} />
+          <Candidate letter="iv" title="A snoozed thread" note="The clock turns amber while a snooze is armed, which retires the footer's grey alarm glyph. The menu leads with when it wakes, and Wake now.">
+            <CardEnd data={HEADER_SNOOZED} height="fit" bare force={{ menu: true }} />
           </Candidate>
-        </Section>
-
-        <Section id="activity" title="2 · Live ops, condensed" note={`Counts at the prompt box's upper right, in the marks the ${CHILD_ARROW} rows already use: a yellow dot for an agent, a blue one for a shell, the pull-request mark for a PR watch, file and link icons. Hover for the rows themselves, in the same ${CHILD_ARROW} grammar as today.`}>
-          <Candidate letter="i" title="Six live ops, at rest" note="One line, whatever the count.">
-            <CardEnd data={CACHE} layout="header" height={460} />
+          <Candidate letter="v" title="Pointing at the check" note="Mark as done. A live turn still gets today's “End this session?” confirmation.">
+            <CardEnd data={HEADER_REST} height="fit" bare force={{ tip: "check" }} />
           </Candidate>
-          <Candidate letter="ii" title="Hovering the counts" note="The rows open above the line, so nothing under the prompt box moves. Each row keeps its click (open the transcript, the output, the PR) and its × (stop or clear).">
-            <CardEnd data={CACHE} layout="header" height={460} activityOpen />
+          <Candidate letter="vi" title="Marked done" note="The two verbs give way to today's “✓ Done” readout; a message reopens the thread, as now.">
+            <CardEnd data={HEADER_DONE} height="fit" bare />
           </Candidate>
-          <Candidate letter="iii" title="One sub-agent" note="A single op reads as a sentence.">
-            <CardEnd data={PRICING} layout="header" height="fit" />
+          <Candidate letter="vii" title="The busiest header" note="Reload plugins, Restart worker, Retry and 88% context on a long title. The title truncates; nothing wraps.">
+            <CardEnd data={HEADER_BUSY} height="fit" bare force={{ tip: "restart" }} />
           </Candidate>
-        </Section>
-
-        <Section id="context" title="3 · Where the context pie and the goal go" note="Today both sit at the far left of the lifecycle strip, which holds the verbs that end or park a thread — neither of them does that. The goal is a standing message to the worker, and the pie is how much room is left for the next one; both are about what you send, so both move into the prompt box.">
-          <Candidate letter="i" pick title="In the prompt box" note="The goal joins model, effort and permission — the controls for how the worker runs. Unset it is a bare mark; armed it is a lit chip that says what it does. The pie sits by Send, where the room it measures gets used.">
-            <CardEnd data={PRICING} layout="header" height="fit" />
-          </Candidate>
-          <Candidate letter="ii" title="The pie in the header, as a reading" note="“Last active 23m ago · 31% context”: a fact about the thread, next to the other fact about it. Reads well, but the header's second line is the one that truncates first.">
-            <CardEnd data={PRICING} layout="header" height="fit" contextAt="header" />
-          </Candidate>
-          <Candidate letter="iii" title="Both on the line above the prompt box" note="With the other outstanding things. Keeps the prompt box to its message, at the cost of a busier line.">
-            <CardEnd data={PRICING} layout="header" height="fit" contextAt="tabs" />
+          <Candidate letter="viii" title="Pointing at the context reading" note="ContextMeter's popover, unchanged: the exact count and Compact now.">
+            <CardEnd data={HEADER_REST} height="fit" bare force={{ context: true }} />
           </Candidate>
         </Section>
 
-        <Section id="comments" title="4 · Comments, as highlights" note="A comment leaves its passage lightly highlighted in yellow and nothing else in the transcript; the words show in a popover on hover, and stay up on click. The count rides both sticky edges: the header and the line above the prompt box.">
-          <Candidate letter="i" pick title="Hovering a highlight" note="Pending · goes with your next send. Edit and delete in the corner.">
-            <CardEnd data={CACHE} layout="header" height={600} layer={{ seeds: [S2, S3], openSeed: 0 }} />
+        <Section id="bottom" title="2 · The bottom: this run, and how to steer it" note="The dock is one line of what is outstanding, then the prompt box. The goal sits at the box's bottom right with attach and send — a standing message is something you send — grey while unset and amber while armed.">
+          <Candidate letter="i" title="At rest, no goal" note="Two pending comments on the left of the line, six live ops counted on the right; the target is grey.">
+            <CardEnd data={CACHE} height={540} layer={{ seeds: [S2, S3] }} />
+          </Candidate>
+          <Candidate letter="ii" title="A goal armed, pointing at it" note="Amber target; the hover shows the goal and when it is sent, as the footer's preview does today. A click opens today's goal panel.">
+            <CardEnd data={PRICING} height="fit" force={{ goal: true }} />
+          </Candidate>
+          <Candidate letter="iii" title="Pointing at the counts" note={`The live ops, one ${CHILD_ARROW} row each, opening upward so nothing under the prompt box moves.`}>
+            <CardEnd data={CACHE} height={540} force={{ activity: true }} />
+          </Candidate>
+        </Section>
+
+        <Section id="context" title="3 · How the context reading reads" note="Three spellings of the same fact in the top bar's second line. All three open the popover on hover.">
+          <Candidate letter="i" pick title="Ring and words" note="“Last active 2m ago · ◔ 64% context”. The ring is the glyph people already know from the footer; the words make it readable without a hover.">
+            <CardEnd data={HEADER_REST} height="fit" bare contextLook="ring" />
+          </Candidate>
+          <Candidate letter="ii" title="Words only" note="“Context 64%”. Quieter, but the line loses the one mark that says this is a gauge.">
+            <CardEnd data={HEADER_REST} height="fit" bare contextLook="words" />
+          </Candidate>
+          <Candidate letter="iii" title="Ring only" note="The footer's bare ring, moved up; the number only on hover. Smallest, and the least readable at a glance.">
+            <CardEnd data={HEADER_REST} height="fit" bare contextLook="bare" force={{ context: true }} />
+          </Candidate>
+        </Section>
+
+        <Section id="comments" title="4 · Comments, as highlights" note="Unchanged from round two: a comment leaves its passage lightly highlighted in yellow, the words show in a popover on hover and stay up on click, and the count rides the line above the prompt box.">
+          <Candidate letter="i" title="Pointing at a highlight" note="Pending · goes with your next send. Edit and delete in the corner.">
+            <CardEnd data={CACHE} height={600} layer={{ seeds: [S2, S3], openSeed: 0 }} />
           </Candidate>
           <Candidate letter="ii" title="Writing one" note="Select, then Comment or ⌘I: the same popover opens as an editor under the passage.">
-            <CardEnd data={CACHE} layout="header" height={600} layer={{ seeds: [S3], draft: { quote: "412 passed, 1 skipped", text: "" } }} />
+            <CardEnd data={CACHE} height={600} layer={{ seeds: [S3], draft: { quote: "412 passed, 1 skipped", text: "" } }} />
           </Candidate>
           <div className="min-w-[360px] max-w-[560px] flex-1">
             <h3 className="mb-1 text-[13px] font-medium text-fg/90">What the worker reads</h3>
-            <p className="mb-3 text-[12px] leading-[18px] text-muted-80">Unchanged from the first sheet: the prompt box text as a note, then one blockquote per comment, in transcript order.</p>
+            <p className="mb-3 text-[12px] leading-[18px] text-muted-80">The prompt box text as a note, then one blockquote per comment, in transcript order.</p>
             <pre className="overflow-auto whitespace-pre-wrap rounded-lg border border-border bg-inset p-4 font-mono text-[12px] leading-[18px] text-fg/85">{wireText("", [S2, S3])}</pre>
           </div>
         </Section>
 
-        <Section id="rule" title="The rule" note="One job per edge, which is what decides where each control goes.">
+        <Section id="rule" title="The rule" note="Manage at the top, steer at the bottom — loose, and the two places it bent are said out loud below the table.">
           <RuleTable />
         </Section>
       </div>

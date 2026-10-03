@@ -16,7 +16,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
 import { parkExpiresAt, parkForMaxMs, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
-import { AWAITING_FOR_MAX_MS, isParkCorrection, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, isParkCorrection, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -26,6 +26,10 @@ import { createStorage, type SessionRow } from "./storage.ts"
 
 const AT = "2026-08-14T00:00:00.000Z"
 const NOW = Date.parse("2026-08-14T00:05:00.000Z")
+// Up here, above every test that reads it: node:test starts the FIRST test the moment `test()` is called,
+// while this module is still evaluating, so a `const` declared below that test is in its temporal dead
+// zone when the test body runs ("Cannot access 'LIVE_SHELL' before initialization").
+const LIVE_SHELL = { label: "the suite", startedAt: "2026-08-15T11:59:00.000Z", state: "running" as const, id: "toolu_x", taskId: "bzvtnt3ig" }
 
 type Shell = SessionTelemetry["bgShells"][number]
 type Agent = SessionTelemetry["subAgents"][number]
@@ -220,7 +224,7 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number }; lastHumanAt?: string } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number }; lastHumanAt?: string; spawnedAt?: string } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
@@ -230,7 +234,9 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
   // exactly how a correction that could never be delivered survived: enqueue is not delivery.
   const sent: string[] = []
   storage.upsertSession({
-    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: "2026-08-15T11:00:00.000Z",
+    // A LEGACY dispatch unless a case says otherwise: these cases pin the item checks, and a thread under
+    // the `needs_input:` contract owes an answer they are not about (see the needs_input cases below).
+    slug, session_id: "sid", thread_name: `frizz-${slug}`, spawned_at: opts.spawnedAt ?? "2026-08-15T11:00:00.000Z",
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: restedAt, title_auto: 0,
     title: null, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
@@ -272,8 +278,6 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
   const state = () => storage.db.prepare("SELECT fence_id, state FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; state: string }[]
   return { s, storage, queued, state, sent, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
-
-const LIVE_SHELL = { label: "the suite", startedAt: "2026-08-15T11:59:00.000Z", state: "running" as const, id: "toolu_x", taskId: "bzvtnt3ig" }
 
 test("a park naming something that is NOT running bumps the worker, and says which", async () => {
   const h = parkHarness([
@@ -873,4 +877,65 @@ test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue b
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
+})
+
+// ---- THE `needs_input:` ANSWER (2026-10-01) -------------------------------------------------------
+// A worker dispatched at or after NEEDS_INPUT_REQUIRED_AT owes every park an answer to "does the human
+// need to look now?". A fence without one is not a park the board will honour, so the worker is told
+// which line is missing — but only once the items are right, because a fence naming dead work or none is
+// wrong for a reason the answer would not fix.
+const NEW_CONTRACT = new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) + 60_000).toISOString()
+
+test("a new-contract park that gives no answer is corrected for exactly that line", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].fence_id, /^park:needs-input:/)
+    assert.ok(rows[0].message.startsWith(PARK_CORRECTION_NEEDS_INPUT_LEAD))
+    assert.equal(isParkCorrection(rows[0].message), true, "invisible in the chat like every other correction")
+    assert.match(rows[0].message, /`needs_input: false` — nothing for them yet/)
+    assert.match(rows[0].message, /no write-up/)
+    // One per rest, however many ticks run over it.
+    await h.s.tick()
+    assert.equal(h.queued().length, 1)
+  } finally { h.close() }
+})
+
+test("an answer that is neither true nor false is quoted back", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, { kind: "needs_input", value: "yes" }], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
+  try {
+    await h.s.tick()
+    assert.match(h.queued()[0].message, /\(it says `needs_input: yes`\)/)
+  } finally { h.close() }
+})
+
+test("an answered new-contract park on live work is left alone — true or false", async () => {
+  for (const answer of ["false", "true"]) {
+    const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }, { kind: "needs_input", value: answer }], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
+    try {
+      await h.s.tick()
+      assert.deepEqual(h.queued(), [], `needs_input: ${answer}`)
+    } finally { h.close() }
+  }
+})
+
+test("a dead name outranks a missing answer — the item correction speaks first", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bGONE" }, { kind: "for", value: "2h" }], { shells: [LIVE_SHELL], spawnedAt: NEW_CONTRACT })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].fence_id, /^park:dead:/)
+    assert.doesNotMatch(rows[0].message, /needs_input: true` or/)
+  } finally { h.close() }
+})
+
+test("a legacy park owes no answer", async () => {
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "2h" }], { shells: [LIVE_SHELL] })
+  try {
+    await h.s.tick()
+    assert.deepEqual(h.queued(), [])
+  } finally { h.close() }
 })

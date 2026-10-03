@@ -5,7 +5,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
-import { createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
+import { ANSWER_REOFFER_BACKOFF_MS, createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS } from "./wake-store.ts"
 import type { Tailer, SessionTelemetry, FenceView, TurnState, BgShellView } from "./tailer.ts"
@@ -519,6 +519,188 @@ test("question: a kick that lands while a pass is delivering runs one more pass,
   assert.match(h.resumes[1].message, /“Which dist-tag\?”/)
   await s.stop()
   h.storage.close()
+})
+
+// ---- AN ANSWER IS DELIVERED WHEN THE WORKER HAS IT (2026-10-01) ----
+//
+// `delivered` used to flip at ENQUEUE, on the reasoning that the outbox is durable and owns retry. Its
+// retry is capped: a wake that exhausted its attempts left the answers reading delivered, and nothing
+// ever offered them again (2026-09-30: four answers flagged delivered that never reached their worker).
+const answerQS = (h: Harness, id: string, question: string, chosen = "SQLite") =>
+  h.storage.answerThreadQuestion(id, JSON.stringify({ questionId: id, question, chosen: [chosen] }), h.clock.ms)
+
+function failingAnswerHarness(over: Partial<Parameters<typeof createScheduler>[0]> = {}) {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "SQLite or a JSON file?")
+  h.tele.set("t", tele())
+  const failing = { on: true }
+  const logs: string[] = []
+  const make = (more: Partial<Parameters<typeof createScheduler>[0]> = {}) => h.make({
+    maxDeliveryAttempts: 2, retryBaseMs: 100, retryMaxMs: 100, deliveryLeaseMs: 1_000,
+    log: (m) => logs.push(m),
+    resume: (slug, message, deliveryId) => {
+      h.resumes.push({ slug, message, deliveryId })
+      if (failing.on) throw new Error("the daemon exited before it became ready")
+    },
+    ...over,
+    ...more,
+  })
+  const store = createWakeDeliveryStore(h.storage.scope)
+  const answerWakes = () => store.list().filter((d) => d.fenceId.startsWith("answers:"))
+  // Spend every attempt: the first claim fails, the lease runs out, the second claim fails, the lease
+  // runs out and the row is exhausted.
+  async function exhaust(s: ReturnType<typeof createScheduler>) {
+    for (let i = 0; i < 4; i++) { await s.tick(); h.clock.ms += 1_100 }
+  }
+  return { h, failing, logs, make, store, answerWakes, exhaust }
+}
+
+test("answers: a wake that never lands leaves the answer UNDELIVERED, and it is offered again once the worker runs", async () => {
+  const { h, failing, logs, make, answerWakes, exhaust } = failingAnswerHarness()
+  const s = make()
+  answerQS(h, "qst_1", "SQLite or a JSON file?")
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0, "queued is not received")
+  await exhaust(s)
+  assert.equal(h.resumes.length, 2, "both attempts spent")
+  assert.deepEqual(answerWakes().map((d) => d.state), ["exhausted"])
+  // THE BUG: this read 1 — "delivered" — for an answer no worker ever saw.
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0, "an exhausted wake delivered nothing")
+  assert.ok(logs.some((m) => /answers for t stay UNDELIVERED/.test(m)), "and that is said")
+
+  // NOT A LOOP. With nothing to say the runtime has changed, the next ticks leave it alone rather than
+  // burning another round of attempts every tick.
+  for (let i = 0; i < 5; i++) { await s.tick(); h.clock.ms += 10_000 }
+  assert.equal(h.resumes.length, 2, "no re-offer without a reason")
+
+  // The worker runs a turn — a human steer reached it — so its runtime takes input again.
+  failing.on = false
+  h.tele.set("t", { ...tele(), lastAssistantAt: iso(h.clock.ms) })
+  h.clock.ms += 1
+  await s.tick()
+  assert.equal(h.resumes.length, 3, "offered again")
+  assert.match(h.resumes[2].message, /^1\. “SQLite or a JSON file\?” → SQLite$/m, "the same answer, in the same words")
+  assert.notEqual(h.resumes[2].deliveryId, h.resumes[0].deliveryId, "under a new delivery id: the old one is spent")
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1, "and now it IS delivered")
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 3, "and never again")
+})
+
+test("answers: a failed batch is offered again after the backoff even if nothing else happens", async () => {
+  const { h, failing, make, exhaust } = failingAnswerHarness()
+  const s = make()
+  answerQS(h, "qst_1", "SQLite or a JSON file?")
+  await exhaust(s)
+  assert.equal(h.resumes.length, 2)
+  failing.on = false
+  h.clock.ms += ANSWER_REOFFER_BACKOFF_MS - 10_000
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "inside the backoff")
+  h.clock.ms += 10_000
+  await s.tick()
+  assert.equal(h.resumes.length, 3, "offered again at the backoff")
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
+})
+
+test("answers: a failed batch is offered again at once by a restarted server", async () => {
+  const { h, failing, make, exhaust } = failingAnswerHarness()
+  answerQS(h, "qst_1", "SQLite or a JSON file?")
+  await exhaust(make())
+  assert.equal(h.resumes.length, 2)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0)
+  // A restart is where a broken binary or credential gets fixed — the real-subsystem run in
+  // scripts/verify-answers-delivery.mjs is exactly this, against a real server.
+  failing.on = false
+  h.clock.ms += 1_000
+  await make().tick()
+  assert.equal(h.resumes.length, 3)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
+})
+
+test("answers: a second answer while the first is in flight is its own wake, and never re-carries the first", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "First?")
+  askQ(h, "t", "qst_2", "Second?")
+  h.tele.set("t", tele())
+  // A broker runtime: the wake is SENT and confirmed by the process surviving the grace, so it sits
+  // leased — in flight — between the two answers.
+  const s = h.make({ wakeRuntimeState: () => "alive", confirmGraceMs: 1_000 })
+  answerQS(h, "qst_1", "First?", "A")
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0, "sent, not yet confirmed")
+  answerQS(h, "qst_2", "Second?", "B")
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+  assert.doesNotMatch(h.resumes[1].message, /First\?/, "the in-flight answer is not sent twice")
+  assert.match(h.resumes[1].message, /“Second\?” → B/)
+  h.clock.ms += 1_100
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1, "confirmed once the process outlived the grace")
+  assert.equal(h.storage.getThreadQuestion("qst_2")?.delivered, 1)
+  await s.tick()
+  assert.equal(h.resumes.length, 2)
+})
+
+test("answers: the transcript token marks them delivered; a process that dies with them is not delivery", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "Which store?")
+  h.tele.set("t", tele())
+  let alive = false
+  const s = h.make({ wakeRuntimeState: () => (alive ? "alive" : "dead"), confirmGraceMs: 1_000, retryBaseMs: 100, retryMaxMs: 100 })
+  answerQS(h, "qst_1", "Which store?")
+  await s.tick()
+  h.clock.ms += 1_100
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0, "the process died before reading it")
+  alive = true
+  h.clock.ms += 200
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the outbox's own retry")
+  h.tele.set("t", { ...tele(), lastUserText: `${h.resumes[1].message}\n\n${wakeDeliveryToken(h.resumes[1].deliveryId!)}` })
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
+})
+
+test("answers: an ABANDONED wake leaves them undelivered and is not retried on every tick", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "Which store?")
+  h.tele.set("t", tele())
+  const s = h.make({
+    resume: (slug, message, deliveryId) => {
+      h.resumes.push({ slug, message, deliveryId })
+      throw Object.assign(new Error("a live worker owns this conversation"), { terminalDelivery: true })
+    },
+  })
+  answerQS(h, "qst_1", "Which store?")
+  for (let i = 0; i < 5; i++) { await s.tick(); h.clock.ms += 10_000 }
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 0)
+})
+
+test("answers: a wake superseded by a session change is offered to the new session at once", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "Which store?")
+  h.tele.set("t", tele(undefined, "in-flight")) // held: an answer waits for the thread to rest
+  const s = h.make()
+  answerQS(h, "qst_1", "Which store?")
+  await s.tick()
+  assert.equal(h.resumes.length, 0)
+  h.storage.upsertSession(row("t", { session_id: "sid-t-2" }))
+  h.tele.set("t", tele())
+  h.clock.ms += 31_000
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1, "the new session gets the answer")
+  assert.match(h.resumes[0].message, /“Which store\?” → SQLite/)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
 })
 
 // ---- single-fire on a witnessed transition ----

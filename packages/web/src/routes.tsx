@@ -15,6 +15,7 @@ import { rememberTabView, resolveView, retiredProjectHref, viewAt, viewInSearch,
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
 import { readProjectsQueues } from "./lib/projectsQueuesRead.ts"
+import { LightboxHost } from "./components/Lightbox.tsx"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
 
@@ -60,6 +61,9 @@ function RootLayout() {
           adds a project, and the launcher's `/?add=<dir>` proposal. The layout's, because the proposal is
           read on `/` and then survives the redirect to the page it lands on. */}
       <AddProjectHost />
+      {/* The image viewer a ```lightbox gallery opens (components/Lightbox.tsx). Hosted here rather
+          than by the gallery, which is a virtualized transcript row that can unmount under it. */}
+      <LightboxHost />
       {/* ALSO hosted by the layout, and for the same reason: prose carrying `#123` renders on the
           page, in a drawer and on the standalone `/thread/<slug>/full` page alike, and one delegated
           listener at the root covers all three. Inert until a pointer rests on a reference. */}
@@ -300,6 +304,7 @@ function StandaloneRoute() {
       <Toaster />
       {/* Its own for the same reason: `e`, `h`, `r` and `f` (which leaves) work on this thread too. */}
       <KeyboardLayer />
+      <LightboxHost />
     </>
   )
 }

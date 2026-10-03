@@ -199,6 +199,12 @@ export interface DevSupervisorOptions {
   error?: (line: string) => void
   /** Lifecycle beats for the foreground launcher's terminal. See SupervisorActivity. */
   onActivity?: (event: SupervisorActivity) => void
+  /**
+   * A control-plane child exited, for any reason. The child shares the launcher's terminal, and Node
+   * resets that terminal to the settings it saw at its own start as it exits — so a launcher holding
+   * raw mode has to put it back here (PaneHost.reclaim).
+   */
+  onChildExit?: () => void
 }
 
 export interface DevSupervisor {
@@ -343,8 +349,11 @@ function isWithin(path: string, root: string): boolean {
   return rel === "" || (rel !== ".." && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
 }
 
-function ignoredDevPath(path: string): boolean {
-  const parts = resolve(path).split(sep)
+/** `relPath` is relative to the watch root that admitted the event, so only segments INSIDE the checkout
+ *  can mark it generated. A checkout that itself lives under one of these names — a worktree in
+ *  `~/.cache/…` — is still source; judged on the absolute path, every file in it was ignored. */
+function ignoredDevPath(relPath: string): boolean {
+  const parts = relPath.split(sep)
   const name = parts.at(-1) ?? ""
   return parts.some((part) => GENERATED_DIRS.has(part) || part === "fixtures" || part.endsWith(".fixtures"))
     || /\.(?:test|spec)\.[^.]+$/.test(name)
@@ -359,12 +368,12 @@ export function classifyDevChange(path: string, roots = defaultDevWatchRoots()):
   const absolute = resolve(path)
   const root = roots.find((candidate) => isWithin(absolute, resolve(candidate)))
   if (!root) return null
-  if (ignoredDevPath(absolute)) return null
-
-  const name = basename(absolute)
   // `watchRoots` is a public test/embedding seam. Resolve package ownership against the root that
   // actually admitted this event rather than the source checkout captured at module-import time.
   const relToWorkspace = relative(resolve(root), absolute)
+  if (ignoredDevPath(relToWorkspace)) return null
+
+  const name = basename(absolute)
   const parts = relToWorkspace.split(sep)
   const packageName = parts[0] === "packages" ? parts[1] : undefined
   if (name === "package.json" && parts.length === 3 && packageName && CHILD_PACKAGE_METADATA.has(packageName)) {
@@ -600,6 +609,7 @@ class Supervisor implements DevSupervisor {
   private readonly logLine: (line: string) => void
   private readonly errorLine: (line: string) => void
   private readonly onActivity?: (event: SupervisorActivity) => void
+  private readonly onChildExit?: () => void
   /** Suppresses activity beats until the first boot has settled; until then the readout owns the terminal. */
   private booted = false
   /** When the restart currently in flight began, so its "ready" beat can report a duration. */
@@ -679,6 +689,7 @@ class Supervisor implements DevSupervisor {
     this.logLine = opts.log ?? ((line) => frizzLog.info("supervisor", stripPrefix(line)))
     this.errorLine = opts.error ?? ((line) => frizzLog.error("supervisor", stripPrefix(line)))
     this.onActivity = opts.onActivity
+    this.onChildExit = opts.onChildExit
     this.updateRestart = opts.updateRestart
     this.updateMode = opts.updateMode ?? "durableReexec"
     this.commitUpdate = opts.commitUpdate
@@ -1266,6 +1277,11 @@ class Supervisor implements DevSupervisor {
         settleSpawn(false)
       })
       child.once("exit", (code, signal) => {
+        try {
+          this.onChildExit?.()
+        } catch {
+          // A launcher whose terminal is gone must never take the board down with it.
+        }
         if (this.child === child) {
           this.child = null
           this.childPort = undefined
