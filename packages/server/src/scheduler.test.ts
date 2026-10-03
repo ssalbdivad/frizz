@@ -688,7 +688,8 @@ test("answers: a wake superseded by a session change is offered to the new sessi
   const h = harness()
   h.storage.upsertSession(row("t"))
   askQ(h, "t", "qst_1", "Which store?")
-  h.tele.set("t", tele(undefined, "in-flight")) // held: an answer waits for the thread to rest
+  // Held by having no telemetry: in this fork an answer goes out mid-turn (isDeliverableNow), so a busy
+  // thread would not hold it.
   const s = h.make()
   answerQS(h, "qst_1", "Which store?")
   await s.tick()

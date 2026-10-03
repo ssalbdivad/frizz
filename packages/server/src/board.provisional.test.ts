@@ -66,14 +66,15 @@ function fixture(): Fixture {
 
 // A thread that rested on a registered PR: its last message is an ```awaiting fence naming the PR, and the
 // PR watcher is armed. That is the park that sits in the Snoozed band — once the human has SEEN the reply:
-// a park answering their prompt stays Ready until they have (board.replyUnseen).
+// a park answering their prompt stays Ready until they have (board.replyUnseen). The fence answers
+// `needs_input: false`: the row is spawned after NEEDS_INPUT_REQUIRED_AT, where an unanswered fence queues.
 function seedParkedOnPr(f: Fixture, slug: string): void {
   f.storage.upsertSession(row(slug, { backend: "claude", seen_at: minutesAgo(25) }))
   f.storage.setClaudeRuntime(slug, "broker")
   f.storage.armPrWatch({ id: `prw-${slug}`, slug, owner: "acme", repo: "app", number: 7, createdAtMs: Date.now() - 30 * 60_000, expiresAtMs: Date.now() + 24 * 3_600_000 })
   writeFileSync(join(f.dir, `${slug}-session.jsonl`),
     user(minutesAgo(40), "Open the PR and wait for review.") +
-    assistant(minutesAgo(30), "Opened acme/app#7.\n\n```awaiting\nprs: [acme/app#7]\nfor: 2h\nWaiting on review.\n```"))
+    assistant(minutesAgo(30), "Opened acme/app#7.\n\n```awaiting\nprs: [acme/app#7]\nneeds_input: false\nfor: 2h\n```"))
 }
 
 test("an unprimed row parked on a PR reads the band it had before the restart, never running — and the same once primed", async () => {
