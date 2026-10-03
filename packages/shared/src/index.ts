@@ -626,6 +626,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDurationRaw).
 //                                    Capped at a day — or at PR_WATCH_FOR_MAX_MS when every item is a
 //                                    `prs:` entry, because an external PR does not move on a day's clock.
+//                                    An `agents:` entry caps it at an hour instead: AGENT_PARK_FOR_MAX_MS.
 //   title:  Waiting on the CI run    OPTIONAL. The resting card's heading, in the worker's own words.
 //   needs_input: false               REQUIRED for a thread dispatched at or after NEEDS_INPUT_REQUIRED_AT.
 //                                    The worker's own answer to "does the human need to look now?" —
@@ -981,6 +982,13 @@ const DURATION_UNIT_MS: Record<string, number> = { s: 1_000, m: 60_000, h: 3_600
  *  already dead. A PULL REQUEST is nothing like that and gets its own, far higher ceiling — see
  *  PR_WATCH_FOR_MAX_MS. */
 export const AWAITING_FOR_MAX_MS = 24 * 60 * 60 * 1000
+/** The ceiling for a park that names a SUB-AGENT, and it is a check-in cadence rather than a timeout.
+ *  An orchestrator parked on its children for the full day reports nothing for the whole run: @3-0 rested
+ *  `for: 8h` on five lanes of fixers and the board showed one stale line while they landed work
+ *  (maintainer 2026-10-03: "the top level thread should regularly be reporting back feedback and
+ *  communicating with sub agents … avoid long periods of top level no updates"). Expiry wakes the parent
+ *  with parkExpiredWakeMessage's check-in steps, and re-parking stays unlimited. */
+export const AGENT_PARK_FOR_MAX_MS = 60 * 60 * 1000
 /** Milliseconds as WRITTEN, uncapped — for a caller that has to know whether the ceiling bit. Every
  *  wait applies one; none of them may apply it silently. */
 export function parseAwaitingDurationRaw(value: string): number | null {
@@ -2250,12 +2258,26 @@ export function parseLimitResumeWake(text: string): { window: LimitWindow } | nu
 
 /** Scheduler SOURCE 12, cause `expired`: the `for:` ran out and nothing resolved. `status` is the live
  *  readout of what the fence named, already formatted by the caller. */
-export function parkExpiredWakeMessage(status: readonly string[]): string {
+export function parkExpiredWakeMessage(status: readonly string[], checkIn = false): string {
   return [
     "⏰ Your wait expired, nothing resolved. Check back in on everything.",
     "",
     ...status,
     "",
+    // A park on sub-agents expires on AGENT_PARK_FOR_MAX_MS, so this wake is the parent's regular
+    // check-in. No line here may open with "- ": parkWakeItems reads those as the parked items.
+    ...(checkIn
+      ? [
+        "THIS IS YOUR SUB-AGENT CHECK-IN. Before re-parking:",
+        "1. Read where each child stands: `mcp__frizz__read_thread` on its address, its output file, or the",
+        "   commits and files it has written since the last check-in.",
+        "2. Steer any child that is off course, stuck or duplicating another's work. `SendMessage` reaches a",
+        "   plain background sub-agent; never message a Workflow's agent (it starts a second copy).",
+        "3. Report: a short progress note above the fence — what landed, what is running, what changed.",
+        "   `needs_input: true` when the human can read or act on something now, else `false`.",
+        "",
+      ]
+      : []),
     "Re-park if they are genuinely still going — there is no limit on that, and a long job is not a",
     "failure. If something is finished, read its result. If nothing is left, end in ```done or register",
     "a question with `mcp__frizz__ask`.",

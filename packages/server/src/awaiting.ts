@@ -1,4 +1,4 @@
-import { AWAITING_FOR_MAX_MS, awaitingNeedsInput, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, awaitingNeedsInput, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -198,9 +198,13 @@ export function needsInputParkHolds(hints: readonly AwaitingHint[], live: LiveAc
  *  a shell or a sub-agent dies with the session, and a day is already generous for one. A park naming
  *  nothing but PULL REQUESTS is a different object — an external PR sits unreviewed for as long as its
  *  maintainers take — and capping that one at a day is what woke a thread daily for four days against a
- *  PR nobody had touched. Mixed ⇒ the low ceiling, because the shell in the list is still a shell. */
+ *  PR nobody had touched. Mixed ⇒ the low ceiling, because the shell in the list is still a shell.
+ *
+ *  A SUB-AGENT anywhere in the list caps it at the hour: that wake is the parent's check-in on its
+ *  children, not a timeout (AGENT_PARK_FOR_MAX_MS). */
 export function parkForMaxMs(park: AwaitingPark): number {
   if (park.items.length === 0) return AWAITING_FOR_MAX_MS
+  if (park.items.some((i) => i.kind === "agent")) return AGENT_PARK_FOR_MAX_MS
   // An issue earns the PR's ceiling for the PR's reason: it sits on its maintainers' clock too.
   return park.items.every((i) => i.kind === "pr" || i.kind === "issue") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
 }

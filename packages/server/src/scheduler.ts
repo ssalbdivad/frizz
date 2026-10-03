@@ -2630,7 +2630,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // fallback and prints its agent-facing body verbatim as a bordered card. The wording is
         // unchanged — only its address is.
         : expired
-        ? parkExpiredWakeMessage(status)
+        ? parkExpiredWakeMessage(status, park.items.some((i) => i.kind === "agent"))
         : allFinished
         ? parkFinishedWakeMessage(status, dead.length !== 1)
         : dead.every(silentItem)

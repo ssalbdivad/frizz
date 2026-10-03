@@ -419,6 +419,14 @@ test("parseParkWake: an expired park round-trips, and its item list is the discl
   assert.deepEqual(wake, { kind: "expired", items: parkStatus })
 })
 
+test("parseParkWake: a sub-agent check-in keeps the item list to the parked items", () => {
+  const status = ["- `agents: [wzkorrv4u]` — still running"]
+  const message = parkExpiredWakeMessage(status, true)
+  assert.match(message, /SUB-AGENT CHECK-IN/)
+  assert.doesNotMatch(parkExpiredWakeMessage(status), /CHECK-IN/)
+  assert.deepEqual(parseParkWake(message), { kind: "expired", items: status })
+})
+
 test("parseParkWake: a finished park round-trips in both its singular and plural wordings", () => {
   assert.equal(parseParkWake(parkFinishedWakeMessage(["- `agent: azf10ktb2` — finished"], false))?.kind, "finished")
   assert.equal(parseParkWake(parkFinishedWakeMessage(parkStatus, true))?.kind, "finished")

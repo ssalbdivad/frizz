@@ -16,7 +16,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
 import { parkExpiresAt, parkForMaxMs, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
-import { AWAITING_FOR_MAX_MS, isParkCorrection, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, isParkCorrection, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
 import { mkdtempSync, rmSync } from "node:fs"
@@ -877,6 +877,16 @@ test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue b
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
+})
+
+test("parkForMaxMs: a sub-agent anywhere in the park caps it at the check-in hour", () => {
+  const at = Date.parse("2026-10-03T10:00:00Z")
+  const lanes = { items: [{ kind: "agent" as const, value: "wzkorrv4u" }, { kind: "agent" as const, value: "wt5dxjxhp" }], forMs: 8 * 60 * 60_000 }
+  assert.equal(parkForMaxMs(lanes), AGENT_PARK_FOR_MAX_MS)
+  assert.equal(parkExpiresAt(lanes, at), at + AGENT_PARK_FOR_MAX_MS, "for: 8h becomes an hourly check-in")
+  assert.equal(parkExpiresAt({ ...lanes, forMs: 20 * 60_000 }, at), at + 20 * 60_000, "a shorter for: stands as written")
+  assert.equal(parkForMaxMs({ items: [{ kind: "agent", value: "a1" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), AGENT_PARK_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
 })
 
 // ---- THE `needs_input:` ANSWER (2026-10-01) -------------------------------------------------------

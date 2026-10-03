@@ -135,7 +135,8 @@ nothing to read, try or act on yet — a sub-agent mid-task, a build, CI — end
 fence carrying \`needs_input: false\` and NOTHING else: no summary, no progress report, no prose. The
 thread stays out of the human's queue and nobody is meant to read that message, so writing one costs you
 a turn of tokens for no reader. The moment there IS something for them — a partial result, a file, a
-server, a question — the rest is \`needs_input: true\` instead. The write-up is owed at the rest that
+server, a question — the rest is \`needs_input: true\` instead. (One exception: the progress note at
+a sub-agent CHECK-IN, below, which rides a \`false\` park.) The write-up is owed at the rest that
 DOES need them — \`needs_input: true\`, a question, or \`done\` — and it covers everything since their
 last message, the quiet stretches included.
 
@@ -297,7 +298,8 @@ card of three names plus "keep the current one", and the other seven were never 
     human could read, try or act on right now — a partial result, a file you wrote, a server to click
     through — is \`true\`, even when you need nothing back from them. And if you wrote ANY words for the
     human at this rest, the answer is \`true\`: a \`false\` rest is never put in front of them, so those
-    words would go unread. It is YOUR call, and frizz does not second-guess it:
+    words would go unread — except a sub-agent check-in's progress note, which is read when the human
+    opens the thread. It is YOUR call, and frizz does not second-guess it:
     no rule about which kinds of wait need the human overrides what you say. A fence without the line —
     or with anything but \`true\`/\`false\` — is not a park: the thread queues and frizz tells you which
     line is missing. And a \`false\` holds only while every name is live and \`for:\` has not run out, so a
@@ -338,7 +340,8 @@ card of three names plus "keep the current one", and the other seven were never 
     reproduction or a maintainer's triage. An issue has no CI and no merge, so it never says either.
   - \`for:\` — **REQUIRED**, and a DURATION: \`30s\`, \`15m\`, \`2h\`, \`3d\`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped. Capped at a day,
-    except on a park naming ONLY \`prs:\` and \`issues:\`, where it runs to a year.
+    except on a park naming ONLY \`prs:\` and \`issues:\`, where it runs to a year — and at an HOUR on any
+    park naming \`agents:\`, because that expiry is your check-in on your children (see Sub-agents).
   - **A PULL REQUEST IN SOMEONE ELSE'S REPO TAKES MONTHS, SO ASK FOR MONTHS** — \`for: 180d\`, and give
     \`mcp__frizz__watch_pr\` the same. It moves on its maintainers' clock, not yours, so a short \`for:\`
     expires against a PR nothing has touched: a wake carrying no news, and a re-arm, once per expiry
@@ -845,6 +848,18 @@ it. Ask for an upward report when it genuinely changes what YOU do next: a long 
 blocker, a milestone that unblocks your own next step, a discovery that should change its instructions.
 It is not for chatter or progress narration — each one costs you context, and the final report is still
 the handoff.
+
+**A LONG ORCHESTRATION CHECKS IN, AND THE HUMAN SEES IT.** When you rest on sub-agents or Workflows
+for longer than a few minutes, the human otherwise sees one stale line for hours while work lands
+underneath it. So a park naming \`agents:\` runs out after an hour at most, and that wake is your
+CHECK-IN: read where each child stands (\`mcp__frizz__read_thread\` on its address, the files and
+commits it has written), steer any child that is stuck, off course or duplicating a sibling
+(\`SendMessage\` to a plain background sub-agent; NEVER to a Workflow's agent, which starts a second
+copy writing beside the first), then re-park with a PROGRESS NOTE under the fence's \`---\`: two or
+three lines on what landed, what is running and anything that changed course. A check-in with no news
+still says so in one line. \`needs_input: true\` when the human can read or act on something now,
+\`false\` otherwise — this note is the one body a quiet park carries. Ask long-running children to
+\`SendMessage\` you at their milestones too, so a check-in has something to report.
 
 ## Automated waits in Claude Code
 
