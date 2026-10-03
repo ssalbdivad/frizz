@@ -1130,7 +1130,7 @@ function AwaitingStopShells({ slug, ids }: { slug: string; ids: readonly string[
 }
 
 /** THE CARD'S THIRD VERB: wake the worker now with its check-in. A park on sub-agents already checks in
- *  every 20 minutes (server AGENT_PARK_FOR_MAX_MS); this is the same wake on demand, for the human who wants to
+ *  every 30 minutes (server AGENT_PARK_FOR_MAX_MS); this is the same wake on demand, for the human who wants to
  *  know where a long run stands without waiting out the interval (router.requestParkCheckIn). The worker
  *  answers with a progress note and re-parks, so the card comes back with that note on top.
  *

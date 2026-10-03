@@ -200,7 +200,7 @@ export function needsInputParkHolds(hints: readonly AwaitingHint[], live: LiveAc
  *  maintainers take — and capping that one at a day is what woke a thread daily for four days against a
  *  PR nobody had touched. Mixed ⇒ the low ceiling, because the shell in the list is still a shell.
  *
- *  A SUB-AGENT anywhere in the list caps it at 20 minutes: that wake is the parent's check-in on its
+ *  A SUB-AGENT anywhere in the list caps it at 30 minutes: that wake is the parent's check-in on its
  *  children, not a timeout (AGENT_PARK_FOR_MAX_MS). */
 export function parkForMaxMs(park: AwaitingPark): number {
   if (park.items.length === 0) return AWAITING_FOR_MAX_MS

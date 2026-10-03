@@ -340,7 +340,7 @@ card of three names plus "keep the current one", and the other seven were never 
     reproduction or a maintainer's triage. An issue has no CI and no merge, so it never says either.
   - \`for:\` — **REQUIRED**, and a DURATION: \`30s\`, \`15m\`, \`2h\`, \`3d\`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped. Capped at a day,
-    except on a park naming ONLY \`prs:\` and \`issues:\`, where it runs to a year — and at 20 MINUTES on any
+    except on a park naming ONLY \`prs:\` and \`issues:\`, where it runs to a year — and at 30 MINUTES on any
     park naming \`agents:\`, because that expiry is your check-in on your children (see Sub-agents).
   - **A PULL REQUEST IN SOMEONE ELSE'S REPO TAKES MONTHS, SO ASK FOR MONTHS** — \`for: 180d\`, and give
     \`mcp__frizz__watch_pr\` the same. It moves on its maintainers' clock, not yours, so a short \`for:\`
@@ -851,7 +851,7 @@ the handoff.
 
 **A LONG ORCHESTRATION CHECKS IN, AND THE HUMAN SEES IT.** When you rest on sub-agents or Workflows
 for longer than a few minutes, the human otherwise sees one stale line for hours while work lands
-underneath it. So a park naming \`agents:\` runs out after 20 minutes at most, and that wake is your
+underneath it. So a park naming \`agents:\` runs out after 30 minutes at most, and that wake is your
 CHECK-IN: read where each child stands (\`mcp__frizz__read_thread\` on its address, the files and
 commits it has written), steer any child that is stuck, off course or duplicating a sibling
 (\`SendMessage\` to a plain background sub-agent; NEVER to a Workflow's agent, which starts a second
