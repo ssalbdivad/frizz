@@ -21,6 +21,7 @@ import {
   buildClaudePermissionInteraction,
   buildClaudeQuestionInteraction,
   claudePermissionDecisionFor,
+  claudeProviderRequestId,
   claudeQuestionDecisionFor,
   parseClaudeAskUserQuestion,
   type ClaudeAskSpec,
@@ -387,7 +388,8 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const scope: InteractionSessionScope = { projectId, threadSlug: slug, sessionId }
     const owner = { projectId, threadSlug: slug, sessionId, cwd }
     const ask = request.toolName === CLAUDE_ASK_USER_QUESTION_TOOL ? parseClaudeAskUserQuestion(request.input) : null
-    const existing = store.listPending(scope).find((r) => r.providerRequestId === requestId)
+    // Keyed on the id the card was journaled under, never the broker's frame id — see claudeProviderRequestId.
+    const existing = store.listPending(scope).find((r) => r.providerRequestId === claudeProviderRequestId(request))
     if (existing) { pendingPerms.set(existing.id, { client, requestId, scope, ...(ask ? { ask } : {}) }); armDeadline(existing.id, existing.expiresAt); return }
     // A question we cannot represent EXACTLY is denied with a redirect rather than downgraded to an
     // approval card: an approximate answer (a clipped label, a dropped question) reads to the model as

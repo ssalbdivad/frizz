@@ -42,6 +42,20 @@ function clip(text: string, max: number): string {
   return text.length > max ? `${text.slice(0, max - 1)}…` : text
 }
 
+/**
+ * The provider request id a card journals for an escalation: the SDK's own `request.requestId`.
+ *
+ * NOT the broker's frame id. The daemon labels each permission frame `perm-<n>` and re-delivers a pending
+ * one under that label after a reconnect; the card is keyed on the id inside the request. The bridge's
+ * "reuse the still-pending card" lookup compared against the frame id, so it never matched, and a
+ * re-delivery only survived because the store deduplicated an identical second create. That stopped the
+ * day approval cards gained `expiresAt = now + deadline`: the second create carried a later deadline, the
+ * store refused it as a conflicting reuse, and the bridge denied a live approval on every restart.
+ */
+export function claudeProviderRequestId(request: Pick<ClaudePermissionRequest, "requestId">): string {
+  return clip(request.requestId, 500)
+}
+
 /** `~`-shorten a path for the prompt — putting the directory in front of the command only pays off if it
  *  stays narrow. (`src/readout.ts` has the CLI's own copy; the server package cannot import the root
  *  project without a circular project reference, and this is four lines of pure string work.)
@@ -141,7 +155,7 @@ export function buildClaudePermissionInteraction(
       sessionEpoch: 0,
       capabilityRevision: 0,
     },
-    providerRequestId: clip(request.requestId, 500),
+    providerRequestId: claudeProviderRequestId(request),
     allowedDecisions: ALLOWED_DECISIONS,
     payload: {
       kind: "permission-approval",
@@ -392,7 +406,7 @@ export function buildClaudeQuestionInteraction(
       sessionEpoch: 0,
       capabilityRevision: 0,
     },
-    providerRequestId: clip(request.requestId, 500),
+    providerRequestId: claudeProviderRequestId(request),
     allowedDecisions: QUESTION_DECISIONS,
     payload: { kind: "agent-question", title, fields: askFields(spec) },
     expiresAt: null,
