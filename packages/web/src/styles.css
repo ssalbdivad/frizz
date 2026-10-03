@@ -1571,6 +1571,17 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
    unmounting). */
 .frizz-card-slot { opacity: 1; }
 .frizz-card-slot[data-queue-leaving="true"] { opacity: 0; }
+/* A card more than a viewport off screen is SKIPPED — no style, layout or paint — and sized from the height
+   it had the last time it was drawn (`auto`), or from 540px, the median card on a 244-card mirror (p10
+   315, p90 793), until it has been drawn once (lib/cardVisibility.ts builds and draws every card in idle
+   time, so the guess does not last; a card not built yet is a stand-in of exactly that height,
+   AllQueuesCard.tsx CardStandIn). `data-near` (set by lib/cardVisibility.ts, never by React) turns it back
+   off for every card within a viewport of the screen, because content-visibility also brings PAINT
+   containment, which would clip what a visible card draws outside its box: its shadow, the arrival ring,
+   the leaving blur, a reply box's menu. The intrinsic size stays on a near card too: `auto` only records
+   the drawn height while the property is present. Width is left to the column (the slot stretches). */
+.frizz-card-slot { content-visibility: auto; contain-intrinsic-block-size: auto 540px; }
+.frizz-card-slot[data-near] { content-visibility: visible; }
 /* The hairline rule under a card is the slot's next SIBLING (a lane, AllQueues.tsx Lane, renders one
    between each pair of cards, never inside a slot), and it unmounts with the card it follows — so it
    fades with it too, or the rule would stand at full strength beside a card that has already dissolved. */

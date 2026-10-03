@@ -122,18 +122,34 @@ const CARD_ICON_OFFSET = "card-icon-offset"
 // half the stroke width goes back on each side), and the difference to the viewBox edge is the dead
 // space, cancelled with an equal negative margin before paint. The ink then starts on the card's own
 // content edge like every other line in it, and `gap-2` means 8px of INK to the title on every kind.
+//
+// MEASURED ONCE PER ICON, not once per card: the trim is a property of the glyph's path at 16px, the same on
+// every card that draws it, and each measurement is a forced layout — of the whole page, or on the queue of
+// a card the browser is skipping (lib/cardVisibility.ts), of that card. A queue of hundreds of done cards
+// paid one per card.
+const glyphTrims = new Map<LucideIcon, { left: string; right: string }>()
 function CardGlyph({ icon: Icon, className }: { icon: LucideIcon; className: string }) {
   const ref = useRef<SVGSVGElement>(null)
   useLayoutEffect(() => {
     const svg = ref.current
     if (!svg || typeof svg.getBBox !== "function") return
-    const ink = svg.getBBox()
-    const view = svg.viewBox.baseVal
-    if (!view || view.width === 0 || ink.width === 0) return
-    const scale = svg.getBoundingClientRect().width / view.width
-    const halfStroke = (Number(svg.getAttribute("stroke-width")) || 0) / 2
-    svg.style.marginLeft = `${-Math.max(0, ink.x - halfStroke - view.x) * scale}px`
-    svg.style.marginRight = `${-Math.max(0, view.x + view.width - (ink.x + ink.width) - halfStroke) * scale}px`
+    let trim = glyphTrims.get(Icon)
+    if (!trim) {
+      const ink = svg.getBBox()
+      const view = svg.viewBox.baseVal
+      if (!view || view.width === 0 || ink.width === 0) return
+      const scale = svg.getBoundingClientRect().width / view.width
+      // Not drawn (display:none, a detached subtree): nothing measured, nothing to remember.
+      if (scale === 0) return
+      const halfStroke = (Number(svg.getAttribute("stroke-width")) || 0) / 2
+      trim = {
+        left: `${-Math.max(0, ink.x - halfStroke - view.x) * scale}px`,
+        right: `${-Math.max(0, view.x + view.width - (ink.x + ink.width) - halfStroke) * scale}px`,
+      }
+      glyphTrims.set(Icon, trim)
+    }
+    svg.style.marginLeft = trim.left
+    svg.style.marginRight = trim.right
   }, [Icon])
   return <Icon ref={ref} aria-hidden="true" size={16} className={`shrink-0 ${CARD_ICON_OFFSET} ${className}`} />
 }

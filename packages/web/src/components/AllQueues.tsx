@@ -60,6 +60,7 @@ import { actedOnHere } from "../lib/humanActs.ts"
 import { useSteeredAt } from "../lib/steering.ts"
 import { pinOverlayQueues, usePinOverrides } from "../lib/optimisticPin.ts"
 import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
+import { drawCardNow } from "../lib/cardVisibility.ts"
 import { isPageKey, registerQueueCursor, releaseAutoOpened, runThreadCommand, useShortcut } from "../lib/keyboardRuntime.ts"
 import { runExternalOpen } from "../lib/externalOpen.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
@@ -1261,6 +1262,9 @@ function useScrollToCard(): (key: string) => number | null {
     releaseAutoOpened(key)
     const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
     if (!slot) return null
+    // A card far down the page may not be built yet (lib/cardVisibility.ts): build and draw it first, so
+    // what lands is the card, with a root to ring and its real height.
+    drawCardNow(slot)
     // Read again when the glide ends: a card that arrived or left above it meanwhile moved it.
     const top = glideTo(() => slot.getBoundingClientRect().top + window.scrollY - QUEUE_CARD_VIEWPORT_TOP)
     const root = slot.querySelector<HTMLElement>("[data-xq-card-root]")

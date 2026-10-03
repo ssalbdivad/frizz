@@ -41,6 +41,7 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { TRANSCRIPT_META_LABEL_CLASS, transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
 import { isPlainLeftClick } from "../lib/standaloneThreadRoute.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
+import { drawnHeight, observeCardSlot, whenCardRendered } from "../lib/cardVisibility.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
 import { LimitPauseNotice, QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
@@ -254,10 +255,72 @@ interface AllQueuesCardProps {
   onChoose?: (project: QueuesProject) => void
 }
 
-export const AllQueuesCard = memo(function AllQueuesCard({
+export const AllQueuesCard = memo(function AllQueuesCard(props: AllQueuesCardProps) {
+  const { project, thread, leaving, ghost, concealed = false } = props
+  const key = threadKey(project.id, thread.id)
+  // BUILT ONLY NEAR THE SCREEN (lib/cardVisibility.ts): until then the slot holds a stand-in of the guessed
+  // height, and the slot's ref is told when to build the card — as it comes within a viewport of the
+  // screen, before the first paint for one already there, or in idle time. Once built it stays built.
+  // `data-near` on the slot is that module's too, never React's: within a viewport of the screen the
+  // browser draws the card, further off it skips it.
+  const [built, setBuilt] = useState(false)
+  // Its handoff is fetched ahead of the build (cardVisibility.ts `prefetch`), under the key the card reads
+  // it by — from the props it has WHEN it runs, since a thread that rests again meanwhile has a new handoff.
+  const queryClient = useQueryClient()
+  const latest = useRef(props)
+  latest.current = props
+  const slotRef = useCallback((slot: HTMLDivElement | null) => observeCardSlot(
+    slot,
+    () => setBuilt(true),
+    () => queryClient.prefetchQuery(handoffQuery(latest.current.project, latest.current.thread)),
+  ), [queryClient])
+  // A card mounted again starts at the height it was last drawn at, not the guess (cardVisibility.ts
+  // `drawnHeight`): the inline intrinsic size sizes it while it is skipped, the stand-in while it is near.
+  const [remembered] = useState(() => drawnHeight(key))
+  return (
+    <div ref={slotRef} data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} aria-hidden={ghost || undefined} data-queue-concealed={concealed || undefined} inert={concealed || ghost} className="frizz-card-slot min-w-0" style={remembered ? { containIntrinsicBlockSize: `auto ${remembered}px` } : undefined}>
+      <div className="frizz-card-clip min-h-0 min-w-0">
+        {built ? <CardArticle {...props} /> : <CardStandIn thread={thread} height={remembered} />}
+      </div>
+    </div>
+  )
+}, sameCard)
+
+/** The card's handoff query, for the card and for the prefetch ahead of its build (one key, one fetch). */
+function handoffQuery(project: QueuesProject, thread: ThreadView) {
+  // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
+  // is read exactly once however often the page polls.
+  return {
+    queryKey: ["ofProject", project.id, "handoff", thread.id, thread.lastAssistantAt ?? ""],
+    queryFn: () => projectRpc(project.id).threadHandoff({ slug: thread.id }),
+    staleTime: Infinity,
+  }
+}
+
+/**
+ * A card not built yet, far from the screen: its frame and its title, at the height every unbuilt card is
+ * guessed at (styles.css `.frizz-card-slot`'s intrinsic size — the same number, so the browser remembers
+ * the guess and not a short stand-in if it ever draws one). Nothing in it takes focus or a click: the card
+ * replaces it before anyone can reach it, and a link here would be swapped out from under the focus.
+ */
+function CardStandIn({ thread, height }: { thread: ThreadView; height?: number }) {
+  return (
+    <article
+      data-xq-card-stand-in
+      aria-label={displayTitle(thread)}
+      style={height ? { height } : undefined}
+      className={`frizz-card-body flex h-[540px] min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
+    >
+      <header className="rounded-t-xl border-b border-border/60 px-5 py-3.5">
+        <h3 className="truncate text-[15px] font-semibold leading-snug">{displayTitle(thread)}</h3>
+      </header>
+    </article>
+  )
+}
+
+function CardArticle({
   project,
   thread,
-  leaving,
   onLeave,
   onReturn,
   onSent = onLeave,
@@ -265,21 +328,14 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   onHold,
   chip = false,
   onChoose,
-  ghost,
   status,
-  concealed = false,
 }: AllQueuesCardProps) {
   const api = projectRpc(project.id)
-  const key = threadKey(project.id, thread.id)
   const chipNode = chip ? <ProjectChip project={project} onChoose={onChoose} square={false} /> : undefined
   const openInPlace = useOpenThreadInPlace()
-  // KEYED ON THE REST, so a thread that rests again fetches its new handoff, and one that has not moved
-  // is read exactly once however often the page polls. The previous handoff stays on screen while the
-  // next one loads rather than blanking the card.
+  // The previous handoff stays on screen while the next one loads rather than blanking the card.
   const handoff = useQuery({
-    queryKey: ["ofProject", project.id, "handoff", thread.id, thread.lastAssistantAt ?? ""],
-    queryFn: () => api.threadHandoff({ slug: thread.id }),
-    staleTime: Infinity,
+    ...handoffQuery(project, thread),
     placeholderData: (previous) => previous,
   })
   const text = handoff.data?.text
@@ -322,227 +378,223 @@ export const AllQueuesCard = memo(function AllQueuesCard({
   }
 
   return (
-    <div data-xq-card={key} data-queue-leaving={leaving} data-queue-ghost={ghost || undefined} aria-hidden={ghost || undefined} data-queue-concealed={concealed || undefined} inert={concealed || ghost} className="frizz-card-slot min-w-0">
-      <div className="frizz-card-clip min-h-0 min-w-0">
-        <article
-          data-xq-card-root
-          aria-label={displayTitle(thread)}
-          className={`frizz-card-body flex min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
-        >
-          <header className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
-            {chip && <ProjectMark project={project} onChoose={onChoose} />}
-            <div className="min-w-0 flex-1">
-              <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
-                {/* The card's title is its drawer door, and `o` presses it (lib/keyboardRuntime.ts). Only a
-                    queue card carries `open`: in a drawer or on /full the thread is already open. */}
-                <a href={placeHref} onClick={openHere} data-command="open" className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
-                  {displayTitle(thread)}
-                </a>
-              </h3>
-              <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
-                {chipNode}
-                {status !== undefined ? (
-                  <>
-                    {chip && <span aria-hidden>·</span>}
-                    <span className="min-w-0 truncate">{status}</span>
-                  </>
-                ) : (
-                  <LastActive
-                    at={thread.lazyPrompt !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
-                    label={thread.lazyPrompt !== undefined ? "Added" : queueLabelWord(thread)}
-                    fallbackAt={thread.spawnedAt}
-                    lead={chip ? <span aria-hidden>·</span> : undefined}
-                    className="min-w-0 truncate"
-                  />
-                )}
-                {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
-                <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
-                {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
-                    takes the rest of the row. Resolved, addressed and opened in the CARD's project: the
-                    page's board names the focused one. */}
-                <SpinoffOf
-                  compact
-                  thread={thread}
-                  lead={<span aria-hidden>·</span>}
-                  resolve={(slug) => queueThread(project, slug)}
-                  href={(slug) => crossProjectThreadHref(project, slug)}
-                  onOpen={(slug) => { const t = queueThread(project, slug); openInPlace(project, slug, t ? displayTitle(t) : undefined) }}
-                />
-                {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
-                <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
-              </div>
-            </div>
-            <div className="flex shrink-0 items-center gap-0.5">
-              {/* SPINOFF, on every card (Spinoff.tsx), leading the strip as the one verb that starts new
-                  work. In the card's OWN project scope: the header sits outside the body's, and the
-                  page's api names the focused project. */}
-              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                {/* The drawer header's strip, in its order (ChatView ThreadHeader): terminal, spinoff,
-                    fullscreen, ⋯. The terminal carries `t` on the card as it does in the drawer. */}
-                <ThreadTerminalButton slug={thread.id} />
-                <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
-              </ThreadProjectScope>
-              {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
-                  QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
-                  name the focused project's thread of the same slug — and it owns `f` on this card.
-                  The header's LAST mark is the ⋯ menu below, which takes the `-mr-2` trim: a glyph's ink
-                  sits well inside a 14px box centred in a 28px square, so untrimmed the last mark drew
-                  ~29px in from the card's right border against the project mark's 20.75px on the left
-                  (the ⤢ measured 21.0px trimmed, 2026-09-29, ink-gaps.mjs dsf 4, sans). */}
-              <ExpandThreadLink
-                slug={thread.id}
-                href={`${placeHref}/full`}
-                command
-                className={HEADER_ICON_CLASS}
+    <article
+      data-xq-card-root
+      aria-label={displayTitle(thread)}
+      className={`frizz-card-body flex min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
+    >
+      <header className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
+        {chip && <ProjectMark project={project} onChoose={onChoose} />}
+        <div className="min-w-0 flex-1">
+          <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
+            {/* The card's title is its drawer door, and `o` presses it (lib/keyboardRuntime.ts). Only a
+                queue card carries `open`: in a drawer or on /full the thread is already open. */}
+            <a href={placeHref} onClick={openHere} data-command="open" className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+              {displayTitle(thread)}
+            </a>
+          </h3>
+          <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
+            {chipNode}
+            {status !== undefined ? (
+              <>
+                {chip && <span aria-hidden>·</span>}
+                <span className="min-w-0 truncate">{status}</span>
+              </>
+            ) : (
+              <LastActive
+                at={thread.lazyPrompt !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
+                label={thread.lazyPrompt !== undefined ? "Added" : queueLabelWord(thread)}
+                fallbackAt={thread.spawnedAt}
+                lead={chip ? <span aria-hidden>·</span> : undefined}
+                className="min-w-0 truncate"
               />
-              {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
-              {/* The ⋯ menu, as the drawer's (ThreadMenu.tsx) minus Restart worker, which only sends to the
-                  page's project. */}
-              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                <ThreadMenu thread={thread} restart={false} className={`${HEADER_ICON_CLASS} -mr-2`} />
-              </ThreadProjectScope>
-            </div>
-          </header>
-
-          {/* ONE answering state for the cards AND the reply box, so a reply sent with a pick staged
-              carries the pick (ReplyBox) instead of replying past it. */}
-          <QueueDismissContext.Provider value={dismiss}>
-          <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
-          <ProjectLinkScope project={project}>
-            {/* A lazy thread has no conversation, handoff or process to show: its note is the box below. */}
-            {thread.lazyPrompt === undefined && (
-            <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
-              {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
-                  inside the queue, and the queue is ONE page: whether a page loaded on a press or on a
-                  scroll up, the card swelled between the reader and the card above it (tried and
-                  reverted 2026-09-29; maintainer: "offer opening the sidebar as a way to see more to not
-                  interfere with threads queue"). The drawer is the thread's own scroller, where reading
-                  back loads as it goes and the queue under it does not move. */}
-              <a
-                href={placeHref}
-                onClick={openHere}
-                title="Open the thread to read back through it"
-                className="self-center rounded-md border border-border px-2 py-0.5 text-[11px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
-              >
-                Show earlier messages
-              </a>
-              {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
-              {answered && (
-                <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
-                  <Prose md={answered} />
-                </ClampedBody>
-              )}
-              {/* Only the PROSE clamps. The fence card under it is the handoff's ledger — what shipped, or
-                  what it is waiting on — and the rested notice is its state; both are the glance. */}
-              {parts ? (
-                parts.prose && (
-                  <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
-                    <Prose md={parts.prose} />
-                  </ClampedBody>
-                )
-              ) : !handoff.data && (thread.lastAssistant || handoff.isError) ? (
-                // The server's own 200-character preview (`lastAssistant`), until the whole message lands: a card that shows
-                // the gist at once beats one that is blank for a round trip. Only UNTIL it lands: a handoff
-                // with no text is a worker that has not answered the human's last turn, and the preview is
-                // then the reply to an earlier one.
-                <p className="text-[13px] leading-5 text-muted-80">{thread.lastAssistant ?? "The handoff could not be read."}</p>
-              ) : null}
-              {parts?.questions.map((question, index) => (
-                <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
-              ))}
-              {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
-              {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
-                ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
-                : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
-              {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
-                  contract now asks for first — is in no message, so the handoff text above carries no fence
-                  for it and the card queued a finished thread with no Done card at all. The drawer draws it
-                  from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
-                  the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
-                  Held until the handoff is read, or a fenced done would draw here first and then swap. */}
-              {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={registeredDoneBody(thread.lastFence!)} />}
-              {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
-                  with its real buttons, under the prose that led to it. It is the whole reason such a card
-                  is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
-                  permission prompt showed its last progress line and a reply box, and read as a
-                  notification for nothing. Held until the handoff lands, for the reason the board's card held it: these
-                  carry buttons, and the full handoff replacing the preview above would move them out from
-                  under a cursor already on its way. Scoped to the card's project like every other control
-                  here; the queue context lets a decision take the card out the way a reply does. */}
-              {(handoff.data || handoff.isError) && (
-                <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                  <QueueDismissContext.Provider value={dismiss}>
-                    <InteractionStack thread={thread} />
-                    <CardTerminalNet thread={thread} />
-                  </QueueDismissContext.Provider>
-                </ThreadProjectScope>
-              )}
-              {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
-                  all, and its notice is about the process, not the message (showsRestedCard). */}
-              {/* A USAGE-LIMIT PAUSE draws the drawer's own pause card (ChatView LimitPauseNotice), so every
-                  paused thread looks the same wherever it is read. Until 2026-10-02 the card drew none: it
-                  showed whatever line the agent wrote last, and the pause was only a mark on the rail. */}
-              {isLimitPaused(thread) && thread.limitPause && <QueueLimitPause project={project} thread={thread} pause={thread.limitPause} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
-              {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
-              {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
-              {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen under its
-                  own row, so the answer is typed right here and the row says which terminal is asking. The
-                  strip below lists every other one. */}
-              <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-                <TerminalPromptPane thread={thread} onOpen={openProcess} />
-              </ThreadProjectScope>
-            </div>
             )}
-
-            {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
-                turn, and a NEW handoff — which says what became of it — starts the stack over. */}
-            {owedQuestions.length > 0 && (
-              <RegisteredQuestionStack key={handoff.data?.at ?? ""} thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
-            )}
-          </ProjectLinkScope>
-
-          <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-            {/* A LAZY THREAD's box is its note, and sending it starts the agent (LazyThreadBox). */}
-            {thread.lazyPrompt !== undefined
-              ? <LazyThreadBox thread={thread} surface="queueComposer" className="shrink-0 px-5 pt-5 pb-3" />
-              : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
-            {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
-                Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
-                terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),
-                on one label column. The strip owns every process row, so a shell is drawn once. A shell with
-                no budget runs until someone stops it, so the card it rests on is where it must be seen.
-                A TERM row opens the thread, then its terminal over it
-                when the thread's project is the one in focus (the drawer stack is that project's). The strip
-                is gated on the rows it will draw, so a card whose only shell has finished — or whose only
-                terminal is the prompt shown above with its own row — draws no empty inset. */}
-            <QueueChildOps
-              project={project}
+            {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
+            <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
+            {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
+                takes the rest of the row. Resolved, addressed and opened in the CARD's project: the
+                page's board names the focused one. */}
+            <SpinoffOf
+              compact
               thread={thread}
-              api={api}
-              agents={!drawsSubAgentWait}
-              onOpenThread={() => openInPlace(project, thread.id, displayTitle(thread))}
-              after={cardProcesses(thread, Date.now()).length > 0 ? (
-                <div data-queue-processes={thread.id} className="min-w-0">
-                  <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
-                </div>
-              ) : null}
+              lead={<span aria-hidden>·</span>}
+              resolve={(slug) => queueThread(project, slug)}
+              href={(slug) => crossProjectThreadHref(project, slug)}
+              onOpen={(slug) => { const t = queueThread(project, slug); openInPlace(project, slug, t ? displayTitle(t) : undefined) }}
             />
-          </ThreadProjectScope>
-          </RegisteredAnsweringProvider>
-          </QueueDismissContext.Provider>
-
+            {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
+            <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
+          </div>
+        </div>
+        <div className="flex shrink-0 items-center gap-0.5">
+          {/* SPINOFF, on every card (Spinoff.tsx), leading the strip as the one verb that starts new
+              work. In the card's OWN project scope: the header sits outside the body's, and the
+              page's api names the focused project. */}
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-            <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
-              {thread.queuedForReply && <MarkReadButton project={project} thread={thread} onRead={onLeave} onFailed={onReturn} />}
-              <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
-              <StateButton thread={thread} onArchived={onSent} onDismissCancel={onReturn} onCompleted={onLanded} command />
-            </footer>
+            {/* The drawer header's strip, in its order (ChatView ThreadHeader): terminal, spinoff,
+                fullscreen, ⋯. The terminal carries `t` on the card as it does in the drawer. */}
+            <ThreadTerminalButton slug={thread.id} />
+            <SpinoffButton thread={thread} className={HEADER_ICON_CLASS} />
           </ThreadProjectScope>
-        </article>
-      </div>
-    </div>
+          {/* THE FULLSCREEN DOOR (ExpandThreadLink), before Retry as on Colin's card (TodosView
+              QueueCard @ 7a20f425). Its address carries the CARD's project — the page's own would
+              name the focused project's thread of the same slug — and it owns `f` on this card.
+              The header's LAST mark is the ⋯ menu below, which takes the `-mr-2` trim: a glyph's ink
+              sits well inside a 14px box centred in a 28px square, so untrimmed the last mark drew
+              ~29px in from the card's right border against the project mark's 20.75px on the left
+              (the ⤢ measured 21.0px trimmed, 2026-09-29, ink-gaps.mjs dsf 4, sans). */}
+          <ExpandThreadLink
+            slug={thread.id}
+            href={`${placeHref}/full`}
+            command
+            className={HEADER_ICON_CLASS}
+          />
+          {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
+          {/* The ⋯ menu, as the drawer's (ThreadMenu.tsx) minus Restart worker, which only sends to the
+              page's project. */}
+          <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+            <ThreadMenu thread={thread} restart={false} className={`${HEADER_ICON_CLASS} -mr-2`} />
+          </ThreadProjectScope>
+        </div>
+      </header>
+
+      {/* ONE answering state for the cards AND the reply box, so a reply sent with a pick staged
+          carries the pick (ReplyBox) instead of replying past it. */}
+      <QueueDismissContext.Provider value={dismiss}>
+      <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
+      <ProjectLinkScope project={project}>
+        {/* A lazy thread has no conversation, handoff or process to show: its note is the box below. */}
+        {thread.lazyPrompt === undefined && (
+        <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
+          {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
+              inside the queue, and the queue is ONE page: whether a page loaded on a press or on a
+              scroll up, the card swelled between the reader and the card above it (tried and
+              reverted 2026-09-29; maintainer: "offer opening the sidebar as a way to see more to not
+              interfere with threads queue"). The drawer is the thread's own scroller, where reading
+              back loads as it goes and the queue under it does not move. */}
+          <a
+            href={placeHref}
+            onClick={openHere}
+            title="Open the thread to read back through it"
+            className="self-center rounded-md border border-border px-2 py-0.5 text-[11px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+          >
+            Show earlier messages
+          </a>
+          {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
+          {answered && (
+            <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
+              <Prose md={answered} />
+            </ClampedBody>
+          )}
+          {/* Only the PROSE clamps. The fence card under it is the handoff's ledger — what shipped, or
+              what it is waiting on — and the rested notice is its state; both are the glance. */}
+          {parts ? (
+            parts.prose && (
+              <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
+                <Prose md={parts.prose} />
+              </ClampedBody>
+            )
+          ) : !handoff.data && (thread.lastAssistant || handoff.isError) ? (
+            // The server's own 200-character preview (`lastAssistant`), until the whole message lands: a card that shows
+            // the gist at once beats one that is blank for a round trip. Only UNTIL it lands: a handoff
+            // with no text is a worker that has not answered the human's last turn, and the preview is
+            // then the reply to an earlier one.
+            <p className="text-[13px] leading-5 text-muted-80">{thread.lastAssistant ?? "The handoff could not be read."}</p>
+          ) : null}
+          {parts?.questions.map((question, index) => (
+            <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
+          ))}
+          {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
+          {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
+            ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
+            : <FenceBody key={index} kind={fence.kind} body={fence.body} />)}
+          {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
+              contract now asks for first — is in no message, so the handoff text above carries no fence
+              for it and the card queued a finished thread with no Done card at all. The drawer draws it
+              from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
+              the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
+              Held until the handoff is read, or a fenced done would draw here first and then swap. */}
+          {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={registeredDoneBody(thread.lastFence!)} />}
+          {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
+              with its real buttons, under the prose that led to it. It is the whole reason such a card
+              is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
+              permission prompt showed its last progress line and a reply box, and read as a
+              notification for nothing. Held until the handoff lands, for the reason the board's card held it: these
+              carry buttons, and the full handoff replacing the preview above would move them out from
+              under a cursor already on its way. Scoped to the card's project like every other control
+              here; the queue context lets a decision take the card out the way a reply does. */}
+          {(handoff.data || handoff.isError) && (
+            <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+              <QueueDismissContext.Provider value={dismiss}>
+                <InteractionStack thread={thread} />
+                <CardTerminalNet thread={thread} />
+              </QueueDismissContext.Provider>
+            </ThreadProjectScope>
+          )}
+          {/* Not gated on the handoff: a STALL's last record is often a tool call with no prose at
+              all, and its notice is about the process, not the message (showsRestedCard). */}
+          {/* A USAGE-LIMIT PAUSE draws the drawer's own pause card (ChatView LimitPauseNotice), so every
+              paused thread looks the same wherever it is read. Until 2026-10-02 the card drew none: it
+              showed whatever line the agent wrote last, and the pause was only a mark on the rail. */}
+          {isLimitPaused(thread) && thread.limitPause && <QueueLimitPause project={project} thread={thread} pause={thread.limitPause} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
+          {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
+          {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
+          {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen under its
+              own row, so the answer is typed right here and the row says which terminal is asking. The
+              strip below lists every other one. */}
+          <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+            <TerminalPromptPane thread={thread} onOpen={openProcess} />
+          </ThreadProjectScope>
+        </div>
+        )}
+
+        {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
+            turn, and a NEW handoff — which says what became of it — starts the stack over. */}
+        {owedQuestions.length > 0 && (
+          <RegisteredQuestionStack key={handoff.data?.at ?? ""} thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
+        )}
+      </ProjectLinkScope>
+
+      <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+        {/* A LAZY THREAD's box is its note, and sending it starts the agent (LazyThreadBox). */}
+        {thread.lazyPrompt !== undefined
+          ? <LazyThreadBox thread={thread} surface="queueComposer" className="shrink-0 px-5 pt-5 pb-3" />
+          : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
+        {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
+            Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
+            terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),
+            on one label column. The strip owns every process row, so a shell is drawn once. A shell with
+            no budget runs until someone stops it, so the card it rests on is where it must be seen.
+            A TERM row opens the thread, then its terminal over it
+            when the thread's project is the one in focus (the drawer stack is that project's). The strip
+            is gated on the rows it will draw, so a card whose only shell has finished — or whose only
+            terminal is the prompt shown above with its own row — draws no empty inset. */}
+        <QueueChildOps
+          project={project}
+          thread={thread}
+          api={api}
+          agents={!drawsSubAgentWait}
+          onOpenThread={() => openInPlace(project, thread.id, displayTitle(thread))}
+          after={cardProcesses(thread, Date.now()).length > 0 ? (
+            <div data-queue-processes={thread.id} className="min-w-0">
+              <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
+            </div>
+          ) : null}
+        />
+      </ThreadProjectScope>
+      </RegisteredAnsweringProvider>
+      </QueueDismissContext.Provider>
+
+      <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+        <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
+          {thread.queuedForReply && <MarkReadButton project={project} thread={thread} onRead={onLeave} onFailed={onReturn} />}
+          <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
+          <StateButton thread={thread} onArchived={onSent} onDismissCancel={onReturn} onCompleted={onLanded} command />
+        </footer>
+      </ThreadProjectScope>
+    </article>
   )
-}, sameCard)
+}
 
 /**
  * The card's memo: its thread by identity (the poll and the board keep an unchanged thread's object), its
@@ -743,10 +795,14 @@ function AskedBubble({ text }: { text: string }) {
     const el = words.current
     if (!el || open) return
     const measure = () => setClamps(el.scrollHeight > el.clientHeight + 1)
-    measure()
+    // Once the card is drawn, as ClampedBody does (lib/cardVisibility.ts).
+    const cancel = whenCardRendered(el, measure)
     const observer = new ResizeObserver(measure)
     observer.observe(el)
-    return () => observer.disconnect()
+    return () => {
+      cancel()
+      observer.disconnect()
+    }
   }, [open, text])
   const toggle = () => setOpen((value) => !value)
   return (
@@ -814,10 +870,15 @@ function ClampedBody({ resetKey, children }: { resetKey: string; children: React
     const el = inner.current
     if (!el) return
     const measure = () => setOverflows(el.scrollHeight > CLAMP_PX + 24)
-    measure()
+    // Measured once the card is drawn: in a card the browser is skipping, `scrollHeight` would lay the card
+    // out just to answer (lib/cardVisibility.ts). The observer reports nothing while it is skipped.
+    const cancel = whenCardRendered(el, measure)
     const observer = new ResizeObserver(measure)
     observer.observe(el)
-    return () => observer.disconnect()
+    return () => {
+      cancel()
+      observer.disconnect()
+    }
   }, [])
   const clipped = overflows && !open
   return (
@@ -876,8 +937,13 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
   const [logoutFor, setLogoutFor] = useState<AccountBackend | null>(null)
   const answering = useContext(RegisteredAnsweringContext)
   // `@` mentions of this card's project's threads — offered only when the page's board IS that project.
-  const mentions = useMentionCandidates(thread.id, project.slug)
-  const ownMention = useOwnMention(thread.id, project.slug)
+  // LIVE ONLY ONCE THE DRAFT HOLDS AN `@`, which is the only time the menu or a mention's link can draw:
+  // a live candidate list walks the whole board and so re-rendered every card on the page at every board
+  // delta and poll (hooks/useMentionCandidates.ts). The keystroke that types the `@` re-renders this box
+  // with them already in hand.
+  const mentionsLive = text.includes("@")
+  const mentions = useMentionCandidates(thread.id, project.slug, mentionsLive)
+  const ownMention = useOwnMention(thread.id, project.slug, mentionsLive)
   // The drawer's chips, on the drawer's draft: a selection staged in the thread's drawer (⌘I, or sent from
   // an editor) is the same staging here, and rides this box's send the same way (lib/stagedContext.ts).
   const contextTokens = useStagedContextTokens(key, text)

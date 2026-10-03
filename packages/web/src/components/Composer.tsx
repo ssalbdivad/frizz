@@ -18,6 +18,7 @@ import { draftStart, insertSlashCommand, matchSlashItems, slashQueryAt, slashSeg
 import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
+import { inSkippedCard, whenCardRendered } from "../lib/cardVisibility.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -435,21 +436,37 @@ export function Composer({
   // settle so the textarea always owns enough height for its actual wrapped content.
   useLayoutEffect(() => {
     let active = true
+    // A queue card the browser is skipping (lib/cardVisibility.ts) snaps once it is drawn instead: reading
+    // `scrollHeight` there would lay that card out just to answer, one card at a time across the queue.
+    let waiting: (() => void) | undefined
     const resize = () => {
       const el = taRef.current
       if (!el || !active) return
+      if (inSkippedCard(el)) {
+        waiting ??= whenCardRendered(el, () => {
+          waiting = undefined
+          resize()
+        })
+        return
+      }
       snapHeight(el, maxHeight)
     }
     resize()
     const frame = requestAnimationFrame(resize)
     void document.fonts?.ready.then(resize)
     const el = taRef.current
-    let width = el?.clientWidth ?? 0
+    // Undefined in a skipped card, for the same reason: the observer's first report, once it is drawn,
+    // sets it (and the snap above runs then anyway).
+    let width = el && !inSkippedCard(el) ? el.clientWidth : undefined
     // A responsive drawer can rewrap a preserved draft without changing its value. Observe width
     // only (not height, which this effect itself owns) and recompute from the new scrollHeight.
     let resizeFrame: number | undefined
     const observer = el ? new ResizeObserver(([entry]) => {
       const nextWidth = Math.round(entry.contentRect.width)
+      if (width === undefined) {
+        width = nextWidth
+        return
+      }
       if (nextWidth === width) return
       width = nextWidth
       // Writing `height` while ResizeObserver is delivering causes Chromium's loop warning. Run the
@@ -461,6 +478,7 @@ export function Composer({
     if (el) observer?.observe(el)
     return () => {
       active = false
+      waiting?.()
       cancelAnimationFrame(frame)
       if (resizeFrame !== undefined) cancelAnimationFrame(resizeFrame)
       observer?.disconnect()

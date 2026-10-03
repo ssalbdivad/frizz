@@ -4,7 +4,6 @@ import { AlarmClock, ChevronDown, Loader2 } from "lucide-react"
 import { SNOOZE_PROMPT_MAX, type ThreadView } from "@frizz/shared"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { futureSnoozedUntil } from "../groups.ts"
-import { useBoard } from "../hooks.ts"
 import {
   SNOOZE_PRESETS,
   formatSnoozeConfirmation,
@@ -16,7 +15,7 @@ import {
   snoozePresetLabel,
   type SnoozePreset,
 } from "../lib/snooze.ts"
-import { showToast } from "../store.ts"
+import { showToast, store } from "../store.ts"
 import { prefs } from "../lib/prefs.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
 import { useCommandHandler, useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
@@ -44,8 +43,13 @@ export function SnoozeButton({
   eventItems?: ReactNode
 }) {
   const api = useThreadApi()
-  const board = useBoard()
-  const where = projectName ?? board?.projectName
+  // The board's NAME, read whether or not the caller named the project: a board read but not dereferenced
+  // (the queue card passes `projectName`, so `board?.projectName` never ran) is tracked by valtio as used
+  // WHOLE, and every board delta re-rendered every queue card's snooze menu — the last of a card's
+  // subscriptions to the board (2026-10-02, queueCardVisibility.e2e.test.ts "a board delta re-renders no
+  // card").
+  const boardName = useSnapshot(store).board?.projectName
+  const where = projectName ?? boardName
   const [busy, setBusy] = useState(false)
   const [customOpen, setCustomOpen] = useState(false)
   const [customValue, setCustomValue] = useState("")
