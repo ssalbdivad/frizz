@@ -28,12 +28,14 @@ import { RegisteredAnsweringContext, type RegisteredAnswering } from "./Register
 //
 // MOUNTED MEANS OPEN, and it takes its own history entry (lib/backDismiss): a phone's Back closes the
 // sheet, not the thread under it. Back INSIDE the sheet (the footer's Back) walks the steps instead.
-export function RegisteredAnswerSheet({ questions, onClose }: { questions: readonly RegisteredQuestionView[]; onClose: () => void }) {
+// A card in the transcript opens it at `initialStep` — the question its tap could not finish (a
+// follow-up, a rich body, a typed answer); the bar's "Answer" opens it where the human left off.
+export function RegisteredAnswerSheet({ questions, initialStep, onClose }: { questions: readonly RegisteredQuestionView[]; initialStep?: string; onClose: () => void }) {
   const a = useContext(RegisteredAnsweringContext)
   const dismiss = useBackDismiss(onClose)
   const steps = a ? answerSteps(questions, a.answersOf) : []
   // `null` is the review. Opens where the human left off: the first step with nothing staged on it.
-  const [at, setAt] = useState<string | null>(() => (a ? firstOpenStep(steps, a.answersOf) : null))
+  const [at, setAt] = useState<string | null>(() => (a ? initialStep ?? firstOpenStep(steps, a.answersOf) : null))
   // A step's free-text row, opened by "Write a different answer…". Per step, so moving on closes it.
   const [writing, setWriting] = useState(false)
 

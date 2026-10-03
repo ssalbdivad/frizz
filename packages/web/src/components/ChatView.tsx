@@ -256,11 +256,13 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
   const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
   // ON A PHONE the registered cards are read-only and answering is a sheet (PhoneQuestionCards,
   // RegisteredAnswerSheet), opened from the bottom bar's "Answer". Null off the phone page.
+  // The sheet's open state carries the step it opens at: `true` is "where the human left off" (the bar's
+  // Answer), a step key is the question a card's tap could not finish on its own (PhoneQuestionCards).
+  const [answerSheetOpen, setAnswerSheetOpen] = useState<string | boolean>(false)
   const phoneQuestions = useMemo<PhoneQuestions | null>(
-    () => (phone ? { numberOf: (id) => openQuestions.findIndex((q) => q.id === id) + 1 } : null),
+    () => (phone ? { numberOf: (id) => openQuestions.findIndex((q) => q.id === id) + 1, openSheet: (step) => setAnswerSheetOpen(step ?? true) } : null),
     [phone, openQuestions],
   )
-  const [answerSheetOpen, setAnswerSheetOpen] = useState(false)
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   const copyTerminalCommand = useCopyTerminalCommand(slug)
 
@@ -674,7 +676,9 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
             : undefined}
         />
       </div>
-      {phone && answerSheetOpen && <RegisteredAnswerSheet questions={openQuestions} onClose={() => setAnswerSheetOpen(false)} />}
+      {phone && answerSheetOpen !== false && (
+        <RegisteredAnswerSheet questions={openQuestions} initialStep={typeof answerSheetOpen === "string" ? answerSheetOpen : undefined} onClose={() => setAnswerSheetOpen(false)} />
+      )}
     </div>
     </PhoneQuestionsContext.Provider>
     </RegisteredAnsweringProvider>

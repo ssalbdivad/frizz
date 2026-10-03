@@ -1,15 +1,29 @@
 import { createContext, useContext } from "react"
-import { Keyboard } from "lucide-react"
-import type { RegisteredQuestionView } from "@frizz/shared"
+import { Check, Keyboard } from "lucide-react"
+import type { AskedOption, RegisteredQuestionView } from "@frizz/shared"
+import { oneLineDescription, stepKey } from "../lib/answerSheet.ts"
+import { nodeAnswered, ROOT_PATH } from "../lib/registeredQuestion.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
+import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 
-// ON A PHONE THE TRANSCRIPT'S QUESTIONS ARE A READING SURFACE (mockup v2 §3, "The questions in the
-// transcript"; the maintainer's 2026-08-17 review: the questions stay visible in the context that
-// produced them, and answering slides up in a sheet one question at a time). So each open registered
-// question draws here as its number, its text and its option LABELS — no descriptions, no chips, no
-// free-text box, no per-card Send. The descriptions live in the sheet (RegisteredAnswerSheet), where a
-// thumb-sized row has room for them; the verb that opens it is the bottom bar's "Answer".
+// ON A PHONE THE TRANSCRIPT'S QUESTIONS ARE ANSWERED WHERE THEY STAND (2026-10-03). Each open registered
+// question draws compactly — its number, its text, and each option as a full-width tap target carrying
+// its letter, label and one-line trade-off. A plain single-choice question is answered by ONE TAP on its
+// option: the pick goes through the thread's shared RegisteredAnswering, whose "a pick that completes its
+// question sends it" rule is the send, exactly as a click on the desktop card is.
+//
+// Until 2026-10-03 these cards were READ-ONLY (mockup v2 §3) and every answer went through the stepped
+// sheet behind the bottom bar's "Answer" — even a two-option yes/no, and nothing on the card said the
+// sheet was where answering lived (maintainer: "it should be possible to answer simple questions without
+// the expanded view, which isn't even clear that's how it's supposed to work"). The sheet
+// (RegisteredAnswerSheet) stays for what one tap cannot finish, and the card opens it AT THAT QUESTION:
+//   - an option with follow-ups: the tap records the pick, then the sheet opens on the first follow-up;
+//   - an option with a rich (multi-line) body: the tap opens the sheet, where the body renders in full —
+//     a pick made without reading the detail that decides it is the thing the body exists to prevent;
+//   - "Other answer…" under a single-choice, and "Write an answer…" for a free-text question: typing
+//     belongs in the sheet, whose footer rides the keyboard;
+//   - a multi-select toggles here, and a Send under it commits that question alone.
 //
 // The accent is on the numbers and the RECOMMENDED tags and nowhere else (not a card border): the
 // accent means "awaiting you", and on this card that is the question and the worker's own pick.
@@ -18,9 +32,11 @@ import { LinkedHtml } from "./LinkedHtml.tsx"
 // registered card under it reads it and draws compactly. Detecting the width inside the card instead
 // would also compact the /full page on a narrow window, which keeps the desktop chrome — and its own
 // per-card Send — on every width. `numberOf` numbers a question by its place among the thread's open
-// questions, so a card placed inside a message and its sibling at the rest still count 1, 2.
+// questions, so a card placed inside a message and its sibling at the rest still count 1, 2. `openSheet`
+// opens the answer sheet, at the step `stepKey` names or else where the human left off.
 export interface PhoneQuestions {
   numberOf: (id: string) => number
+  openSheet: (step?: string) => void
 }
 
 export const PhoneQuestionsContext = createContext<PhoneQuestions | null>(null)
@@ -37,10 +53,10 @@ export function CompactQuestionList({ questions }: { questions: readonly Registe
   return (
     <div
       data-compact-questions
-      className="min-w-0 overflow-hidden rounded-[12px] border border-border-strong bg-panel pb-2.5 text-[14px] leading-5"
+      className="min-w-0 overflow-hidden rounded-[12px] border border-border-strong bg-panel pb-3 text-[14px] leading-5"
     >
       {questions.map((q, i) => (
-        <div key={q.id} data-question-id={q.id} className={i > 0 ? "mt-2.5 border-t border-border" : undefined}>
+        <div key={q.id} data-question-id={q.id} className={i > 0 ? "mt-3 border-t border-border" : undefined}>
           <CompactQuestion q={q} n={phone?.numberOf(q.id) ?? i + 1} />
         </div>
       ))}
@@ -48,27 +64,96 @@ export function CompactQuestionList({ questions }: { questions: readonly Registe
   )
 }
 
+/** An option whose description is more than one line (or carries a legacy `preview`) has a rich body,
+ *  which only the sheet renders. */
+const hasBody = (option: AskedOption) => (!oneLineDescription(option.description) && !!option.description?.trim()) || !!option.preview?.trim()
+
 function CompactQuestion({ q, n }: { q: RegisteredQuestionView; n: number }) {
   const html = useMarkdownHtml(q.spec.question)
+  const a = useContext(RegisteredAnsweringContext)
+  const phone = usePhoneQuestions()
   const options = q.spec.options ?? []
+  const multi = q.spec.kind === "multi"
+  const answer = a?.answerFor(q, ROOT_PATH)
+  const here = stepKey(q.id, ROOT_PATH)
+  const pick = (i: number) => {
+    if (!a) return
+    const option = options[i]!
+    if (multi) return a.onChip(q, ROOT_PATH, true, i)
+    if (hasBody(option)) return phone?.openSheet(here)
+    // Never a toggle-off: a re-tap of the option already picked keeps it.
+    if (answer?.chosen !== i) a.onChip(q, ROOT_PATH, false, i)
+    if (option.followUps?.length) phone?.openSheet(stepKey(q.id, `${ROOT_PATH}/${i}.0`))
+  }
+  const staged = multi && a ? nodeAnswered(q.spec, answer) : false
   return (
     <>
-      <div className="flex gap-2 px-3.5 pb-1 pt-[11px] font-semibold">
+      <div className="flex gap-2 px-3.5 pb-2 pt-3 font-semibold">
         <span className="shrink-0 tabular-nums text-accent">{n}</span>
         <LinkedHtml className={`min-w-0 flex-1 ${QUESTION_PROSE}`} html={html} />
       </div>
-      {options.map((option, i) => (
-        <div key={i} data-compact-option className="flex gap-2 py-0.5 pl-[30px] pr-3.5 text-muted">
-          <span className="w-3 shrink-0 font-bold">{letter(i)}</span>
-          <span className="min-w-0">
-            {option.label}
-            {option.recommended && <span className="ml-1 text-[11px] font-semibold text-accent">RECOMMENDED</span>}
-          </span>
-        </div>
-      ))}
+      <div role={multi ? "group" : "radiogroup"} className="flex flex-col gap-1.5 px-2.5">
+        {options.map((option, i) => {
+          const on = multi ? (answer?.chosenSet ?? []).includes(i) : answer?.chosen === i
+          const line = oneLineDescription(option.description)
+          return (
+            <button
+              key={i}
+              type="button"
+              role={multi ? "checkbox" : "radio"}
+              aria-checked={on}
+              data-compact-option
+              data-on={on || undefined}
+              disabled={!a || a.sending}
+              onClick={() => pick(i)}
+              className={`${OPTION} ${on ? "border-fg/50 bg-hover" : "border-border bg-bg"}`}
+            >
+              <span className={`${KEY} ${on ? "border-fg bg-fg text-bg" : "border-border-strong text-muted"}`}>
+                {multi && on ? <Check aria-hidden size={12} strokeWidth={3} /> : letter(i)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="block font-medium text-fg">
+                  {option.label}
+                  {option.recommended && <span className="ml-1.5 text-[11px] font-semibold text-accent">RECOMMENDED</span>}
+                </span>
+                {line && <span className="mt-px block text-[13px] leading-[18px] text-muted">{line}</span>}
+                {hasBody(option) && <span className="mt-px block text-[13px] leading-[18px] text-muted">Details…</span>}
+              </span>
+            </button>
+          )
+        })}
+        {options.length === 0 ? (
+          <button type="button" data-compact-write onClick={() => phone?.openSheet(here)} className={`${OPTION} border-dashed border-border-strong bg-bg text-muted`}>
+            <Keyboard aria-hidden size={16} strokeWidth={1.8} className="mt-0.5 shrink-0" />
+            <span className="font-medium">Write an answer…</span>
+          </button>
+        ) : (
+          <div className="flex items-center justify-between gap-2 pt-0.5">
+            <button type="button" data-compact-write onClick={() => phone?.openSheet(here)} className="min-h-[36px] px-1 text-[13.5px] font-medium text-muted active:text-fg">
+              {multi ? "Add a note…" : "Other answer…"}
+            </button>
+            {multi && (
+              <button
+                type="button"
+                data-compact-send
+                disabled={!staged || !a || a.sending}
+                onClick={() => a?.commit(q)}
+                className="h-[36px] rounded-[10px] bg-fg px-4 text-[14px] font-semibold text-bg active:opacity-90 disabled:opacity-35"
+              >
+                Send
+              </button>
+            )}
+          </div>
+        )}
+      </div>
     </>
   )
 }
+
+/** A tap target at least 40px tall, the label on the letter's line. */
+const OPTION = "flex w-full items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left outline-none transition-colors active:bg-hover focus-visible:border-fg/50 disabled:opacity-60"
+/** The option's letter, in a key-cap that fills when picked — the same letters every surface uses. */
+const KEY = "flex size-5 shrink-0 items-center justify-center rounded-[6px] border text-[11px] font-bold"
 
 /** A question's markdown at the SURROUNDING type, not the transcript's prose scale: `md-body` pins its
  *  own 14px/1.7 and outranks any utility here (it is unlayered CSS), so the question is rendered bare —
