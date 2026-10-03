@@ -60,6 +60,7 @@
 // few at a time from the first idle moment, as main read them all at mount, and a card built later builds
 // with its handoff in hand, at its real height in its first frame.
 import { flushSync } from "react-dom"
+import { glideTo, gliding } from "./viewportLock.ts"
 
 /** The card slot (AllQueuesCard.tsx). */
 const SLOT = ".frizz-card-slot"
@@ -72,6 +73,13 @@ const MARGIN = "100% 0px"
  * on the loaded mirror box and drawing one ~1–10ms, so a step builds ONE card, or draws several built ones.
  */
 const STEP_BUDGET_MS = 8
+/**
+ * And at most this many cards a step. The budget above times only the BUILD: re-drawing a card already built
+ * is one attribute in the step, and its whole layout lands in the next frame, where the budget cannot see
+ * it. After a width change every built card is due a re-draw at once, and one step marked all 243 on the
+ * mirror: the next frame laid out the whole page, 2.8s (2026-10-02). Four a step keeps a frame to a few cards.
+ */
+const STEP_MAX_CARDS = 4
 /** How long a step may wait for an idle moment before running anyway, so a busy page still gets there. */
 const STEP_IDLE_TIMEOUT_MS = 1_000
 
@@ -221,9 +229,43 @@ function letGo(slot: HTMLElement): void {
 // in its animation frame. Only then: a page merely scrolled to its end, building nothing, is left alone, and
 // cards built later — the observer's, a viewport out — sit above the reading line, where the lock's hold
 // keeps the end where it is.
+//
+// AND HELD THERE FOR A MOMENT (`holdEnd`): the cards a jump to the end lands on are built at once, but a
+// card's handoff can still be on its way — the prefetch below reads them in page order, so the end of a long
+// page comes last (on the loaded mirror every handoff had landed only ~25s after load) — and it grows the
+// card by hundreds of px a round trip later, below the reading line again: End landed on the end, then
+// slid 246px, then 493px, off it. So for END_HOLD_MS after a jump to the end, a card changing height puts
+// the page back at its end (in the slots' ResizeObserver, after layout and before paint, so it is never
+// seen off it). The reader's own move ends the hold at once: a wheel, a touch, a press, a key, or a scroll UP
+// from where the hold last left the page. Not merely being off the end: a card growing below moves the end,
+// not the page, and a scroll event can see that before the observer has put the page back.
 const DRAW_PASSES = 4
+const END_HOLD_MS = 8_000
+let endHoldUntil = 0
+let endHoldY = 0
+const scrollerOf = () => document.scrollingElement ?? document.documentElement
+function holdEnd(): void {
+  endHoldUntil = performance.now() + END_HOLD_MS
+  endHoldY = window.scrollY
+}
+function keepAtEnd(): void {
+  if (endHoldUntil === 0 || gliding()) return
+  if (performance.now() > endHoldUntil) {
+    endHoldUntil = 0
+    return
+  }
+  const end = scrollerOf().scrollHeight - window.innerHeight
+  if (window.scrollY < end - 1) window.scrollTo({ top: end, left: 0, behavior: "instant" })
+  endHoldY = window.scrollY
+}
 function drawOnScreen(): void {
-  const scroller = document.scrollingElement ?? document.documentElement
+  const scroller = scrollerOf()
+  if (endHoldUntil !== 0 && !gliding()) {
+    const atEndNow = window.scrollY >= scroller.scrollHeight - window.innerHeight - 1
+    // Up, and off the end: the reader's scroll. (A page that got shorter is clamped up, but onto its end.)
+    if (!atEndNow && window.scrollY < endHoldY - 1) endHoldUntil = 0
+    else if (atEndNow) endHoldY = window.scrollY
+  }
   let atEnd: boolean | undefined
   let built = false
   for (let pass = 0; pass < DRAW_PASSES; pass++) {
@@ -234,15 +276,23 @@ function drawOnScreen(): void {
       const rect = slot.getBoundingClientRect()
       if (rect.bottom > 0 && rect.top < viewport) due.push(slot)
     }
-    if (due.length === 0) break
     // Read with the layout the box reads above just made: no extra layout.
     atEnd ??= window.scrollY >= scroller.scrollHeight - viewport - 1
+    if (due.length === 0) break
     for (const slot of due) markNear(slot)
     built = true
   }
-  if (!built || !atEnd) return
+  // At the end with nothing built here, but cards still to be re-drawn (a width change, content that arrived
+  // while they were skipped): those heights are about to change too, so the end is held all the same.
+  // Not during a glide: it owns the scroll. A glide to a card whose target was reckoned on guessed heights can
+  // touch the end on its way and then re-land on the card, and a hold taken here would put the page back at
+  // the end in the next ResizeObserver report, before the re-landing's scroll event could end the hold. (End's
+  // own glide sets its hold itself.) Reasoned, not reproduced: the rail click to the last card on the mirror
+  // lands on the page's end either way, since the last cards are shorter than the window.
+  if (!atEnd || gliding() || (!built && unprimed.size === 0)) return
   const end = scroller.scrollHeight - window.innerHeight
   if (window.scrollY < end - 1) window.scrollTo({ top: end, left: 0, behavior: "instant" })
+  holdEnd()
 }
 
 // A WIDTH CHANGE re-wraps every card and mutates nothing, so `ensureMutations` cannot see it, and every
@@ -279,6 +329,7 @@ function ensureSizes(): ResizeObserver {
       const key = slot.dataset.xqCard
       if (key && box.blockSize > 0) drawnHeights.set(key, box.blockSize)
     }
+    keepAtEnd()
     if (changed) scheduleStep()
   })
   return sizes
@@ -314,9 +365,40 @@ function queueDrawOnScreen(): void {
   })
 }
 
+// THE END KEY IS A SMOOTH SCROLL whose target the browser fixes when it starts: the page's end as it was then.
+// The cards it passes on the way down are built as they come on screen (above), at their real height rather
+// than the guess, so the end moves while the animation runs, and it stopped short of it — the last card
+// 1,277px below the window on the 243-card mirror, measured 2026-10-02 after the instant-jump re-pin above (a
+// scrollbar drag lands on the end in one scroll event, which the re-pin catches; an animation never does).
+// So while any card is unbuilt, End is the page's glide (viewportLock.ts glideTo, as a rail click lands a
+// card): it re-reads its target when it ends and lands on the end the page has THEN. The cards at the end of
+// the page are built first, from the last up, until they fill a viewport and a half, so that landing moves
+// as little as it can. With every card built, End is the browser's own again.
+const END_FILL = 1.5
+function onEndKey(event: KeyboardEvent): void {
+  if (event.key !== "End" || event.defaultPrevented || event.altKey || event.shiftKey) return
+  const target = event.target
+  if (target instanceof HTMLElement && (target.isContentEditable || target.closest("input, textarea, select, [contenteditable]:not([contenteditable='false'])"))) return
+  const slots = [...mounted].filter((slot) => slot.isConnected)
+  // Nothing unbuilt and nothing waiting to be re-drawn: every height is real, and the browser's End is right.
+  if (unprimed.size === 0 && !slots.some((slot) => builders.has(slot))) return
+  event.preventDefault()
+  slots.sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1))
+  let filled = 0
+  for (let index = slots.length - 1; index >= 0 && filled < window.innerHeight * END_FILL; index--) {
+    const slot = slots[index]!
+    if (builders.has(slot)) drawCardNow(slot)
+    filled += slot.getBoundingClientRect().height
+  }
+  const scroller = scrollerOf()
+  glideTo(() => scroller.scrollHeight - window.innerHeight)
+  holdEnd()
+}
+
 function ensureObserver(): IntersectionObserver {
   if (!observer) {
     window.addEventListener("scroll", drawOnScreen, { passive: true })
+    window.addEventListener("keydown", onEndKey)
     for (const type of ["keydown", "pointerdown", "wheel", "touchstart"] as const) window.addEventListener(type, noteInput, { capture: true, passive: true })
   }
   observer ??= new IntersectionObserver((entries) => {
@@ -452,6 +534,8 @@ function releaseAfterDraw(slots: HTMLElement[]): void {
 let lastInput = -Infinity
 function noteInput(): void {
   lastInput = performance.now()
+  // The reader acting ends a hold at the end (`holdEnd`); End itself sets a new one after this runs.
+  endHoldUntil = 0
 }
 function idle(fn: () => void): void {
   if (typeof requestIdleCallback === "function") {
@@ -491,7 +575,7 @@ function scheduleStep(): void {
 }
 
 // One idle step: build and draw the next cards down the page — at least one, and more while the step is
-// within its budget — and hold them drawn until their heights are remembered. The next step is asked for
+// within its budget and its count — and hold them drawn until their heights are remembered. The next step is asked for
 // at once rather than after that hold, so the page is built as fast as it is idle. (An unbuilt slot is
 // always unprimed too: a slot is both from the moment it mounts, and `markNear` builds what it draws.)
 function step(): void {
@@ -500,7 +584,7 @@ function step(): void {
   const started = performance.now()
   const batch: HTMLElement[] = []
   for (const slot of [...unprimed]) {
-    if (batch.length > 0 && performance.now() - started > STEP_BUDGET_MS) break
+    if (batch.length >= STEP_MAX_CARDS || (batch.length > 0 && performance.now() - started > STEP_BUDGET_MS)) break
     if (!slot.isConnected) { unprimed.delete(slot); builders.delete(slot); continue }
     batch.push(slot)
     priming.add(slot)

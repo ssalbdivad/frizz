@@ -21,12 +21,18 @@ import test, { after, before } from "node:test"
 //   7  typing `@` into a card's reply box still offers the board's threads — the box subscribes to them only
 //      once its draft holds an `@`, so this pins that the switch turns on;
 //   8  after the column changes width, every skipped card is re-drawn at its new height — a width change
-//      mutates nothing, and each skipped card kept the height it had at the old width;
+//      mutates nothing, and each skipped card kept the height it had at the old width — a few at a time;
 //   9  cards moved on screen by a filter (no scroll, no mount) are real cards in the first frame, and cards
 //      mounted again after it start at the height they were last drawn at, not the guess;
 //  10  `k` landing on a card whose handoff is still loading presses its "Show more" once it appears;
-//  11  End before the page is built stays at the end — the cards it lands on and the cards above them
-//      change height as they are built, and each change used to push the last card off screen.
+//  11  a jump to the end before the page is built stays at the end — the cards it lands on and the cards
+//      above them change height as they are built, and each change used to push the last card off screen;
+//  12  so does the End KEY, a smooth scroll whose target the browser fixed before those cards were built, and
+//      so does a jump made before the handoffs are fetched, whose cards grow when they land;
+//  13  End takes the page's own glide while cards are unbuilt, having built the end of the page first — the
+//      browser's End aims at the end the page had when it started, and in a headed browser it animates
+//      past cards that build at their real height on the way (headless jumps at once, which test 12 cannot
+//      tell apart, so this pins the handler itself).
 //
 // Skipped unless a Vite URL serving the fixtures is provided: `nub run test:e2e` sets it, or start
 // `vite` in packages/web and set FRIZZ_QUEUE_CARD_VISIBILITY_E2E_URL to its origin.
@@ -279,8 +285,22 @@ test("after the column changes width, every skipped card is re-drawn at its new 
   await page!.goto(URL_MANY("&mid=1"), { waitUntil: "load" })
   await settled()
   assert.deepEqual((await skippedOff()).off, [], "the page was right before the width changed")
-  await page!.evaluate(() => { document.querySelector<HTMLElement>("[data-fixture-queue]")!.style.width = "420px" })
+  // A FEW AT A TIME: every built card is due a re-draw at once, and a step that drew them all handed the next
+  // frame the whole page to lay out (2.8s on the 243-card mirror). Counted on every frame of the re-draw.
+  await page!.evaluate(() => {
+    const w = window as unknown as { __mostNear: number }
+    w.__mostNear = 0
+    const t0 = performance.now()
+    const count = () => {
+      w.__mostNear = Math.max(w.__mostNear, document.querySelectorAll("[data-near]").length)
+      if (performance.now() - t0 < 5_000) requestAnimationFrame(count)
+    }
+    document.querySelector<HTMLElement>("[data-fixture-queue]")!.style.width = "420px"
+    requestAnimationFrame(count)
+  })
   await settled()
+  const mostNear = await page!.evaluate(() => (window as unknown as { __mostNear: number }).__mostNear)
+  assert.ok(mostNear <= 20, `${mostNear} of 60 cards drawn at once while the page re-drew them`)
   const after = await skippedOff()
   assert.ok(after.far >= 40, `most cards are still skipped: ${after.far}`)
   assert.deepEqual(after.off, [], "a skipped card still the height it had at the old width")
@@ -355,27 +375,71 @@ test("`k` landing on a card whose handoff is still loading opens its Show more o
   assert.equal(await page!.$eval(toggle, (button) => button.getAttribute("aria-expanded")), "true", "the landed card stayed shut")
 })
 
-test("End before the page is built stays at the end", { skip: !baseUrl, timeout: 120_000 }, async () => {
+test("a jump to the end before the page is built stays at the end", { skip: !baseUrl, timeout: 120_000 }, async () => {
   // Three things moved the end away from a jump to it, each below the card the viewport lock holds at its
   // reading line: the cards End lands on built at their real height instead of the 540px guess (put back at
   // the end in the jump's own scroll event); a card above built SHORTER, whose clamp of the offset the lock
   // undid a second time; and a handoff landing a round trip after its card was built (fetched ahead of the
-  // build now; handoffs here answer 300ms late, and End waits for them to have been fetched).
-  await page!.goto(URL_MANY("&handoffDelay=300"), { waitUntil: "load" })
+  // build now; handoffs here answer 150ms late, and End waits for them to have been fetched). 120 cards, so the
+  // handoffs are all fetched long before the cards are all built, however fast the box builds them.
+  await page!.goto(URL_MANY("&handoffDelay=150", 120), { waitUntil: "load" })
   await page!.waitForSelector("[data-xq-card-root]")
-  // The handoffs are fetched four at a time from the first idle moment: 60 × 300ms / 4 ≈ 4.5s. The end of the
+  // The handoffs are fetched four at a time from the first idle moment: 120 × 150ms / 4 ≈ 4.5s. The end of the
   // page is still stand-ins by then (building is far slower), which is the case End has to get right.
-  await page!.waitForFunction(() => (window as unknown as { __rpc: { calls: { path: string }[] } }).__rpc.calls.filter((call) => call.path.endsWith("/threadHandoff")).length >= 60, { polling: 100, timeout: 30_000 })
-  // The last of them answers 300ms after it was asked.
-  await sleep(600)
+  await page!.waitForFunction(() => (window as unknown as { __rpc: { calls: { path: string }[] } }).__rpc.calls.filter((call) => call.path.endsWith("/threadHandoff")).length >= 120, { polling: 100, timeout: 30_000 })
+  // The last of them answers 150ms after it was asked.
+  await sleep(400)
   const atEnd = await page!.evaluate(async () => {
     const standIns = document.querySelectorAll("[data-xq-card-stand-in]").length
     scrollTo({ top: document.documentElement.scrollHeight, behavior: "instant" as ScrollBehavior })
     await new Promise((resolve) => setTimeout(resolve, 1_500))
-    const last = document.querySelectorAll<HTMLElement>("[data-xq-card]")[59]!.getBoundingClientRect()
+    const last = [...document.querySelectorAll<HTMLElement>("[data-xq-card]")].at(-1)!.getBoundingClientRect()
     return { standIns, gapBelow: Math.round(document.documentElement.scrollHeight - innerHeight - scrollY), lastBottom: Math.round(last.bottom), viewport: innerHeight }
   })
   assert.ok(atEnd.standIns >= 10, `every handoff was fetched while most of the page was unbuilt (ahead of the build), and End came then: ${JSON.stringify(atEnd)}`)
   assert.ok(atEnd.gapBelow <= 2, `End no longer shows the end: ${JSON.stringify(atEnd)}`)
   assert.ok(atEnd.lastBottom <= atEnd.viewport + 2, `the last card is pushed off screen: ${JSON.stringify(atEnd)}`)
+})
+
+test("the End key before the page is built, and before the handoffs are fetched, lands on the end and stays", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  // Handoffs answer 600ms late and End comes at once, so the cards at the end of the page are built with their
+  // handoffs still on the way: each grows a round trip after it was drawn. And the key is the browser's End,
+  // a smooth scroll aimed at the end the page had when it started.
+  await page!.goto(URL_MANY("&handoffDelay=600"), { waitUntil: "load" })
+  await page!.waitForSelector("[data-xq-card-root]")
+  const standIns = await page!.evaluate(() => document.querySelectorAll("[data-xq-card-stand-in]").length)
+  await page!.mouse.click(880, 500)
+  await page!.keyboard.press("End")
+  const read = () => page!.evaluate(() => {
+    const last = document.querySelectorAll<HTMLElement>("[data-xq-card]")[59]!.getBoundingClientRect()
+    return { gapBelow: Math.round(document.documentElement.scrollHeight - innerHeight - scrollY), lastBottom: Math.round(last.bottom) }
+  })
+  await sleep(2_500)
+  const landed = await read()
+  await sleep(2_000)
+  const later = await read()
+  const result = JSON.stringify({ standIns, landed, later })
+  assert.ok(standIns >= 40, `End came before the page was built: ${result}`)
+  for (const at of [landed, later]) {
+    assert.ok(at.gapBelow <= 2, `End does not show the end: ${result}`)
+    assert.ok(at.lastBottom <= 1_000 + 2, `the last card is off screen: ${result}`)
+  }
+})
+
+test("End builds the end of the page and takes the page's glide while cards are unbuilt", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  await page!.goto(URL_MANY(), { waitUntil: "load" })
+  await page!.waitForSelector("[data-xq-card-root]")
+  const pressed = await page!.evaluate(() => {
+    const slots = [...document.querySelectorAll<HTMLElement>("[data-xq-card]")]
+    const lastStandInsBefore = slots.slice(-2).filter((slot) => slot.querySelector("[data-xq-card-stand-in]")).length
+    // Dispatched, not typed: a synthetic key has no default action, so whatever moves the page is the handler.
+    const event = new KeyboardEvent("keydown", { key: "End", bubbles: true, cancelable: true })
+    document.body.dispatchEvent(event)
+    return { lastStandInsBefore, prevented: event.defaultPrevented, lastStandInsAfter: slots.slice(-2).filter((slot) => slot.querySelector("[data-xq-card-stand-in]")).length }
+  })
+  assert.deepEqual(pressed, { lastStandInsBefore: 2, prevented: true, lastStandInsAfter: 0 }, "End built the last cards and took the scroll over")
+  await page!.waitForFunction(() => Math.abs(document.documentElement.scrollHeight - innerHeight - scrollY) <= 2, { polling: 100, timeout: 10_000 })
+  await sleep(1_500)
+  const gap = await page!.evaluate(() => Math.round(document.documentElement.scrollHeight - innerHeight - scrollY))
+  assert.ok(gap <= 2, `the glide left the end: ${gap}px below`)
 })
