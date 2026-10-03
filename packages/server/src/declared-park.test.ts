@@ -905,12 +905,12 @@ test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue b
   assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
 })
 
-test("parkForMaxMs: a sub-agent anywhere in the park caps it at the check-in hour", () => {
+test("parkForMaxMs: a sub-agent anywhere in the park caps it at the 20-minute check-in", () => {
   const at = Date.parse("2026-10-03T10:00:00Z")
   const lanes = { items: [{ kind: "agent" as const, value: "wzkorrv4u" }, { kind: "agent" as const, value: "wt5dxjxhp" }], forMs: 8 * 60 * 60_000 }
   assert.equal(parkForMaxMs(lanes), AGENT_PARK_FOR_MAX_MS)
-  assert.equal(parkExpiresAt(lanes, at), at + AGENT_PARK_FOR_MAX_MS, "for: 8h becomes an hourly check-in")
-  assert.equal(parkExpiresAt({ ...lanes, forMs: 20 * 60_000 }, at), at + 20 * 60_000, "a shorter for: stands as written")
+  assert.equal(parkExpiresAt(lanes, at), at + AGENT_PARK_FOR_MAX_MS, "for: 8h becomes a 20-minute check-in")
+  assert.equal(parkExpiresAt({ ...lanes, forMs: 10 * 60_000 }, at), at + 10 * 60_000, "a shorter for: stands as written")
   assert.equal(parkForMaxMs({ items: [{ kind: "agent", value: "a1" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), AGENT_PARK_FOR_MAX_MS)
   assert.equal(parkForMaxMs({ items: [{ kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
 })

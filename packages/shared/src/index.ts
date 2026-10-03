@@ -626,7 +626,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   for:    2h                       REQUIRED. How long the park may stand (parseAwaitingDurationRaw).
 //                                    Capped at a day — or at PR_WATCH_FOR_MAX_MS when every item is a
 //                                    `prs:` entry, because an external PR does not move on a day's clock.
-//                                    An `agents:` entry caps it at an hour instead: AGENT_PARK_FOR_MAX_MS.
+//                                    An `agents:` entry caps it at 20m instead: AGENT_PARK_FOR_MAX_MS.
 //   title:  Waiting on the CI run    OPTIONAL. The resting card's heading, in the worker's own words.
 //   needs_input: false               REQUIRED for a thread dispatched at or after NEEDS_INPUT_REQUIRED_AT.
 //                                    The worker's own answer to "does the human need to look now?" —
@@ -987,8 +987,9 @@ export const AWAITING_FOR_MAX_MS = 24 * 60 * 60 * 1000
  *  `for: 8h` on five lanes of fixers and the board showed one stale line while they landed work
  *  (maintainer 2026-10-03: "the top level thread should regularly be reporting back feedback and
  *  communicating with sub agents … avoid long periods of top level no updates"). Expiry wakes the parent
- *  with parkExpiredWakeMessage's check-in steps, and re-parking stays unlimited. */
-export const AGENT_PARK_FOR_MAX_MS = 60 * 60 * 1000
+ *  with parkExpiredWakeMessage's check-in steps, and re-parking stays unlimited. Shipped at an hour, cut
+ *  to 20 minutes the same day at the maintainer's request. */
+export const AGENT_PARK_FOR_MAX_MS = 20 * 60 * 1000
 /** Milliseconds as WRITTEN, uncapped — for a caller that has to know whether the ceiling bit. Every
  *  wait applies one; none of them may apply it silently. */
 export function parseAwaitingDurationRaw(value: string): number | null {

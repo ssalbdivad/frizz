@@ -1357,7 +1357,7 @@ export interface Scheduler {
    *  wakes the operator explicitly turned off. `tick()` stays the unconditional one, for tests and boot. */
   kick(): void
   /** THE HUMAN'S "Ask for update" (router.requestParkCheckIn): treat the park this thread rested on at
-   *  `restedAt` as expired NOW, so SOURCE 12 sends the same check-in wake the hour would — early, and
+   *  `restedAt` as expired NOW, so SOURCE 12 sends the same check-in wake the 20-minute expiry would — early, and
    *  headed as the human's request. Keyed on the rest, so a new rest makes a stale request inert; held
    *  in memory, so a restart before the next pass drops the click rather than replaying it later. */
   requestCheckIn(slug: string, restedAt: string): void
