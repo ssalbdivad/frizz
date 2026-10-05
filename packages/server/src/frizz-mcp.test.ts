@@ -66,7 +66,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep", "editor"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep", "editor", "schedule"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     // `keep` takes the id, and optionally a whole reworded question in `ask`'s own tree shape.
     const keepTool = list.result.tools.find((t: { name: string }) => t.name === "keep")
@@ -146,12 +146,13 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     }
     assert.deepEqual(list.result.tools[7].inputSchema.required, ["id"])
     assert.deepEqual(Object.keys(list.result.tools[7].inputSchema.properties), ["id"])
-    // `done` takes the write-up and NOTHING ELSE. Its one argument list is the assertion that matters:
-    // there is no `force`, and there is no second parameter for a worker to reach for when the gate
-    // refuses it — a bypass riding the gated call gets learned, and the gate degrades to a two-token
-    // tax (plans/rest-by-registration.md).
+    // `done` takes the write-up and `quiet`, and NOTHING ELSE. There is no `force`, and no parameter for a
+    // worker to reach for when the gate refuses it — a bypass riding the gated call gets learned, and the
+    // gate degrades to a two-token tax (plans/rest-by-registration.md). `quiet` (2026-10-05) is not one:
+    // the gate refuses a quiet done exactly as it refuses a loud one, and quiet only decides where an
+    // ALLOWED done lands — Done instead of the queue — on a scheduled run alone (plans/scheduled-threads.md).
     assert.deepEqual(list.result.tools[8].inputSchema.required, ["body"])
-    assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), ["body"])
+    assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), ["body", "quiet"])
     // `title` takes ONLY the name. It exposes no thread parameter for `goal`'s reason — the slug comes
     // from the server's env — so a worker can rename its own thread and no other.
     assert.deepEqual(list.result.tools[9].inputSchema.required, ["title"])
@@ -160,7 +161,18 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 19)
+    assert.equal(list.result.tools.length, 20)
+    // `schedule` — `action` alone is required, like its action-switch siblings, and NO thread parameter:
+    // the caller (who proposed, who skipped) comes from the env. The echo instruction is the point of
+    // the description: the human catches a mistranslated time only if the worker relays it.
+    const scheduleTool = list.result.tools[19]
+    assert.equal(scheduleTool.name, "schedule")
+    assert.deepEqual(scheduleTool.inputSchema.required, ["action"])
+    assert.deepEqual(scheduleTool.inputSchema.properties.action.enum, ["create", "dry_run", "update", "list", "pause", "skip_next", "move_next"])
+    assert.ok(!("slug" in scheduleTool.inputSchema.properties) && !("thread" in scheduleTool.inputSchema.properties))
+    for (const cue of ["RELAY IT TO THE HUMAN VERBATIM", "DOES NOT RUN UNTIL THE HUMAN CLICKS TURN ON", "ALWAYS include BYHOUR and BYMINUTE", "`model` and `effort` are REQUIRED"]) {
+      assert.ok(scheduleTool.description.includes(cue), cue)
+    }
     // `editor` READS the human's editor and takes nothing: no window to pick, no project to name — the
     // window is the one on the caller's project, chosen by the server. Marked read-only for the client.
     const editorTool = list.result.tools.find((t: { name: string }) => t.name === "editor")
@@ -1410,6 +1422,83 @@ test("`done` marks the CALLING thread finished, and reports a refusal as an acti
     assert.equal(noBody.result.isError, true)
     assert.match(noBody.result.content[0].text, /`body` is required/)
     assert.equal(seen.length, before, "it never reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+test("`done` passes `quiet` through, and says the run went to Done", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { done: true, blockingQuestions: [], blockingWatches: [] } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "triage-issues" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "done", arguments: { body: "Nothing new — no issues since Oct 5", quiet: true } } })
+    const quiet = await rpc.next(2)
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/markOwnDone", body: { slug: "triage-issues", body: "Nothing new — no issues since Oct 5", quiet: true } })
+    assert.match(quiet.result.content[0].text, /Marked done QUIETLY/)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+test("`schedule` shapes each action for ownSchedule, relays the server's reply verbatim, and refuses locally", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { text: `ECHO for ${JSON.parse(body).action}` } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "proposing-thread" })
+  const call = async (id: number, args: Record<string, unknown>) => {
+    rpc.send({ jsonrpc: "2.0", id, method: "tools/call", params: { name: "schedule", arguments: args } })
+    return (await rpc.next(id)).result
+  }
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    const spec = { title: "Triage issues", prompt: "Triage the new issues.", when: "every Monday at 9am", rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", model: "sonnet", effort: "medium" }
+    const created = await call(2, { action: "create", ...spec, slug: "someone-else" })
+    assert.equal(created.content[0].text, "ECHO for create")
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/ownSchedule", body: { action: "create", slug: "proposing-thread", ...spec } }, "the caller comes from the env, never the arguments")
+    await call(3, { action: "list" })
+    assert.deepEqual(seen[1]!.body, { action: "list", slug: "proposing-thread" })
+    await call(4, { action: "skip_next", id: "sch_0123456789ab", reason: "release freeze" })
+    assert.deepEqual(seen[2]!.body, { action: "skip_next", slug: "proposing-thread", id: "sch_0123456789ab", reason: "release freeze" })
+    await call(5, { action: "move_next", id: "sch_0123456789ab", to: "2026-10-15T10:00" })
+    assert.deepEqual(seen[3]!.body, { action: "move_next", slug: "proposing-thread", id: "sch_0123456789ab", to: "2026-10-15T10:00" })
+    const before = seen.length
+    const noModel = await call(6, { action: "create", ...spec, model: undefined })
+    assert.equal(noModel.isError, true)
+    assert.match(noModel.content[0].text, /`model` is required/)
+    const noId = await call(7, { action: "pause" })
+    assert.match(noId.content[0].text, /`id` is required/)
+    const noTo = await call(8, { action: "move_next", id: "sch_0123456789ab" })
+    assert.match(noTo.content[0].text, /`to` is required/)
+    assert.equal(seen.length, before, "local refusals never reach the server")
   } finally {
     rpc.kill()
     http.close()

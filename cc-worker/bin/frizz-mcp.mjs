@@ -805,6 +805,15 @@ const DONE = {
           "sentence that would read the same in both places belongs in exactly one of them. Nothing " +
           "here may point vaguely forward — no \"a follow-up could…\". Do it, ask about it, or drop it.",
       },
+      quiet: {
+        type: "boolean",
+        description:
+          "ONLY on a SCHEDULED RUN (your first message opened with a <scheduled-run> header), and only when you " +
+          "found nothing that needs the human: the thread goes straight to Done instead of their queue, and the " +
+          "body's FIRST LINE becomes this run's line in the schedule's history — so make it the finding " +
+          "(\"Nothing new — no issues since Oct 5\"). Anything the human should see is not quiet. Refused on any " +
+          "other thread.",
+      },
     },
     required: ["body"],
   },
@@ -915,6 +924,65 @@ const MESSAGE_THREAD = {
 // human in the Frizz sidebar who asked "can you see the highlighted code?" was told no, because the only
 // way a selection reached a worker was as a chip the human added by hand. The description is written to
 // be REACHED FOR on the words humans actually use for code they have not pasted.
+// The schedule bounds, mirrored from @frizz/shared for the same reason as the timer's: this file cannot
+// import them. The server enforces all of them; these only shape the description.
+const SCHEDULE_MIN_SPACING_MINUTES = 15
+
+const SCHEDULE = {
+  name: "schedule",
+  description:
+    "PROPOSE A RECURRING THREAD: a saved prompt Frizz starts as a FRESH thread of its own on a calendar rule — " +
+    "\"every Monday at 9am triage new issues\". Use it when the human asks for something to happen " +
+    "regularly (\"do this every Monday\", \"check this daily\"). It is not `goal` (which repeats in THIS " +
+    "thread) and not `timer` (one instant, this thread): each run starts with no memory of this conversation, " +
+    "so the prompt must stand on its own.\n\n" +
+    "A SCHEDULE YOU CREATE DOES NOT RUN UNTIL THE HUMAN CLICKS TURN ON. It is a proposal; nothing you can " +
+    "call activates it, and `ask` is not a way to get it turned on.\n\n" +
+    "YOU WRITE THE RULE; FRIZZ COMPUTES THE RUNS. Give an RFC 5545 `rrule` (FREQ HOURLY/DAILY/WEEKLY/MONTHLY/" +
+    "YEARLY with INTERVAL, COUNT, UNTIL, BYMONTH, BYMONTHDAY, BYDAY, BYHOUR, BYMINUTE, BYSETPOS, WKST — " +
+    "nothing else), a LOCAL `dtstart` (`YYYY-MM-DDTHH:MM`, wall clock, no zone) and optionally an IANA `tz` " +
+    "(default: the human's own zone). ALWAYS include BYHOUR and BYMINUTE. Weekdays = BYDAY=MO,TU,WE,TH,FR; the " +
+    "last day of the month = BYMONTHDAY=-1 (never above 28); the first weekday of the month = " +
+    "BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1. Runs must be at least " + SCHEDULE_MIN_SPACING_MINUTES + "m apart. " +
+    "Put the human's own words for when in `when`. Anything a rule cannot say (\"unless it's a holiday\", " +
+    "\"the day after each release\") goes in `condition`, a short clause each run checks first.\n\n" +
+    "EVERY REPLY CARRIES AN ECHO built from the rule Frizz will fire (\"Triage issues · every Monday at 9am\" " +
+    "and the next runs). RELAY IT TO THE HUMAN VERBATIM — it is how a mistranslated time gets caught before it " +
+    "runs. Use `dry_run` first when you are unsure; it saves nothing.\n\n" +
+    "`model` and `effort` are REQUIRED, chosen for what ONE RUN must do, exactly as for `spawn_thread` — every " +
+    "run is a paid agent session.\n\n" +
+    "On a schedule that is already on, you may only change ONE OCCURRENCE: `skip_next`, `move_next` (to a " +
+    "local time before the run after it), or `pause` it. A scheduled run uses these when its own check says " +
+    "the next run should not happen as planned. Only the human resumes, edits or deletes a schedule.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        enum: ["create", "dry_run", "update", "list", "pause", "skip_next", "move_next"],
+        description:
+          "`create` proposes a schedule (it waits for the human's Turn on); `dry_run` validates and echoes " +
+          "without saving; `update` changes a proposal YOU made that is not on yet; `list` shows this project's " +
+          "schedules with their ids; `pause`, `skip_next` and `move_next` act on an active schedule by `id`.",
+      },
+      id: { type: "string", description: "The schedule's `sch_…` id (from `create` or `list`). For update, pause, skip_next, move_next." },
+      title: { type: "string", description: "For create/dry_run (and update): one or two words naming the task's subject, sentence case — \"Triage issues\". Every run is named this." },
+      prompt: { type: "string", description: "For create/dry_run (and update): what each run does, self-contained — a fresh thread with none of your context reads it." },
+      when: { type: "string", description: "For create/dry_run (and update): the human's own words for when, as they said them — \"every Monday at 9am\"." },
+      rrule: { type: "string", description: "For create/dry_run (and update): the RRULE value without the `RRULE:` prefix, e.g. `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0`." },
+      dtstart: { type: "string", description: "For create/dry_run (and update): the local start, `YYYY-MM-DDTHH:MM`, at the rule's first time of day. It anchors INTERVAL." },
+      tz: { type: "string", description: "Optional IANA zone like `America/New_York`. Default: the zone the human's browser reports." },
+      condition: { type: "string", description: "Optional: a short clause each run checks before working — \"unless it's a US public holiday\"." },
+      model: { type: "string", description: "For create/dry_run: REQUIRED, picked for one run's task — `opus`, `sonnet` or `haiku` (claude), or a codex model id with `backend: \"codex\"`." },
+      effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"], description: "For create/dry_run: REQUIRED, picked for one run's task." },
+      backend: { type: "string", enum: ["claude", "codex"], description: "Optional agent backend for the runs (default `claude`)." },
+      reason: { type: "string", description: "For skip_next: why, in a few words — it is the run's line in the schedule's history (\"release freeze\")." },
+      to: { type: "string", description: "For move_next: the new start, a local time in the schedule's zone (`2026-10-15T10:00`) or an ISO instant. Before the run after it." },
+    },
+    required: ["action"],
+  },
+}
+
 const EDITOR = {
   name: "editor",
   description:
@@ -985,8 +1053,9 @@ const UNLINK = {
 
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
-// EXTEND_SHELL is appended after it for the same reason (2026-09-29), and EDITOR after KEEP (2026-10-02).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR]
+// EXTEND_SHELL is appended after it for the same reason (2026-09-29), EDITOR after KEEP (2026-10-02), and
+// SCHEDULE after EDITOR (2026-10-05).
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR, SCHEDULE]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -1009,6 +1078,7 @@ const HANDLERS = {
   [READ_THREAD.name]: readThread,
   [MESSAGE_THREAD.name]: messageThread,
   [EDITOR.name]: editor,
+  [SCHEDULE.name]: schedule,
 }
 
 /** The `read_thread` handler: another thread's request, status, approach and newest message, by handle.
@@ -2259,13 +2329,66 @@ async function keep(args) {
   return `${head}\n\n${openQuestionList(result)}`
 }
 
+/** The `schedule` handler: propose a recurring thread, or move one occurrence of an active one. The server
+ *  builds the reply — the echo the worker relays verbatim — so this only shapes the request.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function schedule(args) {
+  const slug = threadSlug()
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  const actions = ["create", "dry_run", "update", "list", "pause", "skip_next", "move_next"]
+  if (!actions.includes(action)) throw new Error(`\`action\` must be one of ${actions.map((a) => `"${a}"`).join(", ")}`)
+  /** @param {string} key */
+  const text = (key) => (typeof args[key] === "string" && args[key].trim() ? args[key].trim() : undefined)
+  /** @type {Record<string, unknown>} */
+  const body = { action, slug }
+  if (action !== "list" && action !== "create" && action !== "dry_run") {
+    const id = text("id")
+    if (!id) throw new Error("`id` is required — take the `sch_…` id from `create`'s reply or from `action: \"list\"`")
+    body.id = id
+  }
+  if (action === "create" || action === "dry_run" || action === "update") {
+    for (const key of ["title", "prompt", "when", "rrule", "dtstart", "tz", "condition", "model", "effort", "backend"]) {
+      const value = text(key)
+      if (value !== undefined) body[key] = value
+    }
+    if (action !== "update") {
+      for (const key of ["title", "prompt", "when", "rrule", "dtstart"]) {
+        if (body[key] === undefined) throw new Error(`\`${key}\` is required to ${action === "create" ? "create" : "dry-run"} a schedule`)
+      }
+      // Required with no default, like spawn_thread: every run is a paid agent session, and a defaulted
+      // model is the cheap one picked by nobody.
+      if (body.model === undefined) throw new Error("`model` is required — choose it for what ONE run must do (claude: opus/sonnet/haiku; codex: a model id with backend: \"codex\"). There is no default.")
+      if (body.effort === undefined) throw new Error("`effort` is required — choose it for what one run must do (low/medium/high/xhigh/max). There is no default.")
+    }
+  }
+  if (action === "skip_next") {
+    const reason = text("reason")
+    if (reason) body.reason = reason
+  }
+  if (action === "move_next") {
+    const to = text("to")
+    if (!to) throw new Error("`to` is required — the new start, as a local time in the schedule's zone (`2026-10-15T10:00`) or an ISO instant")
+    body.to = to
+  }
+  const result = (await callRpc("ownSchedule", body))?.result
+  if (typeof result?.text !== "string") throw new Error(`ownSchedule returned no reply: ${JSON.stringify(result)?.slice(0, 300)}`)
+  return result.text
+}
+
 /** The `done` handler: declare the effort finished, or report exactly what refuses to let it.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function done(args) {
   const slug = threadSlug()
   const body = typeof args.body === "string" ? args.body.trim() : ""
   if (!body) throw new Error("`body` is required — the write-up the human reads on the card")
-  const result = (await callRpc("markOwnDone", { slug, body }))?.result
+  const quiet = args.quiet === true
+  const result = (await callRpc("markOwnDone", { slug, body, ...(quiet ? { quiet: true } : {}) }))?.result
+  if (result?.done && quiet) {
+    return (
+      "Marked done QUIETLY. This run is filed under Done, out of the human's queue, and your body's first " +
+      "line is its line in the schedule's history. End your turn now."
+    )
+  }
   if (result?.done) {
     return (
       "Marked done. Your thread cards as a checked success in the human's queue and stays there until " +
