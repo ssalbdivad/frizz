@@ -434,7 +434,7 @@ function phrase(rule: ScheduleRule, dtstart: Wall): string | undefined {
     const window = rule.byHour ? ` from ${formatClock(Math.min(...rule.byHour), minute[0]!)} to ${formatClock(Math.max(...rule.byHour), minute[minute.length - 1]!)}` : ""
     const days = daysPhrase(rule)
     if (days === undefined) return undefined
-    return `${every}${at}${window}${days ? ` ${days.replace(/^every /, "on ")}` : ""}`
+    return `${every}${at}${window}${days ? ` on ${pluralDays(rule.byDay!)}` : ""}`
   }
   if (times === undefined) return undefined
   if (rule.freq === "DAILY") {
@@ -489,6 +489,15 @@ function weekdayList(days: ScheduleWeekday[]): string | undefined {
   if (set.join() === "5,6") return "weekend day"
   if (set.length === 7) return "day"
   return joinWords(set.map((d) => WEEKDAY_NAMES[d]!))
+}
+
+/** "weekdays", "weekends", "Mondays and Wednesdays" — for "every 2 hours … on weekdays". */
+function pluralDays(days: ScheduleWeekday[]): string {
+  const list = weekdayList(days)
+  if (list === "weekday") return "weekdays"
+  if (list === "weekend day") return "weekends"
+  if (list === "day") return "every day"
+  return joinWords(sortedUnique(days.map((d) => d.day)).map((d) => `${WEEKDAY_NAMES[d]}s`))
 }
 
 function monthDayPhrase(rule: ScheduleRule, dtstart: Wall): string | undefined {
