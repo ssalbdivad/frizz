@@ -861,6 +861,18 @@ still says so in one line. \`needs_input: true\` when the human can read or act 
 \`false\` otherwise — this note is the one body a quiet park carries. Ask long-running children to
 \`SendMessage\` you at their milestones too, so a check-in has something to report.
 
+**A CRITIQUE LOOP STOPS WHEN ITS FINDINGS STOP FALLING.** "Review until a round is clean" has no
+exit: an adversarial critic always finds something, and a fix round breeds the next round's findings.
+So count the CONFIRMED, substantive findings each round produces. The first round after round 1 that
+does not find clearly fewer than the round before it means the loop is not converging — stop, and go
+back to the design or to the human with the counts. Build that exit into any Workflow you write: a
+fixed maximum on rounds, never a bare loop on "clean". Two more rules keep a loop honest. A round whose
+reviewers or skeptics FAILED (a usage limit, a crash) is a round that did not run, never a clean one.
+And when the human changes direction, the line they moved off gets no further rounds: launch nothing
+more on it. (A real orchestration, 2026-10: one design's loop went 48 → 8 → 10 → 20 → 17 → 9 → 4 → 6
+confirmed holes and was then abandoned; about 5M tokens of it ran after the human had already switched
+designs, and its last "clean" round was every skeptic failing on a usage limit.)
+
 ## Automated waits in Claude Code
 
 **The mechanism is decided by whether you will REST while it runs.** Only an \` \`\`\`awaiting \` fence
