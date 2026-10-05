@@ -108,7 +108,11 @@ export const RAIL_LAZY_RESERVE_PLAIN = "pr-[6.75rem]"
 
 /** The new-thread box's SCHEDULE glyph (`Repeat`, plans/scheduled-threads.md §3) takes the slot directly
  *  left of the snail, and every slot further left moves over by one more 28px pitch; the reserves grow by
- *  the same 28px. Provisional pitch-only values until measured — see the readings below once taken. */
+ *  the same 28px. The plain pitch holds — `Repeat` inks 13px across (the snail 14, the paperclip 13) at the
+ *  same mean contrast as the snail (386 / 388), so no slot needed its own nudge. Measured with scripts/ink-gaps.mjs on
+ *  composer-icons-fixture `?schedule` (dark, sans, dsf 4), left to right: 14.25 · 14.75 · 14.5 · 14.5
+ *  with GitHub (paperclip · GitHub · repeat · snail · send), 14.75 · 14.5 · 14.5 without — inside the
+ *  14.25–14.75 the strip already drew without it. */
 export const RAIL_SCHEDULE_OFFSET = "right-[72px]"
 export const RAIL_SCHEDULE_ACTION_OFFSET = "right-[99px]"
 export const RAIL_SCHEDULE_PAPERCLIP_OFFSET = "right-[127px]"

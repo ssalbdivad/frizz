@@ -21,7 +21,7 @@ import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useSta
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
-import { questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
+import { parseScheduledRunPrompt, questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { prefetchProjectTranscript } from "../hooks.ts"
@@ -482,7 +482,10 @@ function CardArticle({
           >
             Show earlier messages
           </a>
-          {handoff.data?.asked && <AskedBubble text={handoff.data.asked} />}
+          {/* A scheduled run's first message opens with Frizz's header for the worker; the card shows only the
+              saved prompt under it, the human's own words — the title's repeat glyph already says where the
+              run came from (ChatView ScheduledRunOpening does the same in the drawer). */}
+          {handoff.data?.asked && <AskedBubble text={parseScheduledRunPrompt(handoff.data.asked)?.prompt || handoff.data.asked} />}
           {answered && (
             <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
               <Prose md={answered} />

@@ -1048,8 +1048,14 @@ function QuietBands({
 }
 
 /** The schedules count's glyph, at the size every band glyph takes on the row (QuietToggles). */
+// The schedules count's glyph, in the band glyphs' 10px box. `Repeat` inks y 1–23 of its 24 units where
+// every band glyph inks 3–21, so at the shared 10px it drew 9.38px tall against their 8.38–8.50 and read
+// as the biggest mark on the row (scripts/ink-gaps.mjs, dsf 8). Drawn at 90% inside the same 10px box —
+// a viewBox padded by 1/18 of itself a side, not a 9px svg in a 10px wrapper: a wrapper's baseline is
+// its svg's bottom, which dropped the glyph 0.5px under the band's lift (read +0.36px low against the
+// others' -0.14). Now 7.75 x 8.38 ink against 8.5 x 8.38-8.5, 4.5px from its digit against 4.75.
 function ScheduleCountGlyph({ size = 10 }: { size?: number }) {
-  return <Repeat size={size} />
+  return <Repeat size={size} viewBox="-1.333 -1.333 26.667 26.667" />
 }
 
 /**

@@ -1465,13 +1465,7 @@ export function Composer({
               {interruptChord} to interrupt
             </span>
           )}
-          {/* The schedule glyph's one visible trace in the strip, only while it is lit as a hint: the text
-              opens like a schedule ("every Monday …"), and Enter would still start it now. */}
-          {scheduleSlot && schedule === "hint" && hasContent && !busy && (
-            <span data-composer-schedule-hint className="ml-auto max-w-full shrink-0 truncate text-[11px] text-muted-70 [[data-editor-line]~&]:ml-1">
-              Schedule this? {scheduleChord}
-            </span>
-          )}
+
         </div>
       )}
       {/* Outlined controls keep 8px between edges; prose reserves the same clearance. */}

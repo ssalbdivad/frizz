@@ -12,11 +12,23 @@ import type { ThreadScheduleRef } from "@frizz/shared"
 // caller's `ml-1` is 4px of ink gap, the same gap the provider mark keeps beside it. Stroke 2.5, not lucide's
 // 2: at a 10px box the default pen draws 0.9px lines, which read as a fainter mark than the filled provider
 // glyph next to it.
+//
+// VERTICALLY the box IS the ink, and an inline box with no text in it sits its bottom edge on the title's
+// baseline, so `translate-y-[calc(H/2 - 0.5cap)]` puts the ink's centre on the cap band's in any font at
+// any size — the browser computes it, nothing to re-measure when the type moves. Measured on the real rows
+// (visual-review cap-band probe, sans = system-ui, dsf 2; ink centre minus cap-band centre, + = low):
+// a flat `translate-y-px` (the provider marks' nudge) read +0.77px on the 13px row and +0.76px on the 15px
+// semibold card title; untranslated it is -0.23px; with the cap term, 0.00 on both. The Claude asterisk
+// beside it reads +0.27px on the same probe, and is left alone.
+//
+// HORIZONTALLY, ink to ink (geometry plus the 2.5 stroke's half): title → mark 3.52px on the row, against
+// 3.64px from a title straight to its provider mark; mark → Claude asterisk 4.00px. 4.97px after the
+// card's 15px title (`ml-1.5`).
 export const SCHEDULE_MARK_GEOMETRY = {
   /** Beside a 13px row title (Sidebar.tsx ThreadRow). */
-  row: "h-[10px] w-[9.11px] translate-y-px",
+  row: "h-[10px] w-[9.11px] translate-y-[calc(5px_-_0.5cap)]",
   /** Beside a queue card's 15px semibold title (AllQueuesCard.tsx). */
-  title: "h-[11.5px] w-[10.48px] translate-y-px",
+  title: "h-[11.5px] w-[10.48px] translate-y-[calc(5.75px_-_0.5cap)]",
 } as const
 
 export function scheduleMarkLabel(schedule: Pick<ThreadScheduleRef, "title" | "describe">): string {

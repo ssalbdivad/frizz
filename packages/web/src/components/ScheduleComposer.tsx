@@ -173,6 +173,9 @@ function ScheduleEchoPanel({
 }) {
   const esc = <kbd className="font-sans text-[11px] text-muted-70">Esc</kbd>
   const ok = reading?.ok && reading.prompt.trim() ? reading : undefined
+  // A reading that will not make a schedule: its copy says what to type instead, and Create would only be a
+  // dead button beside it, so the footer keeps Cancel alone.
+  const refused = !pending && !ok && !!reading && !stale
   let body: React.ReactNode
   if (pending) {
     body = (
@@ -188,7 +191,7 @@ function ScheduleEchoPanel({
         {ok.preview.nextLine && <p data-schedule-next className="text-[12px] leading-5 text-muted">{ok.preview.nextLine}</p>}
       </>
     )
-  } else if (reading && !stale) {
+  } else if (refused) {
     body = <p data-schedule-refusal className="text-[12px] leading-5 text-fg/85">{reading.ok ? NOTHING_TO_DO : reading.error}</p>
   } else {
     // The mode is on and nothing on screen describes the text yet: say what Enter does here.
@@ -200,11 +203,14 @@ function ScheduleEchoPanel({
   }
   return (
     <div data-schedule-panel role="status" className="rounded-lg border border-border bg-panel-2 px-3 py-2.5">
-      <div className="flex items-start gap-2">
+      <div className="flex items-baseline gap-2">
         {/* The mode's own glyph, on the first line's cap band — the same lift every glyph beside a line of
-            text gets here (see QuietToggles in ProjectList.tsx): baseline-aligned, then raised by half the
-            difference between its box and the cap height. */}
-        <span aria-hidden className="flex h-5 shrink-0 items-center text-muted">
+            text gets here (QuietToggles in ProjectList.tsx): its box's bottom on the first line's baseline,
+            then lifted by half the box less half the cap height. `cap` reads the glyph span's own font, so
+            the span takes the first line's size (13px for the echo, 12px for every other line). Measured
+            (visual-review cap-band probe, sans, dsf 2): 0.03px off the band beside the echo, the refusal
+            and the empty-box hint alike. */}
+        <span aria-hidden className={`flex shrink-0 self-baseline translate-y-[calc(6.5px_-_0.5cap)] text-muted ${ok && !pending ? "text-[13px]" : "text-[12px]"}`}>
           <Repeat size={13} />
         </span>
         <div className="min-w-0 flex-1">{body}</div>
@@ -214,12 +220,13 @@ function ScheduleEchoPanel({
           type="button"
           onMouseDown={(e) => e.preventDefault()}
           onClick={onLeave}
-          className="flex items-center gap-1.5 rounded-md px-1 text-[12px] text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+          // Baseline, not centre: the 11px key and the 12px word box-centred sat 0.28px apart; now 0.
+          className="flex items-baseline gap-1.5 rounded-md px-1 text-[12px] text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
         >
           {esc}
           <span>Cancel</span>
         </button>
-        <button
+        {!refused && <button
           type="button"
           data-schedule-create
           onMouseDown={(e) => e.preventDefault()}
@@ -229,7 +236,7 @@ function ScheduleEchoPanel({
           className="rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-40"
         >
           {creating ? "Creating…" : "Create schedule"}
-        </button>
+        </button>}
       </div>
     </div>
   )
