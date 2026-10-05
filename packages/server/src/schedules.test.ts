@@ -608,3 +608,29 @@ test("a rule edit moves the next run but keeps the note the human wrote for it",
     h.close()
   }
 })
+
+test("Mark as done then Undo before the next pass leaves the next run at its time, not due now", async () => {
+  // Archiving clears a row's snooze (storage setState), so the Undo — the mobile triage toast, or the
+  // rail's uncheck — hands back the pending run with NO instant before the scheduler has reconciled the
+  // skip. It must not read that as "due now": a Monday run must not fire on a Tuesday.
+  const h = harness({ nowMs: T("2026-10-06T08:00:00Z") })
+  try {
+    const view = h.service.create(WEEKLY)
+    const next = view.nextRun!
+    assert.equal(next.occurrenceAt, new Date(NEXT_MON_9AM).toISOString())
+    await h.router.setThreadState.handler({ input: { slug: next.slug, state: "archived" } })
+    await h.router.setThreadState.handler({ input: { slug: next.slug, state: "open" } })
+    h.at(T("2026-10-06T08:00:10Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 0, "nothing starts on Tuesday")
+    const got = h.service.get(view.id)
+    assert.equal(got.history.length, 0, "and nothing was skipped: the Undo took the skip back")
+    assert.equal(got.schedule.nextRun!.slug, next.slug)
+    assert.equal(h.storage.getSession(next.slug)!.snoozed_until, new Date(NEXT_MON_9AM).toISOString(), "parked at its time again")
+    h.at(NEXT_MON_9AM + 1000)
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "it runs at its occurrence")
+  } finally {
+    h.close()
+  }
+})

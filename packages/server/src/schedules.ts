@@ -572,8 +572,16 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       materialize(id, nowMs, occurrenceAt)
       return
     }
-    // DUE? The lazy row's own instant is the truth — the human may have snoozed it elsewhere.
-    const dueAt = row.snoozed_until ? Date.parse(row.snoozed_until) : nowMs
+    // DUE? The lazy row's own instant is the truth — the human may have snoozed it elsewhere. A row with
+    // NO instant lost it to something that was not a move: archiving clears a snooze (storage setState),
+    // so a Mark as done the human then Undid, before this pass reconciled the skip, hands the run back
+    // bare. That is not "run now" (Wake now starts the run itself, router setThreadSnooze): its
+    // occurrence is its time, and the row is parked there again so the board shows it.
+    if (!row.snoozed_until) {
+      storage.setSnoozedUntil(row.slug, iso(occurrenceAt), null)
+      refresh()
+    }
+    const dueAt = row.snoozed_until ? Date.parse(row.snoozed_until) : occurrenceAt
     if (!Number.isFinite(dueAt) || dueAt > nowMs) return
     if (starter.isStarting(row.slug)) return
     // NEVER ON FIRST SIGHT: wait out the post-boot grace so the tailer has vouched for the last run.
