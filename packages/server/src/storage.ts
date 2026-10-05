@@ -2,6 +2,7 @@ import Database from "./sqlite.ts"
 import { ThreadSlug, slugify, threadIdentityName } from "@frizz/shared"
 import { createInteractionStore, type InteractionStore } from "./interaction-store.ts"
 import { scopeDatabase, type ProjectScope } from "./project-scope.ts"
+import { createScheduleStore, type ScheduleStore } from "./schedule-store.ts"
 import { log } from "./logging.ts"
 
 // The UI-state store (never .frizz/): session registry + settings. ONE SQLite file for the whole
@@ -277,6 +278,17 @@ export interface SessionRow {
   // message sent to it starts the agent through the dispatch path, on this same slug and session id,
   // and that dispatch's upsert writes NULL here (plans/lazy-threads.md).
   lazy_prompt?: string | null
+  // The SCHEDULE this thread is a run of (plans/scheduled-threads.md): set on the lazy row a schedule
+  // materializes as its next run, and kept when that row starts — the dispatch upsert never writes it —
+  // so every run carries its schedule for life. A lazy row WITH this is a schedule's pending next run:
+  // the board parks it in Snoozed with its wake time even once that time has passed, and the scheduler
+  // (schedules.ts), not snooze expiry, decides when it starts.
+  schedule_id?: string | null
+}
+
+/** A schedule's pending next run: an unstarted thread a schedule materialized (SessionRow.schedule_id). */
+export function isScheduledLazyRow(row: Pick<SessionRow, "lazy_prompt" | "schedule_id"> | undefined | null): boolean {
+  return isLazyRow(row) && typeof row?.schedule_id === "string" && row.schedule_id.length > 0
 }
 
 /** An unstarted thread (SessionRow.lazy_prompt): no agent has ever run for it. */
@@ -690,7 +702,9 @@ function groupBySlug<Row extends { thread_slug: string }>(rows: Row[]): Map<stri
   return bySlug
 }
 
-export interface Storage {
+// The scheduled-threads tables' methods (schedule-store.ts) are part of the Storage surface like every
+// other table's; they are implemented in their own module only to keep this one from growing further.
+export interface Storage extends ScheduleStore {
   /** The SHARED connection — raw, unscoped. Prefer `scope`; see project-scope.ts. */
   db: Database
   /** Every statement bound to this project. What wake-store.ts and tail-cache.ts build on. */
@@ -1292,6 +1306,8 @@ export const STORAGE_SCHEMA = `
       status_at TEXT,
       -- When the human last acted on the thread (SessionRow); also in the ALTER list below.
       interacted_at TEXT,
+      -- The schedule this thread is a run of (SessionRow.schedule_id); also in the ALTER list below.
+      schedule_id TEXT,
       PRIMARY KEY (project_id, slug)
     );
     CREATE INDEX IF NOT EXISTS session_snoozed_until_idx ON session(project_id, snoozed_until);
@@ -1612,13 +1628,70 @@ export const STORAGE_SCHEMA = `
       shell       INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project_id, slug)
     );
+    -- SCHEDULED THREADS (plans/scheduled-threads.md §7): a saved prompt plus a recurrence that starts a
+    -- FRESH thread at each occurrence. Instants are epoch ms, like thread_timer's. The statements that
+    -- read and write both tables are in schedule-store.ts.
+    --
+    -- state: 'proposed' (a worker made it; waits for a human's Turn on) | 'active' | 'paused' | 'ended'
+    -- (the rule ran out). paused_reason: 'human' | 'review' (too many unreviewed runs; resumes itself
+    -- when the human clears them) | 'failures' | 'stuck' (the last run kept overlapping the next).
+    -- next_slug is the one materialized next run — a lazy session row carrying schedule_id.
+    CREATE TABLE IF NOT EXISTS thread_schedule (
+      project_id  TEXT NOT NULL,
+      id          TEXT NOT NULL,
+      title       TEXT NOT NULL,
+      when_text   TEXT NOT NULL,
+      prompt      TEXT NOT NULL,
+      condition   TEXT,
+      rrule       TEXT NOT NULL,
+      dtstart     TEXT NOT NULL,
+      tz          TEXT NOT NULL,
+      model       TEXT,
+      effort      TEXT,
+      backend     TEXT NOT NULL DEFAULT 'claude',
+      state       TEXT NOT NULL CHECK (state IN ('proposed', 'active', 'paused', 'ended')),
+      paused_reason TEXT,
+      revision    INTEGER NOT NULL DEFAULT 0,
+      next_slug   TEXT,
+      next_occurrence_at INTEGER,
+      last_occurrence_at INTEGER,
+      consecutive_failures INTEGER NOT NULL DEFAULT 0,
+      consecutive_overlaps INTEGER NOT NULL DEFAULT 0,
+      created_by  TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      updated_at  INTEGER NOT NULL,
+      PRIMARY KEY (project_id, id)
+    );
+    -- One row per occurrence a schedule consumed: started, skipped (with why) or failed — the permanent
+    -- never-twice record, and the schedule's history. 'starting' is a claim in flight; its owner is the
+    -- process that made it, so a later process settles a claim a dead one left behind.
+    CREATE TABLE IF NOT EXISTS thread_schedule_run (
+      project_id  TEXT NOT NULL,
+      id          TEXT NOT NULL,
+      schedule_id TEXT NOT NULL,
+      occurrence_at INTEGER NOT NULL,
+      started_at  INTEGER,
+      state       TEXT NOT NULL CHECK (state IN ('starting', 'started', 'skipped', 'failed')),
+      reason      TEXT,
+      summary     TEXT,
+      thread_slug TEXT,
+      session_id  TEXT,
+      owner       TEXT,
+      created_at  INTEGER NOT NULL,
+      PRIMARY KEY (project_id, id),
+      UNIQUE (project_id, schedule_id, occurrence_at)
+    );
+    CREATE INDEX IF NOT EXISTS thread_schedule_run_state
+      ON thread_schedule_run(project_id, state, created_at);
+    CREATE INDEX IF NOT EXISTS thread_schedule_run_slug
+      ON thread_schedule_run(project_id, thread_slug);
 `
 
 /** Every table this module owns, for the importer and the project purge. */
 export const STORAGE_TABLES = [
   "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
   "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer", "thread_link",
-  "command_thread", "shell_budget", "thread_spinoff",
+  "command_thread", "shell_budget", "thread_spinoff", "thread_schedule", "thread_schedule_run",
 ] as const
 
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
@@ -1646,6 +1719,8 @@ export function ensureStorageSchema(db: Database): void {
     "fork_anchor TEXT",
     // 2026-10-01: an unstarted thread's note (SessionRow.lazy_prompt).
     "lazy_prompt TEXT",
+    // 2026-10-05: the schedule a thread is a run of (SessionRow.schedule_id).
+    "schedule_id TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1848,8 +1923,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
   const upsertStmt = scope.prepare(`
-    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision, lazy_prompt)
-    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision, @lazy_prompt)
+    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision, lazy_prompt, schedule_id)
+    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision, @lazy_prompt, @schedule_id)
     ON CONFLICT(project_id, slug) DO UPDATE SET
       session_id = excluded.session_id,
       thread_name  = excluded.thread_name,
@@ -1897,6 +1972,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- The note an UNSTARTED thread carries (SessionRow.lazy_prompt). Every dispatch writes NULL here, so the
       -- upsert that starts a lazy thread's agent is the same write that makes it an ordinary thread.
       lazy_prompt = excluded.lazy_prompt,
+      -- \`schedule_id\` is deliberately ABSENT from this list: the INSERT carries it (a schedule's lazy
+      -- next run is born with it), and no later write over the slug — the dispatch that starts that run,
+      -- a re-dispatch, an adopt — may clear which schedule the thread belongs to.
       archived = 0,
       state = 'open'
   `)
@@ -2550,9 +2628,13 @@ export function createStorage(source: string | Database, projectId: string): Sto
   // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
   // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
   // elapse (the board refreshes far more often than the waker ticks) would drop the follow-up entirely.
+  // A SCHEDULE'S PENDING NEXT RUN (a lazy row with schedule_id) does not expire here either: its instant
+  // is when the schedule fires it, and clearing it would drop the row into the queue in the seconds
+  // before the scheduler's tick starts it (isScheduledLazyRow).
   const clearExpiredSnoozesStmt = scope.prepare(`
     UPDATE session SET snoozed_until = NULL
     WHERE project_id = @project_id AND snoozed_until IS NOT NULL AND snoozed_until <= ? AND snooze_prompt IS NULL
+      AND NOT (schedule_id IS NOT NULL AND lazy_prompt IS NOT NULL)
   `)
   // Both human-title writers LOCK as they write: the text, the "not a guess" flag, and the lock move in
   // one statement, so no concurrent tail tick can land a backend auto-title between them.
@@ -2871,6 +2953,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     acp_agent: row.acp_agent ?? null,
     fork_anchor: row.fork_anchor ?? null,
     lazy_prompt: row.lazy_prompt ?? null,
+    schedule_id: row.schedule_id ?? null,
   })
 
   const getAdoptionRuntimeSnapshot = db.transaction((slug: string) => ({
@@ -3107,7 +3190,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
     return previous
   }
 
+  const scheduleStore = createScheduleStore(db, scope)
+
   return {
+    ...scheduleStore,
     db,
     scope,
     projectId,

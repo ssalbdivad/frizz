@@ -6,6 +6,7 @@ import { test } from "node:test"
 import { threadIdentityName } from "@frizz/shared"
 import Database from "./sqlite.ts"
 import { STORAGE_TABLES, createStorage, type SessionRow, type Storage } from "./storage.ts"
+import type { ThreadScheduleRow } from "./schedule-store.ts"
 
 // THE NET UNDER project-scope.ts. Its `prepare` refuses a statement that never names @project_id,
 // but it cannot see a subquery that forgot the scope — `NOT EXISTS (SELECT 1 FROM session WHERE slug =
@@ -47,6 +48,19 @@ const row = (slug: string, sessionId: string): SessionRow => ({
 })
 
 const SLUGS = ["alpha-thread", "beta-thread"]
+
+// The SAME schedule id in both projects: the id is unique per project only, so a statement that forgot
+// its scope would hit the twin's row.
+const schedule = (): ThreadScheduleRow => ({
+  id: "sch_000000000001", title: "Triage issues", when_text: "every Monday at 9am", prompt: "triage", condition: null,
+  rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-05T09:00", tz: "UTC", model: "haiku", effort: "low",
+  backend: "claude", state: "active", paused_reason: null, revision: 0, next_slug: "alpha-thread", next_occurrence_at: 1_000,
+  last_occurrence_at: null, consecutive_failures: 0, consecutive_overlaps: 0, created_by: "human", created_at: 1, updated_at: 1,
+})
+const run = (id: string, occurrenceAt: number, state: "starting" | "skipped" = "starting") => ({
+  id, schedule_id: "sch_000000000001", occurrence_at: occurrenceAt, started_at: null, state, reason: null,
+  thread_slug: "alpha-thread", session_id: "sess-alpha-thread", owner: "owner", created_at: occurrenceAt,
+})
 const UUID = "0f7b8b3a-2a5d-4c2b-9e7a-1f2c3d4e5f60"
 
 function seed(storage: Storage): void {
@@ -68,6 +82,9 @@ function seed(storage: Storage): void {
   })
   storage.reserveAdoptionClaim({ slug: "gamma-thread", attemptToken: UUID, sessionId: `adopt-${storage.projectId}`, reservedAtMs: 1, leaseExpiresAtMs: 2 })
   storage.insertCommandThread({ slug: "term-alpha", parentSlug: "alpha-thread", command: `echo ${storage.projectId}`, cwd: `/work/${storage.projectId}`, shell: false, createdAtMs: 1 })
+  storage.insertSchedule(schedule())
+  storage.insertScheduleRun(run("run_a", 500))
+  storage.insertScheduleRun(run("run_b", 600, "skipped"))
 }
 
 /** Every row of every storage table for one project, in a stable order. */
@@ -110,6 +127,11 @@ test("two projects in one database never see each other's rows", () => {
   assert.equal(a.getAdoptionClaim("gamma-thread")!.session_id, "adopt-project-a")
   assert.equal(a.allAdoptionClaims().length, 1)
   assert.deepEqual([...a.retiredOps("alpha-thread", "sess-alpha-thread")], ["op-1"])
+  assert.equal(a.listSchedules().length, 1)
+  assert.equal(a.countLiveSchedules(), 1)
+  assert.equal(a.listScheduleRuns("sch_000000000001", 10).length, 2)
+  assert.equal(a.startingScheduleRuns().length, 1)
+  assert.equal(a.scheduleRunForThread("alpha-thread")?.id, "run_b")
   // A slug with the same name in the other project is not "taken" here.
   assert.equal(
     a.reserveAdoptionClaim({ slug: "beta-thread", attemptToken: "1f7b8b3a-2a5d-4c2b-9e7a-1f2c3d4e5f61", sessionId: "x", reservedAtMs: 1, leaseExpiresAtMs: 2 }),
@@ -183,6 +205,14 @@ test("every mutating method touches only its own project", () => {
     ["insertSessionIfAbsent", () => a.insertSessionIfAbsent(row("delta-thread", "sess-delta"))],
     ["forgetSession", () => a.forgetSession("beta-thread")],
     ["forgetSessionIfCurrent", () => a.forgetSessionIfCurrent("delta-thread", { sessionId: "sess-delta", runtimeGeneration: 0, adoptionAttemptToken: null })],
+    ["writeSchedule", () => assert.ok(a.writeSchedule({ ...schedule(), title: "Renamed" }, 0, 5))],
+    ["claimScheduleRun", () => assert.ok(a.claimScheduleRun(run("run_c", 700), 1, 5))],
+    ["insertScheduleRun", () => assert.ok(a.insertScheduleRun(run("run_d", 800, "skipped")))],
+    ["settleScheduleRun", () => assert.ok(a.settleScheduleRun("run_a", { state: "started", startedAt: 5 }))],
+    ["dropScheduleRunClaim", () => assert.ok(a.dropScheduleRunClaim("run_c"))],
+    ["setScheduleRunSummary", () => assert.ok(a.setScheduleRunSummary("run_b", "Nothing new"))],
+    ["pruneScheduleRuns", () => assert.equal(a.pruneScheduleRuns("sch_000000000001", 1), 2)],
+    ["deleteSchedule", () => assert.ok(a.deleteSchedule("sch_000000000001"))],
   ]
   for (const [name, run] of mutations) {
     run()
