@@ -15,9 +15,14 @@ export const scheduleKeys = {
 }
 
 /** After any write to a schedule: every list and drawer that might show it, and the project row's count
- *  (the poll's `schedules`). */
-export function invalidateSchedules(queryClient: QueryClient): void {
-  void queryClient.invalidateQueries({ predicate: (query) => query.queryKey[0] === "ofProject" && query.queryKey[2] === "schedules" })
+ *  (the poll's `schedules`). `deleted` names a schedule that is gone: its own reads are not refetched,
+ *  since the drawer or sheet still mounted on it for the frame it takes to close would ask the server for
+ *  it and log the server's error. */
+export function invalidateSchedules(queryClient: QueryClient, deleted?: string): void {
+  if (deleted) void queryClient.cancelQueries({ predicate: (query) => query.queryKey[3] === "get" && query.queryKey[4] === deleted })
+  void queryClient.invalidateQueries({
+    predicate: (query) => query.queryKey[0] === "ofProject" && query.queryKey[2] === "schedules" && !(deleted && query.queryKey[3] === "get" && query.queryKey[4] === deleted),
+  })
   void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
 }
 

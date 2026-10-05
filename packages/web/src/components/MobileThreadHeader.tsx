@@ -86,7 +86,7 @@ export function MobileThreadHeader({ slug, onClose }: { slug: string; onClose: (
               onClick={() => setScheduleOpen(true)}
               // The 12px mark, tappable across the 44px the header's other buttons give: the ::after
               // overhangs the box without moving it.
-              className="relative ml-1.5 flex shrink-0 rounded-sm outline-none after:absolute after:-inset-x-2 after:-inset-y-4 after:content-[''] focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+              className="relative ml-1 flex shrink-0 rounded-sm outline-none after:absolute after:-inset-x-2 after:-inset-y-4 after:content-[''] focus-visible:ring-1 focus-visible:ring-focus-ink-60"
             >
               <ScheduleMark schedule={thread.schedule} size="phoneHeader" />
             </button>

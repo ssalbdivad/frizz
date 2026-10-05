@@ -207,10 +207,14 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
           <span className="flex min-w-0 items-baseline gap-2.5">
             {/* The title truncates and the schedule's repeat mark stays after it, outside the ellipsis — a
                 run whose title fills the line still says where it came from (ScheduleMark). */}
-            {/* The type is on the wrapper so the mark's `cap` is the title's. */}
+            {/* The type is on the wrapper so the mark's `cap` is the title's. Measured (sans, dsf 2, ink centre
+                minus cap-band centre): -0.35px, ink high, in Chrome on Linux, where `1cap` resolves to 12.00px
+                for this title against an H that inks 11.30px (DejaVu Sans; the same probe reads 11.30 for a
+                bare 15.5px span, and 12.03 / 12.10 on the 16.5px header). A browser metric, not a geometry
+                error, so no constant is fitted over it. */}
             <span className="flex min-w-0 flex-1 items-baseline text-[15.5px] font-medium leading-[21px] tracking-[-0.005em] text-fg">
               <span className="min-w-0 truncate">{displayTitle(t)}</span>
-              {t.schedule ? <ScheduleMark schedule={t.schedule} size="phoneRow" className="ml-1.5" /> : null}
+              {t.schedule ? <ScheduleMark schedule={t.schedule} size="phoneRow" className="ml-1" /> : null}
             </span>
             {/* `leading-[16px]`, not the title's 21px: baseline-aligned to the 15.5px title, a 12px reading
                 on a 21px line hung 1.25px below the title's line box, so every row with an age stood 1px
@@ -470,7 +474,14 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
             <SettingsIcon size={21} strokeWidth={1.9} />
           </button>
         </div>
-        <div role="tablist" aria-label="Bands" className="flex gap-[22px] border-b border-border/70 px-[18px]">
+        {/* With Schedules a fourth tab, 22px gaps ran it to x=374 on a 360px phone (the four tabs draw 290px
+            at their usual counts), off the screen. The gaps give way first: 22px where they fit, down to
+            what keeps the strip inside 18px margins — 11.3px at 360, 21.3 at 390. */}
+        <div
+          role="tablist"
+          aria-label="Bands"
+          className={`flex border-b border-border/70 px-[18px] ${scheduleCount > 0 || tab === "schedules" ? "gap-[clamp(10px,calc((100vw_-_326px)/3),22px)]" : "gap-[22px]"}`}
+        >
           <BandTab band="queue" label="Queue" active={tab === "queue"} onClick={() => setTab("queue")}>
             {counts.asks > 0 ? <span className="text-[12.5px] font-bold tabular-nums text-accent">{counts.asks}</span> : null}
             {queue.length > 0 ? <span className={TAB_COUNT}>{counts.asks > 0 ? `· ${queue.length}` : queue.length}</span> : null}

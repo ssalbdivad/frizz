@@ -184,7 +184,7 @@ export function useScheduleActions(schedule: ScheduleView, onDeleted: () => void
   const remove = useMutation({
     mutationFn: () => api.deleteSchedule({ id: schedule.id }),
     onSuccess: () => {
-      settle()
+      invalidateSchedules(queryClient, schedule.id)
       onDeleted()
     },
     onError: failed("delete it"),

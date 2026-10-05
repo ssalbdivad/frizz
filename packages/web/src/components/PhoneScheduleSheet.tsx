@@ -29,7 +29,8 @@ import { scheduleRunOpens, useScheduleActions, useScheduleProfileLabel, useSched
 /** Section labels, the drawer's small caps at the phone's reading size. */
 const LABEL = "text-[12px] font-medium uppercase tracking-wide text-muted-70"
 /** The footer's buttons: the answer sheet's 46px pills, outlined. */
-const BUTTON = "flex h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-border-strong px-4 text-[15px] font-medium text-fg outline-none active:bg-hover disabled:opacity-45"
+const OUTLINE = "flex h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-[12px] border border-border-strong px-4 text-[15px] font-medium outline-none active:bg-hover disabled:opacity-45"
+const BUTTON = `${OUTLINE} text-fg`
 const SOLID = "flex h-[44px] shrink-0 items-center justify-center gap-1.5 rounded-[12px] bg-fg px-4 text-[15px] font-semibold text-bg outline-none active:opacity-90 disabled:opacity-40"
 
 export function PhoneScheduleSheet({ scheduleId, projectId, onClose }: { scheduleId: string; projectId: string | undefined; onClose: () => void }) {
@@ -139,7 +140,7 @@ function ScheduleSheetBody({ schedule, history, dismiss }: { schedule: ScheduleV
           </button>
         )}
         <span className="flex-1" />
-        <button type="button" data-mobile-schedule-delete className={`${BUTTON} text-danger-90`} disabled={busy} onClick={() => setConfirmDelete(true)}>
+        <button type="button" data-mobile-schedule-delete className={`${OUTLINE} text-danger-90`} disabled={busy} onClick={() => setConfirmDelete(true)}>
           Delete
         </button>
       </div>
@@ -211,10 +212,12 @@ function History({ history, openRun }: { history: ScheduleRunView[]; openRun: (s
               <>
                 <span className="shrink-0 tabular-nums text-muted">{run.when}</span>
                 <span aria-hidden className="shrink-0 text-muted-50">·</span>
-                <span className={`min-w-0 truncate ${quiet ? "text-muted" : run.threadState === "archived" ? "text-fg/70" : "text-fg/90"}`}>{run.label}</span>
+                <span className={`min-w-0 break-words ${quiet ? "text-muted" : run.threadState === "archived" ? "text-fg/70" : "text-fg/90"}`}>{run.label}</span>
               </>
             )
-            const row = `flex min-h-[44px] w-full min-w-0 items-center gap-2 text-left text-[14.5px] leading-[20px] ${index > 0 ? "border-t border-border/70" : ""}`
+            // The line WRAPS rather than truncates: what it says after the run's handle ("started 2h late",
+            // why it was skipped) is the part worth reading, and a phone's measure cut it to "start…".
+            const row = `flex min-h-[44px] w-full min-w-0 items-baseline gap-2 py-[11px] text-left text-[14.5px] leading-[20px] ${index > 0 ? "border-t border-border/70" : ""}`
             return (
               <li key={run.id} data-mobile-schedule-run={run.state}>
                 {scheduleRunOpens(run) ? (

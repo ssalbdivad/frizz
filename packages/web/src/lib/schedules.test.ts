@@ -1,7 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { parseScheduledRunPrompt, scheduledRunHeader, scheduledRunPrompt } from "@frizz/shared"
-import { proposedByLine, scheduledRunFacts, scheduleNextLabel } from "./schedules.ts"
+import { QueryClient } from "@tanstack/react-query"
+import { invalidateSchedules, proposedByLine, scheduledRunFacts, scheduleKeys, scheduleNextLabel } from "./schedules.ts"
 
 const NOW = Date.parse("2026-10-05T12:00:00Z")
 const next = (at: string) => ({ slug: "triage-issues", sessionId: "s", at, occurrenceAt: at, moved: false })
@@ -41,4 +42,28 @@ test("a run's opening header names its schedule back, and anything else names no
   assert.equal(run.prompt, "triage new issues")
   assert.deepEqual(scheduledRunFacts(run.header), { title: "Triage issues", describe: "every Monday at 9am" })
   assert.equal(scheduledRunFacts("triage new issues"), undefined)
+})
+
+test("a delete re-reads every schedule list but never the deleted schedule's own read", () => {
+  const client = new QueryClient()
+  const keys = {
+    list: scheduleKeys.list("p1"),
+    all: scheduleKeys.all(),
+    gone: scheduleKeys.get("p1", "sch_000000000001"),
+    other: scheduleKeys.get("p1", "sch_000000000002"),
+    page: scheduleKeys.get("page", "sch_000000000001"),
+  }
+  for (const key of Object.values(keys)) client.setQueryData(key, {})
+  invalidateSchedules(client, "sch_000000000001")
+  const stale = (key: readonly unknown[]) => client.getQueryState(key)?.isInvalidated
+  assert.equal(stale(keys.list), true)
+  assert.equal(stale(keys.all), true)
+  assert.equal(stale(keys.other), true)
+  // Still mounted for the frame its sheet or drawer takes to close: a refetch would ask for what is gone.
+  assert.equal(stale(keys.gone), false)
+  assert.equal(stale(keys.page), false)
+  // Without a delete, every read goes.
+  invalidateSchedules(client)
+  assert.equal(stale(keys.gone), true)
+  client.clear()
 })

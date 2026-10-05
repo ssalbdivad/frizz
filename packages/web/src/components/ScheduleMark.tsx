@@ -29,9 +29,14 @@ export const SCHEDULE_MARK_GEOMETRY = {
   row: "h-[10px] w-[9.11px] translate-y-[calc(5px_-_0.5cap)]",
   /** Beside a queue card's 15px semibold title (AllQueuesCard.tsx). */
   title: "h-[11.5px] w-[10.48px] translate-y-[calc(5.75px_-_0.5cap)]",
-  /** Beside a phone row's 15.5px medium title (PhonePage.tsx ThreadRow). Provisional until measured. */
+  /** Beside a phone row's 15.5px medium title (PhonePage.tsx ThreadRow), the card's ratio to its title.
+   *  Measured at 420px, sans, dsf 2 (H ink read at 10x canvas size — at 1x Chrome rounds it to whole px):
+   *  ink 12.0px tall on an 11.3px cap band; centre -0.35px (high) where Chrome resolves `1cap` to 12.00 for
+   *  this title, 0.00 on a load where it resolved 11.30. `ml-1`: 4.2-5.4px of ink after the title, by its
+   *  last letter's bearing (ml-1.5 drew 6.2-7.4). */
   phoneRow: "h-[12px] w-[10.93px] translate-y-[calc(6px_-_0.5cap)]",
-  /** Beside the phone thread header's 16.5px semibold title (MobileThreadHeader.tsx). Provisional. */
+  /** Beside the phone thread header's 16.5px semibold title (MobileThreadHeader.tsx): ink 12.5px on a
+   *  12.1px cap band, centre +0.03px, 5.09px of ink after the title with `ml-1`. */
   phoneHeader: "h-[12.5px] w-[11.39px] translate-y-[calc(6.25px_-_0.5cap)]",
 } as const
 
