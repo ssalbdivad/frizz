@@ -9,7 +9,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
@@ -2119,16 +2119,21 @@ function sessionThreadView(
   // exactly that reason, which is why the batched read behind it is unfiltered too.
   const questionRows = registries.questions.get(row.slug) ?? []
   const questions: ThreadView["questions"] = []
+  // The rest the default countdown starts from — the scheduler's own reading (evalQuestionDefaults).
+  const restedMs = rawTele?.turn === "idle" ? Date.parse(rawTele.lastAssistantAt ?? "") : undefined
   for (const q of questionRows) {
     if (q.state !== "open") continue
     const spec = safeQuestionSpec(q.spec)
     if (spec) {
+      const repliedPast = questionRepliedPast(q, rawTele?.lastHumanAt)
+      const defaultsAtMs = !repliedPast && recommendedDefaultAnswer(q.id, spec) ? questionDefaultAtMs(q, restedMs) : undefined
       questions.push({
         id: q.id,
         spec,
         askedAt: new Date(q.asked_at).toISOString(),
         ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
-        ...(questionRepliedPast(q, rawTele?.lastHumanAt) ? { repliedPast: true as const } : {}),
+        ...(repliedPast ? { repliedPast: true as const } : {}),
+        ...(defaultsAtMs !== undefined ? { defaultsAt: new Date(defaultsAtMs).toISOString() } : {}),
       })
     }
   }

@@ -2936,6 +2936,10 @@ export const RegisteredQuestionView = z.object({
    *  The worker opts one back in with `keep`; at its next rest, frizz withdraws every one it did not
    *  (scheduler evalSetAsideQuestions). Absent means it is current. */
   repliedPast: z.literal(true).optional(),
+  /** When Frizz will take the recommended option for the human (questionDefaultAtMs). Absent when it
+   *  will not: the thread is still working, the question has nothing to take, it was typed past, or the
+   *  human turned the default off with the countdown's ×. The card counts down to it. */
+  defaultsAt: z.string().optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
@@ -2989,6 +2993,38 @@ export function questionsOwed<Q extends { repliedPast?: true }>(questions: reado
  *  expire before the thread has rested. Only questions with something to take qualify; see
  *  `recommendedDefaultAnswer`. */
 export const QUESTION_DEFAULT_AFTER_MS = 10 * 60_000
+
+/** How long a human's interaction with a card holds its default off. The card reports a pick, a toggle
+ *  or a keystroke (holdQuestionDefault), and the deadline never lands sooner than this after the latest
+ *  one — so a default cannot fire under someone halfway through answering, and still fires if they walk
+ *  away from a half-staged card. */
+export const QUESTION_DEFAULT_ENGAGED_GRACE_MS = 2 * 60_000
+
+/** THE ONE READING OF WHEN A QUESTION DEFAULTS — the scheduler acts on it and the board counts down to
+ *  it, so the two cannot disagree. Undefined while the thread is working (`restedMs` undefined), and for
+ *  a question the human turned the default off on. Callers check `recommendedDefaultAnswer` and
+ *  `questionRepliedPast` themselves. */
+export function questionDefaultAtMs(
+  q: { asked_at: number; kept_at?: number | null; engaged_at?: number | null; default_off?: number | null },
+  restedMs: number | undefined,
+): number | undefined {
+  if (q.default_off || restedMs === undefined || !Number.isFinite(restedMs)) return undefined
+  const base = Math.max(q.asked_at, q.kept_at ?? 0, restedMs) + QUESTION_DEFAULT_AFTER_MS
+  return q.engaged_at != null ? Math.max(base, q.engaged_at + QUESTION_DEFAULT_ENGAGED_GRACE_MS) : base
+}
+
+/** The card's report on a question's default: `engage` when the human picks, toggles or types on it
+ *  (pushes the deadline out by QUESTION_DEFAULT_ENGAGED_GRACE_MS), `cancel` when they press the
+ *  countdown's × (the question waits for them for good). */
+export const HoldQuestionDefaultInput = z.object({
+  slug: ThreadSlug,
+  id: z.string().min(1).max(64),
+  action: z.enum(["engage", "cancel"]),
+}).strict()
+export type HoldQuestionDefaultInput = z.infer<typeof HoldQuestionDefaultInput>
+
+export const HoldQuestionDefaultResult = z.object({ held: z.boolean() }).strict()
+export type HoldQuestionDefaultResult = z.infer<typeof HoldQuestionDefaultResult>
 
 /** The `text` an automatic answer carries beside its picked label — read by the worker in the answers
  *  wake and by the human on the settled card, so neither mistakes Frizz's default for the human's pick. */

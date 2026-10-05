@@ -134,6 +134,8 @@ import {
   AnswerQuestionsResult,
   DismissQuestionsInput,
   DismissQuestionsResult,
+  HoldQuestionDefaultInput,
+  HoldQuestionDefaultResult,
   ThreadSettledQuestionsResult,
   QuestionAnswerSchema,
   type SettledQuestionView,
@@ -4307,6 +4309,18 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // The card's report on a question's default: the human is working on it, or pressed the countdown's ×.
+    holdQuestionDefault: mutation({
+      input: HoldQuestionDefaultInput,
+      output: HoldQuestionDefaultResult,
+      handler: async ({ input }) => {
+        const held = ctx.storage.holdQuestionDefault(input.slug, input.id, input.action, Date.now())
+        // The countdown on every open surface moves with it.
+        if (held) ctx.board.refresh()
+        return { held }
+      },
+    }),
+
     dismissQuestions: mutation({
       input: DismissQuestionsInput,
       output: DismissQuestionsResult,
@@ -5750,7 +5764,7 @@ const HUMAN_THREAD_ACTS = [
   "followUp", "unqueueFollowUp", "deliverQueuedNow", "setThreadPermission", "setThreadProfile", "upgradeThreadModel",
   "archiveThread", "markRead", "threadSeen", "setThreadState", "completeThread", "markComplete", "setThreadStatus",
   "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
-  "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "renameThread",
+  "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "holdQuestionDefault", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
   "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateLazyPrompt", "startLazyThread",
 ] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]

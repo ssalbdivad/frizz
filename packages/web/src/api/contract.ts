@@ -144,6 +144,8 @@ import type {
   AnswerQuestionsResult,
   DismissQuestionsInput,
   DismissQuestionsResult,
+  HoldQuestionDefaultInput,
+  HoldQuestionDefaultResult,
   ThreadSettledQuestionsResult,
   AddOwnPrWatchResult,
   DropOwnPrWatchInput,
@@ -304,6 +306,7 @@ export interface Api {
   // its next wake instead. Refused server-side for a danger-tagged question, which the card also does
   // not offer it on.
   dismissQuestions(input: DismissQuestionsInput): Promise<DismissQuestionsResult>
+  holdQuestionDefault(input: HoldQuestionDefaultInput): Promise<HoldQuestionDefaultResult>
   // THE SUPERSEDED WORKER PROCEDURES, declared here only so the drift gate can see them. A worker's MCP
   // server outlives every frizz restart, so a session dispatched before the stop hook and the heartbeat
   // merged is still POSTing these names; the router aliases them onto the one recurring-prompt row
@@ -547,6 +550,7 @@ export const PROCEDURES = {
   markOwnDone: "mutation",
   answerQuestions: "mutation",
   dismissQuestions: "mutation",
+  holdQuestionDefault: "mutation",
   getOwnThreadRecurringPrompt: "mutation",
   setOwnThreadStopHook: "mutation",
   setOwnThreadHeartbeat: "mutation",

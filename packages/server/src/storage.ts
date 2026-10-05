@@ -640,6 +640,11 @@ export interface ThreadQuestionRow {
   settled_at: number | null
   /** When the worker last `keep`-ed it current; null if never. See questionRepliedPast. */
   kept_at: number | null
+  /** When the human last picked, toggled or typed on its card — holds its default off for a grace
+   *  (questionDefaultAtMs). Null if never; absent on a row read before 2026-10-05. */
+  engaged_at?: number | null
+  /** 1 once the human pressed the countdown's ×: the question waits for them, with no default. */
+  default_off?: number | null
 }
 
 /** One operator-authored steer that Frizz delivered into a sub-agent from its drawer.
@@ -981,6 +986,9 @@ export interface Storage {
   /** The human's x. Distinct from `withdrawn` on purpose: the two states answer different questions
    *  about what happened, and the worker is told which. */
   dismissThreadQuestion(id: string, atMs: number): boolean
+  /** The human worked on an open question's card (`engage`) or turned its default off (`cancel`).
+   *  Slug-scoped, open rows only. */
+  holdQuestionDefault(slug: string, id: string, action: "engage" | "cancel", atMs: number): boolean
   // ---- THE WORKER'S OWN COMPLETION ----------------------------------------------------------------
   /** Record this thread as done, replacing any earlier record — a worker declaring itself done twice
    *  has not finished two things. The GATE (open questions, live registrations) lives at the RPC, not
@@ -1517,7 +1525,11 @@ export const STORAGE_SCHEMA = `
       settled_at  INTEGER,
       -- When the worker last KEPT the question current (keep) after the human typed past it — what
       -- questionRepliedPast measures the human's newest message against, instead of asked_at.
-      kept_at     INTEGER
+      kept_at     INTEGER,
+      -- When the human last touched its card, and whether they turned its default off (2026-10-05) —
+      -- see questionDefaultAtMs.
+      engaged_at  INTEGER,
+      default_off INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS thread_question_slug
       ON thread_question(project_id, thread_slug, state, asked_at);
@@ -1676,6 +1688,11 @@ export function ensureStorageSchema(db: Database): void {
     // `thread_question.kept_at` (2026-09-30): a typed message sets open questions aside, and the worker
     // opts one back in with `keep`, which stamps this.
     ["thread_question", "kept_at INTEGER"],
+    // `thread_question.engaged_at` / `default_off` (2026-10-05): an unanswered question takes its
+    // recommended option after a while at rest, held off while the human works on its card and turned
+    // off by the countdown's ×.
+    ["thread_question", "engaged_at INTEGER"],
+    ["thread_question", "default_off INTEGER NOT NULL DEFAULT 0"],
   ] as const) {
     try {
       db.exec(`ALTER TABLE ${table} ADD COLUMN ${column}`)
@@ -2499,6 +2516,12 @@ export function createStorage(source: string | Database, projectId: string): Sto
     UPDATE thread_question SET state = 'dismissed', settled_at = ?
     WHERE project_id = @project_id AND id = ? AND state = 'open'
   `)
+  const engageThreadQuestionStmt = scope.prepare(
+    "UPDATE thread_question SET engaged_at = ? WHERE project_id = @project_id AND thread_slug = ? AND id = ? AND state = 'open'",
+  )
+  const cancelQuestionDefaultStmt = scope.prepare(
+    "UPDATE thread_question SET default_off = 1 WHERE project_id = @project_id AND thread_slug = ? AND id = ? AND state = 'open'",
+  )
   const delThreadQuestions = scope.prepare("DELETE FROM thread_question WHERE project_id = @project_id AND thread_slug = ?")
   const delThreadDone = scope.prepare("DELETE FROM thread_done WHERE project_id = @project_id AND thread_slug = ?")
   const delSubAgentSteers = scope.prepare("DELETE FROM subagent_steer WHERE project_id = @project_id AND thread_slug = ?")
@@ -3331,6 +3354,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
     keepThreadQuestion: (slug, id, spec, atMs) => keepThreadQuestionStmt.run({ slug, id, spec: spec ?? null, atMs }).changes === 1,
     dismissThreadQuestion: (id, atMs) => dismissThreadQuestionStmt.run(atMs, id).changes === 1,
+    holdQuestionDefault: (slug, id, action, atMs) =>
+      (action === "cancel" ? cancelQuestionDefaultStmt.run(slug, id) : engageThreadQuestionStmt.run(atMs, slug, id)).changes === 1,
     markThreadDone: (slug, body, atMs) => { markThreadDoneStmt.run(slug, body, atMs) },
     getThreadDone: (slug) => {
       const row = getThreadDoneStmt.get(slug) as { body: string; done_at: number } | undefined

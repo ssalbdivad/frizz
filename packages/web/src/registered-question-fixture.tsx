@@ -38,6 +38,8 @@ import "./styles.css"
 //   ?woken=1    — the worker asked and rested, then frizz WOKE it (a PR watcher expired) and it wrote a
 //                 newer handoff with the question still open. Only frizz has spoken since, so the card
 //                 must render at the BOTTOM, under the newer handoff — not frozen above the wake.
+//   ?default=1  — the question will take its recommended option in ~7m unless answered: the countdown
+//                 caption under the card, with its own × that turns the default off (2026-10-05).
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -193,6 +195,7 @@ const questions = params.get("danger") === "1" ? [GATE]
   : params.get("tree") === "1" ? [TREE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
   : params.get("table") === "1" ? [TABLE]
+  : params.get("default") === "1" ? [{ ...SETTINGS, defaultsAt: new Date(Date.now() + 7 * 60_000 + 20_000).toISOString() }]
   : [SETTINGS]
 
 const tail = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
@@ -285,7 +288,7 @@ window.fetch = async (input, init) => {
   // The two writes the card makes, echoed onto the window so a probe can assert the exact payload the
   // worker would receive — above all that an answer RESTATES the question and carries the option's own
   // label rather than the lettered chip text.
-  if (rpc === "answerQuestions" || rpc === "dismissQuestions") {
+  if (rpc === "answerQuestions" || rpc === "dismissQuestions" || rpc === "holdQuestionDefault") {
     const body = JSON.parse(String(init?.body ?? "{}"))
     window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc, body } }))
     const ids: string[] = body.ids ?? (body.answers ?? []).map((a: { questionId: string }) => a.questionId)

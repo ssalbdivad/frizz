@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { QUESTION_DEFAULT_AFTER_MS, wakeDeliveryToken } from "@frizz/shared"
+import { QUESTION_DEFAULT_AFTER_MS, QUESTION_DEFAULT_ENGAGED_GRACE_MS, wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { ANSWER_REOFFER_BACKOFF_MS, createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
@@ -438,6 +438,32 @@ test("question: a rested thread's unanswered question takes its recommended opti
   assert.equal(h.resumes.length, 1, "delivered in the same tick")
   assert.match(h.resumes[0].message, /^1\. “Narrow the error rule\?” → Narrow — No reply in 10m, so Frizz took the recommended option$/m)
   assert.match(h.resumes[0].message, /“Rewrite the brief\?” → Yes$/m)
+  h.storage.close()
+})
+
+test("question: the human working on the card holds the default, and the countdown's x turns it off", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const t0 = h.clock.ms
+  const spec = JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }, { label: "B" }] })
+  h.storage.askThreadQuestion({ id: "qst_held", slug: "t", spec, askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_off", slug: "t", spec, askedAtMs: t0 })
+  h.tele.set("t", { ...tele(), lastAssistantAt: iso(t0) })
+  const s = h.make()
+  // A keystroke a few seconds before the deadline pushes it out by the grace.
+  const engagedMs = t0 + QUESTION_DEFAULT_AFTER_MS - 5_000
+  assert.equal(h.storage.holdQuestionDefault("t", "qst_held", "engage", engagedMs), true)
+  assert.equal(h.storage.holdQuestionDefault("t", "qst_off", "cancel", engagedMs), true)
+  assert.equal(h.storage.holdQuestionDefault("other", "qst_held", "cancel", engagedMs), false, "slug-scoped")
+  h.clock.ms = t0 + QUESTION_DEFAULT_AFTER_MS
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_held")?.state, "open", "held while the human is on it")
+  h.clock.ms = engagedMs + QUESTION_DEFAULT_ENGAGED_GRACE_MS
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_held")?.state, "answered", "and defaults once they walk away")
+  h.clock.ms += 24 * 3600_000
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_off")?.state, "open", "the x leaves it for the human for good")
   h.storage.close()
 })
 

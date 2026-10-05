@@ -40,6 +40,7 @@ import { AnswersCard } from "./AnswersCard.tsx"
 import { QueueDismissContext } from "./ChatView.tsx"
 import { QuestionBlockCard, focusQuestionNode } from "./QuestionBlockCard.tsx"
 import { revealInDrawerTranscript } from "../lib/drawerReveal.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 import { CompactQuestionList, usePhoneQuestions } from "./PhoneQuestionCards.tsx"
 
 function errorText(error: unknown): string {
@@ -61,6 +62,8 @@ export interface RegisteredAnswering {
   onText: (q: RegisteredQuestionView, path: string, isMulti: boolean, text: string) => void
   dismiss: (id: string) => void
   dismissing: boolean
+  /** The countdown's ×: Frizz will not take the recommended option for `id`; it waits for the human. */
+  cancelDefault: (id: string) => void
   /** Send ONE question's staged answer — what completing a question does. Nothing staged: nothing sent. */
   commit: (q: RegisteredQuestionView) => void
   /** Send EVERY staged answer on the thread: the on-purpose Send answers, and a typed reply carrying what
@@ -92,7 +95,7 @@ export const RegisteredAnsweringContext = createContext<RegisteredAnswering | nu
  * answer lands on the thread that asked and a half-typed one shares its draft with that project's board.
  */
 export interface RegisteredAnsweringScope {
-  api: Pick<Api, "answerQuestions" | "dismissQuestions">
+  api: Pick<Api, "answerQuestions" | "dismissQuestions" | "holdQuestionDefault">
   projectDir: string | undefined
   /** Whose steer an answer is: the project list reads it back for that project's row (lib/steering.ts). */
   projectId: string
@@ -186,6 +189,24 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     mutationFn: async (id: string) => api.dismissQuestions({ slug: slug!, ids: [id] }),
     onError: (cause) => setError(errorText(cause)),
   })
+  // THE DEFAULT HOLDS WHILE THE HUMAN IS ON THE CARD. A question that would take its recommended option
+  // (`defaultsAt`) is told about every pick, toggle and keystroke — at most once per ENGAGE_PING_MS, well
+  // inside the server's grace — so the default cannot fire under someone halfway through answering. A
+  // lost ping is not worth an error line: the next interaction sends another.
+  const hold = useMutation({
+    mutationFn: async (input: { id: string; action: "engage" | "cancel" }) => api.holdQuestionDefault({ slug: slug!, ...input }),
+    onError: (cause, input) => {
+      if (input.action === "cancel") setError(errorText(cause))
+    },
+  })
+  const engagedAt = useRef(new Map<string, number>())
+  const engage = (q: RegisteredQuestionView) => {
+    if (!slug || !q.defaultsAt) return
+    const now = Date.now()
+    if (now - (engagedAt.current.get(q.id) ?? 0) < ENGAGE_PING_MS) return
+    engagedAt.current.set(q.id, now)
+    hold.mutate({ id: q.id, action: "engage" })
+  }
 
   const sendPairs = (pairs: typeof stagedPairs, then?: () => void) => {
     if (!slug || pairs.length === 0) return
@@ -271,6 +292,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     answerFor,
     answersOf,
     onChip: (q, path, isMulti, optIdx) => {
+      engage(q)
       // SINGLE: picking a chip makes it the answer; re-picking toggles off — mirroring both other
       // producers. The typed draft is never cleared (maintainer 2026-09-02): it stays in the box as an
       // unselected draft, and registeredAnswer submits the chip while one is chosen (the box taking
@@ -293,6 +315,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     },
     onText: (q, path, isMulti, text) => {
       if (!slug) return
+      engage(q)
       draftStore.set(draftKey.question(projectDir, slug, q.id, path), text)
       // SINGLE: the free-text box taking over — a keystroke OR just focusing it — drops the chosen chip,
       // as the fence producer does. The card's onFocus calls this with the text unchanged for exactly
@@ -306,6 +329,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     },
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
+    cancelDefault: (id) => hold.mutate({ id, action: "cancel" }),
     commit,
     submit,
     enter,
@@ -315,6 +339,10 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     error,
   }
 }
+
+/** How often a card re-reports the human working on it. Well under QUESTION_DEFAULT_ENGAGED_GRACE_MS,
+ *  so steady typing keeps the deadline pushed out. */
+const ENGAGE_PING_MS = 30_000
 
 // ---- ANSWERED questions: the card stays where it stood, greyed, showing only the answer ----
 
@@ -458,7 +486,11 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
   const a = given ?? shared
   if (!a || !a.slug) return null
   // On the phone thread page the card is a reading surface; the sheet answers it (PhoneQuestionCards).
-  if (phone) return <CompactQuestionList questions={[q]} />
+  const countdown = q.defaultsAt ? <DefaultCountdown at={q.defaultsAt} onCancel={() => a.cancelDefault(q.id)} /> : null
+  if (phone) return <>
+    <CompactQuestionList questions={[q]} />
+    {countdown}
+  </>
   const nodes = liveQuestionNodes(q.spec, a.answersOf(q))
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
@@ -529,7 +561,38 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
           ))}
         </div>
       )}
+      {countdown}
     </article>
+  )
+}
+
+/** THE DEFAULT'S COUNTDOWN — a caption under the card, not chrome on it: the card's own title-row × is
+ *  the dismiss, and a second × beside it would read as the same control. Minutes only, on the page's
+ *  30s clock (a ticking seconds digit would pull the eye off the question it sits under); `<1m` for the
+ *  last minute, as the shell-budget reading spells it. Its × turns the default off for this question. */
+function DefaultCountdown({ at, onCancel }: { at: string; onCancel: () => void }) {
+  const now = useNowMs()
+  const left = Date.parse(at) - now
+  const reading = left < 60_000 ? "<1m" : `${Math.ceil(left / 60_000)}m`
+  return (
+    // The × is the caption's own handle: at 12px lucide's X paints 6 of its 12 box px, and with `p-1`
+    // the box put 11.63px of ink gap after the text under `gap-1` (sans, measured 2026-10-05) — detached.
+    // At 4.70px it read as "8m×", a multiplication sign; no gap and `-ml-px` measure ~6.7px, keeping the
+    // 20px hit area. Vertically `items-center` lands the ink 0.50px from the cap band's centre — left alone.
+    <div data-question-default className="flex items-center px-4 text-[12px] leading-4 text-muted-70">
+      {/* Short enough to stay on one line beside its × in a 380px card; the tooltip says the rest. */}
+      <span title="Unless it is answered first">Picks the recommended option in {reading}</span>
+      <button
+        type="button"
+        data-cancel-question-default
+        aria-label="Keep waiting for an answer"
+        title="Keep waiting for an answer"
+        onClick={onCancel}
+        className="icon-hover-outline -my-1 -ml-px flex rounded-md p-1 outline-none transition-colors hover:bg-elevated hover:text-fg"
+      >
+        <X size={12} />
+      </button>
+    </div>
   )
 }
 
