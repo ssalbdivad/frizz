@@ -565,6 +565,31 @@ test("ProviderAuthRequiredError reads as signed out", async () => {
   assert.equal(scheduleStartFailure(new Error("spawn x ENOENT")), "the project folder is missing")
 })
 
+test("after a long absence the newest occurrence still inside its own cap runs once; the older ones are skipped", async () => {
+  // Daily at 9. Frizz went off on Friday after 10am and came back Monday at 9:19. Saturday's run, the one
+  // materialized, is two days late; Monday's is twenty minutes late, well inside its 12h cap, and must run.
+  const h = harness({ nowMs: T("2026-10-02T10:00:00Z"), bootAtMs: T("2026-10-05T09:19:00Z") })
+  try {
+    const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-02T09:00" })
+    assert.equal(view.nextRun!.occurrenceAt, "2026-10-03T09:00:00.000Z", "Saturday is the materialized run")
+    h.at(T("2026-10-05T09:20:00Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "Monday's run starts")
+    assert.match(h.spawned[0]!.prompt, /This run is for Mon Oct 5, 9am\. It started 20m late, because Frizz was off\./)
+    const got = h.service.get(view.id)
+    assert.deepEqual(got.history.map((r) => [r.occurrenceAt, r.state]), [
+      ["2026-10-05T09:00:00.000Z", "started"],
+      ["2026-10-03T09:00:00.000Z", "skipped"],
+    ])
+    assert.equal(got.history[1]!.label, "Skipped: Frizz was off; 2 runs missed", "Saturday and Sunday")
+    assert.equal(got.schedule.nextRun!.occurrenceAt, "2026-10-06T09:00:00.000Z")
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "and nothing more")
+  } finally {
+    h.close()
+  }
+})
+
 test("a rule edit moves the next run but keeps the note the human wrote for it", async () => {
   const h = harness()
   try {
