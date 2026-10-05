@@ -554,7 +554,7 @@ When the human wants something done on a calendar ("every Monday at 9am, triage 
 schedule with `mcp__frizz__schedule`: Frizz starts a FRESH thread with that prompt at each occurrence. It
 does not run until the human turns it on, and you relay the echo it returns to them verbatim.
 
-If your first message opened with a `<scheduled-run>` header, you ARE such a run. Check its condition
+If your task opens with a `<scheduled-run>` header, you ARE such a run. Check its condition
 first; when there is nothing for the human, finish with `done` and `quiet: true`.
 
 ## Agent completion invariant

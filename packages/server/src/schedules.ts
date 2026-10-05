@@ -283,14 +283,19 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
    * Point the schedule at its next occurrence: the first one after max(now, every occurrence it has
    * consumed). The pending lazy row is REUSED when there is one (a skip, a failed start, a rule change),
    * re-snoozed to the new instant; otherwise a fresh one is written. A rule with no next occurrence ends.
+   *
+   * `at` points it at one occurrence the caller already chose instead — the overdue catch-up in evalOne,
+   * which may be in the past. Only ever FORWARD of everything consumed: an `at` at or before that is
+   * ignored, so the never-twice record cannot be walked back.
    */
-  function materialize(id: string, nowMs: number, consumed?: number): ThreadScheduleRow | undefined {
+  function materialize(id: string, nowMs: number, consumed?: number, at?: number): ThreadScheduleRow | undefined {
     for (let attempt = 0; attempt < 5; attempt++) {
       const sch = storage.getSchedule(id)
       if (!sch || sch.state !== "active") return sch
       const last = consumed === undefined ? sch.last_occurrence_at : Math.max(sch.last_occurrence_at ?? consumed, consumed)
       const compiled = compiledOf(sch)
-      const [next] = compiled ? occurrencesAfter(compiled, Math.max(nowMs, last ?? -Infinity), 1) : []
+      const [next] = at !== undefined && at > (last ?? -Infinity) ? [at]
+        : compiled ? occurrencesAfter(compiled, Math.max(nowMs, last ?? -Infinity), 1) : []
       const reuse = pendingRow(sch)
       if (next === undefined) {
         if (reuse && !starter.isStarting(reuse.slug)) storage.forgetSession(reuse.slug)
@@ -305,9 +310,11 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       if (reuse && !starter.isStarting(reuse.slug)) {
         slug = reuse.slug
         if (reuse.snoozed_until !== iso(next)) storage.setSnoozedUntil(slug, iso(next), null)
-        // The note a human edited was for the occurrence that just went; the next one starts from the
-        // schedule's prompt again.
-        if (reuse.lazy_prompt !== sch.prompt) storage.setLazyPrompt(slug, reuse.session_id, sch.prompt)
+        // When an occurrence was CONSUMED (a skip, a failed start), the note a human edited was for the
+        // occurrence that just went, so the next one starts from the schedule's prompt again. When nothing
+        // was consumed — an edit re-pointing the same pending run at a new rule — the note is still for
+        // this run and stays (§6 "Edits": "keeping a per-run prompt edit the human made").
+        if (consumed !== undefined && reuse.lazy_prompt !== sch.prompt) storage.setLazyPrompt(slug, reuse.session_id, sch.prompt)
       } else {
         const made = deps.dispatcher.createLazyThread(
           {
@@ -506,6 +513,10 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       storage.settleScheduleRun(run.id, started
         ? { state: "started", startedAt: run.created_at }
         : { state: "failed", reason: "Frizz stopped" })
+      // A hard kill can land after the daemon took the prompt but before the row stopped being lazy, so
+      // that session id may have a live worker behind it. Never hand it to the next occurrence: drop the
+      // lazy row and let the pass write the next run down under a fresh session id.
+      if (!started && row && row.session_id === run.session_id && isLazyRow(row)) storage.forgetSession(row.slug)
       log(`schedule ${run.schedule_id}: settled a claim from a stopped process as ${started ? "started" : "failed"}`)
     }
   }
@@ -565,8 +576,16 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       materialize(id, nowMs, occurrenceAt)
       return
     }
-    // DUE? The lazy row's own instant is the truth — the human may have snoozed it elsewhere.
-    const dueAt = row.snoozed_until ? Date.parse(row.snoozed_until) : nowMs
+    // DUE? The lazy row's own instant is the truth — the human may have snoozed it elsewhere. A row with
+    // NO instant lost it to something that was not a move: archiving clears a snooze (storage setState),
+    // so a Mark as done the human then Undid, before this pass reconciled the skip, hands the run back
+    // bare. That is not "run now" (Wake now starts the run itself, router setThreadSnooze): its
+    // occurrence is its time, and the row is parked there again so the board shows it.
+    if (!row.snoozed_until) {
+      storage.setSnoozedUntil(row.slug, iso(occurrenceAt), null)
+      refresh()
+    }
+    const dueAt = row.snoozed_until ? Date.parse(row.snoozed_until) : occurrenceAt
     if (!Number.isFinite(dueAt) || dueAt > nowMs) return
     if (starter.isStarting(row.slug)) return
     // NEVER ON FIRST SIGHT: wait out the post-boot grace so the tailer has vouched for the last run.
@@ -574,13 +593,23 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     const compiled = compiledOf(sch)
     const lateMs = nowMs - dueAt
     // MISSED: one materialized run means a week asleep wakes ONE overdue run — and only within the cap.
+    // The materialized run is the OLDEST one missed, so past its cap the newest occurrence that came due
+    // meanwhile is judged on its OWN lateness: it becomes that one overdue run when it is still inside its
+    // cap, and only the ones before it are skipped. Without this a daily 9am schedule that was off from
+    // Friday to Monday 9:20 skipped Monday's run too — twenty minutes late — because Saturday's was not.
     if (lateMs > lateCap(compiled, occurrenceAt)) {
-      const missed = compiled ? occurrencesBetween(compiled, occurrenceAt, nowMs).length : 0
+      const since = compiled ? occurrencesBetween(compiled, occurrenceAt, nowMs) : []
+      const newest = since.at(-1)
+      const catchUp = newest !== undefined && nowMs - newest <= lateCap(compiled, newest) ? newest : undefined
+      const missed = since.length - (catchUp === undefined ? 0 : 1)
       const cause = dueAt < bootAtMs ? "Frizz was off"
         : deps.awake && deps.awake.awakeBetween(dueAt, nowMs) < lateMs - SLEEP_SLACK_MS ? "the computer was asleep"
         : "it was too late to run"
       record(sch, occurrenceAt, "skipped", missed > 0 ? `${cause}; ${missed + 1} runs missed` : cause)
-      materialize(id, nowMs, occurrenceAt)
+      const after = materialize(id, nowMs, occurrenceAt, catchUp)
+      // The catch-up is inside its cap by construction, so this second pass starts it (or defers it on an
+      // overlap or the start cap) and cannot come back here.
+      if (catchUp !== undefined && after?.next_occurrence_at === catchUp) evalOne(id, nowMs)
       return
     }
     // OVERLAP: the previous run still WORKING (the board's predicate, on a vouched reading) skips this one.

@@ -288,6 +288,10 @@ export interface AppContext {
   startLazyThread?: (row: SessionRow, prompt: string, profile?: LazyStartProfile) => Promise<{ slug: string; sessionId: string }>
 }
 
+// Read on every board build (once per scheduled row), so it is cached per Frizz home — one process
+// serves every project, and every project's context writes through the same map.
+const clientZoneByHome = new Map<string, string | undefined>()
+
 /** The machine-config record holding the zone the human's browser last reported (reportClientZone). */
 export const CLIENT_ZONE_CONFIG_KEY = "clientTimeZone"
 
@@ -1115,8 +1119,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // daemon's row into `exited`; raw telemetry would read it in flight forever) and whether the tailer
     // vouches for it yet.
     threadView: (slug) => ({ view: board.refresh().threads.find((t) => t.id === slug), vouched: telemetryVouched(tailer.get(slug)) }),
-    clientZone: () => readMachineConfig(home, CLIENT_ZONE_CONFIG_KEY, z.string()),
-    setClientZone: (tz) => writeMachineConfig(home, CLIENT_ZONE_CONFIG_KEY, tz),
+    // Read on every board build, once per scheduled row, so it is cached; this process is the only writer.
+    clientZone: () => {
+      if (!clientZoneByHome.has(home)) clientZoneByHome.set(home, readMachineConfig(home, CLIENT_ZONE_CONFIG_KEY, z.string()))
+      return clientZoneByHome.get(home)
+    },
+    setClientZone: (tz) => {
+      writeMachineConfig(home, CLIENT_ZONE_CONFIG_KEY, tz)
+      clientZoneByHome.set(home, tz)
+    },
     awake: processAwakeClock,
     log: (message) => frizzLog.info("schedules", message),
   })

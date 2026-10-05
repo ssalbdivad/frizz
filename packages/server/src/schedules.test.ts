@@ -222,7 +222,10 @@ test("a claim a dead process left behind is settled by what its thread shows", a
     assert.equal(ha.history[0]!.state, "failed")
     assert.equal(ha.history[0]!.label, "Didn't start: Frizz stopped")
     assert.equal(ha.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString(), "the next occurrence is materialized")
-    assert.equal(ha.schedule.nextRun!.slug, a.nextRun!.slug, "on the same lazy row, re-snoozed")
+    // The dead process may have handed that session id to a daemon before it died, so the next run is a
+    // fresh lazy row under a fresh session id, never the same one re-snoozed.
+    assert.notEqual(ha.schedule.nextRun!.sessionId, a.nextRun!.sessionId, "a fresh session id for the next run")
+    assert.equal(h.storage.getSession(a.nextRun!.slug)?.session_id === a.nextRun!.sessionId, false, "the cut-off lazy row is gone")
     const hb = h.service.get(b.id)
     assert.equal(hb.history[0]!.state, "started", "its thread started, so the claim got through")
     assert.notEqual(hb.schedule.nextRun!.slug, b.nextRun!.slug)
@@ -563,4 +566,74 @@ test("ProviderAuthRequiredError reads as signed out", async () => {
   const { scheduleStartFailure } = await import("./schedules.ts")
   assert.equal(scheduleStartFailure(new ProviderAuthRequiredError("codex")), "Codex is signed out")
   assert.equal(scheduleStartFailure(new Error("spawn x ENOENT")), "the project folder is missing")
+})
+
+test("after a long absence the newest occurrence still inside its own cap runs once; the older ones are skipped", async () => {
+  // Daily at 9. Frizz went off on Friday after 10am and came back Monday at 9:19. Saturday's run, the one
+  // materialized, is two days late; Monday's is twenty minutes late, well inside its 12h cap, and must run.
+  const h = harness({ nowMs: T("2026-10-02T10:00:00Z"), bootAtMs: T("2026-10-05T09:19:00Z") })
+  try {
+    const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-02T09:00" })
+    assert.equal(view.nextRun!.occurrenceAt, "2026-10-03T09:00:00.000Z", "Saturday is the materialized run")
+    h.at(T("2026-10-05T09:20:00Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "Monday's run starts")
+    assert.match(h.spawned[0]!.prompt, /This run is for Mon Oct 5, 9am\. It started 20m late, because Frizz was off\./)
+    const got = h.service.get(view.id)
+    assert.deepEqual(got.history.map((r) => [r.occurrenceAt, r.state]), [
+      ["2026-10-05T09:00:00.000Z", "started"],
+      ["2026-10-03T09:00:00.000Z", "skipped"],
+    ])
+    assert.equal(got.history[1]!.label, "Skipped: Frizz was off; 2 runs missed", "Saturday and Sunday")
+    assert.equal(got.schedule.nextRun!.occurrenceAt, "2026-10-06T09:00:00.000Z")
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "and nothing more")
+  } finally {
+    h.close()
+  }
+})
+
+test("a rule edit moves the next run but keeps the note the human wrote for it", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    const next = view.nextRun!
+    await h.router.updateLazyPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Just this once: only the bug reports." } })
+    const edited = h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am" })
+    assert.equal(edited.nextRun!.slug, next.slug)
+    assert.equal(edited.nextRun!.at, "2026-10-06T10:00:00.000Z")
+    assert.equal(h.storage.getSession(next.slug)!.lazy_prompt, "Just this once: only the bug reports.")
+    h.at(T("2026-10-06T10:00:05Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 1)
+    assert.match(h.spawned[0]!.prompt, /Just this once: only the bug reports\.$/)
+  } finally {
+    h.close()
+  }
+})
+
+test("Mark as done then Undo before the next pass leaves the next run at its time, not due now", async () => {
+  // Archiving clears a row's snooze (storage setState), so the Undo — the mobile triage toast, or the
+  // rail's uncheck — hands back the pending run with NO instant before the scheduler has reconciled the
+  // skip. It must not read that as "due now": a Monday run must not fire on a Tuesday.
+  const h = harness({ nowMs: T("2026-10-06T08:00:00Z") })
+  try {
+    const view = h.service.create(WEEKLY)
+    const next = view.nextRun!
+    assert.equal(next.occurrenceAt, new Date(NEXT_MON_9AM).toISOString())
+    await h.router.setThreadState.handler({ input: { slug: next.slug, state: "archived" } })
+    await h.router.setThreadState.handler({ input: { slug: next.slug, state: "open" } })
+    h.at(T("2026-10-06T08:00:10Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 0, "nothing starts on Tuesday")
+    const got = h.service.get(view.id)
+    assert.equal(got.history.length, 0, "and nothing was skipped: the Undo took the skip back")
+    assert.equal(got.schedule.nextRun!.slug, next.slug)
+    assert.equal(h.storage.getSession(next.slug)!.snoozed_until, new Date(NEXT_MON_9AM).toISOString(), "parked at its time again")
+    h.at(NEXT_MON_9AM + 1000)
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "it runs at its occurrence")
+  } finally {
+    h.close()
+  }
 })
