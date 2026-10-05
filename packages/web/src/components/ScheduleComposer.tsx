@@ -21,6 +21,8 @@ import { invalidateSchedules } from "../lib/schedules.ts"
 /** What the box passes in: the text to read (the prompt as it would be sent), the profile to snapshot,
  *  and what to do once the schedule exists (clear the draft, close a phone sheet). */
 export interface ScheduleModeInput {
+  /** The box's draft key (lib/drafts.ts): the mode and its reading are kept under it, like the draft. */
+  draftKey: string
   /** The prompt as it would be sent — chips serialized, user commands expanded — or "" when empty. */
   text: string
   /** The prose the box shows, for marking the phrase. */
@@ -47,10 +49,28 @@ export interface ScheduleMode {
   panel: React.ReactNode
 }
 
-export function useScheduleMode({ text, prose, profile, blocked, onCreated }: ScheduleModeInput): ScheduleMode {
+type Reading = { text: string; result: InterpretScheduleResult }
+
+// THE MODE OUTLIVES A REMOUNT, the way the draft does (lib/drafts.ts). The box is remounted by things the
+// human never sees — a layout pass across the phone breakpoint, a viewport change — and its draft comes back
+// while plain component state would not: the text stayed, the panel vanished, and the next Enter STARTED a
+// thread from text that was being set up as a schedule (seen in a headless run, 2026-10-05, where a
+// screenshot's viewport override did exactly this and dispatched a real worker). What Enter does with the
+// draft is part of the draft, so it is kept beside it, per box, for the life of the tab.
+const kept = new Map<string, { on: boolean; reading: Reading | null }>()
+
+export function useScheduleMode({ draftKey, text, prose, profile, blocked, onCreated }: ScheduleModeInput): ScheduleMode {
   const queryClient = useQueryClient()
-  const [on, setOn] = useState(false)
-  const [reading, setReading] = useState<{ text: string; result: InterpretScheduleResult } | null>(null)
+  const [on, setOnState] = useState(() => kept.get(draftKey)?.on ?? false)
+  const [reading, setReadingState] = useState<Reading | null>(() => kept.get(draftKey)?.reading ?? null)
+  const setOn = (next: boolean) => {
+    kept.set(draftKey, { on: next, reading: next ? (kept.get(draftKey)?.reading ?? null) : null })
+    setOnState(next)
+  }
+  const setReading = (next: Reading | null) => {
+    kept.set(draftKey, { on: kept.get(draftKey)?.on ?? false, reading: next })
+    setReadingState(next)
+  }
   const interpret = useMutation({
     mutationFn: (read: string) => rpc.interpretSchedule({ text: read, tz: browserZone() }),
     onSuccess: (result, read) => setReading({ text: read, result }),

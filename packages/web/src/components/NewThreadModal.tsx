@@ -240,6 +240,7 @@ function PromptForm({
   // it reads is the prompt as a lazy save would write it — the chips, never the editor block — because a
   // schedule's prompt is sent hours or weeks later, like a lazy thread's.
   const schedule = useScheduleMode({
+    draftKey: promptKey,
     text: prompt.trim() ? outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim() : "",
     prose: prompt,
     profile: resolved
