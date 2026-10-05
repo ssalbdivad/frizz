@@ -69,8 +69,9 @@ export function scheduleProcedures(ctx: AppContext) {
         const existing = input.scheduleId ? ctx.storage.getSchedule(input.scheduleId) : undefined
         if (input.scheduleId && !existing) throw new Error("That schedule no longer exists.")
         if (!ctx.scheduleInterpreter) return { ok: false as const, error: "Schedules are not available on this server" }
-        const tz = existing?.tz ?? input.tz ?? service().defaultZone()
-        return ctx.scheduleInterpreter.interpret({ text: input.text, tz, ...(existing ? { existing } : {}) })
+        const viewerTz = input.tz ?? service().defaultZone()
+        const tz = existing?.tz ?? viewerTz
+        return ctx.scheduleInterpreter.interpret({ text: input.text, tz, viewerTz, ...(existing ? { existing } : {}) })
       },
     }),
 

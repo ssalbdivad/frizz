@@ -126,13 +126,16 @@ export function cutPhrase(text: string, start: number, end: number): string {
 }
 
 export interface ScheduleInterpreter {
-  interpret(input: { text: string; tz: string; existing?: ThreadScheduleRow }): Promise<InterpretScheduleResult>
+  /** `tz` is the zone the rule is read in; `viewerTz` the zone the human reads the preview in (the
+   *  browser's), so a "Change when" on a schedule kept in another zone previews with the same
+   *  "<City> time" suffix the saved echo will carry. Defaults to `tz`. */
+  interpret(input: { text: string; tz: string; existing?: ThreadScheduleRow; viewerTz?: string }): Promise<InterpretScheduleResult>
 }
 
 export function createScheduleInterpreter(deps: { complete?: ClaudeOneShot; now?: () => number; model?: string }): ScheduleInterpreter {
   const now = deps.now ?? Date.now
   return {
-    async interpret({ text, tz, existing }) {
+    async interpret({ text, tz, existing, viewerTz }) {
       if (!deps.complete) return { ok: false, error: "Reading a schedule needs Claude, which this server has switched off." }
       if (!isValidTimeZone(tz)) return { ok: false, error: `"${tz}" is not a time zone Frizz knows.` }
       const nowMs = now()
@@ -179,7 +182,7 @@ export function createScheduleInterpreter(deps: { complete?: ClaudeOneShot; now?
         const title = existing?.title
           ?? (typeof answer.title === "string" ? cleanThreadName(answer.title) : undefined)
           ?? "Scheduled run"
-        const checked = scheduleEcho({ title, rrule, dtstart, tz, condition }, nowMs, tz)
+        const checked = scheduleEcho({ title, rrule, dtstart, tz, condition }, nowMs, viewerTz ?? tz)
         if (!checked.ok) {
           if (/less than 15 minutes apart/i.test(checked.error)) return { ok: false, error: SCHEDULE_SPACING_COPY }
           retry(checked.error, `Couldn't turn that into a schedule: ${checked.error}`)
