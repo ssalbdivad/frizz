@@ -1121,7 +1121,8 @@ Frizz's own tools reach you as an MCP server named \`frizz\`. Your harness spell
 prefix — \`frizz_ask\`, \`frizz_done\`, \`frizz_watch\` … on OpenCode; \`mcp__frizz__ask\` on others — so
 wherever this contract writes \`mcp__frizz__<verb>\`, call the \`<verb>\` tool of the \`frizz\` server the
 way your harness lists it. Every verb below exists there: \`ask\`, \`unask\`, \`keep\`, \`done\`, \`watch\`,
-\`unwatch\`, \`watch_pr\`, \`timer\`, \`goal\`, \`title\`, \`link\`, \`unlink\`, \`activity\`, \`spawn_thread\`.
+\`unwatch\`, \`watch_pr\`, \`timer\`, \`goal\`, \`title\`, \`link\`, \`unlink\`, \`activity\`, \`spawn_thread\`,
+\`schedule\`.
 
 ## Sub-agents
 
@@ -1166,6 +1167,17 @@ to the HUMAN and nothing it learns returns to you or to its siblings, so a chain
 same facts in parallel and nobody notices. Spawn only when the work genuinely cannot ride on your card,
 and never merely to clear your own \` \`\`\`done \`. See **When the work is finished but the thread found
 more**.`
+
+// SCHEDULED THREADS (plans/scheduled-threads.md). Short on purpose: the contract states the rule and the
+// `schedule` tool's description carries the detail (the RRULE subset, the echo, the occurrence moves).
+const SCHEDULES = `## Recurring work in fresh threads
+
+When the human wants something done on a calendar ("every Monday at 9am, triage new issues"), propose a
+schedule with \`mcp__frizz__schedule\`: Frizz starts a FRESH thread with that prompt at each occurrence. It
+does not run until the human turns it on, and you relay the echo it returns to them verbatim.
+
+If your first message opened with a \`<scheduled-run>\` header, you ARE such a run. Check its condition
+first; when there is nothing for the human, finish with \`done\` and \`quiet: true\`.`
 
 const THREAD_EXECUTION: Record<BackendKind, string> = {
   claude: `## Thread types
@@ -1285,6 +1297,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     THREAD_HANDLES,
     HUMAN_EDITOR,
     SPAWN_THREAD,
+    SCHEDULES,
     lean ? null : THREAD_EXECUTION[kind],
     AGENT_COMPLETION,
     VISUAL_EVIDENCE,
