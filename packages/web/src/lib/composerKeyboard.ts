@@ -27,7 +27,8 @@ export type ComposerKeyboardEvent = {
 // interrupt and "send now" and "send" are the same act.
 //
 // A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter saves the prompt as a lazy thread instead of
-// starting it (shouldSaveLazyComposerEnter).
+// starting it (shouldSaveLazyComposerEnter). And a FIFTH there: ⌘/Ctrl-Option-Enter schedules it
+// (shouldScheduleComposerEnter, plans/scheduled-threads.md §3).
 function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
     && !event.altKey
@@ -62,6 +63,19 @@ export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent,
  */
 export function shouldSaveLazyComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
   return canSubmit && event.key === "Enter" && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey
+    && !event.isComposing && event.keyCode !== 229
+}
+
+/**
+ * SCHEDULE IT — ⌘/Ctrl-Option-Enter in the new-thread box (Ctrl-Alt-Enter off a Mac): the text is read for
+ * WHEN it should run and shown back as a schedule to confirm, instead of being dispatched now
+ * (plans/scheduled-threads.md §3). Disjoint from every other Enter: the sends and the lazy save refuse
+ * Option outright (isEnter, and the lazy save's `!altKey`), and the Option-Enter newline repair refuses
+ * ⌘/Ctrl. No `canSubmit` gate — on an empty box the chord turns schedule mode on, so the caller decides
+ * what an empty box means. The same IME guard as every send.
+ */
+export function shouldScheduleComposerEnter(event: ComposerKeyboardEvent): boolean {
+  return event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey
     && !event.isComposing && event.keyCode !== 229
 }
 

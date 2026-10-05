@@ -11,6 +11,7 @@ import { FileReaderDrawer } from "./FileReaderDrawer.tsx"
 import { ImageViewer } from "./ImageViewer.tsx"
 import { ThreadDrawer } from "./ThreadDrawer.tsx"
 import { TerminalSheet } from "./TerminalSheet.tsx"
+import { ScheduleDrawer } from "./ScheduleDrawer.tsx"
 import { ErrorBoundary, DrawerErrorSheet } from "./ErrorBoundary.tsx"
 
 // The side-drawer STACK, and the Escape chain that unwinds it. Lives in its own component because
@@ -110,6 +111,8 @@ export function DrawerStack({ onEscapeAtRest }: { onEscapeAtRest?: () => void } 
           <TerminalSheet key={d.id} id={d.id} slug={d.slug} source={{ owner: "agent", shellId: d.subId ?? "" }} label={d.label} startedAt={d.startedAt} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "terminal" ? (
           <TerminalSheet key={d.id} id={d.id} slug={d.slug} source={{ owner: "human", terminalId: d.subId ?? "" }} depth={i} widthDepth={widthDepth} />
+        ) : d.kind === "schedule" ? (
+          <ScheduleDrawer key={d.id} id={d.id} scheduleId={d.slug} projectId={d.projectId} depth={i} widthDepth={widthDepth} />
         ) : d.kind === "file" ? (
           <FileReaderDrawer key={d.id} id={d.id} path={d.path ?? d.slug} title={d.label ?? d.slug} scope={d.scope} depth={i} widthDepth={widthDepth} />
         ) : (

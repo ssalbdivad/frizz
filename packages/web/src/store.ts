@@ -97,12 +97,13 @@ export const store = proxy({
   // same entry so App can render its sheet without a board lookup after the operation finishes.
   drawers: [] as {
     id: number
-    kind: "thread" | "doc" | "subagent" | "shell" | "file" | "terminal"
-    slug: string
+    kind: "thread" | "doc" | "subagent" | "shell" | "file" | "terminal" | "schedule"
+    slug: string // schedule: the schedule's id
     routed?: boolean // URL/deep-link-created thread: visible on first paint, never an invisible animated backdrop
     subId?: string // subagent/shell: the launch tool_use id (the RPC handle + dedupe key) / terminal: its id
     label?: string // subagent: the dispatch description (header title) / file: the basename
     path?: string // file: the absolute file path
+    projectId?: string // schedule: the project it belongs to, which every one of its RPCs goes through
     scope?: MarkdownScope // file: opened from ANOTHER project's card on the everything page — whose gate
     // reads it and whose repo its prose links into (pushFileReader); absent = the page's own project
     subagentType?: string // subagent: the model+effort cell tag
@@ -248,11 +249,13 @@ function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean
   return false
 }
 
-function openOrRaiseDrawer(next: Omit<Drawer, "id" | "closing" | "openedAt">): void {
+function openOrRaiseDrawer(next: Omit<Drawer, "id" | "closing" | "openedAt">, opts?: { drillIn?: boolean }): void {
   // ONE-DRAWER POLICY (maintainer 2026-07-21): opening a layer REPLACES every live layer it doesn't
   // logically stack over, so lateral moves (sidebar sibling thread/sub-agent clicks) swap the
   // open drawer instead of piling up; only drilling into the open thread's own child/doc stacks.
-  const displaced = store.drawers.filter((d) => !d.closing && !sameDrawer(d, next) && !stacksOver(d, next)).map((d) => d.id)
+  // `drillIn` is a caller that KNOWS it is opening from inside the top layer — a schedule's history row
+  // opening its run, a run's transcript opening its schedule — so nothing is displaced and Esc goes back.
+  const displaced = opts?.drillIn ? [] : store.drawers.filter((d) => !d.closing && !sameDrawer(d, next) && !stacksOver(d, next)).map((d) => d.id)
   if (displaced.length) closeDrawersById(displaced)
 
   const matches = store.drawers.filter((drawer) => sameDrawer(drawer, next))
@@ -290,14 +293,21 @@ export function slugsInThreadDrawers(drawers: readonly Pick<Drawer, "kind" | "sl
 export function drawerThreadSlug(drawers: readonly Pick<Drawer, "kind" | "slug" | "closing">[]): string | null {
   for (let i = drawers.length - 1; i >= 0; i--) {
     const d = drawers[i]
-    if (d.closing || d.kind === "file") continue
+    if (d.closing || d.kind === "file" || d.kind === "schedule") continue
     return d.slug
   }
   return null
 }
 
-export function pushDrawer(kind: "thread" | "doc", slug: string, opts?: { routed?: boolean }): void {
-  openOrRaiseDrawer({ kind, slug, routed: opts?.routed })
+export function pushDrawer(kind: "thread" | "doc", slug: string, opts?: { routed?: boolean; drillIn?: boolean }): void {
+  openOrRaiseDrawer({ kind, slug, routed: opts?.routed }, { drillIn: opts?.drillIn })
+}
+
+// Open a SCHEDULE's drawer (plans/scheduled-threads.md §8, ScheduleDrawer.tsx). `projectId` is the
+// schedule's own project, which may not be the page's — the palette lists every project's — so the drawer
+// reads and writes through that project's client and never asks the page.
+export function pushScheduleDrawer(id: string, projectId: string | undefined, opts?: { drillIn?: boolean }): void {
+  openOrRaiseDrawer({ kind: "schedule", slug: id, ...(projectId ? { projectId } : {}) }, { drillIn: opts?.drillIn })
 }
 
 // Open one of a thread's TERMINALS (lib/threadTerminals.ts) as a layer over the thread it belongs to.

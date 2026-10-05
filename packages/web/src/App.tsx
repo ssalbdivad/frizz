@@ -45,6 +45,13 @@ import { formatCompactElapsed } from "./lib/durationLabels.ts"
 // keeps it from re-firing across re-renders, effect re-runs, or a StrictMode double-invoke. In an
 // editor's sidebar it says where a terminal is: VS Code's, one chord away (lib/embed.ts).
 let signInHintShown = false
+let clientZoneReported = false
+function reportClientZoneOnce() {
+  if (clientZoneReported) return
+  clientZoneReported = true
+  const tz = Intl.DateTimeFormat().resolvedOptions().timeZone
+  if (tz) rpc.reportClientZone({ tz }).catch(() => {})
+}
 function maybeShowSignInHint() {
   if (signInHintShown) return
   signInHintShown = true
@@ -75,6 +82,15 @@ export function App() {
   useEffect(() => {
     rpc.board().then(seedBoard).catch(() => {})
   }, [pageSlug])
+
+  // THE HUMAN'S TIME ZONE, once per page load (plans/scheduled-threads.md §1). A server under WSL or in a
+  // container often runs in UTC while the human does not, and "every Monday at 9am" means THEIR 9am: the
+  // latest zone a browser reported is the default for every new schedule. Machine-scoped, so the page
+  // project's client is as good as any. Best-effort — a server that predates it, or a failed write, leaves
+  // schedules on the zone the server already knows.
+  useEffect(() => {
+    reportClientZoneOnce()
+  }, [])
 
   // STORE → URL (opening a drawer writes the address bar). The other direction is the route tree's —
   // see routes.tsx useRouteToStore. Navigation goes through the router so its history stack and its

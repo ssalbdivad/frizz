@@ -240,8 +240,9 @@ export function useCollapsedProjects(): ReadonlySet<string> {
   return useSyncExternalStore(collapsed.subscribe, collapsed.read, () => NONE)
 }
 
-/** The list's quiet bands, which open one at a time. */
-export type QuietBandKey = "snoozed" | "done" | "external"
+/** The list's quiet bands, which open one at a time. `schedules` is the one band that is not threads: the
+ *  project's schedules (plans/scheduled-threads.md §8), opened in place from the row's fourth count. */
+export type QuietBandKey = "snoozed" | "done" | "external" | "schedules"
 
 /** The key a project's quiet band is remembered under. */
 export function bandKey(projectId: string, band: QuietBandKey): string {

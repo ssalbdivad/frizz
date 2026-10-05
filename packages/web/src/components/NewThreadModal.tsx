@@ -1,7 +1,7 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput, type DispatchInput } from "@frizz/shared"
+import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput, type CreateScheduleInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
@@ -28,6 +28,7 @@ import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
+import { useScheduleMode } from "./ScheduleComposer.tsx"
 
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
@@ -234,7 +235,30 @@ function PromptForm({
     dispatch.mutate(input)
   }
 
+  // SCHEDULE MODE (plans/scheduled-threads.md §3, ScheduleComposer.tsx): the same text, read for WHEN it
+  // should run and saved as a schedule on this box's project and profile, instead of started now. The text
+  // it reads is the prompt as a lazy save would write it — the chips, never the editor block — because a
+  // schedule's prompt is sent hours or weeks later, like a lazy thread's.
+  const schedule = useScheduleMode({
+    text: prompt.trim() ? outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim() : "",
+    prose: prompt,
+    profile: resolved
+      ? { model: resolved.model, backend: resolved.backend, effort: (resolved.effort || undefined) as CreateScheduleInput["effort"] }
+      : undefined,
+    blocked: savingSettings || !!parseAccountAlias(prompt),
+    onCreated: () => {
+      takeContextItems(promptKey)
+      clearPrompt()
+      setPick(undefined)
+      onDispatched?.()
+    },
+  })
+
   function submit() {
+    if (schedule.on) {
+      schedule.submit()
+      return
+    }
     if (!prompt.trim() || !resolved || savingSettings) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
@@ -362,11 +386,15 @@ function PromptForm({
         onChange={setPrompt}
         onSubmit={submit}
         onSaveLazy={submitLazy}
+        onSchedule={schedule.toggle}
+        schedule={schedule.glyph}
+        highlight={schedule.highlight}
+        onEscape={schedule.escape}
         contextTokens={contextTokens}
         contextSources={contextSources}
         header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
         aside={<EditorLine box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
-        placeholder="Describe the task…"
+        placeholder={schedule.on ? "What to do, and when it runs…" : "Describe the task…"}
         mentionCandidates={mentions}
         fileMentions={embedFileMentions(projectDir)}
         slashSuggest={slashSuggest}
@@ -377,6 +405,7 @@ function PromptForm({
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
+      {schedule.panel}
       {dispatch.isError && (
         <span className="px-0.5 text-[11px] text-danger truncate">{(dispatch.error as Error).message}</span>
       )}

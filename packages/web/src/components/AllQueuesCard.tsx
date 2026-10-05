@@ -27,6 +27,7 @@ import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { prefetchProjectTranscript } from "../hooks.ts"
 import { ThreadMenu, ThreadTerminalButton } from "./ThreadMenu.tsx"
 import { displayTitle, offersRetry, queueLabelAt, queueLabelWord } from "../groups.ts"
+import { ScheduleMark } from "./ScheduleMark.tsx"
 import { useMentionCandidates, useOwnMention } from "../hooks/useMentionCandidates.ts"
 import { answerProse, handoffParts, projectMarkdownScope, sameProjectAddress, squareCard, threadKey, type QueuesProject } from "../lib/allQueues.ts"
 import { draftKey, draftStore, useDraftValues } from "../lib/drafts.ts"
@@ -392,6 +393,7 @@ function CardArticle({
             <a href={placeHref} onClick={openHere} data-command="open" className="rounded-sm outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60">
               {displayTitle(thread)}
             </a>
+            {thread.schedule && <ScheduleMark schedule={thread.schedule} size="title" className="ml-1.5" />}
           </h3>
           <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
             {chipNode}

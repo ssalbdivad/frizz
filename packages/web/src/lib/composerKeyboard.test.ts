@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -137,4 +137,20 @@ test("⌘/Ctrl-Shift-Enter saves a lazy thread, and claims no other Enter", () =
   assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true }), true), false, "⌘-Enter stays the forced send")
   assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
   assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
+})
+
+test("⌘/Ctrl-Option-Enter schedules, and claims no other Enter", () => {
+  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, altKey: true })), true)
+  assert.equal(shouldScheduleComposerEnter(key({ ctrlKey: true, altKey: true })), true)
+  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, altKey: true, isComposing: true })), false)
+  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, altKey: true, shiftKey: true })), false)
+  assert.equal(shouldScheduleComposerEnter(key({ altKey: true })), false, "Option-Enter stays a newline")
+  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true })), false, "⌘-Enter stays the forced send")
+  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, shiftKey: true })), false, "⌘⇧-Enter stays the lazy save")
+  // …and none of the others claim it.
+  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
+  assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true, altKey: true }), true), false)
+  assert.equal(shouldRestoreOptionEnterNewline(key({ metaKey: true, altKey: true })), false)
+  assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true, altKey: true }), true), false)
 })

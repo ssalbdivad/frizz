@@ -1,14 +1,14 @@
 import { createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, Plus, Snail, X } from "lucide-react"
+import { ArrowUp, FileText, Loader2, Paperclip, Plus, Repeat, Snail, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type EmbedPickedFile, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
-import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -203,6 +203,10 @@ export function Composer({
   onInterruptSubmit,
   onPushQueued,
   onSaveLazy,
+  onSchedule,
+  schedule,
+  highlight,
+  onEscape,
   attachBase,
   phone,
   onUploadingChange,
@@ -293,6 +297,20 @@ export function Composer({
   // snail glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
   // starting one. (A footer text hint did this job until 2026-10-01; the maintainer wanted it gone.)
   onSaveLazy?: () => void
+  // SCHEDULE IT — the new-thread box only, and only beside `onSaveLazy` (plans/scheduled-threads.md §3).
+  // ⌘/Ctrl-Option-Enter, or the repeat glyph left of the snail, asks the caller to read the text for WHEN
+  // it should run instead of starting it now. The caller owns the mode; `schedule` says how the glyph reads:
+  // `hint` lights it because the text opens with a recurrence phrase (lib/scheduleHint.ts) — Enter still
+  // dispatches — and `on` is the mode itself, where Enter is the caller's schedule step.
+  onSchedule?: () => void
+  schedule?: "off" | "hint" | "on"
+  // A span of the PROSE to mark behind the text — the schedule phrase the server found in it, so the
+  // human sees which words became WHEN and that the rest is the prompt, verbatim. Offsets into the prose
+  // the box shows; a span that no longer fits it (the text was edited) draws nothing.
+  highlight?: { start: number; end: number }
+  // Escape, before the box's own blur. Return true to claim it: the schedule mode leaves itself on the
+  // first Escape and keeps the caret, rather than climbing out of the box with the mode still on.
+  onEscape?: () => boolean
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
@@ -306,6 +324,7 @@ export function Composer({
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null)
   const contextRef = useRef<HTMLDivElement>(null)
+  const highlightRef = useRef<HTMLDivElement>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   // What a drag over the box would do: upload a file as an attachment, or (a drag from VS Code's own
   // explorer, which carries resources rather than files) reference what it names.
@@ -589,6 +608,11 @@ export function Composer({
     return paintsText || hasToken ? { segments: out, paintsText } : null
   }, [prose, stagedTokens, allMentions, slashItems, opensAt])
   const backdropSegments = backdrop?.segments
+  // The schedule phrase, marked behind its own words (the `highlight` prop). Only while the span still
+  // fits the prose: an edit makes the caller's reading stale, and a mark over the wrong words is worse
+  // than none.
+  const highlightRun = highlight && highlight.start >= 0 && highlight.end > highlight.start && highlight.end <= prose.length ? highlight : undefined
+  const mirrored = backdropSegments !== undefined || highlightRun !== undefined
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
   // content; the backdrop must pan with it or the pills detach from their tokens).
@@ -596,6 +620,8 @@ export function Composer({
     const el = taRef.current
     const backdrop = contextRef.current
     if (el && backdrop) backdrop.scrollTop = el.scrollTop
+    const marks = highlightRef.current
+    if (el && marks) marks.scrollTop = el.scrollTop
   }
   useLayoutEffect(syncContextScroll)
 
@@ -786,6 +812,9 @@ export function Composer({
   const hasContent = value.trim().length > 0
   const interruptChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⏎" : "Ctrl+Enter"), [])
   const lazyChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
+  const scheduleChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⌥⏎" : "Ctrl+Alt+Enter"), [])
+  // The schedule glyph rides only beside the snail (the new-thread box), one 28px slot further left.
+  const scheduleSlot = onSaveLazy !== undefined && onSchedule !== undefined
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
@@ -794,13 +823,17 @@ export function Composer({
   const railAction = leftAction ?? null
   // The lazy-save glyph (new-thread box only) takes the slot beside Send and pushes the rest of the rail
   // one slot left, so the reserve and the left-hand offsets all follow it.
-  const railReserve = onSaveLazy
-    ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
-    : railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
-  const railActionOffset = onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
-  const paperclipOffset = onSaveLazy
-    ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
-    : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
+  const railReserve = scheduleSlot
+    ? railAction ? RAIL_SCHEDULE_RESERVE_WITH_ACTION : RAIL_SCHEDULE_RESERVE_PLAIN
+    : onSaveLazy
+      ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
+      : railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
+  const railActionOffset = scheduleSlot ? RAIL_SCHEDULE_ACTION_OFFSET : onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
+  const paperclipOffset = scheduleSlot
+    ? railAction ? RAIL_SCHEDULE_PAPERCLIP_OFFSET : RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET
+    : onSaveLazy
+      ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
+      : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget
@@ -887,6 +920,12 @@ export function Composer({
       onSaveLazy()
       return
     }
+    if (onSchedule && shouldScheduleComposerEnter(keyboardEvent)) {
+      e.preventDefault()
+      e.stopPropagation()
+      if (!busy && !uploading) onSchedule()
+      return
+    }
     // ⌘/Ctrl-Enter — the FORCED send. With a worker mid-turn it preempts what the worker is doing so
     // the message is read now instead of when the current command finishes; with nothing to
     // interrupt it is the same send as Enter, so the chord always means "send now". Disjoint by
@@ -923,6 +962,11 @@ export function Composer({
       // happening the first time. The draft is persisted, so the drawer or card it lands in shows it.
       // A drawer opened OVER /full is portaled outside this column and still climbs out below.
       if (e.currentTarget.closest("[data-standalone-thread]")) return
+      if (onEscape?.()) {
+        e.preventDefault()
+        e.stopPropagation()
+        return
+      }
       // Climb out: blur the textarea and STOP the event — the same physical keypress must not also
       // reach App's window handler and pop a drawer. The NEXT Esc, at rest, unwinds normally.
       // Mid-IME-composition Esc is the IME's own cancel — leave it to the editor, don't blur.
@@ -1310,6 +1354,20 @@ export function Composer({
           any drift between them detaches every pill from its token. */}
       {header}
       <div className="relative">
+        {highlightRun && (
+          <div
+            ref={highlightRef}
+            aria-hidden
+            data-composer-highlight-backdrop
+            className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed text-transparent`}
+          >
+            {prose.slice(0, highlightRun.start)}
+            {/* Zero-layout like the context pill: the side pad is bought back by the negative margin. */}
+            <mark data-composer-highlight className="rounded-[3px] bg-accent/15 py-px -mx-px px-px text-transparent">{prose.slice(highlightRun.start, highlightRun.end)}</mark>
+            {prose.slice(highlightRun.end)}
+            {prose.endsWith("\n") && " "}
+          </div>
+        )}
         {backdropSegments && (
           <div
             ref={contextRef}
@@ -1329,7 +1387,7 @@ export function Composer({
           // 1Password's extension offers to create an SSH key on any bare textarea it focuses; this is
           // its documented opt-out. Every prose textarea in the app carries it.
           data-1p-ignore
-          onScroll={backdropSegments ? syncContextScroll : undefined}
+          onScroll={mirrored ? syncContextScroll : undefined}
           title={hoverSource}
           onMouseMove={backdropSegments && contextSources ? (e) => setHoverSource(sourceAt(e.clientX, e.clientY)) : undefined}
           onMouseLeave={hoverSource === undefined ? undefined : () => setHoverSource(undefined)}
@@ -1407,6 +1465,13 @@ export function Composer({
               {interruptChord} to interrupt
             </span>
           )}
+          {/* The schedule glyph's one visible trace in the strip, only while it is lit as a hint: the text
+              opens like a schedule ("every Monday …"), and Enter would still start it now. */}
+          {scheduleSlot && schedule === "hint" && hasContent && !busy && (
+            <span data-composer-schedule-hint className="ml-auto max-w-full shrink-0 truncate text-[11px] text-muted-70 [[data-editor-line]~&]:ml-1">
+              Schedule this? {scheduleChord}
+            </span>
+          )}
         </div>
       )}
       {/* Outlined controls keep 8px between edges; prose reserves the same clearance. */}
@@ -1437,6 +1502,27 @@ export function Composer({
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
+      {/* SCHEDULE IT, left of the snail: the third way out of the new-thread box (plans/scheduled-threads.md
+          §3). Muted at rest like the snail; LIT — the text's own ink, not the accent, which means "wants
+          you" — while the text opens with a recurrence phrase, and pressed (the hover square held) in
+          schedule mode. Never disabled on an empty box: there it turns the mode on, to type into. */}
+      {scheduleSlot && (
+        <button
+          type="button"
+          data-composer-schedule={schedule ?? "off"}
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSchedule}
+          disabled={busy || uploading}
+          aria-pressed={schedule === "on"}
+          title={schedule === "on" ? `Schedule mode — Esc to leave (${scheduleChord})` : schedule === "hint" ? `Schedule this? ${scheduleChord}` : `Schedule it, to run on a repeat (${scheduleChord})`}
+          aria-label={schedule === "on" ? "Leave schedule mode" : "Schedule"}
+          className={`icon-hover-outline absolute bottom-2 ${RAIL_SCHEDULE_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50 ${
+            schedule === "on" ? "bg-panel-2 text-fg" : schedule === "hint" ? "text-fg" : "text-muted"
+          }`}
+        >
+          <Repeat size={15} strokeWidth={2} />
+        </button>
+      )}
       {/* SAVE AS A LAZY THREAD, beside Send so the act is discoverable without its chord. Muted like the
           paperclip: it is the secondary submit, and Send stays the one filled button. */}
       {onSaveLazy && (

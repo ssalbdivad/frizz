@@ -1,4 +1,4 @@
-import type { BoardSnapshot, ProjectCard, ProjectQueue, RegisteredQuestionView, ThreadView } from "@frizz/shared"
+import type { BoardSnapshot, ProjectCard, ProjectQueue, ProjectSchedules, RegisteredQuestionView, ThreadView } from "@frizz/shared"
 import { orderByInteraction, orderQueue, queued, sectionOf, type QueueDirection } from "../groups.ts"
 import { crossProjectHref } from "./base-path.ts"
 import { splitFenceBlocks } from "./fenceBlocks.ts"
@@ -34,6 +34,9 @@ export interface QueuesProject {
   running: ThreadView[]
   snoozed: ThreadView[]
   doneCount: number
+  /** Its schedules' count, and whether one wants the human (paused by Frizz, or a proposal to turn on) —
+   *  the row's fourth quiet count. Absent when it has none. */
+  schedules?: ProjectSchedules
 }
 
 /**
@@ -122,6 +125,7 @@ export function queuesProjects(
       snoozed: orderByInteraction(threads.filter((t) => !queued(t) && sectionOf(t) === "snoozed")),
       // The server counts archived rows itself; any that still arrive (an older server) are Done too.
       doneCount: (queue?.doneCount ?? 0) + threads.filter((t) => sectionOf(t) === "inactive").length,
+      ...(queue?.schedules && queue.schedules.count > 0 ? { schedules: queue.schedules } : {}),
     }
   }
   for (const card of cards ?? []) {

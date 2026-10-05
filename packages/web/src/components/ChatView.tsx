@@ -3,10 +3,11 @@ import { createPortal } from "react-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
-import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, TerminalSquare, X } from "lucide-react"
-import { parseRecurringPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
+import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, Repeat, TerminalSquare, X } from "lucide-react"
+import { parseRecurringPrompt, parseScheduledRunPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
-import { store, threadBySlug, pushDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
+import { store, threadBySlug, pushDrawer, pushScheduleDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
+import { scheduledRunFacts } from "../lib/schedules.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
 import { rpc } from "../api/rpc.ts"
 import { UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, subAgentName } from "../groups.ts"
@@ -3367,6 +3368,25 @@ function FailedSendRow({ deliveryId, text, rawText, error }: { deliveryId: strin
   )
 }
 
+/**
+ * A scheduled run's first message: one hairline naming the schedule it came from — "From Triage issues ·
+ * every Monday at 9am", the same words as the repeat glyph's tooltip on its row — which opens the schedule
+ * over this thread, then the saved prompt in the human's bubble. The header's text (the occurrence, the
+ * previous run, how to finish quietly) is the worker's, not the reader's.
+ */
+function ScheduledRunOpening({ scheduleId, header, prompt, sourceId, at }: { scheduleId: string; header: string; prompt: string; sourceId?: string; at?: string }) {
+  const facts = scheduledRunFacts(header)
+  const label = facts ? `From ${facts.title} · ${facts.describe}` : "Scheduled run"
+  return (
+    <div data-frizz-msg={sourceId} data-scheduled-run={scheduleId} className="flex w-full flex-col gap-2">
+      <WakeDivider icon={Repeat} marker="scheduled-run" ariaLabel={`${label}. Open the schedule`} at={at} onClick={() => pushScheduleDrawer(scheduleId, undefined, { drillIn: true })}>
+        {label}
+      </WakeDivider>
+      {prompt.trim() !== "" && <UserBubble text={prompt} />}
+    </div>
+  )
+}
+
 function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryFailed, deliveryError, deliveryId, sourceId }: { text: string; rawText?: string; queued?: boolean; deliveryUnconfirmed?: boolean; deliveryFailed?: boolean; deliveryError?: string; deliveryId?: string; sourceId?: string }) {
   // TAKE IT BACK. A still-queued send is the one bubble in the transcript that isn't history yet, so
   // it alone is clickable: the click unqueues it at the provider and hands the words back to the
@@ -3598,6 +3618,12 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // bubble honors \n but not a lone \r → the breaks collapse into a run-on. Normalize for BOTH render
     // paths (the server does this too, but this is the definitive per-surface guarantee for user text).
     const text = messagePresentationText(m).replace(/\r\n?/g, "\n")
+    // A SCHEDULED RUN'S OPENING (plans/scheduled-threads.md §5): Frizz's header for the worker, then the
+    // schedule's saved prompt. The header is machinery — which occurrence, how late, how to finish quietly
+    // — so it folds to one line naming the schedule, and the prompt, which the human wrote, keeps the
+    // human's bubble (ScheduledRunOpening).
+    const scheduledRun = parseScheduledRunPrompt(text)
+    if (scheduledRun) return <ScheduledRunOpening scheduleId={scheduledRun.scheduleId} header={scheduledRun.header} prompt={scheduledRun.prompt} sourceId={m.sourceId} at={m.at} />
     // OUR OWN composed multi-block answer — either wire form ("Answers:\n1. …\n2. …" for the live ask,
     // "Answers to earlier questions:\n1. “Q” → A" for a buried one, both from useLiveAnswering.sendAnswers)
     // renders as a structured answers card echoing the question component — not a flat run-on bubble.

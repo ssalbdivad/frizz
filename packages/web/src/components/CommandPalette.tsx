@@ -2,12 +2,17 @@ import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { Command } from "cmdk"
-import { store, openThread, openNewThread, pushDrawer, topThreadSlug, closeDrawersById } from "../store.ts"
+import { useQuery } from "@tanstack/react-query"
+import { Repeat } from "lucide-react"
+import { store, openThread, openNewThread, pushDrawer, pushScheduleDrawer, topThreadSlug, closeDrawersById } from "../store.ts"
+import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 import { rpc } from "../api/rpc.ts"
 import { useBoard, asThreads } from "../hooks.ts"
 import { sortThreads, displayName, displayTitle } from "../groups.ts"
 import { isCrossProjectPath } from "../lib/base-path.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
+import type { ScheduleView } from "@frizz/shared"
 
 // Cmd+K palette: fuzzy-jump to any thread (over title + slug, grouped like the sidebar) plus the
 // common actions. cmdk owns the filtering; we set each item's `value` to the text we want matched.
@@ -23,13 +28,19 @@ export function CommandPalette() {
   const snap = useSnapshot(store)
   const board = useBoard()
   const [search, setSearch] = useState("")
+  // The palette's one sub-page: "Schedules", every project's (plans/scheduled-threads.md §8). Backspace on
+  // an empty query climbs back out, cmdk's own convention for pages.
+  const [page, setPage] = useState<"root" | "schedules">("root")
   const inputRef = useRef<HTMLInputElement>(null)
   // Captured as the palette opens, so closing it can hand focus back (see onCloseAutoFocus).
   const openerRef = useRef<HTMLElement | null>(null)
 
   // Reset the query each time it opens so a stale filter never hides everything.
   useEffect(() => {
-    if (snap.showPalette) setSearch("")
+    if (snap.showPalette) {
+      setSearch("")
+      setPage("root")
+    }
   }, [snap.showPalette])
 
   if (!snap.showPalette) return null
@@ -90,14 +101,24 @@ export function CommandPalette() {
               ref={inputRef}
               value={search}
               onValueChange={setSearch}
+              onKeyDown={(event) => {
+                if (page !== "root" && event.key === "Backspace" && !search) {
+                  event.preventDefault()
+                  setPage("root")
+                }
+              }}
               // The whole sentence needs ~300px of box. Narrower (a 300px sidebar) it clipped mid-word, "…run a
               // comman", and no ellipsis can help: Chrome draws none on the placeholder of a FOCUSED input, and
               // this one always is. So a narrow palette says the half that names what you type. `text-ellipsis`
               // still covers a long query once focus has left the box.
-              placeholder={narrowPalette() ? "Jump to a thread…" : "Jump to a thread or run a command…"}
+              placeholder={page === "schedules" ? "Find a schedule…" : narrowPalette() ? "Jump to a thread…" : "Jump to a thread or run a command…"}
               className="w-full px-4 h-12 bg-transparent outline-none border-b border-border text-sm text-ellipsis placeholder:text-muted"
             />
             <Command.List className="max-h-[52vh] overflow-y-auto py-1.5">
+              {page === "schedules" ? (
+                <SchedulesPage onOpen={(schedule) => run(() => pushScheduleDrawer(schedule.id, schedule.projectId))} />
+              ) : (
+              <>
               <Command.Empty className="px-4 py-6 text-center text-sm text-muted">No matches.</Command.Empty>
 
               <Command.Group heading="Actions" className="cmdk-group">
@@ -114,6 +135,15 @@ export function CommandPalette() {
                 </Item>
                 <Item value="keyboard shortcuts keys hotkeys keybindings rebind" onSelect={() => run(() => (store.showShortcuts = true))}>
                   Keyboard shortcuts
+                </Item>
+                <Item
+                  value="schedules scheduled recurring repeat every cron routines"
+                  onSelect={() => {
+                    setSearch("")
+                    setPage("schedules")
+                  }}
+                >
+                  Schedules
                 </Item>
                 {selected && (
                   <>
@@ -160,11 +190,50 @@ export function CommandPalette() {
                   ))}
                 </Command.Group>
               )}
+              </>
+              )}
             </Command.List>
           </Command>
         </RadixDialog.Content>
       </RadixDialog.Portal>
     </RadixDialog.Root>
+  )
+}
+
+/**
+ * EVERY SCHEDULE ON THE MACHINE, one row each — its title, its project, and when it runs next — and a pick
+ * opens its drawer. Through the page's client with `allProjects`: the server answers for every open project,
+ * and each row names its own, which the drawer then reads through.
+ */
+function SchedulesPage({ onOpen }: { onOpen: (schedule: ScheduleView) => void }) {
+  const now = useNowMs()
+  const list = useQuery({ queryKey: scheduleKeys.all(), queryFn: () => rpc.listSchedules({ allProjects: true }), staleTime: 5_000 })
+  if (list.isLoading) return <Command.Loading className="px-4 py-1.5 text-[12px] text-muted">Loading schedules…</Command.Loading>
+  const schedules = list.data ?? []
+  if (schedules.length === 0) {
+    return (
+      <div data-palette-schedules-empty className="px-4 py-6 text-center text-sm text-muted">
+        {list.isError ? "Couldn't read the schedules." : "Nothing scheduled. In the prompt box, try “every Monday at 9am triage new issues”."}
+      </div>
+    )
+  }
+  return (
+    <>
+      <Command.Empty className="px-4 py-6 text-center text-sm text-muted">No matches.</Command.Empty>
+      <Command.Group heading="Schedules" className="cmdk-group">
+        {schedules.map((schedule) => (
+          <Item key={schedule.id} value={`${schedule.title} ${schedule.describe} ${schedule.projectName} ${schedule.id}`} onSelect={() => onOpen(schedule)}>
+            <Repeat size={12} aria-hidden className="shrink-0 text-muted-70" />
+            <span className="min-w-0 flex-1 truncate">
+              {schedule.title}
+              <span className="ml-1.5 text-[12px] text-muted-70">{schedule.describe}</span>
+            </span>
+            <span className="ml-auto min-w-0 max-w-[30%] shrink-0 truncate text-[11px] text-muted-70 max-[360px]:hidden">{schedule.projectName}</span>
+            <span className={`w-[4.5rem] shrink-0 text-right text-[11px] tabular-nums ${schedule.attention ? "text-attention-soft" : "text-muted-70"}`}>{scheduleNextLabel(schedule, now)}</span>
+          </Item>
+        ))}
+      </Command.Group>
+    </>
   )
 }
 

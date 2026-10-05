@@ -18,6 +18,7 @@ import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
 import { formatAutoSnoozedUntil, formatUserSnooze } from "../lib/snooze.ts"
 import { SUBAGENTS_SNOOZE_TOAST } from "../lib/subAgentWait.ts"
+import { ScheduleMark } from "./ScheduleMark.tsx"
 import { formatCompactElapsed } from "../lib/durationLabels.ts"
 import { statusElapsed } from "./ThreadStatusLine.tsx"
 import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.ts"
@@ -317,6 +318,8 @@ export const ThreadRow = memo(function ThreadRow({
                   and the status truncates into what is left; without one the title fills the line. */}
               <span className={`min-w-0 break-words text-[13px] leading-[19px] ${working ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
                 <TitleWithTrailers title={displayTitle(t)}>
+                  {/* A schedule's run, or its next run: the repeat glyph, before the provider (ScheduleMark). */}
+                  {t.schedule && <ScheduleMark schedule={t.schedule} className="ml-1" />}
                   <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
                 </TitleWithTrailers>
               </span>

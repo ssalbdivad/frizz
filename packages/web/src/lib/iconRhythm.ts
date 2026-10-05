@@ -105,3 +105,13 @@ export const RAIL_LAZY_PAPERCLIP_OFFSET = "right-[99px]"
 export const RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET = "right-[72px]"
 export const RAIL_LAZY_RESERVE_WITH_ACTION = "pr-[8.4375rem]"
 export const RAIL_LAZY_RESERVE_PLAIN = "pr-[6.75rem]"
+
+/** The new-thread box's SCHEDULE glyph (`Repeat`, plans/scheduled-threads.md §3) takes the slot directly
+ *  left of the snail, and every slot further left moves over by one more 28px pitch; the reserves grow by
+ *  the same 28px. Provisional pitch-only values until measured — see the readings below once taken. */
+export const RAIL_SCHEDULE_OFFSET = "right-[72px]"
+export const RAIL_SCHEDULE_ACTION_OFFSET = "right-[99px]"
+export const RAIL_SCHEDULE_PAPERCLIP_OFFSET = "right-[127px]"
+export const RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET = "right-[100px]"
+export const RAIL_SCHEDULE_RESERVE_WITH_ACTION = "pr-[10.1875rem]"
+export const RAIL_SCHEDULE_RESERVE_PLAIN = "pr-[8.5rem]"

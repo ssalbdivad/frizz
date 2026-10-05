@@ -44,12 +44,12 @@
 // the order, decides which run a project is in: a busy project dropped among the quiet ones would
 // only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
-import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus } from "lucide-react"
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus, Repeat } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import type { BoardSnapshot, ProjectCard, ThreadView } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import type { BoardSnapshot, ProjectCard, ScheduleView, ThreadView } from "@frizz/shared"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, externalThreads, isPinned, queued, sectionThreads } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
@@ -65,7 +65,9 @@ import { listOverlay, loudBands, type LoudBands } from "../lib/listBands.ts"
 import { prefetchProjectBoard, projectBoardKey, useProjectBoard } from "../lib/projectBoards.ts"
 import { edgeScrollVelocity, listDropIndex, listPitch, placeAmong, shiftFor, type ListBox } from "../lib/railReorder.ts"
 import { useSteeredAt } from "../lib/steering.ts"
-import { drawerThreadSlug, store } from "../store.ts"
+import { drawerThreadSlug, pushScheduleDrawer, store } from "../store.ts"
+import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
+import { useNowMs } from "../lib/liveClock.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BANDS, type BandKey } from "./BandLabel.tsx"
 import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
@@ -687,8 +689,9 @@ function ProjectGroupRows({
   )
 }
 
-/** The quiet bands, in the order the list gives them. */
-const QUIET_BANDS: readonly QuietBandKey[] = ["snoozed", "done", "external"]
+/** The quiet bands, in the order the list gives them. Schedules last: the one band of the four that is not
+ *  threads, so it reads as the project's future rather than part of its past. */
+const QUIET_BANDS: readonly QuietBandKey[] = ["snoozed", "done", "external", "schedules"]
 
 /** Every band a project's rows are drawn in, loud then quiet — the sections lib/heldLayout.ts holds. */
 type ListBand = "pinned" | "ready" | "working" | QuietBandKey
@@ -702,6 +705,10 @@ interface QuietBands {
   done: ThreadView[] | undefined
   doneCount: number
   external: ThreadView[]
+  /** The project's schedules — the poll's count; the rows are read when the band opens (ScheduleRows). */
+  schedules: number
+  /** One of them wants the human: paused by Frizz, or a proposal waiting for Turn on. */
+  schedulesAttention: boolean
 }
 
 /**
@@ -711,16 +718,17 @@ interface QuietBands {
  */
 function quietBands(project: QueuesProject, board: BoardSnapshot | null | undefined): QuietBands {
   const snoozed = project.snoozed.filter((t) => !isPinned(t))
-  if (!board) return { pinnedDone: [], snoozed, done: undefined, doneCount: project.doneCount, external: [] }
+  const schedules = { schedules: project.schedules?.count ?? 0, schedulesAttention: project.schedules?.attention ?? false }
+  if (!board) return { pinnedDone: [], snoozed, done: undefined, doneCount: project.doneCount, external: [], ...schedules }
   const sections = sectionThreads(board.threads)
   const done = sections.inactive
   const pinnedDone = sections.pinned.filter((t) => t.state === "archived")
-  return { pinnedDone, snoozed, done, doneCount: done.length, external: externalThreads(board.threads) }
+  return { pinnedDone, snoozed, done, doneCount: done.length, external: externalThreads(board.threads), ...schedules }
 }
 
 /** How many rows a quiet band holds. */
 function quietCount(quiet: QuietBands, band: QuietBandKey): number {
-  return band === "snoozed" ? quiet.snoozed.length : band === "done" ? quiet.doneCount : quiet.external.length
+  return band === "snoozed" ? quiet.snoozed.length : band === "done" ? quiet.doneCount : band === "schedules" ? quiet.schedules : quiet.external.length
 }
 
 /**
@@ -935,18 +943,25 @@ function ProjectRow({
  * counts were buttons; `relative`, to sit above the fold's whole-row target.
  */
 function QuietToggles({ project, quiet, opened, working = 0 }: { project: QueuesProject; quiet: QuietBands; opened: readonly QuietBandKey[]; working?: number }) {
-  const entries: { band: BandKey; count: number; noun: string }[] = [
+  const entries: { band: BandKey | "schedules"; count: number; noun: string }[] = [
     { band: "working", count: working, noun: "working" },
-    ...QUIET_BANDS.map((band) => ({ band, count: quietCount(quiet, band), noun: band })),
+    ...QUIET_BANDS.map((band) => ({ band, count: quietCount(quiet, band), noun: band === "schedules" && quietCount(quiet, band) === 1 ? "schedule" : band })),
   ]
   const shown = entries.filter((entry) => entry.count > 0)
   if (shown.length === 0) return null
   return (
     <span data-xq-quiet-toggles className="flex shrink-0 items-center gap-2">
       {shown.map(({ band, count, noun }) => {
-        const { Icon } = BANDS[band]
+        // Schedules are no band of the rail's, so their glyph is their own: the repeat mark every surface
+        // draws for a schedule (the prompt box's button, a run's title, the drawer).
+        const Icon = band === "schedules" ? ScheduleCountGlyph : BANDS[band].Icon
         const isOpen = band !== "working" && opened.includes(band as QuietBandKey)
-        const label = band === "working" ? `Show ${count} working` : `${isOpen ? "Hide" : "Show"} ${count} ${noun}`
+        // THE WARNING TONE, on the schedules count alone: one was paused by Frizz, or a worker's proposal is
+        // waiting for Turn on — the "it stopped two weeks ago and I never noticed" failure, said on the row.
+        const attention = band === "schedules" && quiet.schedulesAttention
+        const label = band === "working"
+          ? `Show ${count} working`
+          : `${isOpen ? "Hide" : "Show"} ${count} ${noun}${attention ? " — one is waiting on you" : ""}`
         return (
           <button
             key={band}
@@ -968,7 +983,10 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
             // baseline and the translate lifts its centre to the band's. Every band glyph's ink spans y 3–21
             // of its 24-unit box (SquareCheck, ExternalLink, BandLabel's SnoozeMark, Bot), so the box centre
             // is the ink centre for each.
-            className={`relative -mx-1 flex h-[19px] shrink-0 items-baseline gap-[3px] rounded px-1 text-[10.5px] leading-[19px] outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${isOpen ? "text-muted-80" : "text-muted-50"}`}
+            data-xq-quiet-attention={attention || undefined}
+            className={`relative -mx-1 flex h-[19px] shrink-0 items-baseline gap-[3px] rounded px-1 text-[10.5px] leading-[19px] outline-none transition-colors hover:bg-hover-strong focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
+              attention ? "text-attention-soft hover:text-attention" : `hover:text-fg/80 ${isOpen ? "text-muted-80" : "text-muted-50"}`
+            }`}
           >
             <span aria-hidden className="flex self-baseline translate-y-[calc(5px_-_0.5cap)]">
               <Icon size={10} />
@@ -1006,13 +1024,15 @@ function QuietBands({
   /** How many Done rows are listed — the rest are paged in by the group's MoreRow. */
   donePage: number
 }) {
-  const bands = opened.filter((band) => slots(band).length > 0 || (band === "done" && quiet.done === undefined && quiet.doneCount > 0))
+  const bands = opened.filter((band) =>
+    band === "schedules" ? quiet.schedules > 0 : slots(band).length > 0 || (band === "done" && quiet.done === undefined && quiet.doneCount > 0))
   if (bands.length === 0) return null
   return (
     <div data-xq-drill={project.id} className="flex min-w-0 flex-col">
       {bands.map((band) => (
         <div key={band} data-xq-drill-band={band} data-xq-drill-open>
-          {band !== "done" && slots(band).map(row)}
+          {band === "schedules" && <ScheduleRows project={project} count={quiet.schedules} attention={quiet.schedulesAttention} />}
+          {band !== "done" && band !== "schedules" && slots(band).map(row)}
           {band === "done" &&
             (slots("done").length > 0 ? (
               slots("done").slice(0, donePage).map(row)
@@ -1023,6 +1043,70 @@ function QuietBands({
             ))}
         </div>
       ))}
+    </div>
+  )
+}
+
+/** The schedules count's glyph, at the size every band glyph takes on the row (QuietToggles). */
+function ScheduleCountGlyph({ size = 10 }: { size?: number }) {
+  return <Repeat size={size} />
+}
+
+/**
+ * A project's SCHEDULES, listed in place under its row when its fourth count is open (plans/scheduled-
+ * threads.md §8) — not a dialog: every count on the row opens its rows here, and this one does too. Read
+ * when the band opens, through the project's own client, and again whenever the poll's count for it moves.
+ *
+ * A row is the thread row's anatomy (Sidebar.tsx ThreadRow) so the band reads as more of the same list: the
+ * repeat glyph in the indicator column, the title, the rule inline in grey after it the way a working
+ * thread's status sits, and the next run in the rest-time column — `in 3h`, or `Paused` / `Proposed` when it
+ * will not run on its own, warning-toned when that is Frizz's doing or a proposal's. A click opens the
+ * schedule's drawer.
+ */
+function ScheduleRows({ project, count, attention }: { project: QueuesProject; count: number; attention: boolean }) {
+  const list = useQuery({
+    // The poll's count and attention ride the key, so the list is read again the moment either moves.
+    queryKey: [...scheduleKeys.list(project.id), count, attention],
+    queryFn: () => projectRpc(project.id).listSchedules({}),
+    enabled: project.open,
+    // The next-run column counts down on the shared clock; the instants themselves move only when a run
+    // starts, which the poll's count does not see.
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous,
+  })
+  if (!list.data) {
+    return <div aria-busy className="py-1 pl-[44px] text-[11.5px] leading-[19px] text-muted-50">Loading…</div>
+  }
+  return <>{list.data.map((schedule) => <ScheduleRow key={schedule.id} schedule={schedule} />)}</>
+}
+
+function ScheduleRow({ schedule }: { schedule: ScheduleView }) {
+  const now = useNowMs()
+  const next = scheduleNextLabel(schedule, now)
+  // Dimmed like a Snoozed row when it will not run on its own — unless that wants the human, which is the
+  // one reading on this band that must not recede.
+  const dim = schedule.state !== "active" && !schedule.attention
+  return (
+    <div data-xq-schedule-row={schedule.id} data-xq-schedule-state={schedule.state} className={`${ROW_CLASS} ${dim ? "sidebar-row-dim" : ""}`}>
+      <button
+        type="button"
+        onClick={() => pushScheduleDrawer(schedule.id, schedule.projectId)}
+        title={schedule.pausedText ?? schedule.echo}
+        className={ROW_BUTTON_CLASS}
+      >
+        <span className={`${INDICATOR_SLOT} text-muted-60`}>
+          <Repeat size={11} aria-hidden />
+        </span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-3">
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <span className={`min-w-0 max-w-full shrink-0 break-words text-[13px] leading-[19px] ${dim ? "text-fg/75" : "text-fg/90"}`}>{schedule.title}</span>
+            <span data-xq-schedule-rule className="min-w-0 flex-1 truncate text-[12px] leading-[19px] text-muted-70">{schedule.describe}</span>
+          </span>
+          <span data-xq-schedule-next className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] ${schedule.attention ? "text-attention-soft" : "text-muted-55"}`}>
+            {next}
+          </span>
+        </span>
+      </button>
     </div>
   )
 }
