@@ -42,7 +42,8 @@ import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { MobileAnswerSheet } from "./MobileAnswerSheet.tsx"
-import { PhoneAnswerBar, PhoneQuestionsContext, type PhoneQuestions } from "./PhoneQuestionCards.tsx"
+import { PhoneAnswerBar, PhoneQuestionsContext, usePhoneQuestions, type PhoneQuestions } from "./PhoneQuestionCards.tsx"
+import { PhoneScheduleSheet } from "./PhoneScheduleSheet.tsx"
 import { RegisteredAnswerSheet } from "./RegisteredAnswerSheet.tsx"
 import { sendEagerFollowUp } from "../lib/eagerComposerSubmission.ts"
 import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
@@ -3414,12 +3415,17 @@ function FailedSendRow({ deliveryId, text, rawText, error }: { deliveryId: strin
 function ScheduledRunOpening({ scheduleId, header, prompt, sourceId, at }: { scheduleId: string; header: string; prompt: string; sourceId?: string; at?: string }) {
   const facts = scheduledRunFacts(header)
   const label = facts ? `From ${facts.title} · ${facts.describe}` : "Scheduled run"
+  // On the phone's thread page (the one that provides PhoneQuestionsContext) the schedule opens in the
+  // phone's sheet over the thread, not the desktop drawer stacked full-screen on it (PhoneScheduleSheet).
+  const phone = usePhoneQuestions() !== null
+  const [sheet, setSheet] = useState(false)
   return (
     <div data-frizz-msg={sourceId} data-scheduled-run={scheduleId} className="flex w-full flex-col gap-2">
-      <WakeDivider icon={Repeat} marker="scheduled-run" ariaLabel={`${label}. Open the schedule`} at={at} onClick={() => pushScheduleDrawer(scheduleId, undefined, { drillIn: true })}>
+      <WakeDivider icon={Repeat} marker="scheduled-run" ariaLabel={`${label}. Open the schedule`} at={at} onClick={() => (phone ? setSheet(true) : pushScheduleDrawer(scheduleId, undefined, { drillIn: true }))}>
         {label}
       </WakeDivider>
       {prompt.trim() !== "" && <UserBubble text={prompt} />}
+      {sheet && <PhoneScheduleSheet scheduleId={scheduleId} projectId={undefined} onClose={() => setSheet(false)} />}
     </div>
   )
 }

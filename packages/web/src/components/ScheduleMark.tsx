@@ -29,6 +29,10 @@ export const SCHEDULE_MARK_GEOMETRY = {
   row: "h-[10px] w-[9.11px] translate-y-[calc(5px_-_0.5cap)]",
   /** Beside a queue card's 15px semibold title (AllQueuesCard.tsx). */
   title: "h-[11.5px] w-[10.48px] translate-y-[calc(5.75px_-_0.5cap)]",
+  /** Beside a phone row's 15.5px medium title (PhonePage.tsx ThreadRow). Provisional until measured. */
+  phoneRow: "h-[12px] w-[10.93px] translate-y-[calc(6px_-_0.5cap)]",
+  /** Beside the phone thread header's 16.5px semibold title (MobileThreadHeader.tsx). Provisional. */
+  phoneHeader: "h-[12.5px] w-[11.39px] translate-y-[calc(6.25px_-_0.5cap)]",
 } as const
 
 export function scheduleMarkLabel(schedule: Pick<ThreadScheduleRef, "title" | "describe">): string {

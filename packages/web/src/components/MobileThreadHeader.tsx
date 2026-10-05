@@ -8,6 +8,8 @@ import { displayTitle } from "../groups.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { MOBILE_STATE_WORD, mobileThreadAge, mobileThreadState, turnStartedAt } from "../lib/mobileThread.ts"
 import { ThreadActionsSheet, useModelEffortLabel } from "./MobileThreadActionsSheet.tsx"
+import { ScheduleMark } from "./ScheduleMark.tsx"
+import { PhoneScheduleSheet } from "./PhoneScheduleSheet.tsx"
 
 // THE PHONE THREAD HEADER (mockup v2 §2). The desktop drawer's header is two rows — title and "Last
 // active", then an icon strip and a bordered × — and at 390pt it spent 91.5px on controls a phone either
@@ -37,6 +39,7 @@ export function MobileThreadHeader({ slug, onClose }: { slug: string; onClose: (
   const board = useBoard()
   const thread = threadBySlug(board, slug)
   const [sheetOpen, setSheetOpen] = useState(false)
+  const [scheduleOpen, setScheduleOpen] = useState(false)
   const now = useNowMs()
   const running = thread?.runtime === "running" || thread?.runtime === "spawning"
   // The same transcript query the conversation below already holds (one observer more, no extra read):
@@ -71,7 +74,24 @@ export function MobileThreadHeader({ slug, onClose }: { slug: string; onClose: (
         <ArrowLeft size={21} strokeWidth={2.1} />
       </button>
       <div className="min-w-0 flex-1 pl-0.5 leading-[1.25]">
-        <div data-mobile-thread-title className="truncate text-[16.5px] font-semibold tracking-[-0.01em]" title={title}>{title}</div>
+        {/* A schedule's run, or its next run: the repeat mark after the title, outside its ellipsis. A phone has
+            no hover for the mark's tooltip, so the mark is a button that opens the schedule's sheet — the
+            same door the desktop's run divider is. The type is on the row so the mark's `cap` is the title's. */}
+        <div className="flex min-w-0 items-baseline text-[16.5px] font-semibold tracking-[-0.01em]">
+          <div data-mobile-thread-title className="min-w-0 truncate" title={title}>{title}</div>
+          {thread.schedule && (
+            <button
+              type="button"
+              data-mobile-thread-schedule
+              onClick={() => setScheduleOpen(true)}
+              // The 12px mark, tappable across the 44px the header's other buttons give: the ::after
+              // overhangs the box without moving it.
+              className="relative ml-1.5 flex shrink-0 rounded-sm outline-none after:absolute after:-inset-x-2 after:-inset-y-4 after:content-[''] focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+            >
+              <ScheduleMark schedule={thread.schedule} size="phoneHeader" />
+            </button>
+          )}
+        </div>
         <div data-mobile-thread-subtitle data-state={state} className="truncate text-[13px] text-muted">
           <span className={stateClass}>{MOBILE_STATE_WORD[state]}</span>
           {age && <> · {age}</>}
@@ -91,6 +111,7 @@ export function MobileThreadHeader({ slug, onClose }: { slug: string; onClose: (
       </button>
       {/* Mark as done from the sheet leaves the thread the way the bottom bar's Done does — the next
           thread that needs you, or back to the board — not the desktop close (lib/mobileTriage). */}
+      {scheduleOpen && thread.schedule && <PhoneScheduleSheet scheduleId={thread.schedule.id} projectId={undefined} onClose={() => setScheduleOpen(false)} />}
       {sheetOpen && <ThreadActionsSheet slug={slug} onClose={() => setSheetOpen(false)} onArchived={() => leaveFiledThread(slug)} />}
     </header>
   )

@@ -30,17 +30,22 @@ const LABEL = "text-[11px] uppercase tracking-wide text-muted-70"
 const BUTTON = "button-outline rounded-md px-2.5 py-1 text-[12px] text-fg/85 outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45"
 const PRIMARY = "rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-40"
 
-export function ScheduleDrawer({ id, scheduleId, projectId, depth, widthDepth }: { id: number; scheduleId: string; projectId: string | undefined; depth: number; widthDepth: number }) {
+/** One schedule and its history, read through its own project's client while something shows it. */
+export function useScheduleQuery(scheduleId: string, projectId: string | undefined) {
   // No project named: opened from a run's own transcript, which is always the page project's thread, so
   // the page's client is the schedule's. Once read, everything else goes through `schedule.projectId`.
   const api = projectId ? projectRpc(projectId) : rpc
-  const query = useQuery({
+  return useQuery({
     queryKey: scheduleKeys.get(projectId || "page", scheduleId),
     queryFn: () => api.getSchedule({ id: scheduleId }),
     // The next run moves, a run starts, Frizz pauses it: nothing pushes a schedule to the page, so the
     // drawer re-reads while it is open.
     refetchInterval: 5_000,
   })
+}
+
+export function ScheduleDrawer({ id, scheduleId, projectId, depth, widthDepth }: { id: number; scheduleId: string; projectId: string | undefined; depth: number; widthDepth: number }) {
+  const query = useScheduleQuery(scheduleId, projectId)
   const schedule = query.data?.schedule
   return (
     <Sheet id={id} depth={depth} widthDepth={widthDepth}>
@@ -61,39 +66,10 @@ export function ScheduleDrawer({ id, scheduleId, projectId, depth, widthDepth }:
 }
 
 function ScheduleBody({ schedule, history, drawerId }: { schedule: ScheduleView; history: ScheduleRunView[]; drawerId: number }) {
-  const queryClient = useQueryClient()
-  const api = projectRpc(schedule.projectId)
   const [confirmDelete, setConfirmDelete] = useState(false)
-  const settle = () => invalidateSchedules(queryClient)
-  const failed = (what: string) => (error: unknown) => {
-    showToast(`Could not ${what}: ${(error as Error).message.slice(0, 100)}`)
-    settle()
-  }
-  const setState = useMutation({
-    mutationFn: (state: "active" | "paused") => api.setScheduleState({ id: schedule.id, state }),
-    onSuccess: settle,
-    onError: failed("change the schedule"),
-  })
-  const runNow = useMutation({
-    mutationFn: () => api.runScheduleNow({ id: schedule.id }),
-    onSuccess: () => {
-      settle()
-      void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
-      showToast(`${schedule.title} started`)
-    },
-    onError: failed("start it"),
-  })
-  const remove = useMutation({
-    mutationFn: () => api.deleteSchedule({ id: schedule.id }),
-    onSuccess: () => {
-      settle()
-      closeDrawersById([drawerId])
-    },
-    onError: failed("delete it"),
-  })
+  const { setState, runNow, remove, busy } = useScheduleActions(schedule, () => closeDrawersById([drawerId]))
   const proposed = schedule.state === "proposed"
   const paused = schedule.state === "paused"
-  const busy = setState.isPending || runNow.isPending || remove.isPending
 
   return (
     <>
@@ -129,7 +105,7 @@ function ScheduleBody({ schedule, history, drawerId }: { schedule: ScheduleView;
         <PromptEditor schedule={schedule} />
         <section className="flex flex-col gap-1">
           <h3 className={LABEL}>Runs on</h3>
-          <p data-schedule-profile className="text-[13px] leading-5 text-fg/90">{useProfileLabel(schedule)}</p>
+          <p data-schedule-profile className="text-[13px] leading-5 text-fg/90">{useScheduleProfileLabel(schedule)}</p>
         </section>
         <History schedule={schedule} history={history} />
       </div>
@@ -176,6 +152,49 @@ function ScheduleBody({ schedule, history, drawerId }: { schedule: ScheduleView;
       )}
     </>
   )
+}
+
+/**
+ * A schedule's verbs — Turn on / Resume / Pause (`setState`), Run now, Delete or Discard (`remove`) — through
+ * the schedule's own project, each settling every list and drawer that shows it. Shared by the desktop drawer
+ * and the phone's sheet (PhoneSchedules.tsx), so the two never disagree on what a verb does or says.
+ */
+export function useScheduleActions(schedule: ScheduleView, onDeleted: () => void) {
+  const queryClient = useQueryClient()
+  const api = projectRpc(schedule.projectId)
+  const settle = () => invalidateSchedules(queryClient)
+  const failed = (what: string) => (error: unknown) => {
+    showToast(`Could not ${what}: ${(error as Error).message.slice(0, 100)}`)
+    settle()
+  }
+  const setState = useMutation({
+    mutationFn: (state: "active" | "paused") => api.setScheduleState({ id: schedule.id, state }),
+    onSuccess: settle,
+    onError: failed("change the schedule"),
+  })
+  const runNow = useMutation({
+    mutationFn: () => api.runScheduleNow({ id: schedule.id }),
+    onSuccess: () => {
+      settle()
+      void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+      showToast(`${schedule.title} started`)
+    },
+    onError: failed("start it"),
+  })
+  const remove = useMutation({
+    mutationFn: () => api.deleteSchedule({ id: schedule.id }),
+    onSuccess: () => {
+      settle()
+      onDeleted()
+    },
+    onError: failed("delete it"),
+  })
+  return { setState, runNow, remove, busy: setState.isPending || runNow.isPending || remove.isPending }
+}
+
+/** A past run opens its thread while that thread still exists; a skipped or failed one reads quiet. */
+export function scheduleRunOpens(run: ScheduleRunView): boolean {
+  return Boolean(run.threadSlug) && run.threadState !== "deleted"
 }
 
 function Banner({ tone, text, children }: { tone: "attention" | "quiet"; text: string; children?: ReactNode }) {
@@ -370,7 +389,7 @@ function PromptEditor({ schedule }: { schedule: ScheduleView }) {
 }
 
 /** `Opus 5 · high` — the composer chip's reading, from the same model lists the box reads. */
-function useProfileLabel(schedule: ScheduleView): string {
+export function useScheduleProfileLabel(schedule: ScheduleView): string {
   const codex = useQuery({ queryKey: ["codexModels"], queryFn: () => rpc.codexModels() })
   const claude = useQuery({ queryKey: ["claudeModels"], queryFn: () => rpc.claudeModels(), retry: false })
   const acp = useQuery({ queryKey: ["acpAgents"], queryFn: () => rpc.acpAgents() })
@@ -393,7 +412,7 @@ function History({ schedule, history }: { schedule: ScheduleView; history: Sched
       ) : (
         <ul data-schedule-history className="flex flex-col">
           {history.map((run) => {
-            const linked = run.threadSlug && run.threadState !== "deleted"
+            const linked = scheduleRunOpens(run)
             const quiet = run.state === "skipped" || run.state === "failed"
             return (
               <li key={run.id} data-schedule-run={run.state} className="flex min-w-0 items-baseline gap-2 py-0.5 text-[12.5px] leading-5">

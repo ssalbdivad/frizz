@@ -2,8 +2,10 @@ import { useEffect, useRef, useState, type ReactNode } from "react"
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
-import { AlarmClock, ArrowLeft, Check, Hourglass, Layers, Plus, Settings as SettingsIcon } from "lucide-react"
-import type { ThreadView } from "@frizz/shared"
+import { useQuery } from "@tanstack/react-query"
+import { AlarmClock, ArrowLeft, Check, Hourglass, Layers, Plus, Repeat, Settings as SettingsIcon } from "lucide-react"
+import type { ScheduleView, ThreadView } from "@frizz/shared"
+import { projectRpc, rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -19,11 +21,18 @@ import { useProjectBoards } from "../lib/projectBoards.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { agentSuffix, liveAgentCount, rowSecondLine, wakeAt } from "../lib/mobileBoardRow.ts"
 import { phoneCounts, phoneDone, phoneSubtitle, phoneProjects, phoneQueue, phoneSnoozed, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
+import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
+import { ScheduleMark } from "./ScheduleMark.tsx"
+import { PhoneScheduleSheet } from "./PhoneScheduleSheet.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { shortPath } from "./ProjectActions.tsx"
 
-// THE PHONE'S PAGE — a header, three text tabs, ONE list, and a "New thread" button.
+// THE PHONE'S PAGE — a header, three text tabs, ONE list, and a "New thread" button. A fourth tab,
+// Schedules, joins the three while the view has any (plans/scheduled-threads.md §8): the desktop's project
+// row lists them as its fourth quiet count, and here they are the list's fourth band. There is no schedule
+// mode in the phone's prompt box — a schedule is made on the desktop, or proposed by a worker — so the
+// phone reads, runs, pauses, turns on and deletes them (PhoneScheduleSheet.tsx).
 //
 // Upstream's phone board (colinhacks/frizz MobileBoard.tsx, its 2026-09-30 redesign: 6754e72a "the phone
 // board gets a header, text tabs and one line per row", 39db08a6 "the projects page is a plain list on a
@@ -196,7 +205,13 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
         </CapSlot>
         <span className="flex min-w-0 flex-1 flex-col gap-px self-baseline">
           <span className="flex min-w-0 items-baseline gap-2.5">
-            <span className="min-w-0 flex-1 truncate text-[15.5px] font-medium leading-[21px] tracking-[-0.005em] text-fg">{displayTitle(t)}</span>
+            {/* The title truncates and the schedule's repeat mark stays after it, outside the ellipsis — a
+                run whose title fills the line still says where it came from (ScheduleMark). */}
+            {/* The type is on the wrapper so the mark's `cap` is the title's. */}
+            <span className="flex min-w-0 flex-1 items-baseline text-[15.5px] font-medium leading-[21px] tracking-[-0.005em] text-fg">
+              <span className="min-w-0 truncate">{displayTitle(t)}</span>
+              {t.schedule ? <ScheduleMark schedule={t.schedule} size="phoneRow" className="ml-1.5" /> : null}
+            </span>
             {/* `leading-[16px]`, not the title's 21px: baseline-aligned to the 15.5px title, a 12px reading
                 on a 21px line hung 1.25px below the title's line box, so every row with an age stood 1px
                 taller than one without (64 against 63px, 2026-09-30). */}
@@ -274,7 +289,7 @@ function EmptyBand({ label }: { label: string }) {
  * which stay within 3px of each other — 26.85 and 29.69px with Queue open (left-aligned instead, it all landed after the count and the two
  * gaps read 23.4 and 31.2px).
  */
-function BandTab({ band, label, active, onClick, children }: { band: PhoneTab; label: string; active: boolean; onClick: () => void; children?: ReactNode }) {
+function BandTab({ band, label, active, onClick, children }: { band: PageTab; label: string; active: boolean; onClick: () => void; children?: ReactNode }) {
   return (
     <button
       type="button"
@@ -385,7 +400,9 @@ function useProjectsListing() {
 
 function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, composer, onProjects }: PhonePageProps & { onProjects: () => void }) {
   const focused = focusedSlug !== undefined
-  const [tab, setTab] = useState<PhoneTab>("queue")
+  const [tab, setTab] = useState<PageTab>("queue")
+  // The schedule whose sheet is up (PhoneScheduleSheet) — mounted means open.
+  const [sheet, setSheet] = useState<ScheduleView | null>(null)
   // In the store, not local state: an editor's selection opens it too (lib/editorBridge.ts composeInto).
   const composing = useSnapshot(store).phoneNewThread
   const setComposing = (open: boolean) => (store.phoneNewThread = open ? { focus: true } : null)
@@ -425,7 +442,12 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   const done = tab === "done" ? phoneDone(shown, (project) => (onPage(project) ? live : boardById.get(project.id))) : []
   const doneLoading = tab === "done" && others.some((project) => boardById.get(project.id) === undefined)
 
-  const rows = tab === "queue" ? queue : tab === "snoozed" ? snoozed : done.slice(0, donePage)
+  // The view's schedules: the poll's count per project names the tab, and the rows are read while it is open.
+  const scheduleCount = shown.reduce((sum, project) => sum + (project.schedules?.count ?? 0), 0)
+  const scheduleAttention = shown.some((project) => project.schedules?.attention === true)
+  const schedules = useViewSchedules(shown, focused ? viewed : undefined, focused, tab === "schedules", scheduleCount, scheduleAttention)
+
+  const rows = tab === "queue" ? queue : tab === "snoozed" ? snoozed : tab === "done" ? done.slice(0, donePage) : []
   const title = focused ? (viewed?.name ?? focusedSlug) : "All projects"
 
   return (
@@ -457,6 +479,18 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
             {snoozed.length > 0 ? <span className={TAB_COUNT}>{snoozed.length}</span> : null}
           </BandTab>
           <BandTab band="done" label="Done" active={tab === "done"} onClick={() => setTab("done")} />
+          {/* SCHEDULES, after the bands, only while the view has any (or the tab is open, so deleting the
+              last one does not pull the tab out from under the reader). Its count turns warning-toned
+              when one was paused by Frizz or a proposal waits — the desktop project row's fourth count. */}
+          {scheduleCount > 0 || tab === "schedules" ? (
+            <BandTab band="schedules" label="Schedules" active={tab === "schedules"} onClick={() => setTab("schedules")}>
+              {scheduleCount > 0 ? (
+                <span data-mobile-schedules-count className={scheduleAttention ? "text-[12.5px] font-bold tabular-nums text-attention-soft" : TAB_COUNT}>
+                  {scheduleCount}
+                </span>
+              ) : null}
+            </BandTab>
+          ) : null}
         </div>
       </div>
 
@@ -465,6 +499,20 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
       <div className="flex min-h-dvh flex-col pb-[calc(82px+env(safe-area-inset-bottom))] pt-[calc(101px+env(safe-area-inset-top))]">
         {error ? (
           <EmptyBand label={`Could not read the queues: ${error}`} />
+        ) : tab === "schedules" ? (
+          schedules.error ? (
+            <EmptyBand label={`Could not read the schedules: ${(schedules.error as Error).message.slice(0, 120)}`} />
+          ) : !schedules.data ? (
+            <EmptyBand label="Loading…" />
+          ) : schedules.data.length === 0 ? (
+            <EmptyBand label="No schedules." />
+          ) : (
+            <div role="tabpanel" data-mobile-schedules>
+              {schedules.data.map((schedule, index) => (
+                <ScheduleRow key={schedule.id} schedule={schedule} last={index === schedules.data!.length - 1} withProject={!focused} onOpen={() => setSheet(schedule)} />
+              ))}
+            </div>
+          )
         ) : rows.length === 0 ? (
           <EmptyBand
             label={
@@ -514,7 +562,77 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
           <span className="self-baseline">New thread</span>
         </span>
       </button>
+      {sheet ? <PhoneScheduleSheet scheduleId={sheet.id} projectId={sheet.projectId} onClose={() => setSheet(null)} /> : null}
       {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false), composing.focus)}</PhoneNewThread> : null}
+    </div>
+  )
+}
+
+/** The page's tabs: the three bands, and the view's schedules. */
+type PageTab = PhoneTab | "schedules"
+
+/**
+ * The view's SCHEDULES — the focused project's through its own client, or every project's for All projects
+ * (the palette's read), kept to the projects the view shows. Read while the tab is open, and again whenever
+ * the poll's count or attention for the view moves (both ride the key, as the desktop project row's do).
+ */
+function useViewSchedules(shown: QueuesProject[], viewed: QueuesProject | undefined, focused: boolean, open: boolean, count: number, attention: boolean) {
+  const ids = new Set(shown.map((project) => project.id))
+  const query = useQuery({
+    queryKey: focused ? [...scheduleKeys.list(viewed?.id ?? ""), count, attention] : [...scheduleKeys.all(), count, attention],
+    queryFn: () => (focused ? projectRpc(viewed!.id).listSchedules({}) : rpc.listSchedules({ allProjects: true })),
+    enabled: open && (!focused || viewed?.open === true),
+    // The right column counts down on the shared clock; the instants move only when a run starts, which
+    // the poll's count does not see.
+    refetchInterval: 30_000,
+    placeholderData: (previous) => previous,
+  })
+  return { error: query.error, data: query.data?.filter((schedule) => ids.has(schedule.projectId)) }
+}
+
+/**
+ * One schedule, in the thread row's anatomy so the tab reads as more of the same list: the repeat glyph in
+ * the mark column, the title with its next run at the right — `in 3h`, or `Paused` / `Proposed` when it will
+ * not run on its own, warning-toned when that is Frizz's doing or a proposal waiting — and the rule under it,
+ * after its project in All projects. Dimmed like a Snoozed row when it will not run on its own, unless that
+ * wants the human. A tap opens its sheet.
+ */
+function ScheduleRow({ schedule, last, withProject, onOpen }: { schedule: ScheduleView; last: boolean; withProject: boolean; onOpen: () => void }) {
+  const now = useNowMs()
+  const dim = schedule.state !== "active" && !schedule.attention
+  return (
+    <div className={dim ? "opacity-[var(--mobile-dim-opacity)]" : undefined}>
+      <button
+        type="button"
+        data-mobile-schedule-row={schedule.id}
+        data-mobile-schedule-state={schedule.state}
+        onClick={onOpen}
+        className="flex w-full items-start gap-3 px-4 py-[11px] text-left active:bg-hover"
+      >
+        <CapSlot size={18} fontSize={TITLE_PX}>
+          <span className="flex size-full items-center justify-center text-muted-75">
+            <Repeat size={15} strokeWidth={2} aria-hidden />
+          </span>
+        </CapSlot>
+        <span className="flex min-w-0 flex-1 flex-col gap-px self-baseline">
+          <span className="flex min-w-0 items-baseline gap-2.5">
+            <span className="min-w-0 flex-1 truncate text-[15.5px] font-medium leading-[21px] tracking-[-0.005em] text-fg">{schedule.title}</span>
+            <span data-mobile-row-right className={`shrink-0 text-[12px] leading-[16px] tabular-nums ${schedule.attention ? "font-medium text-attention-soft" : "text-faint"}`}>
+              {scheduleNextLabel(schedule, now)}
+            </span>
+          </span>
+          <span data-mobile-row-line className="flex min-w-0 text-[13.5px] leading-[19px] text-muted">
+            {withProject ? (
+              <>
+                <span data-mobile-row-project className="max-w-[45%] shrink-0 truncate">{schedule.projectName}</span>
+                <span className="shrink-0 whitespace-pre"> · </span>
+              </>
+            ) : null}
+            <span className="min-w-0 truncate">{schedule.describe}</span>
+          </span>
+        </span>
+      </button>
+      {last ? null : <div className="ml-[46px] h-px bg-border/70" />}
     </div>
   )
 }
