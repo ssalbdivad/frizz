@@ -2,6 +2,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
+import { ProjectSchedules, ThreadScheduleRef } from "./schedules.ts"
 import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorReviewTarget, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
@@ -3300,6 +3301,10 @@ export function parseQuestionsCancelledWake(text: string): { count: number } | u
 export const MarkOwnDoneInput = z.object({
   slug: ThreadSlug,
   body: z.string().trim().min(1).max(20_000),
+  // A SCHEDULED RUN's quiet finish (plans/scheduled-threads.md §5): nothing for the human, so the thread
+  // goes straight to Done instead of the queue and the body's first line becomes the run's history line.
+  // Refused on any thread that is not a run of a schedule.
+  quiet: z.boolean().optional(),
 }).strict()
 export type MarkOwnDoneInput = z.infer<typeof MarkOwnDoneInput>
 
@@ -3669,6 +3674,11 @@ export const ThreadView = z.object({
   // An UNSTARTED thread's note (plans/lazy-threads.md): present ⇒ no agent has ever run for this thread. It
   // rests in the queue like a bare rest, and the first message sent to it starts the agent.
   lazyPrompt: z.string().optional(),
+  // The SCHEDULE this thread is a run of (plans/scheduled-threads.md) — what draws the repeat glyph and
+  // its tooltip. `pending` marks the schedule's next run: a lazy row that sits in Snoozed with its wake
+  // time until the scheduler starts it, even once that time has passed (isSnoozed). Absent on every other
+  // thread, and on a run whose schedule has since been deleted.
+  schedule: ThreadScheduleRef.optional(),
   // The terminals the human opened on this thread that are not yet filed away — running, or finished and
   // still worth reading. Absent ⇒ none. A terminal waiting at a prompt (`awaitingInput`) is what queues
   // this thread on its behalf (server board.ts withThreadTerminals).
@@ -4030,6 +4040,10 @@ export function futureSnoozedUntil(
 export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
   if (t.state === "archived") return false
+  // A SCHEDULE'S NEXT RUN is parked until the scheduler starts it — including the seconds after its wake
+  // time passes and before the tick that starts it (a post-boot grace, the start cap). Reading its clock
+  // here would drop it into Active for exactly that window (plans/scheduled-threads.md §4).
+  if (t.schedule?.pending === true && t.lazyPrompt !== undefined) return true
   // THE RESTING CARD'S EVENT-SNOOZE IS A PARK THE HUMAN MADE, and it parks into Snoozed exactly as the
   // wall-clock snooze does. It arrives as `bgSnoozed` (server truth: bg_snooze_rested_at equals the
   // current rest) on a thread resting behind a shell, a PR watch or a timer — the three shapes whose
@@ -6389,6 +6403,8 @@ export * from "./embed-protocol.ts"
 export * from "./interactions.ts"
 export * from "./receipt-bus.ts"
 export * from "./relay-protocol.ts"
+export * from "./schedule-rule.ts"
+export * from "./schedules.ts"
 export * from "./shell-writes.ts"
 export * from "./thread-handle.ts"
 export * from "./thread-slug.ts"
@@ -7022,6 +7038,9 @@ export const ProjectQueue = z.object({
    *  All projects `@` typeahead offers after the open ones (web lib/threadMentions.ts). Never drawn as
    *  rows: this page's Done band is still `doneCount`. */
   recentDone: z.array(ThreadView).optional(),
+  /** The project's schedules — the row's fourth count, warning-toned when one was paused by Frizz or is
+   *  a proposal waiting for Turn on. Absent when the project has none. */
+  schedules: ProjectSchedules.optional(),
 })
 export type ProjectQueue = z.infer<typeof ProjectQueue>
 
