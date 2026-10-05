@@ -19,7 +19,15 @@ import { getDispatchPreferences, setDispatchPreference } from "./dispatch-prefer
 import { readCodexModels } from "./backend/codex-models.ts"
 import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
-import { createBoard, type BoardManager } from "./board.ts"
+import { z } from "zod"
+import { createBoard, telemetryVouched, type BoardManager } from "./board.ts"
+import { createLazyThreadStarter } from "./lazy-start.ts"
+import { createScheduleService, type ScheduleService } from "./schedules.ts"
+import { createScheduleInterpreter, SCHEDULE_INTERPRETER_MODEL, type ScheduleInterpreter } from "./schedule-interpreter.ts"
+import { readMachineConfig, writeMachineConfig } from "./machine-config.ts"
+import { processAwakeClock } from "./awake-clock.ts"
+import type { SessionRow } from "./storage.ts"
+import type { LazyStartProfile } from "./lazy-start.ts"
 import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
@@ -269,7 +277,19 @@ export interface AppContext {
   // Thread terminals: ptys the human opened on a thread, run in the folder its agent works in, each
   // owned by this server (thread-terminals.ts) and watched over the /term transport.
   terminalRunner: TerminalRunner
+  // SCHEDULED THREADS (schedules.ts, plans/scheduled-threads.md). Optional so a hand-built test context
+  // need not supply one; the schedule RPCs then refuse.
+  schedules?: ScheduleService
+  // The one-shot model call that reads a schedule out of plain words (schedule-interpreter.ts).
+  scheduleInterpreter?: ScheduleInterpreter
+  // Start a lazy thread, whoever asks — the router's send / startLazyThread / followUp and the
+  // scheduler alike (lazy-start.ts). A schedule's pending next run gets its run header and its history
+  // line on this path. Absent (a hand-built test context) ⇒ the router starts lazy rows itself.
+  startLazyThread?: (row: SessionRow, prompt: string, profile?: LazyStartProfile) => Promise<{ slug: string; sessionId: string }>
 }
+
+/** The machine-config record holding the zone the human's browser last reported (reportClientZone). */
+export const CLIENT_ZONE_CONFIG_KEY = "clientTimeZone"
 
 export interface ContextOptions {
   claudeBin?: string // injectable dispatch executable (tests use a stand-in)
@@ -1009,7 +1029,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       }
     },
   })
+  // Late-bound: the schedule service needs the dispatcher, which needs the board.
+  let schedules: ScheduleService | undefined
   board = createBoard(project, storage, bus, tailer, bootId, {
+    scheduleRef: (row) => schedules?.threadRef(row),
     threadTerminals: () => terminalRunner.byThread(),
     codexTurnLiveness: (slug, sessionId) => codexAppServer?.turnLiveness(slug, sessionId),
     // Headless-stall signal for a broker row: the ownerless daemon's record. Absent bridge ⇒ default
@@ -1078,6 +1101,34 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
   })
 
+  // SCHEDULED THREADS (plans/scheduled-threads.md). One lazy-thread starter per project, shared by the
+  // router and the scheduler so its one-launch-at-a-time guard sees every launch.
+  const lazyStarter = createLazyThreadStarter({ dispatcher, board })
+  schedules = createScheduleService({
+    project,
+    storage,
+    dispatcher,
+    starter: lazyStarter,
+    board,
+    nameHolder: (name, exceptSlug) => threadNamer.holder(name, exceptSlug),
+    // The overlap check's reading: the BOARD's view of the previous run (deriveRuntime turns a dead
+    // daemon's row into `exited`; raw telemetry would read it in flight forever) and whether the tailer
+    // vouches for it yet.
+    threadView: (slug) => ({ view: board.refresh().threads.find((t) => t.id === slug), vouched: telemetryVouched(tailer.get(slug)) }),
+    clientZone: () => readMachineConfig(home, CLIENT_ZONE_CONFIG_KEY, z.string()),
+    setClientZone: (tz) => writeMachineConfig(home, CLIENT_ZONE_CONFIG_KEY, tz),
+    awake: processAwakeClock,
+    log: (message) => frizzLog.info("schedules", message),
+  })
+  const scheduleService = schedules
+  // Its own completer, so reading a schedule never queues behind a fleet's name mints. Same switch as the
+  // namer: FRIZZ_THREAD_NAMER=0 turns every Frizz-side model call off.
+  const scheduleInterpreter = createScheduleInterpreter({
+    complete: process.env.FRIZZ_THREAD_NAMER === "0"
+      ? undefined
+      : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), model: SCHEDULE_INTERPRETER_MODEL, timeoutMs: 90_000, concurrency: 1 }),
+  })
+
   // Durable timer waker + legacy pr/ci compatibility. Reuses the SAME resume path as followUp;
   // boot-safe because it only fires on a condition it witnesses cross.
   // The runtime budget's kill (scheduler SOURCE 13) is the operator's × — one shared body in
@@ -1086,6 +1137,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const scheduler = createScheduler({
     storage,
     tailer,
+    scheduledThreads: scheduleService,
     shellControl: {
       stoppable: (slug, id) => backgroundShellStoppable(shellStopDeps, slug, id),
       stop: (slug, id, reason, stopOpts) => stopBackgroundShell(shellStopDeps, slug, id, reason, stopOpts),
@@ -1263,6 +1315,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     terminalRunner,
+    schedules: scheduleService,
+    scheduleInterpreter,
+    startLazyThread: (row, prompt, profile) => scheduleService.startLazyRow(row, prompt, profile),
   }
   startThreadRetention(appContext, contextUnsubscribers)
   return appContext

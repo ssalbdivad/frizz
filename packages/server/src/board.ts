@@ -8,7 +8,7 @@ import { processAwakeClock } from "./awake-clock.ts"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
-import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
+import type { BoardSnapshot, ClaudeModel, ThreadScheduleRef, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
 import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
@@ -2415,12 +2415,19 @@ function sessionThreadView(
 // this an untailed row reads as a dispatch still spinning up (Active, forever), and past the discovery
 // grace as a worker that never wrote its transcript (a stall card). A lazy thread is neither: it is waiting
 // on the human, exactly like a bare rest, so it queues unless it is done or snoozed.
+//
+// A SCHEDULE'S NEXT RUN (`view.schedule.pending`, plans/scheduled-threads.md §4) is parked rather than
+// queued: it keeps its wake time even once that has passed — the scheduler, not the clock, starts it, and
+// the seconds between its time and the tick that starts it must not drop it into the queue.
 export function lazyThreadView(view: ThreadView, row: SessionRow): ThreadView {
+  const pending = view.schedule?.pending === true && !view.archived
+  const parkedUntil = pending && SnoozeUntil.safeParse(row.snoozed_until).success ? row.snoozed_until ?? undefined : undefined
   return {
     ...view,
     lazyPrompt: row.lazy_prompt ?? "",
     runtime: "turn-idle",
-    needsYou: !view.archived && view.snoozedUntil === undefined,
+    ...(parkedUntil ? { snoozedUntil: parkedUntil } : {}),
+    needsYou: !pending && !view.archived && view.snoozedUntil === undefined,
     awaitingBackground: false,
     crashed: false,
     deliveryInFlight: undefined,
@@ -2560,6 +2567,9 @@ export interface BoardManagerDeps {
   claudeModels?: () => readonly ClaudeModel[] | undefined
   // Every open thread terminal (thread-terminals.ts), grouped by the thread it belongs to.
   threadTerminals?: () => Map<string, ThreadTerminal[]>
+  // The schedule a row is a run of (schedules.ts threadRef) — the repeat glyph's data, and what parks a
+  // schedule's pending next run in Snoozed. Absent ⇒ no row carries one.
+  scheduleRef?: (row: SessionRow) => ThreadScheduleRef | undefined
 }
 
 /**
@@ -2844,11 +2854,13 @@ export function createBoard(
         issueBook,
         claudeModels(),
       )
+      const schedule = row.schedule_id ? deps.scheduleRef?.(row) : undefined
+      const scheduled = schedule ? { ...base, schedule } : base
       if (isLazyRow(row)) {
-        out.push(lazyThreadView(base, row))
+        out.push(lazyThreadView(scheduled, row))
         continue
       }
-      const view = base
+      const view = scheduled
       out.push(view)
       surfaceSideTurn(row, tele, view, nowMs)
     }

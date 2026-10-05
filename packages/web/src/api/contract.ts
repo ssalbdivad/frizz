@@ -14,6 +14,19 @@
 // nothing but the `PROCEDURES` data table as a value. Transport concerns (fetch, RpcCallOpts, the
 // Proxy) live in rpc.ts, which is browser-only and never enters the server program.
 import type {
+  CreateScheduleInput,
+  GetScheduleResult,
+  InterpretScheduleInput,
+  InterpretScheduleResult,
+  ListSchedulesInput,
+  OwnScheduleInput,
+  OwnScheduleResult,
+  ReportClientZoneInput,
+  RunScheduleNowResult,
+  ScheduleIdInput,
+  ScheduleView,
+  SetScheduleStateInput,
+  UpdateScheduleInput,
   CreateLazyThreadInput,
   StartLazyThreadInput,
   UpdateLazyPromptInput,
@@ -441,6 +454,26 @@ export interface Api {
   // project with no board here is absent. Each entry names its project, which is what every action
   // the page takes is addressed by.
   projectsQueues(): Promise<ProjectQueue[]>
+  // SCHEDULED THREADS (plans/scheduled-threads.md; shared schedules.ts holds every shape). Project-scoped
+  // like everything else: call them through projectRpc(projectId) for a schedule in another project —
+  // each ScheduleView names its own projectId. `listSchedules({ allProjects: true })` is the palette's
+  // cross-project list.
+  listSchedules(input: ListSchedulesInput): Promise<ScheduleView[]>
+  getSchedule(input: ScheduleIdInput): Promise<GetScheduleResult>
+  // The prompt box's schedule mode: what the human typed → the phrase it found, the prompt with that phrase
+  // cut out verbatim, the rule, and the echo to confirm. `scheduleId` makes it "Change when".
+  interpretSchedule(input: InterpretScheduleInput): Promise<InterpretScheduleResult>
+  createSchedule(input: CreateScheduleInput): Promise<ScheduleView>
+  updateSchedule(input: UpdateScheduleInput): Promise<ScheduleView>
+  // Pause / Resume / Turn on.
+  setScheduleState(input: SetScheduleStateInput): Promise<ScheduleView>
+  runScheduleNow(input: ScheduleIdInput): Promise<RunScheduleNowResult>
+  // Delete, and a proposal's Discard.
+  deleteSchedule(input: ScheduleIdInput): Promise<void>
+  // Called once per page load with the browser's Intl zone.
+  reportClientZone(input: ReportClientZoneInput): Promise<void>
+  // The worker's `schedule` tool. Never called from the browser.
+  ownSchedule(input: OwnScheduleInput): Promise<OwnScheduleResult>
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
   // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
   projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
@@ -610,6 +643,16 @@ export const PROCEDURES = {
   projectsReorder: "mutation",
   projectRemove: "mutation",
   projectsQueues: "query",
+  listSchedules: "query",
+  getSchedule: "query",
+  interpretSchedule: "mutation",
+  createSchedule: "mutation",
+  updateSchedule: "mutation",
+  setScheduleState: "mutation",
+  runScheduleNow: "mutation",
+  deleteSchedule: "mutation",
+  reportClientZone: "mutation",
+  ownSchedule: "mutation",
   projectIconPick: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",

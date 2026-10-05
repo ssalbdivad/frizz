@@ -227,7 +227,9 @@ import type { BackendKind } from "./backend/types.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
-import { isBrokerClaudeRow, isLazyRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
+import { isBrokerClaudeRow, isLazyRow, isScheduledLazyRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
+import { createLazyThreadStarter, type LazyStartProfile } from "./lazy-start.ts"
+import { scheduleProcedures } from "./schedule-router.ts"
 import { SUBAGENT_STALE_MS, unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
 import { workflowAgentViews } from "./workflow-runs.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
@@ -1514,29 +1516,14 @@ export function createRouter(ctx: AppContext) {
     if (unsaved.length > 0) throw new Error(unsavedWorktreeRefusal(unsaved))
   }
 
-  // One launch per lazy thread at a time. A second click while the first is still spawning would start a
-  // second agent on the SAME session id, so it is refused here rather than raced in the broker.
-  const startingLazyThreads = new Set<string>()
-  async function startLazyThreadRow(
-    row: SessionRow,
-    prompt: string,
-    profile: { model?: string; backend?: BackendKind; effort?: DispatchInput["effort"] } = {},
-  ): Promise<{ slug: string; sessionId: string }> {
-    if (!isLazyRow(row)) throw new Error("This thread has already started")
-    if (startingLazyThreads.has(row.slug)) throw new Error("This thread is already starting")
-    startingLazyThreads.add(row.slug)
-    try {
-      const backend = profile.backend ?? (row.backend === "codex" || row.backend === "acp" ? row.backend : "claude")
-      const sameBackend = profile.backend === undefined || profile.backend === row.backend
-      const model = profile.model ?? (sameBackend ? row.model ?? undefined : undefined)
-      const effort = profile.effort ?? (sameBackend && model === (row.model ?? undefined) ? (row.effort ?? undefined) as DispatchInput["effort"] : undefined)
-      const started = await ctx.dispatcher.dispatch({ prompt, model, effort }, { backend, lazy: row })
-      ctx.board.refresh()
-      return started
-    } finally {
-      startingLazyThreads.delete(row.slug)
-    }
-  }
+  // Starting a lazy thread goes through the project's ONE starter (lazy-start.ts), shared with the
+  // scheduler so its one-launch-at-a-time guard sees every launch — and through the schedule service, so a
+  // schedule's pending next run that the human sends early still opens with its run header and still lands
+  // in the schedule's history (schedules.ts startLazyRow). A hand-built test context carries neither and
+  // gets a starter of its own.
+  const localLazyStarter = createLazyThreadStarter({ dispatcher: ctx.dispatcher, board: ctx.board })
+  const startLazyThreadRow = (row: SessionRow, prompt: string, profile: LazyStartProfile = {}): Promise<{ slug: string; sessionId: string }> =>
+    ctx.startLazyThread ? ctx.startLazyThread(row, prompt, profile) : localLazyStarter.start(row, prompt, profile)
 
   function currentOwnedSession(slug: string, sessionId: string) {
     const row = ctx.storage.getSession(slug)
@@ -3634,6 +3621,19 @@ export function createRouter(ctx: AppContext) {
           if (thread.state === "archived") throw new Error("Reopen this thread before snoozing it")
           if (Date.parse(input.until) <= Date.now()) throw new Error("Snooze time must be in the future")
         }
+        // A SCHEDULE'S NEXT RUN (plans/scheduled-threads.md §4): snoozing it moves this one occurrence, and
+        // Wake now runs it now — there is no "un-parked and waiting" for a run whose start the scheduler
+        // owns. A prompt is dropped: the run's own note is what it starts with.
+        const row = ctx.storage.getSession(input.slug)
+        if (row && isScheduledLazyRow(row) && thread.schedule?.pending) {
+          if (input.until === null) {
+            await startLazyThreadRow(row, row.lazy_prompt ?? "")
+            return
+          }
+          ctx.storage.setSnoozedUntil(input.slug, input.until, null)
+          ctx.board.refresh()
+          return
+        }
         // `until: null` is Wake now: setSnoozedUntil clears the instant and the bump it owed together.
         ctx.storage.setSnoozedUntil(input.slug, input.until, input.prompt ?? null)
         ctx.board.refresh()
@@ -4375,8 +4375,20 @@ export function createRouter(ctx: AppContext) {
             .listThreadTimers(input.slug, { armedOnly: true })
             .map((t) => ({ id: t.id, what: `timer, fires ${new Date(t.fire_at).toISOString()}` })),
         ]
+        // A quiet finish is refused BEFORE the gate is consulted when it cannot apply at all, so a worker
+        // that reached for it on an ordinary thread learns that first.
+        if (input.quiet && !row.schedule_id) {
+          throw new Error("`quiet` is only for a scheduled run, and this thread is not one. Call `done` without it: your card stays in the human's queue.")
+        }
         if (blockingQuestions.length > 0 || blockingWatches.length > 0) {
           return { done: false, blockingQuestions, blockingWatches }
+        }
+        // QUIET: a scheduled run with nothing for the human goes straight to Done, and its body's first
+        // line becomes the run's line in the schedule's history (schedules.ts quietDone).
+        if (input.quiet) {
+          if (!ctx.schedules) throw new Error("Schedules are not available on this server")
+          ctx.schedules.quietDone(input.slug, input.body)
+          return { done: true, blockingQuestions: [], blockingWatches: [] }
         }
         ctx.storage.markThreadDone(input.slug, input.body, Date.now())
         ctx.board.refresh()
@@ -5296,10 +5308,13 @@ export function createRouter(ctx: AppContext) {
       output: z.array(ProjectQueue),
       handler: async () => {
         const out: ProjectQueue[] = []
-        const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board }]
-        for (const { project, board } of open) {
+        const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board, ctx }]
+        for (const { project, board, ctx: tenant } of open) {
           try {
             const snapshot = await board.snapshot()
+            // The row's fourth count (plans/scheduled-threads.md §8). The launching project's context may be
+            // the one asking even when the tenant map did not hand it over.
+            const schedules = (tenant ?? (project.id === ctx.project.id ? ctx : undefined))?.schedules?.summary()
             const done: ThreadView[] = []
             const threads = snapshot.threads.filter((thread) => {
               // A thread's terminals ride its row (`terminals`), so the session rows are the whole list.
@@ -5322,6 +5337,7 @@ export function createRouter(ctx: AppContext) {
               threads,
               doneCount,
               recentDone: recentDoneThreads(done),
+              ...(schedules ? { schedules } : {}),
             })
           } catch {
             // A board stopping mid-walk is a project missing from this round, not a failed request for
@@ -5741,6 +5757,10 @@ export function createRouter(ctx: AppContext) {
         return { dispatched, failed }
       },
     }),
+
+    // SCHEDULED THREADS (plans/scheduled-threads.md): the human's schedule surface and the worker's
+    // `schedule` tool — schedule-router.ts.
+    ...scheduleProcedures(ctx),
   }
   // Every verb the HUMAN performs on a thread stamps `interacted_at` before it runs — what deleting old
   // threads counts from (thread-retention.ts). One wrapper over a named list rather than a line in each

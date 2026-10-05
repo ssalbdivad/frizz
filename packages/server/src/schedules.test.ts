@@ -1,0 +1,566 @@
+// SCHEDULED THREADS (plans/scheduled-threads.md): the schedule service against the REAL dispatcher, the REAL
+// lazy-thread starter, the REAL router and real SQLite. Only the Claude broker is a recorder (what Frizz
+// asks it to start, and when) and the clock is injected, so every case below is the scheduler pass exactly
+// as production runs it, at an instant the test chooses.
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { mkdtempSync, rmSync } from "node:fs"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { parseScheduledRunPrompt, type BoardSnapshot, type ThreadView } from "@frizz/shared"
+import { createDispatcher } from "./dispatch.ts"
+import { createRouter } from "./router.ts"
+import { createStorage, isLazyRow, isScheduledLazyRow } from "./storage.ts"
+import { defaultSettings } from "./settings.ts"
+import { cwdSlug, type Project } from "./project.ts"
+import { lazyThreadView, type BoardManager } from "./board.ts"
+import type { AppContext } from "./context.ts"
+import type { Tailer } from "./tailer.ts"
+import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
+import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
+import { createLazyThreadStarter } from "./lazy-start.ts"
+import { createScheduleService, createStartCap, type ScheduleServiceDeps } from "./schedules.ts"
+
+const T = (iso: string) => Date.parse(iso)
+// Monday 2026-10-05, in UTC so the arithmetic reads off the page.
+const MON_8AM = T("2026-10-05T08:00:00Z")
+const MON_9AM = T("2026-10-05T09:00:00Z")
+const NEXT_MON_9AM = T("2026-10-12T09:00:00Z")
+
+const WEEKLY = {
+  title: "Triage issues",
+  prompt: "Triage the new issues and label them.",
+  whenText: "every Monday at 9am",
+  rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+  dtstart: "2026-10-05T09:00",
+  tz: "UTC",
+  model: "haiku",
+  effort: "low" as const,
+}
+
+function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootGraceMs" | "startCap" | "owner">> & { nowMs?: number } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-schedules-"))
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  const project: Project = { dir, id: "schedules", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
+  // A board that projects every row the way the real one does for what these tests read: an editable
+  // session thread, with its schedule ref (late-bound — the service is built below).
+  let refOf: (row: never) => ThreadView["schedule"] = () => undefined
+  const snapshot = (): BoardSnapshot => ({
+    projectDir: dir, projectName: "t", projectLabel: "t", errors: [], warnings: [],
+    threads: storage.allSessions().map((row) => ({
+      id: row.slug, title: row.title ?? "", status: "active", kind: "session", foreign: false,
+      state: row.state === "archived" ? "archived" : "open", schedule: refOf(row as never),
+    }) as unknown as ThreadView),
+  })
+  const board: BoardManager = {
+    snapshot: async () => snapshot(), currentSeq: () => 0, rebuild: async () => snapshot(),
+    refresh: () => snapshot(), start: async () => {}, stop: async () => {},
+  }
+  const spawned: { threadSlug: string; sessionId: string; prompt: string; model?: string }[] = []
+  let fail: (() => Error | undefined) | undefined
+  let gate: Promise<void> = Promise.resolve()
+  const claudeBroker = {
+    spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; model?: string }) => {
+      await gate
+      const error = fail?.()
+      if (error) throw error
+      spawned.push({ threadSlug: input.threadSlug, sessionId: input.sessionId, prompt: input.prompt, model: input.model })
+      return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd } }
+    },
+    followUp: async () => {},
+    releaseSession: () => {},
+  } as unknown as ClaudeAgentBrokerBridge
+  let preflight: "authed" | "signed-out" = "authed"
+  const dispatcher = createDispatcher({
+    project, storage, board, claudeBroker,
+    getSettings: () => defaultSettings(),
+    dispatchProfile: () => ({ model: "opus" }),
+    preflightAuth: async () => preflight,
+  })
+  const starter = createLazyThreadStarter({ dispatcher, board })
+  let clock = opts.nowMs ?? MON_8AM
+  // The board's reading of a run, by slug — what the overlap check consults. Default: nothing known.
+  const readings = new Map<string, { view?: ThreadView; vouched: boolean }>()
+  const service = createScheduleService({
+    project, storage, dispatcher, starter, board,
+    nameHolder: (name, except) => storage.allSessions().find((r) => r.state !== "archived" && r.title === name && r.slug !== except),
+    threadView: (slug) => readings.get(slug) ?? { vouched: true },
+    clientZone: () => "UTC",
+    now: () => clock,
+    bootAtMs: opts.bootAtMs ?? 0,
+    postBootGraceMs: opts.postBootGraceMs ?? 0,
+    startCap: opts.startCap ?? createStartCap(2),
+    ...(opts.owner ? { owner: opts.owner } : {}),
+  })
+  refOf = (row) => service.threadRef(row)
+  const tailer: Tailer = {
+    get: () => undefined, foreignIds: () => [], subAgent: () => undefined,
+    forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
+  }
+  const ctx = {
+    project, storage, board, tailer, dispatcher, claudeBroker,
+    getSettings: () => defaultSettings(),
+    schedules: service,
+    startLazyThread: (row: never, prompt: string, profile: never) => service.startLazyRow(row, prompt, profile),
+    terminalRunner: { closeThread: async () => {}, live: () => false, stopThread: async () => {} },
+  } as unknown as AppContext
+  return {
+    storage, service, router: createRouter(ctx), spawned, readings,
+    at: (ms: number) => { clock = ms },
+    tick: async () => { service.evalDue(clock); await service.drain() },
+    failWith: (f: (() => Error | undefined) | undefined) => { fail = f },
+    signOut: () => { preflight = "signed-out" },
+    hold: () => { let open!: () => void; gate = new Promise((r) => { open = r }); return () => open() },
+    close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) },
+  }
+}
+
+const running = (slug: string): ThreadView => ({ id: slug, title: "x", status: "active", runtime: "running" } as unknown as ThreadView)
+
+test("a new schedule's next run is a lazy thread snoozed until the occurrence, parked in Snoozed even once due", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    assert.equal(view.state, "active")
+    assert.equal(view.echo, "Triage issues · every Monday at 9am")
+    assert.equal(view.nextLine, "Next: Mon Oct 5 · Mon Oct 12 · Mon Oct 19")
+    assert.ok(view.nextRun, "the next run is materialized")
+    assert.equal(view.nextRun!.at, new Date(MON_9AM).toISOString())
+    const row = h.storage.getSession(view.nextRun!.slug)!
+    assert.equal(isScheduledLazyRow(row), true)
+    assert.equal(row.title, "Triage issues")
+    assert.equal(row.lazy_prompt, WEEKLY.prompt)
+    assert.equal(row.model, "haiku")
+    assert.equal(h.spawned.length, 0, "nothing runs at create")
+    // The board's projection: Snoozed with its wake time — and STILL parked after the time passes.
+    const ref = h.service.threadRef(row)
+    assert.deepEqual(ref, { id: view.id, title: "Triage issues", describe: "every Monday at 9am", pending: true })
+    const base = { id: row.slug, title: row.title, status: "active", archived: false, schedule: ref } as unknown as ThreadView
+    const projected = lazyThreadView(base, row)
+    assert.equal(projected.snoozedUntil, row.snoozed_until)
+    assert.equal(projected.needsYou, false, "a pending run never queues")
+  } finally {
+    h.close()
+  }
+})
+
+test("at its time the scheduler starts the run with the header, records it, and materializes the next one", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    const firstSlug = view.nextRun!.slug
+    h.at(MON_9AM - 1000)
+    await h.tick()
+    assert.equal(h.spawned.length, 0, "not before its time")
+    h.at(MON_9AM + 5_000)
+    await h.tick()
+    assert.equal(h.spawned.length, 1)
+    assert.equal(h.spawned[0]!.threadSlug, firstSlug, "it starts on the lazy row's own slug")
+    assert.equal(h.spawned[0]!.model, "haiku")
+    const prompt = h.spawned[0]!.prompt
+    assert.match(prompt, /<scheduled-run schedule="sch_[0-9a-f]{12}">/)
+    assert.match(prompt, /This run is for Mon Oct 5, 9am\./)
+    assert.match(prompt, /This is the schedule's first run\./)
+    assert.match(prompt, /`quiet: true`/)
+    assert.ok(prompt.includes(WEEKLY.prompt), "the saved prompt follows the header")
+    const started = h.storage.getSession(firstSlug)!
+    assert.equal(isLazyRow(started), false)
+    assert.equal(started.schedule_id, view.id, "the run keeps its schedule")
+    const after = h.service.get(view.id)
+    assert.equal(after.history.length, 1)
+    assert.equal(after.history[0]!.state, "started")
+    assert.equal(after.history[0]!.label, "@triage-issues")
+    assert.equal(after.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString())
+    const next = h.storage.getSession(after.schedule.nextRun!.slug)!
+    assert.equal(next.title, "Triage issues 2", "a collision takes a number, never another word")
+    assert.equal(isScheduledLazyRow(next), true)
+    // The second run's header names the first.
+    h.at(NEXT_MON_9AM + 1000)
+    await h.tick()
+    assert.equal(h.spawned.length, 2)
+    assert.match(h.spawned[1]!.prompt, /The previous run was @triage-issues for Mon Oct 5, 9am\./)
+  } finally {
+    h.close()
+  }
+})
+
+test("two passes over one due occurrence start exactly one run", async () => {
+  const h = harness()
+  try {
+    h.service.create(WEEKLY)
+    h.at(MON_9AM + 1000)
+    const open = h.hold()
+    // Two ticks while the first launch is still in flight — the second must see the claim and stand down.
+    h.service.evalDue(MON_9AM + 1000)
+    h.service.evalDue(MON_9AM + 2000)
+    open()
+    await h.service.drain()
+    assert.equal(h.spawned.length, 1)
+  } finally {
+    h.close()
+  }
+})
+
+test("a claim a dead process left behind is settled by what its thread shows", async () => {
+  const h = harness()
+  try {
+    const a = h.service.create(WEEKLY)
+    const b = h.service.create({ ...WEEKLY, title: "Dep bumps" })
+    // Process A claimed both occurrences and died: one before the dispatch landed, one after.
+    for (const v of [a, b]) {
+      h.storage.insertScheduleRun({
+        id: `run_dead_${v.id}`, schedule_id: v.id, occurrence_at: MON_9AM, started_at: null, state: "starting", reason: null,
+        thread_slug: v.nextRun!.slug, session_id: v.nextRun!.sessionId, owner: "a-dead-process", created_at: MON_9AM,
+      })
+    }
+    const row = h.storage.getSession(b.nextRun!.slug)!
+    h.storage.upsertSession({ ...row, lazy_prompt: null, snoozed_until: null, exited: 0 })
+    h.at(MON_9AM + 60_000)
+    await h.tick()
+    assert.equal(h.spawned.length, 0, "a settled claim is never retried")
+    const ha = h.service.get(a.id)
+    assert.equal(ha.history[0]!.state, "failed")
+    assert.equal(ha.history[0]!.label, "Didn't start: Frizz stopped")
+    assert.equal(ha.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString(), "the next occurrence is materialized")
+    assert.equal(ha.schedule.nextRun!.slug, a.nextRun!.slug, "on the same lazy row, re-snoozed")
+    const hb = h.service.get(b.id)
+    assert.equal(hb.history[0]!.state, "started", "its thread started, so the claim got through")
+    assert.notEqual(hb.schedule.nextRun!.slug, b.nextRun!.slug)
+  } finally {
+    h.close()
+  }
+})
+
+test("an occurrence missed past its lateness cap is skipped once, with the count, and never fires", async () => {
+  // Frizz came up Thursday; the Monday run was due while it was off — 3 days late on a weekly rule.
+  const h = harness({ bootAtMs: T("2026-10-08T12:00:00Z") })
+  try {
+    h.at(T("2026-10-04T12:00:00Z"))
+    const view = h.service.create(WEEKLY)
+    h.at(T("2026-10-08T12:00:10Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 0)
+    const got = h.service.get(view.id)
+    assert.equal(got.history[0]!.label, "Skipped: Frizz was off")
+    assert.equal(got.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString())
+  } finally {
+    h.close()
+  }
+})
+
+test("an occurrence missed WITHIN the cap runs once, late, and says so", async () => {
+  const h = harness({ bootAtMs: T("2026-10-05T11:00:00Z") })
+  try {
+    h.service.create(WEEKLY)
+    h.at(T("2026-10-05T11:10:00Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 1)
+    assert.match(h.spawned[0]!.prompt, /It started 2h 10m late, because Frizz was off\./)
+  } finally {
+    h.close()
+  }
+})
+
+test("nothing fires inside the post-boot grace", async () => {
+  const h = harness({ bootAtMs: MON_9AM, postBootGraceMs: 60_000 })
+  try {
+    h.service.create(WEEKLY)
+    h.at(MON_9AM + 30_000)
+    await h.tick()
+    assert.equal(h.spawned.length, 0)
+    h.at(MON_9AM + 61_000)
+    await h.tick()
+    assert.equal(h.spawned.length, 1)
+  } finally {
+    h.close()
+  }
+})
+
+test("a previous run still working skips the occurrence; unvouched defers; three in a row pause it", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
+    h.at(MON_9AM + 1000)
+    await h.tick()
+    const firstRun = h.spawned[0]!.threadSlug
+    h.readings.set(firstRun, { view: running(firstRun), vouched: false })
+    h.at(MON_9AM + 86_400_000 + 1000)
+    await h.tick()
+    assert.equal(h.service.get(view.id).history.length, 1, "an unvouched reading neither fires nor skips")
+    h.readings.set(firstRun, { view: running(firstRun), vouched: true })
+    for (let day = 1; day <= 3; day++) {
+      h.at(MON_9AM + day * 86_400_000 + 1000)
+      await h.tick()
+    }
+    const got = h.service.get(view.id)
+    assert.equal(h.spawned.length, 1, "nothing started over the running one")
+    assert.deepEqual(got.history.slice(0, 3).map((r) => r.label), Array(3).fill("Skipped: the last run was still working"))
+    assert.equal(got.schedule.state, "paused")
+    assert.equal(got.schedule.pausedReason, "stuck")
+    assert.equal(got.schedule.attention, true)
+    assert.equal(got.schedule.nextRun, undefined, "a paused schedule holds no next run")
+  } finally {
+    h.close()
+  }
+})
+
+test("three unreviewed runs pause it, and reviewing them resumes it without catching up", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
+    for (let day = 0; day < 3; day++) {
+      h.at(MON_9AM + day * 86_400_000 + 1000)
+      await h.tick()
+    }
+    assert.equal(h.spawned.length, 3)
+    h.at(MON_9AM + 3 * 86_400_000 + 1000)
+    await h.tick()
+    let got = h.service.get(view.id)
+    assert.equal(h.spawned.length, 3, "the fourth does not start")
+    assert.equal(got.schedule.state, "paused")
+    assert.equal(got.schedule.pausedText, "Paused until you review 3 runs")
+    assert.equal(h.service.summary()!.attention, true)
+    // The human marks two done: still paused, and the line counts what is left.
+    h.storage.setState(h.spawned[0]!.threadSlug, "archived")
+    h.storage.setState(h.spawned[1]!.threadSlug, "archived")
+    await h.tick()
+    got = h.service.get(view.id)
+    assert.equal(got.schedule.pausedText, "Paused until you review 1 run")
+    h.storage.forgetSession(h.spawned[2]!.threadSlug) // deleted counts as reviewed
+    h.at(MON_9AM + 3 * 86_400_000 + 7_200_000) // 11am — today's 9am is gone
+    await h.tick()
+    got = h.service.get(view.id)
+    assert.equal(got.schedule.state, "active")
+    assert.equal(got.schedule.nextRun!.occurrenceAt, new Date(MON_9AM + 4 * 86_400_000).toISOString(), "resume never catches up")
+    assert.equal(h.spawned.length, 3)
+  } finally {
+    h.close()
+  }
+})
+
+test("failed starts are recorded, retried never, and pause the schedule after three", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
+    const lazySlug = view.nextRun!.slug
+    h.signOut()
+    for (let day = 0; day < 3; day++) {
+      h.at(MON_9AM + day * 86_400_000 + 1000)
+      await h.tick()
+      await h.tick() // a second pass the same minute must not retry it
+    }
+    const got = h.service.get(view.id)
+    assert.equal(h.spawned.length, 0)
+    assert.deepEqual(got.history.map((r) => r.label), Array(3).fill("Didn't start: Claude is signed out"))
+    assert.equal(got.schedule.state, "paused")
+    assert.equal(got.schedule.pausedText, "Paused: couldn't start 3 times. Sign in to Claude, then resume.")
+    assert.equal(h.storage.getSession(lazySlug), undefined, "the pause removes the unstarted next run")
+  } finally {
+    h.close()
+  }
+})
+
+test("the human's acts on the next run: done skips it, a snooze moves it, Wake now runs it", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
+    // Mark as done = skip this occurrence. The row stays in Done; a fresh one stands for tomorrow.
+    h.storage.setState(view.nextRun!.slug, "archived")
+    h.at(MON_9AM + 1000)
+    await h.tick()
+    let got = h.service.get(view.id)
+    assert.equal(got.history[0]!.label, "Skipped: you marked it done")
+    assert.equal(h.spawned.length, 0)
+    const tomorrow = got.schedule.nextRun!
+    assert.equal(tomorrow.occurrenceAt, new Date(MON_9AM + 86_400_000).toISOString())
+    // Snooze it to 2pm tomorrow = move this occurrence: nothing at 9, a start at 2.
+    const twoPm = new Date(MON_9AM + 86_400_000 + 5 * 3_600_000).toISOString()
+    await h.router.setThreadSnooze.handler({ input: { slug: tomorrow.slug, sessionId: tomorrow.sessionId, until: twoPm } as never })
+    got = h.service.get(view.id)
+    assert.equal(got.schedule.nextRun!.moved, true)
+    h.at(MON_9AM + 86_400_000 + 1000)
+    await h.tick()
+    assert.equal(h.spawned.length, 0, "not at its old time")
+    h.at(Date.parse(twoPm) + 1000)
+    await h.tick()
+    assert.equal(h.spawned.length, 1, "at the time the human moved it to")
+    assert.match(h.spawned[0]!.prompt, /This run is for Tue Oct 6, 9am\./)
+    // Wake now on the following one = run it now, as the human, through the RPC (no scheduler tick).
+    got = h.service.get(view.id)
+    const third = got.schedule.nextRun!
+    await h.router.setThreadSnooze.handler({ input: { slug: third.slug, sessionId: third.sessionId, until: null } as never })
+    assert.equal(h.spawned.length, 2)
+    assert.match(h.spawned[1]!.prompt, /This run is for Wed Oct 7, 9am; the human started it early\./)
+    got = h.service.get(view.id)
+    assert.equal(got.history[0]!.reason, "started by you")
+    assert.equal(got.schedule.nextRun!.occurrenceAt, new Date(MON_9AM + 3 * 86_400_000).toISOString(), "that occurrence is spent")
+  } finally {
+    h.close()
+  }
+})
+
+test("sending the next run early (followUp) starts it with the header; Run now on a paused schedule runs once", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    const next = view.nextRun!
+    // The human edits this run's note, then sends it.
+    await h.router.updateLazyPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Only the bug reports this time." } })
+    await h.router.followUp.handler({ input: { slug: next.slug, sessionId: next.sessionId, message: "Only the bug reports this time." } } as never)
+    assert.equal(h.spawned.length, 1)
+    assert.ok(parseScheduledRunPrompt(h.spawned[0]!.prompt.slice(h.spawned[0]!.prompt.indexOf("<scheduled-run"))))
+    assert.match(h.spawned[0]!.prompt, /Only the bug reports this time\./)
+    // Paused: Run now still works, consumes no occurrence, and leaves it paused.
+    h.service.setState(view.id, "paused")
+    const run = await h.router.runScheduleNow.handler({ input: { id: view.id } })
+    assert.equal(h.spawned.length, 2)
+    assert.equal(h.spawned[1]!.threadSlug, run.slug)
+    const got = h.service.get(view.id)
+    assert.equal(got.schedule.state, "paused")
+    assert.equal(got.history.filter((r) => r.state === "started").length, 2)
+  } finally {
+    h.close()
+  }
+})
+
+test("the machine-wide start cap holds a third start for the next tick, late but not skipped", async () => {
+  const h = harness({ startCap: createStartCap(2) })
+  try {
+    for (const title of ["Triage issues", "Dep bumps", "CI check"]) h.service.create({ ...WEEKLY, title })
+    h.at(MON_9AM + 1000)
+    const open = h.hold()
+    h.service.evalDue(MON_9AM + 1000)
+    open()
+    await h.service.drain()
+    assert.equal(h.spawned.length, 2)
+    await h.tick()
+    assert.equal(h.spawned.length, 3)
+  } finally {
+    h.close()
+  }
+})
+
+test("a quiet done files a scheduled run under Done with its summary; on any other thread it is refused", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    h.at(MON_9AM + 1000)
+    await h.tick()
+    const slug = h.spawned[0]!.threadSlug
+    const result = await h.router.markOwnDone.handler({ input: { slug, body: "**Nothing new** — no issues since Oct 5.\n\n- checked `gh issue list`", quiet: true } })
+    assert.equal(result.done, true)
+    assert.equal(h.storage.getSession(slug)!.state, "archived")
+    const got = h.service.get(view.id)
+    assert.equal(got.history[0]!.summary, "Nothing new — no issues since Oct 5.")
+    assert.equal(got.history[0]!.label, "Nothing new — no issues since Oct 5.")
+    assert.equal(got.schedule.counts.unreviewed, 0)
+    // An ordinary thread: the lazy one the human wrote down, started.
+    const plain = await h.router.createLazyThread.handler({ input: { prompt: "plain work", title: "Plain work" } })
+    await h.router.startLazyThread.handler({ input: { slug: plain.slug, sessionId: plain.sessionId, prompt: "plain work" } })
+    await assert.rejects(
+      h.router.markOwnDone.handler({ input: { slug: plain.slug, body: "done", quiet: true } }),
+      /`quiet` is only for a scheduled run/,
+    )
+    assert.equal(h.storage.getSession(plain.slug)!.state, "open")
+  } finally {
+    h.close()
+  }
+})
+
+test("a worker proposes; only the human turns it on; skip_next and move_next act on one occurrence", async () => {
+  const h = harness()
+  try {
+    // The caller must be a registered thread.
+    const caller = await h.router.createLazyThread.handler({ input: { prompt: "x", title: "Caller" } })
+    const spec = { slug: caller.slug, title: "Dep bumps", prompt: "Bump the deps.", when: "first weekday of the month at 10", rrule: "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=10;BYMINUTE=0", dtstart: "2026-10-05T10:00", tz: "UTC", model: "sonnet", effort: "medium" as const }
+    const dry = await h.router.ownSchedule.handler({ input: { action: "dry_run", ...spec } })
+    assert.match(dry.text, /^Dry run — nothing was saved/)
+    assert.match(dry.text, /Dep bumps · on the first weekday of every month at 10am/)
+    assert.equal(h.storage.listSchedules().length, 0)
+    const made = await h.router.ownSchedule.handler({ input: { action: "create", ...spec } })
+    assert.equal(made.schedule!.state, "proposed")
+    assert.equal(made.schedule!.attention, true)
+    assert.equal(made.schedule!.nextRun, undefined, "a proposal materializes nothing")
+    assert.match(made.text, /does NOT run until the human clicks Turn on/)
+    assert.match(made.text, /Next: Mon Nov 2 · Tue Dec 1 · Fri Jan 1/)
+    // It may refine its own proposal…
+    const id = made.schedule!.id
+    await h.router.ownSchedule.handler({ input: { action: "update", slug: caller.slug, id, prompt: "Bump the deps, then run the tests." } })
+    // …but not anyone else's, and not once it is on.
+    const other = await h.router.createLazyThread.handler({ input: { prompt: "y", title: "Other" } })
+    await assert.rejects(h.router.ownSchedule.handler({ input: { action: "update", slug: other.slug, id, title: "Hijack" } }), /only change a schedule you proposed/)
+    const on = h.service.setState(id, "active")
+    assert.equal(on.state, "active")
+    assert.equal(on.nextRun!.occurrenceAt, "2026-11-02T10:00:00.000Z")
+    await assert.rejects(h.router.ownSchedule.handler({ input: { action: "update", slug: caller.slug, id, title: "Renamed" } }), /only change a schedule you proposed/)
+    // move_next: only that occurrence moves, and never past the one after it.
+    const moved = await h.router.ownSchedule.handler({ input: { action: "move_next", slug: caller.slug, id, to: "2026-11-03T10:00" } })
+    assert.match(moved.text, /Moved the run for Mon Nov 2, 10am to Tue Nov 3, 10am\. The rule is unchanged\./)
+    await assert.rejects(h.router.ownSchedule.handler({ input: { action: "move_next", slug: caller.slug, id, to: "2026-12-02T10:00" } }), /past the run after it/)
+    const skipped = await h.router.ownSchedule.handler({ input: { action: "skip_next", slug: caller.slug, id, reason: "release freeze" } })
+    assert.match(skipped.text, /Skipped the run for Mon Nov 2, 10am\. The next one is Tue Dec 1, 10am\./)
+    assert.equal(h.service.get(id).history[0]!.label, "Skipped: release freeze")
+    const paused = await h.router.ownSchedule.handler({ input: { action: "pause", slug: caller.slug, id } })
+    assert.equal(paused.schedule!.state, "paused")
+    assert.equal(paused.schedule!.attention, false, "a deliberate pause is not Frizz's to flag")
+  } finally {
+    h.close()
+  }
+})
+
+test("validation: the cap, the title, the spacing floor", async () => {
+  const h = harness()
+  try {
+    assert.throws(() => h.service.create({ ...WEEKLY, title: "Triage every new issue" }), /one or two short words/)
+    assert.throws(() => h.service.create({ ...WEEKLY, rrule: "FREQ=HOURLY;BYMINUTE=0,5" }), /less than 15 minutes apart/)
+    for (let i = 0; i < 25; i++) h.service.create({ ...WEEKLY, title: `Job ${i}` })
+    assert.throws(() => h.service.create({ ...WEEKLY, title: "One more" }), /A project can hold 25 schedules/)
+  } finally {
+    h.close()
+  }
+})
+
+test("an edit re-points the next run: a new rule re-snoozes it, a new prompt reaches an untouched note only", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    const slug = view.nextRun!.slug
+    const edited = h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am", prompt: "New prompt." })
+    assert.equal(edited.nextRun!.slug, slug, "the same lazy row")
+    assert.equal(edited.nextRun!.at, "2026-10-06T10:00:00.000Z")
+    assert.equal(h.storage.getSession(slug)!.lazy_prompt, "New prompt.")
+    // The human edits this run's note; a later prompt change leaves it alone.
+    await h.router.updateLazyPrompt.handler({ input: { slug, sessionId: edited.nextRun!.sessionId, prompt: "Just this once." } })
+    h.service.update({ id: view.id, prompt: "Newer prompt." })
+    assert.equal(h.storage.getSession(slug)!.lazy_prompt, "Just this once.")
+    assert.throws(() => h.service.update({ id: view.id, revision: 0, title: "Stale" }), /changed while you were editing/)
+    h.service.remove(view.id)
+    assert.equal(h.storage.getSession(slug), undefined, "deleting the schedule removes its unstarted run")
+    assert.equal(h.storage.listSchedules().length, 0)
+  } finally {
+    h.close()
+  }
+})
+
+test("a failure that is not auth reads plainly, and the lazy row survives for the next occurrence", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    h.failWith(() => new Error("daemon exited before it became ready"))
+    h.at(MON_9AM + 1000)
+    await h.tick()
+    const got = h.service.get(view.id)
+    assert.match(got.history[0]!.label, /^Didn't start: Claude session broker could not start this thread: daemon exited/)
+    assert.equal(got.schedule.nextRun!.slug, view.nextRun!.slug, "the failed run's row is reused")
+    assert.equal(got.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString())
+    assert.equal(got.schedule.state, "active")
+  } finally {
+    h.close()
+  }
+})
+
+test("ProviderAuthRequiredError reads as signed out", async () => {
+  const { scheduleStartFailure } = await import("./schedules.ts")
+  assert.equal(scheduleStartFailure(new ProviderAuthRequiredError("codex")), "Codex is signed out")
+  assert.equal(scheduleStartFailure(new Error("spawn x ENOENT")), "the project folder is missing")
+})

@@ -793,7 +793,14 @@ export interface Dispatcher {
   adopt(slug: string, message?: string): Promise<{ slug: string; sessionId: string }>
   // Write down a LAZY THREAD: a thread row with a name and a session id but no agent (SessionRow.lazy_prompt). Nothing
   // is spawned and no provider is contacted; `dispatch` with `opts.lazy` starts it later.
-  createLazyThread(input: CreateLazyThreadInput): { slug: string; sessionId: string }
+  //
+  // `opts.scheduleRun` writes a SCHEDULE's next run (plans/scheduled-threads.md §4): the row carries the
+  // schedule's id and is snoozed until the occurrence in the SAME write, so no reader ever sees one half
+  // — a lazy row with no schedule queues, and one with no instant would read as due. Its title is used
+  // exactly as given (the schedule numbers a collision, `Triage issues 2`, rather than taking the namer's
+  // significant-word fallback, which reads like a different task) and is locked, and nothing is minted.
+  // Server-only, like `dispatch`'s `lazy`: the caller is schedules.ts.
+  createLazyThread(input: CreateLazyThreadInput, opts?: { scheduleRun?: { scheduleId: string; snoozedUntil: string | null; title: string } }): { slug: string; sessionId: string }
   // Take over an EXTERNAL session — one of the human's own `claude`/`codex` terminals, listed in the
   // rail's External band. Distinct from `adopt` above, which cold-starts a fresh worker on a thread
   // FILE: this one binds frizz to a conversation that already exists and continues it.
@@ -1188,13 +1195,16 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       throw new Error(`unsupported backend for dispatch: ${String(kind)}`)
     },
 
-    createLazyThread(input) {
+    createLazyThread(input, opts) {
       input = CreateLazyThreadInput.parse(input)
       const kind: BackendKind = input.backend ?? "claude"
+      const scheduled = opts?.scheduleRun
       // A typed name is the human's, so it is locked; otherwise the note is chopped like a prompt and the
-      // row is minted a real name, exactly as a dispatch would be.
-      const typed = input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
-      const title = (typed && deps.threadNamer ? deps.threadNamer.distinct(typed, input.prompt) : typed) || fallbackTitle(input.prompt)
+      // row is minted a real name, exactly as a dispatch would be. A schedule's run takes its title as given.
+      const typed = scheduled ? scheduled.title.trim() || undefined
+        : input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
+      const title = scheduled && typed ? typed
+        : (typed && deps.threadNamer ? deps.threadNamer.distinct(typed, input.prompt) : typed) || fallbackTitle(input.prompt)
       const slug = resolveSlug(frizzDir, slugify(title), (s) => deps.storage.getSession(s) !== undefined)
       const sessionId = randomUUID()
       const settings = deps.getSettings()
@@ -1224,6 +1234,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         effort: kind === "acp" ? null : effort ?? null,
         permission_mode: null,
         lazy_prompt: input.prompt,
+        ...(scheduled ? { snoozed_until: scheduled.snoozedUntil, schedule_id: scheduled.scheduleId } : {}),
       })
       deps.storage.setBackend(slug, kind)
       if (!typed) void deps.threadNamer?.mint(slug, sessionId, input.prompt)

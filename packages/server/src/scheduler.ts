@@ -1341,6 +1341,11 @@ export interface SchedulerDeps {
   // Deterministic hard-crash fault injection. Throwing here escapes tick without compensating writes,
   // exactly like process death at the named durability boundary. Never configured in production.
   crashPoint?: (point: SchedulerCrashPoint, delivery: WakeDelivery) => void
+  // SCHEDULED THREADS (schedules.ts, plans/scheduled-threads.md §6): the pass that starts a schedule's next
+  // run when its time comes. `evalDue` claims synchronously and launches OFF the tick, so an auth preflight
+  // or a cold daemon never holds up this project's other wakes; `drain` is what `stop` awaits so no launch
+  // outlives the scheduler that started it. Absent ⇒ no schedule ever fires (tests of other sources).
+  scheduledThreads?: { evalDue(nowMs: number): void; drain(): Promise<void> }
 }
 
 export type SchedulerCrashPoint = "after-enqueue" | "after-claim" | "after-delivery" | "after-ack"
@@ -3828,6 +3833,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     log(`waker: answers for ${item.slug} stay UNDELIVERED — offered again once this server restarts, the worker runs a turn, or ${Math.round(ANSWER_REOFFER_BACKOFF_MS / 60_000)}m pass`)
   }
 
+  // ---- SCHEDULED THREADS --------------------------------------------------------------------------------
+  // A schedule starts a NEW thread, which nothing else here does: every other source resumes an existing
+  // one through the outbox. So this pass owns no outbox rows — its never-twice record is the schedule's own
+  // run row (thread_schedule_run), claimed in this tick and launched outside it (schedules.ts evalDue).
+  //
+  // THE ONE EXCEPTION TO "NEVER FIRES ON FIRST SIGHT" (start, below): an occurrence that came due while
+  // Frizz was off does fire after a restart — once, and only within its lateness cap. It waits out a
+  // post-boot grace first, so the tailer has vouched for the previous run before the overlap check reads it.
+  function evalScheduledThreads(nowMs: number): void {
+    deps.scheduledThreads?.evalDue(nowMs)
+  }
+
   function evalTimers(nowMs: number): void {
     for (const timer of deps.storage.dueThreadTimers(nowMs)) {
       const row = deps.storage.getSession(timer.thread_slug)
@@ -4681,6 +4698,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       log(`waker: one-off timer pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
+      evalScheduledThreads(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: scheduled-thread pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
       repairDroppedReports(now())
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
@@ -4719,6 +4742,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       timer = null
       const draining = activeTick
       if (draining) await draining
+      // A scheduled run launched off the tick settles its run row and materializes the next one when it
+      // lands; the storage it writes must still be open, so the launch is awaited here like a tick.
+      await deps.scheduledThreads?.drain()
     },
     tick,
     requestCheckIn(slug, restedAt) {
