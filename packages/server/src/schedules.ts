@@ -687,7 +687,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       ...(run.reason ? { reason: run.reason } : {}),
       ...(run.summary ? { summary: run.summary } : {}),
       ...(run.thread_slug && live ? { threadSlug: run.thread_slug } : {}),
-      ...(title ? { threadTitle: title } : {}),
+      ...(live?.title ? { threadTitle: live.title } : {}),
       ...(threadState ? { threadState } : {}),
       label,
     }
