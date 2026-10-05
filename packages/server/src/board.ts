@@ -9,7 +9,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingSteps, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
@@ -358,8 +358,10 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
 
 // The same question asked of a thread whose owning process is PROVABLY GONE, where `stale` stops being
 // ambiguous. Everywhere else `stale` means only "we lost this child's completion signal and its
-// transcript has been quiet past the 15-minute ceiling" — it could equally be a finished child whose
-// notification never landed, which is why hasLiveBackgroundWork deliberately counts `running` alone.
+// transcript has been quiet past its window" — 15 minutes, or past the declared bound of the call it is
+// blocked in (pending-call.ts). It could equally be a finished
+// child whose notification never landed, which is why hasLiveBackgroundWork deliberately counts
+// `running` alone.
 // Against a dead daemon there is nothing left to be ambiguous about: an Agent child ran IN-PROCESS
 // inside that `claude`, so a still-unretired child of it was lost, full stop.
 //
@@ -388,7 +390,8 @@ function hasUnretiredOwnAgents(tele: SessionTelemetry | undefined): boolean {
 // provider control and works everywhere. The flag answers "can this be KILLED", not "can this be clicked".
 // A DEAD BROKER DAEMON TOOK ITS SUB-AGENTS WITH IT — they are in-process children of that process — so a
 // child the fold still reads `running` is shown `stale` in the VIEW. The fold only ages one out after
-// SUBAGENT_STALE_MS of silence, and until then the rail spun a child (and offered to stop it) beside a
+// SUBAGENT_STALE_MS of silence (or past the bound of a Bash wait it declared, which can be hours
+// away), and until then the rail spun a child (and offered to stop it) beside a
 // thread the same view carded as crashed. View-only on purpose: `crashed`, `headlessLostWork` and the
 // queue read the raw telemetry above, which is where that meaning lives. (Shells need none of this:
 // bgShellViews already empties on a dead owner.)
@@ -865,9 +868,15 @@ export function hasParkedTimerWatch(
   return tele.lastFence.hints.some((hint) => hint.kind === "timer" && armedTimerIds.has(hint.value.trim()))
 }
 
-/** Does the thread DECLARE a wait of any kind — its own background work, a parked PR watcher, or a
- *  parked timer? This is what the resting card states. It is wider than the queue excusal above by
- *  exactly the PR and timer waits, which card but never park. */
+/** Is the thread's last word a fence handing the HUMAN steps to perform (`steps:`, 2026-10-03)? That
+ *  is a wait on them rather than on anything running, and the resting card is where they read it. */
+export function hasHumanSteps(tele: SessionTelemetry | undefined): boolean {
+  return tele?.lastFence?.kind === "awaiting" && awaitingSteps(tele.lastFence.hints).length > 0
+}
+
+/** Does the thread DECLARE a wait of any kind — its own background work, a parked PR watcher, a parked
+ *  timer, or steps for the human? This is what the resting card states. It is wider than the queue
+ *  excusal above by exactly the PR, timer and steps waits, which card but never park. */
 export function hasDeclaredWait(
   tele: SessionTelemetry | undefined,
   nowMs: number,
@@ -877,6 +886,7 @@ export function hasDeclaredWait(
   // for the same reason the two sets above are: only it has the storage handle.
   armedWatches: readonly RegisteredWatch[] = [],
 ): boolean {
+  if (hasHumanSteps(tele)) return true
   if (hasDeclaredBackgroundPark(tele, nowMs)) return true
   // A REGISTRATION IS A WAIT WITHOUT A FENCE. It is the same fact the `shells:` line states, made
   // durable: it outlives the message that created it, so it survives the worker saying something else.
@@ -1718,7 +1728,10 @@ export function deriveAwaitingBackground(
     !hasRegisteredBackgroundPark(tele, armedWatches, nowMs) &&
     // A TIMER PARK IS THE SAME EXCEPTION AGAIN (2026-08-24): its fence has no park action either, so
     // suppressing this card left the wait stated nowhere but the fence's own machinery footer.
-    !hasParkedTimerWatch(tele, armedTimerIds)
+    !hasParkedTimerWatch(tele, armedTimerIds) &&
+    // STEPS FOR THE HUMAN carry the card's own Done, so this card is the one place it can be pressed
+    // from — the queue, the drawer and the full-screen page alike.
+    !hasHumanSteps(tele)
   ) return false
   // Every OTHER excusal deriveNeedsYou applies still outranks the card (a user wall-clock snooze, a
   // delivered-but-unobserved follow-up); only the queue-owned event-snooze is dropped,

@@ -1464,7 +1464,8 @@ export function Composer({
         disabled={!hasContent || busy || uploading}
         title={`Send (Enter · ${interruptChord} sends now)`}
         aria-label="Send"
-        className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-all ${
+        // Never `transition-all`: it animates box-shadow, which holds the hover edge back (styles.css).
+        className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color,opacity,scale] ${
           // Primary actions use neutral contrast; the accent marks focus.
           hasContent && !busy && !uploading
             ? "bg-fg text-bg hover:opacity-90 active:scale-95"

@@ -64,12 +64,18 @@ export function normalizedToolName(name: string): string {
  *     finished"). So a finished background op folds back into the run — see finishedBackgroundOp. The
  *     `"unknown"` job never gets a completion signal, so it keeps its card whatever its status.
  *     An ORPHANED POLL wears the same `"unknown"` and is deliberately NOT here — see orphanedPoll.
- *   • A call whose RESULT IS A PICTURE — an image `Read`, a `take_screenshot`, a SendUserFile delivery
- *     carrying images. The reason is different but no weaker: the whole content of the card is something
- *     the human has to LOOK at, and a digest reduces it to the one thing a picture cannot survive being
- *     reduced to — a word. A worker reading back its own screenshots produced exactly `2 tool calls ·
- *     Click to expand` with both shots hidden behind it (maintainer 2026-08-02: "the screenshots should
- *     just be rendered in the chat automatically").
+ *   • A SendUserFile delivery carrying images — the worker SENDING pictures to the human. The whole
+ *     content of the card is something the human has to look at, and a digest reduces it to the one
+ *     thing a picture cannot survive being reduced to — a word.
+ *
+ *     A picture a tool merely RETURNED — an image `Read`, a `take_screenshot`, codex's `view_image` — is
+ *     deliberately NOT here. That is the worker looking, not the worker showing, and it folds into the
+ *     run like any other call; the human sees a picture only where a worker chose to show it, in a
+ *     ```lightbox fence (maintainer 2026-10-03: "we should stop having special rendering where we
+ *     display screenshots in the read tool … No images or screenshots are visible unless you make them
+ *     visible to the user with the light box"). Until then every such call was lifted out of the digest
+ *     and drawn open (2026-08-02: "the screenshots should just be rendered in the chat automatically"),
+ *     which put every shot a worker took to check its own work in front of the human, wanted or not.
  *
  *   • A SETTLED native ask (`AskUserQuestion` carrying its structured questions, with a result). The
  *     question was ON SCREEN as an answerable card until it settled; folding it into `Ran N tool calls`
@@ -87,7 +93,7 @@ export function normalizedToolName(name: string): string {
  */
 export function isToolActivityException(tool: Pick<
   TranscriptToolCall,
-  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState" | "outputImage" | "sentImages" | "ask" | "status"
+  "name" | "prompt" | "agentId" | "sendTo" | "sendBody" | "backgroundState" | "sentImages" | "ask" | "status"
 >): boolean {
   return tool.prompt !== undefined
     || tool.agentId !== undefined
@@ -120,8 +126,9 @@ export function isSettledAsk(tool: Pick<TranscriptToolCall, "ask" | "status">): 
 }
 
 /**
- * A call whose card IS a picture — an image `Read`, a `take_screenshot`, a SendUserFile delivery
- * carrying images.
+ * A call whose card IS a picture: a SendUserFile delivery carrying images, drawn open as a gallery. A
+ * tool that only RETURNED a picture folds into the digest (see isToolActivityException), so it is never
+ * a card edge for the spacing below to see.
  *
  * Every other exception above renders as a compact band a couple of rows tall, which is what lets the
  * transcript's tight run (ChatView.META_CARD_STEP) sit them 6px apart: two faint borders with 6px of
@@ -132,8 +139,8 @@ export function isSettledAsk(tool: Pick<TranscriptToolCall, "ask" | "status">): 
  * spacing under the screenshots … it's too close"). ChatView.PICTURE_STEP is the answer; this predicate
  * is who it applies to.
  */
-export function isPictureTool(tool: Pick<TranscriptToolCall, "outputImage" | "sentImages">): boolean {
-  return tool.outputImage !== undefined || (tool.sentImages !== undefined && tool.sentImages.length > 0)
+export function isPictureTool(tool: Pick<TranscriptToolCall, "sentImages">): boolean {
+  return tool.sentImages !== undefined && tool.sentImages.length > 0
 }
 
 /**

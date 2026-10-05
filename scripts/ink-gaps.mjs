@@ -22,6 +22,8 @@
 //   node scripts/ink-gaps.mjs <url> "<sel-a>,<sel-b>,…" [--dsf=4] [--w=1100] [--h=700] [--wait=2200]
 //     [--pad=2] [--threshold=8] [--before=@/tmp/routine.js] [--hover=<css selector>] [--mouse]
 //     [--software] [--viewport-only] (for a stalled GPU compositor; keep the whole row in the viewport)
+//     [--touch] (a touch screen: `(pointer: coarse)` matches, so a strip's touch-sized layout is what is
+//     measured)
 //
 // Selectors are measured in the order given (NOT document order), so the printed gaps follow the
 // strip left to right exactly as you name it. `--hover` parks the pointer on an element first (after
@@ -64,7 +66,7 @@ const browser = flags.browser ? await puppeteer.connect({ browserWSEndpoint: fla
 let page
 try {
   page = await browser.newPage()
-  await page.setViewport({ width: W, height: H, deviceScaleFactor: DSF })
+  await page.setViewport({ width: W, height: H, deviceScaleFactor: DSF, ...(flags.touch ? { isMobile: true, hasTouch: true } : {}) })
   await page.goto(url, { waitUntil: "networkidle2", timeout: 30000 })
   await new Promise((r) => setTimeout(r, WAIT))
   if (flags.before) {

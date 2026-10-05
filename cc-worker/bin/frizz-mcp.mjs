@@ -707,9 +707,11 @@ const ASK = {
     "ON AN AUTONOMOUS THREAD THIS REFUSES, and tells you the standing instruction you are working " +
     "under. A thread carrying a rest Goal has already been told to keep going and decide for itself, " +
     "so the refusal is that instruction arriving at the moment it matters. Decide, and say which way " +
-    "you went in your write-up. If the call is genuinely the human's — destructive, irreversible, or " +
-    "an act you are not permitted to take — put it in your FINAL MESSAGE instead of here; autonomous " +
-    "does not mean nobody is reading.",
+    "you went in your write-up. If the call is genuinely the human's — destructive or irreversible — " +
+    "put it in your FINAL MESSAGE instead of here; autonomous does not mean nobody is reading.\n\n" +
+    "AN ACT IS NOT A QUESTION. When the human must PERFORM something you cannot — sign in, approve, " +
+    "merge, press a button you may not — do not ask whether they will: list the steps under `steps:` " +
+    "in your ```awaiting fence. That works on an autonomous thread too, and their reply wakes you.",
   inputSchema: {
     type: "object",
     properties: {

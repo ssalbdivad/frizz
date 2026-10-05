@@ -86,7 +86,7 @@ export function GithubTrigger({ className = "", variant = "icon" }: { className?
       onMouseDown={(e) => e.preventDefault()}
       title="Investigate this issue and make recommendations"
       aria-label="Investigate this issue and make recommendations"
-      className={`icon-hover-outline flex h-7 w-7 items-center justify-center rounded-lg text-muted outline-none transition-[color,background-color,box-shadow] enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:text-muted enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated enabled:active:text-muted disabled:bg-transparent disabled:text-muted-35 ${className}`}
+      className={`icon-hover-outline flex h-7 w-7 items-center justify-center rounded-lg text-muted outline-none transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg enabled:focus-visible:bg-panel-2/70 enabled:focus-visible:text-muted enabled:focus-visible:ring-1 enabled:focus-visible:ring-muted/80 enabled:focus-visible:ring-offset-1 enabled:focus-visible:ring-offset-bg enabled:active:bg-elevated enabled:active:text-muted disabled:bg-transparent disabled:text-muted-35 ${className}`}
     >
       <Github size={15} strokeWidth={2} />
     </button>

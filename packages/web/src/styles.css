@@ -6,7 +6,14 @@
   @apply inset-ring inset-ring-button-border;
 }
 
-/* Bare icon actions stay quiet at rest in both palettes. Keyboard focus gets the same edge. */
+/* Bare icon actions stay quiet at rest in both palettes. Keyboard focus gets the same edge.
+   NEVER LET A TRANSITION ANIMATE box-shadow ON THESE (`transition`, `transition-all`,
+   `transition-shadow`, or a list naming it). The edge is a box-shadow whose colour is
+   color-mix(currentColor …), and Chrome cannot interpolate that from the resting `none`: it holds
+   the edge fully transparent for the whole duration and pops it in on the last frame. Measured
+   2026-10-03 on the prompt box: the paperclip (colour + background only) showed its edge on the
+   first frame, while the GitHub icon and send button showed nothing for 120ms and then snapped —
+   the "hitch". theme.test.ts fails on any class string that pairs this utility with one. */
 @utility icon-hover-outline {
   @media (hover: hover) {
     &:enabled:hover {
@@ -1041,6 +1048,18 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
   border-radius: 4px;
   padding: 0.05em 0.3em;
 }
+/* …except INSIDE A TRANSCRIPT CARD, whose own fill is panel-2 too (TranscriptCard): there the chip
+   vanished into the card and left only its padding, so a command read as mono text with stray gaps on
+   either side — most visibly in a steps list, where nearly every item carries one (2026-10-03). The
+   question option's translucent mix (below) gives the same one-step contrast on any fill a card takes.
+   Fenced code keeps no chip: the re-reset outranks this rule as the base one does `.md-body code`. */
+.card-md .md-body code,
+.card-md .md-inline code {
+  background: color-mix(in srgb, var(--color-fg) 8%, transparent);
+}
+.card-md .md-body pre code {
+  background: none;
+}
 /* Inline-only markdown (answer chips, the recommendation caption): honor inline emphasis/strong/del/
    links without md-body's block chrome. Code shares the prose chip above; emphasis maps to weight/style. */
 .md-inline strong {
@@ -1058,6 +1077,14 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
    a click on a link, a local-file action or a resolved path follows the reference, and a click on any
    other pixel of the row picks the option. */
 [data-question-option] :is(a, .local-file-action, .local-file-code) {
+  position: relative;
+  z-index: 1;
+}
+/* A picture in an option is there to be LOOKED AT before choosing, so it is a live thing too: a click on
+   a picture or a gallery tile opens the lightbox, and the option is picked by the rest of the row (the
+   chip's div-level onClick skips the picture, as it skips a link). A gallery's mat, between its tiles,
+   still picks the option — that click reaches the chip's handler with no button or picture under it. */
+[data-question-option] :is(img[data-local-path], .md-lightbox) {
   position: relative;
   z-index: 1;
 }
@@ -1160,6 +1187,19 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
   margin-top: 0;
 }
 .md-body > .md-code:last-child {
+  margin-bottom: 0;
+}
+/* A ```lightbox fence in rendered Markdown (components/Lightbox.tsx useLightboxIslands): the gallery
+   stands where the fence's code block stood, so it takes that block's rhythm and the same explicit
+   first/last-child resets, for the same specificity tie. */
+.md-body .md-lightbox {
+  display: block;
+  margin: var(--md-step) 0;
+}
+.md-body > .md-lightbox:first-child {
+  margin-top: 0;
+}
+.md-body > .md-lightbox:last-child {
   margin-bottom: 0;
 }
 /* Geometry is ExternalTerminalCommand's copy button — the app's existing one — expressed in `em` so it

@@ -19,6 +19,8 @@ the bug.
 This is not a style note. It was a real, repeated complaint (maintainer 2026-07-28: *"it keeps opening
 tabs in my actual real Chrome"*), and the cause was a skill file recommending the MCP first.
 
+**A raw Chrome command carries `--use-mock-keychain`.** `shot.mjs` and the MCP pass it already. If you start `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" --headless` yourself, or write a prompt that tells a worker to, add the flag: without it, a Chrome under a temporary `HOME` (every sandbox) makes macOS put a modal "Keychain Not Found" dialog on the maintainer's screen. AGENTS.md § Never put a macOS keychain dialog on the maintainer's screen has the rest.
+
 ---
 
 ## 1. The default: `scripts/shot.mjs` (puppeteer)
@@ -114,11 +116,9 @@ identity, and you clean up only YOUR identity.
 
 ## 4. Putting the shot in the handoff
 
-Embed the **decisive** screenshots (not bulk) with **markdown image syntax** —
-`![meaningful alt](/abs/path.png)` — NOT `SendUserFile` (that pushes a file as a deliverable; it is not
-inline handoff evidence).
+Show the **decisive** screenshots (not bulk) in a **```lightbox fence** — one absolute path per line, a caption after each — which Frizz draws as a gallery the maintainer opens, zooms into and pages through. It is the ONLY way a picture reaches them: Frizz folds every tool call into a collapsed row, a screenshot you took or Read included, so a shot you only looked at is on nobody's screen (maintainer 2026-10-03: *"No images or screenshots are visible unless you make them visible to the user with the light box"*). A screen recording goes in the same fence — `.mp4`, `.webm` or `.mov` — and plays in the viewer. Markdown `![](…)` still renders, but it is no longer the way to do it; and never `SendUserFile`, which a dispatched worker does not have.
 
-Frizz serves a local image through its origin-gated `/local-image` route, and the route is deliberately path-unconfined (`packages/server/src/local-image.ts`): any absolute path that realpath-resolves to a regular `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp` file renders — `.adhoc-shots/` included. The trap is **durability**, not authorization: `/tmp` and `os.tmpdir()` are emptied at boot, and a handoff card is read hours or days later. Three shots embedded from `/tmp` on 2026-08-29 had become gray path labels by the time the maintainer read them, because the machine rebooted in between (`BlockImage` deliberately falls back to the plain path text on a load error). Embed from a path that outlives a reboot: `.adhoc-shots/` right where `shot.mjs` wrote it, or your thread's scratch directory. Keep a concise textual finding beside it; the handoff must still read when images are unavailable.
+Frizz serves a local picture or video through its origin-gated `/local-image` route, and the route is deliberately path-unconfined (`packages/server/src/local-image.ts`): any absolute path that realpath-resolves to a regular `.png`/`.jpg`/`.jpeg`/`.gif`/`.webp`/`.mp4`/`.m4v`/`.webm`/`.mov` file renders — `.adhoc-shots/` included. The trap is **durability**, not authorization: `/tmp` and `os.tmpdir()` are emptied at boot, and a handoff card is read hours or days later. Three shots embedded from `/tmp` on 2026-08-29 had become gray path labels by the time the maintainer read them, because the machine rebooted in between (a picture that fails to load deliberately falls back to its plain path text). Show them from a path that outlives a reboot: `.adhoc-shots/` right where `shot.mjs` wrote it, or your thread's scratch directory. Keep a concise textual finding beside the fence; the handoff must still read when the pictures are unavailable.
 
 If a check was skipped (MCP unavailable, a state you couldn't reach), say so plainly — don't imply
 coverage you didn't have.

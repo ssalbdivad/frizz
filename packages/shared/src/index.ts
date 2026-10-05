@@ -632,6 +632,11 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //                                    The worker's own answer to "does the human need to look now?" —
 //                                    `false` keeps the thread out of the queue, `true` puts it in the
 //                                    queue while the work keeps running (see awaitingNeedsInput).
+//   steps:                           OPTIONAL. Steps only the HUMAN can perform — a sign-in, an
+//     - Run `npm login`              approval, a merge the worker may not make — one `- ` item per
+//     - Approve the browser prompt   line, read VERBATIM (see awaitingSteps). A fence carrying them
+//                                    waits on the human: it needs no other name and no `for:`, and it
+//                                    always queues (awaitingNeedsInput reads it as `true`).
 //
 // THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
 // SEQUENCES, block or flow. A bare scalar where a sequence is expected is accepted and normalised to a
@@ -671,8 +676,9 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 // does not park: a wait that cannot resolve must never be able to look like one that can.
 //
 // WHAT WAS DELETED, AND WHY, BECAUSE EACH ONE WAS A WAY TO STALL SILENTLY:
-//   `human: <person>`  parked a thread in Held and NOTHING EVER FIRED IT. Waiting on a person is a
-//                      ```question — that is what a question is for.
+//   `human: <person>`  parked a thread in Held and NOTHING EVER FIRED IT. Waiting on a person to DECIDE
+//                      is a registered question; waiting on one to ACT is `steps:` (2026-10-03), which
+//                      keeps the thread IN the queue — and the human's reply is the wake.
 //   `timer: <instant>` an absolute instant the worker computed. One was written 5h55m in the past; it
 //                      parsed, armed nothing, and stalled its thread for 5.5 hours. `for:` is a duration
 //                      precisely so this cannot be expressed (see parseAwaitingDurationRaw).
@@ -686,7 +692,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input", "step"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -727,7 +733,7 @@ export function retiredAwaitingKindsIn(body: string): RetiredAwaitingKind[] {
 export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> = {
   "watch": "`shells: [<the id your runtime gave you>]` (or `agents: [<id>]`) — the same id, in the current sequence",
   "pr-watch": "register the PR with `mcp__frizz__watch_pr`, then name it `prs: [owner/repo#123]`",
-  "human": "there is no human gate any more — if you need a person, register a question with `mcp__frizz__ask` instead of parking",
+  "human": "there is no human gate any more — steps only the human can perform go under `steps:`, one `- ` item per line; a decision you need from them is a question, registered with `mcp__frizz__ask`",
   "ci": "CI is not a wait of its own: register the PR with `mcp__frizz__watch_pr` and you are woken when its checks settle",
   "session": "there is no cross-session wait — name the sub-agent you dispatched with `agents: [<id>]`",
   // THE 2026-08-24 CUTOVER. The frontmatter is YAML now, and YAML has no repeated keys — so the four
@@ -767,10 +773,11 @@ export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> =
 const AWAITING_KEY_RE = /^([a-z][a-z_-]*):\s*(\S.*)?$/i
 
 /** The keys the frontmatter recognises as STRUCTURE: four PLURAL sequences of things frizz can look up,
- *  the scalars `for:` and `needs_input:`, and `title:` — which is recognised here so it never falls to
- *  the body, but is read verbatim rather than as YAML (see splitAwaitingFrontmatter). Anything else falls
- *  through to the body. `needs-input` is the same key spelled the way the other hyphenated kinds are. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title", "needs_input", "needs-input"])
+ *  the scalars `for:` and `needs_input:`, and `title:` and `steps:` — which are recognised here so they
+ *  never fall to the body, but are read verbatim rather than as YAML (see splitAwaitingFrontmatter).
+ *  Anything else falls through to the body. `needs-input` is the same key spelled the way the other
+ *  hyphenated kinds are. */
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title", "steps", "needs_input", "needs-input"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -789,6 +796,12 @@ const AWAITING_SEQUENCE_KEYS: { [key: string]: AwaitingItemKind | undefined } = 
 /** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row. */
 export const AWAITING_HINT_MAX = 8
 export const AWAITING_HINT_VALUE_MAX = 200
+
+/** `steps:` has caps of its own. A step is a SENTENCE rather than an id, so it gets a sentence's length;
+ *  and the list is appended AFTER the hints capped above, so a long list can never crowd a `prs:` entry
+ *  or the `needs_input:` answer out of AWAITING_HINT_MAX. */
+export const AWAITING_STEPS_MAX = 12
+export const AWAITING_STEP_VALUE_MAX = 500
 
 /** `title:` — the resting card's heading in the WORKER'S OWN WORDS, replacing the derived one
  *  ("Awaiting" / "Agent terminals running", see awaitingBackgroundLabel).
@@ -842,7 +855,14 @@ export function trimAwaitingTitle(raw: string): string {
  *  every resting message — and the card drew "De-slop rewrite of the" with no ellipsis and no error,
  *  because YAML had read the PR number as a comment. A colon would have been worse: the whole
  *  frontmatter fails to parse, and a fence that named a live sub-agent and a PR parks NOTHING. So the
- *  title is read verbatim off its line (plus any indented continuation), and only the lookups stay YAML. */
+ *  title is read verbatim off its line (plus any indented continuation), and only the lookups stay YAML.
+ *
+ *  `steps:` IS READ VERBATIM FOR THE SAME REASON, and more urgently: a step is an instruction, and an
+ *  instruction is the prose most likely to carry what YAML cannot hold. `- Run \`npm login\`` is a parse
+ *  error outright (a backtick may not open a plain scalar), `- Approve it: use the org account` silently
+ *  becomes a one-key mapping, and either failure would cost the fence every lookup beside it. So each
+ *  `- ` item under the key is taken as written, an indented line continues the item above it, and a
+ *  value on the key line itself is one step — or, written `[a, b]`, a flow list YAML is allowed to try. */
 export function splitAwaitingFrontmatter(raw: string): { body: string; hints: AwaitingHint[] } {
   const lines = raw.split("\n").map((l) => l.replace(/\r$/, ""))
   const delimiter = lines.findIndex((l) => /^\s*---+\s*$/.test(l))
@@ -851,18 +871,22 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   const rest: string[] = []
   const yamlLines: string[] = []
   const titleLines: string[] = []
+  const steps: string[] = []
   // `structural` tracks whether the line we are on belongs to the YAML document. A block sequence's items
   // and any indented continuation belong to the KEY ABOVE THEM, so they follow that key's fate — which is
   // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
-  // `inTitle` is the same rule for the one key that is prose: its continuation lines follow it verbatim.
+  // `inTitle` and `inSteps` are the same rule for the two keys that are prose: their lines follow them
+  // verbatim.
   let structural = true
   let inTitle = false
+  let inSteps = false
   for (const line of frontmatter) {
     const m = line.match(AWAITING_KEY_RE)
     const key = m?.[1].toLowerCase()
     if (m && key) {
       structural = AWAITING_YAML_KEYS.has(key)
       inTitle = key === "title"
+      inSteps = key === "steps"
     }
     // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
     // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
@@ -870,8 +894,17 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
     else if (line.trim() !== "" && !/^\s/.test(line) && !/^\s*-\s/.test(line)) {
       structural = false
       inTitle = false
+      inSteps = false
     }
     if (inTitle) titleLines.push(m && key === "title" ? (m[2] ?? "") : line)
+    else if (inSteps) {
+      if (m && key === "steps") steps.push(...inlineSteps(m[2] ?? ""))
+      else {
+        const item = /^\s*-\s+(.*)$/.exec(line)
+        if (item) steps.push(item[1])
+        else if (line.trim() && steps.length > 0) steps[steps.length - 1] += ` ${line.trim()}`
+      }
+    }
     else (structural ? yamlLines : rest).push(line)
   }
   const parsed = parseAwaitingYaml(yamlLines.join("\n"))
@@ -883,7 +916,34 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   // no consumer can draw a longer one. A title alone still parks nothing (see readAwaitingPark).
   const title = trimAwaitingTitle(titleLines.join(" "))
   if (title) parsed.hints.push({ kind: "title", value: title })
-  return { body: rest.join("\n").trim(), hints: parsed.hints.slice(0, AWAITING_HINT_MAX) }
+  const stepHints: AwaitingHint[] = steps
+    .map((step) => step.trim())
+    .filter(Boolean)
+    .slice(0, AWAITING_STEPS_MAX)
+    .map((step) => ({ kind: "step", value: step.slice(0, AWAITING_STEP_VALUE_MAX) }))
+  return { body: rest.join("\n").trim(), hints: [...parsed.hints.slice(0, AWAITING_HINT_MAX), ...stepHints] }
+}
+
+/** The steps written ON the `steps:` line: none, one, or a flow list. A flow list YAML cannot read — a
+ *  step opening on a backtick, a colon inside one — stays ONE step with its brackets off, so the human
+ *  still reads every word rather than the fence losing them. */
+function inlineSteps(value: string): string[] {
+  const v = value.trim()
+  if (!v) return []
+  if (!(v.startsWith("[") && v.endsWith("]"))) return [v]
+  try {
+    const list = parseYaml(v)
+    if (Array.isArray(list) && list.every((s) => typeof s === "string" || typeof s === "number")) return list.map(String)
+  } catch {
+    // fall through to the one-step reading
+  }
+  return [v.slice(1, -1)]
+}
+
+/** The fence's steps for the human, in the order written — empty for every fence that is not waiting on
+ *  one, which is how every reader tells the two shapes apart. */
+export function awaitingSteps(hints: readonly AwaitingHint[] | undefined): string[] {
+  return (hints ?? []).filter((h) => h.kind === "step").map((h) => h.value)
 }
 
 function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] } {
@@ -945,8 +1005,14 @@ export function awaitingFenceTitle(hints: readonly AwaitingHint[] | undefined): 
 /** The fence's `needs_input:` answer: `true` (the human should look now, while the work keeps running),
  *  `false` (nothing for the human yet), or null when the fence gave no answer or one that is neither —
  *  which a new-contract thread is bumped for and queued on, never parked on. The LAST one wins, as
- *  awaitingFenceTitle's does. */
+ *  awaitingFenceTitle's does.
+ *
+ *  STEPS ARE THE ANSWER, whatever the line says. A fence listing `steps:` is waiting on the human to
+ *  perform them, so the human is needed now by construction: the line may be left out, and a `false`
+ *  beside steps is a contradiction read the safe way — a thread that is waiting on its human must never
+ *  be the one that disappears from their queue. */
 export function awaitingNeedsInput(hints: readonly AwaitingHint[] | undefined): boolean | null {
+  if (awaitingSteps(hints).length > 0) return true
   let answer: boolean | null = null
   for (const h of hints ?? []) {
     if (h.kind !== "needs_input") continue
@@ -1941,6 +2007,11 @@ function signoffNudgeText(needsInput: boolean): string {
   "  A fence that names NOTHING is not a park at all — if you are not waiting on anything, you are not",
   "  awaiting, you are done. Register a PR with `mcp__frizz__watch_pr` and a timer with",
   "  `mcp__frizz__timer`; `mcp__frizz__activity` reads back everything you have running, with its id.",
+  "- `` ```awaiting `` with `steps:` — the human must PERFORM something you cannot: sign in, approve,",
+  "  merge, press a button you may not. List each step as a `- ` line under `steps:`, written to be",
+  "  followed cold; frizz reads them verbatim. Steps name the HUMAN as the wait, so the fence needs no",
+  "  other name and no `for:`, and the thread goes into their queue. Their Done comes back to you as",
+  "  their reply; anything else they need to say comes as a message of their own.",
   "",
   "**STILL OWED counts things you are not going to do yourself.** A decision you are RECOMMENDING, a",
   "draft you wrote but did not send, follow-up work you discovered — all of it dies with the card, even",

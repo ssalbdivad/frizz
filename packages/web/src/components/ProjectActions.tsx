@@ -121,7 +121,13 @@ export function ProjectMenu({
           if (file) upload.mutate(file)
         }}
       />
-      <RadixDropdown.Root onOpenChange={onOpenChange}>
+      {/* Opening the menu is the cue: "Choose an icon…" is one move away, and on macOS a panel built at the
+          click took most of a second to draw (server/directory-picker.ts). Speculative, so a failed
+          request is dropped — the click builds its own panel. */}
+      <RadixDropdown.Root onOpenChange={(open) => {
+        if (open) rpc.projectIconPickWarm({ id: project.id }).catch(() => {})
+        onOpenChange?.(open)
+      }}>
         <RadixDropdown.Trigger asChild>{children}</RadixDropdown.Trigger>
         <RadixDropdown.Portal>
           {/* The items do NOT name the project: a name is a directory basename of any length, and this
@@ -727,6 +733,23 @@ function PathField({
 }
 
 /**
+ * Have the server build the folder picker NOW, because the pointer or keyboard focus has reached an
+ * "Add a project" control and the click is a moment behind it. On macOS a panel built at the click
+ * took 0.8-1.0s to draw — the whole delay the operator saw after pressing the button — and a panel
+ * built ahead draws in ~0.09s (server/directory-picker.ts).
+ *
+ * At most once every 10s: the server keeps a built panel for a minute and answers a repeat by keeping
+ * it, so asking more often only adds requests. A failed ask clears the stamp, so the next hover retries.
+ */
+let pickerWarmedAt = 0
+export function warmProjectPicker(): void {
+  const now = Date.now()
+  if (now - pickerWarmedAt < 10_000) return
+  pickerWarmedAt = now
+  rpc.projectPickWarm({}).catch(() => { pickerWarmedAt = 0 })
+}
+
+/**
  * Adding a project: the native folder picker first, the typed-path dialog as the FALLBACK — it opens
  * only when the machine has no picker, or the picker failed to open and said why. Every door that adds a
  * project (the list's last row, the empty machine's box) calls this, and the fallback is
@@ -852,6 +875,8 @@ export function Welcome({ projects: cards }: { projects: readonly ProjectCard[] 
         </p>
         <button
           type="button"
+          onPointerEnter={warmProjectPicker}
+          onFocus={warmProjectPicker}
           onClick={add.start}
           disabled={add.pending}
           className="mt-4 flex min-h-[96px] w-full max-w-[360px] flex-col items-center justify-center gap-1.5 rounded-lg border border-dashed border-border-strong bg-transparent px-3 py-2.5 text-muted outline-none transition-colors hover:border-fg/40 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-60"

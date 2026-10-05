@@ -19,8 +19,11 @@ import { ChildOpRow } from "./ChildOpRow.tsx"
 // It DOES carry the dismiss × (maintainer 2026-07-30 — "the X button to stop a sub-agent should show up
 // everywhere sub-agents are listed"). That is not the "second operations toolbar" this comment has
 // always warned against: the card names the live work, and retiring a child that finished without
-// signalling is the one action that reading provokes. Everything else — the kind tag, the counters, the
-// profile — still stays off the card.
+// signalling is the one action that reading provokes. The counters and the profile still stay off the
+// card. The kind tag does not, since 2026-10-03: the shell, watcher and File/Link rows that continue this
+// column below are tagged, so an untagged agent line here started a tag's width left of all of them —
+// and the same child lost its tag every time its thread moved from the drawer to the queue (see
+// ChildOpRow).
 // Whether this card will actually draw any ⤷ child lines. The card renders these lines and the
 // background-ops strip as two SIBLING lists in one visual column, so the strip has to know whether it
 // is opening that column or continuing it (the project board's card, TodosView, asked this until

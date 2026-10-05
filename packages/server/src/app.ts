@@ -2,6 +2,7 @@ import { Hono } from "hono"
 import { cors } from "hono/cors"
 import { streamSSE } from "hono/streaming"
 import { mkdirSync, writeFileSync } from "node:fs"
+import { Readable } from "node:stream"
 import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { mountRouter } from "@frizz/rpc/server"
@@ -10,7 +11,7 @@ import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
 import { compress, negotiateEncoding, shouldCompress } from "./compression.ts"
-import { resolveLocalImage } from "./local-image.ts"
+import { localImageHeaders, localImageStream, resolveLocalImage } from "./local-image.ts"
 import { resolveProjectIconResponse } from "./project-icon.ts"
 import { resolveLocalVisualization } from "./local-visualization.ts"
 import { workDirOf } from "./project.ts"
@@ -128,11 +129,15 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     return c.json({ accepted: true as const }, 202)
   })
 
+  // Pictures AND videos (a ```lightbox gallery plays both), in byte ranges — see local-image.ts.
   app.get(frizzRoute("/local-image"), (c) => {
-    const r = resolveLocalImage(c.req.query("path"))
-    if (r.status !== 200) return c.text(String(r.status), r.status)
-    // Copy into a plain Uint8Array<ArrayBuffer> — Hono's body type rejects Node's Buffer union.
-    return c.body(Uint8Array.from(r.body), 200, { "content-type": r.contentType, "cache-control": "private, max-age=60" })
+    const r = resolveLocalImage(c.req.query("path"), c.req.header("range"))
+    if (r.status === 416) return c.body(null, 416, { "content-range": `bytes */${r.size}`, "accept-ranges": "bytes" })
+    if (r.status === 400 || r.status === 404) return c.text(String(r.status), r.status)
+    // Hono answers a HEAD by running this handler and dropping the body, so open no file for one.
+    const stream = c.req.method === "HEAD" ? null : localImageStream(r)
+    if (!stream) return c.body(null, r.status, localImageHeaders(r))
+    return c.body(Readable.toWeb(stream) as ReadableStream<Uint8Array>, r.status, localImageHeaders(r))
   })
 
   // MACHINE-SCOPED, not this project's: the rail draws every project on the machine, so it asks for

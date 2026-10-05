@@ -1,6 +1,15 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { pickDirectory, pickWindowsFolder } from "./directory-picker.ts"
+import {
+  type NativePanel,
+  type PanelKind,
+  openPanel,
+  pickDirectory,
+  pickImageFile,
+  pickWindowsFolder,
+  warmDirectoryPicker,
+  warmImagePicker,
+} from "./directory-picker.ts"
 
 // The picker opens a real modal window, so the darwin/linux/win32 branches are exercised by hand
 // rather than here — popping a dialog on the operator's desktop is not something a test suite may do.
@@ -35,11 +44,93 @@ test("windows reports the last edition's own failure when none ran the script", 
   assert.notEqual(reason, "")
 })
 
-// Verified against the real tool on macOS 2026-08-06, and both details bite:
-//   osascript -e 'POSIX path of (path to home folder)'  →  "/Users/colinmcd94/"   (trailing slash)
-//   osascript -e 'error "User canceled." number -128'   →  "execution error: User canceled. (-128)"
-// The trailing slash would miss every path comparison in the registry, and AppleScript reports a
-// DISMISSED dialog as an error — so without the -128 case a mis-click reads as a broken picker.
-test("the darwin contract this depends on is documented where it can be re-checked", () => {
-  assert.ok(true)
+// THE MACOS PANELS' PROTOCOL, driven by a stand-in for the JXA helper: it reads the one `{"prompt":…}`
+// line, and answers the way the panel would — a picked path, or a cancel when the prompt says so. The
+// real helper is a window on the operator's desktop, so it is exercised by hand. The stand-in answers
+// with a trailing slash, as AppleScript's `POSIX path of` did for a folder, so the strip stays pinned.
+const STAND_IN = `
+let text = ""
+process.stdin.setEncoding("utf8")
+process.stdin.on("data", (chunk) => {
+  text += chunk
+  if (!text.includes("\\n")) return
+  const { prompt } = JSON.parse(text.slice(0, text.indexOf("\\n")))
+  process.stdout.write("2026-10-03 osascript[1] a stray log line\\n")
+  process.stdout.write(JSON.stringify(prompt === "cancel" ? { cancelled: true } : { path: "/picked/" + prompt + "/" }) + "\\n")
+  process.exit(0)
+})
+process.stdin.on("end", () => process.exit(0))
+`
+
+function countingOpen(kind: PanelKind = "folder") {
+  const open = () => {
+    open.count++
+    const panel = openPanel(kind, [process.execPath, "-e", STAND_IN])
+    open.panels.push(panel)
+    return panel
+  }
+  open.count = 0
+  open.panels = [] as NativePanel[]
+  return open
+}
+
+async function until(predicate: () => boolean): Promise<void> {
+  const deadline = Date.now() + 5_000
+  while (!predicate()) {
+    if (Date.now() > deadline) throw new Error("timed out waiting")
+    await new Promise((resolve) => setTimeout(resolve, 10))
+  }
+}
+
+// The whole fix: the panel built when the pointer reached the button is the one the click shows, so
+// the click does not pay the build. A second warm-up keeps that panel rather than building another.
+test("a panel built ahead of the click is the one the click shows", async () => {
+  const open = countingOpen()
+  assert.equal(warmDirectoryPicker("darwin", open), true)
+  assert.equal(warmDirectoryPicker("darwin", open), true)
+  assert.equal(open.count, 1)
+  assert.deepEqual(await pickDirectory("alpha", "darwin", open), { kind: "picked", path: "/picked/alpha" })
+  assert.equal(open.count, 1)
+  // That panel was used up, so a click nothing warned of builds its own.
+  assert.deepEqual(await pickDirectory("cancel", "darwin", open), { kind: "cancelled" })
+  assert.equal(open.count, 2)
+})
+
+test("only macOS builds a panel ahead", () => {
+  const open = countingOpen()
+  for (const platform of ["linux", "win32", "freebsd"] as const) {
+    assert.equal(warmDirectoryPicker(platform, open), false)
+    assert.equal(warmImagePicker("/projects/a", platform, open), false)
+  }
+  assert.equal(open.count, 0)
+})
+
+// The icon menu's panel opens in its project's directory, so one built for another project is not the
+// one this click shows — and it is killed, not left waiting beside the panel the click builds. The
+// folder panel waiting for "Add a project" is a different picker, and neither takes the other's.
+test("an image panel is shown only by a click for the directory it was built in", async () => {
+  const images = countingOpen("image")
+  const folders = countingOpen("folder")
+  warmDirectoryPicker("darwin", folders)
+  assert.equal(warmImagePicker("/projects/a", "darwin", images), true)
+  assert.equal(warmImagePicker("/projects/a", "darwin", images), true)
+  assert.equal(images.count, 1)
+  assert.deepEqual(await pickImageFile("/projects/a", "logo", "darwin", images), { kind: "picked", path: "/picked/logo" })
+  assert.equal(images.count, 1)
+  warmImagePicker("/projects/a", "darwin", images)
+  assert.deepEqual(await pickImageFile("/projects/b", "cancel", "darwin", images), { kind: "cancelled" })
+  assert.equal(images.count, 3)
+  await until(() => images.panels[1]!.exited)
+  assert.deepEqual(await pickDirectory("alpha", "darwin", folders), { kind: "picked", path: "/picked/alpha" })
+  assert.equal(folders.count, 1)
+})
+
+// A helper that dies without answering — no window server, a broken JXA bridge — is "no picker here",
+// and the operator reads the helper's own first line rather than a generic failure.
+test("a panel that exits without answering is unavailable, with its own reason", async () => {
+  const dies = () => openPanel("folder", [process.execPath, "-e", 'process.stderr.write("execution error: no window server (-1)\\nmore\\n"); process.exit(1)'])
+  assert.deepEqual(await pickDirectory("Choose", "darwin", dies), {
+    kind: "unavailable",
+    reason: "execution error: no window server (-1)",
+  })
 })

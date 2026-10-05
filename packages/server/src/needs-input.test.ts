@@ -4,8 +4,8 @@
 // declared-park.test.ts for the scheduler's correction of a fence that gives no answer.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { awaitingNeedsInput, NEEDS_INPUT_REQUIRED_AT, needsInputRequired, splitAwaitingFrontmatter, type AwaitingHint } from "@frizz/shared"
-import { deriveAwaitingBackground, deriveNeedsYou, type RegisteredWatch } from "./board.ts"
+import { AWAITING_STEP_VALUE_MAX, AWAITING_STEPS_MAX, awaitingNeedsInput, awaitingSteps, NEEDS_INPUT_REQUIRED_AT, needsInputRequired, RETIRED_AWAITING_REPLACEMENT, splitAwaitingFrontmatter, type AwaitingHint } from "@frizz/shared"
+import { deriveAwaitingBackground, deriveNeedsYou, hasDeclaredWait, type RegisteredWatch } from "./board.ts"
 import type { GithubStatusBook } from "./awaiting.ts"
 import type { SessionRow } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -144,4 +144,75 @@ test("the hard gates still outrank a false: an open question, a done handoff", (
   assert.equal(needsYou(row(), t, { questions: 1 }), true, "a question waits on a person, whatever the fence says")
   const done = tele({ subAgents: [LIVE_AGENT], lastFence: { kind: "done", body: "- **Shipped** it", hints: [] } })
   assert.equal(needsYou(row(), done), true, "a done card queues even with a child still running")
+})
+
+// ---- STEPS FOR THE HUMAN (2026-10-03) --------------------------------------------------------------
+// A fence can hand the human steps only they can perform. They ride the fence rather than a registered
+// row (maintainer 2026-10-03: "I don't think this requires persistently registering it"), and they are
+// PROSE inside the frontmatter, which is exactly what YAML cannot hold — so they are read verbatim.
+
+test("steps are read verbatim: code, colons and #refs survive, and the lookups beside them still parse", () => {
+  const { hints, body } = splitAwaitingFrontmatter([
+    "title: Sign in to npm",
+    "steps:",
+    "  - Run `npm login --auth-type=web` in a terminal",
+    "  - Approve it: use the maintainer account, as in #482",
+    "    (the 2FA prompt can take a minute)",
+    "prs: [acme/app#391]",
+    "for: 2d",
+    "---",
+    "The publish step runs as the maintainer.",
+  ].join("\n"))
+  assert.deepEqual(awaitingSteps(hints), [
+    "Run `npm login --auth-type=web` in a terminal",
+    "Approve it: use the maintainer account, as in #482 (the 2FA prompt can take a minute)",
+  ])
+  // A backtick opening a step is a YAML parse error, and it must not cost the fence its lookups.
+  assert.deepEqual(hints.filter((h) => h.kind === "pr"), [{ kind: "pr", value: "acme/app#391" }])
+  assert.deepEqual(hints.filter((h) => h.kind === "for"), [{ kind: "for", value: "2d" }])
+  assert.equal(body, "The publish step runs as the maintainer.")
+})
+
+test("a step on the key line is one step; a flow list YAML can read is a list, and one it cannot stays one step", () => {
+  assert.deepEqual(awaitingSteps(splitAwaitingFrontmatter("steps: Merge acme/app#391").hints), ["Merge acme/app#391"])
+  assert.deepEqual(awaitingSteps(splitAwaitingFrontmatter("steps: [Sign in, Approve the prompt]").hints), ["Sign in", "Approve the prompt"])
+  assert.deepEqual(awaitingSteps(splitAwaitingFrontmatter("steps: [Run `npm login`, Approve]").hints), ["Run `npm login`", "Approve"], "a backtick INSIDE a step is fine")
+  // A step OPENING on a backtick, or carrying ` #`, is a flow list YAML cannot read: every word kept, brackets off.
+  assert.deepEqual(awaitingSteps(splitAwaitingFrontmatter("steps: [`npm login` first, Approve]").hints), ["`npm login` first, Approve"])
+  assert.deepEqual(awaitingSteps(splitAwaitingFrontmatter("steps: [Run x, see #4]").hints), ["Run x, see #4"])
+  assert.deepEqual(awaitingSteps(splitAwaitingFrontmatter("agents: [a01b2d20]\nfor: 1h").hints), [], "no steps is the ordinary fence")
+})
+
+test("steps have caps of their own, after the hints' cap, so a long list never crowds out a lookup", () => {
+  const many = Array.from({ length: 14 }, (_, i) => `  - step ${i + 1}`)
+  const shells = Array.from({ length: 6 }, (_, i) => `id${i}`).join(", ")
+  const { hints } = splitAwaitingFrontmatter([`shells: [${shells}]`, "needs_input: true", "for: 1h", "steps:", ...many, `  - ${"x".repeat(900)}`].join("\n"))
+  assert.equal(hints.filter((h) => h.kind === "shell").length, 6)
+  assert.ok(hints.some((h) => h.kind === "needs_input"), "the answer survives a long list")
+  assert.ok(hints.some((h) => h.kind === "for"), "so does for:")
+  const steps = awaitingSteps(hints)
+  assert.equal(steps.length, AWAITING_STEPS_MAX)
+  assert.deepEqual(steps.slice(0, 2), ["step 1", "step 2"])
+  const long = awaitingSteps(splitAwaitingFrontmatter(`steps:\n  - ${"y".repeat(900)}`).hints)[0]
+  assert.equal(long.length, AWAITING_STEP_VALUE_MAX)
+})
+
+test("steps ARE the needs_input answer: the line may be left out, and a false beside them reads true", () => {
+  assert.equal(awaitingNeedsInput(splitAwaitingFrontmatter("steps:\n  - Sign in").hints), true)
+  assert.equal(awaitingNeedsInput(splitAwaitingFrontmatter("needs_input: false\nsteps:\n  - Sign in").hints), true, "a thread waiting on its human never hides from them")
+  // The retired `human:` gate now points at steps for an act, and at a question for a decision.
+  assert.match(RETIRED_AWAITING_REPLACEMENT.human, /`steps:`/)
+  assert.match(RETIRED_AWAITING_REPLACEMENT.human, /mcp__frizz__ask/)
+})
+
+const stepsFence = (...extra: AwaitingHint[]) => awaiting({ kind: "step", value: "Run `npm login`" }, { kind: "step", value: "Approve the prompt" }, ...extra)
+
+test("a steps fence queues the thread — new contract, legacy, and with a false beside it — and the resting card states it", () => {
+  assert.equal(needsYou(row(), tele(stepsFence())), true, "new contract, no needs_input line")
+  assert.equal(needsYou(row({ spawned_at: LEGACY_SPAWN }), tele(stepsFence())), true, "legacy thread")
+  assert.equal(needsYou(row(), tele({ subAgents: [LIVE_AGENT], ...stepsFence({ kind: "agent", value: "a01b2d20" }, { kind: "for", value: "2h" }, { kind: "needs_input", value: "false" }) })), true, "steps outrank a false on a live park")
+  assert.equal(deriveAwaitingBackground(row(), tele(stepsFence()), "turn-idle", false, NOW), true, "the card is where the steps are performed from")
+  assert.equal(hasDeclaredWait(tele(stepsFence()), NOW), true)
+  // A question still outranks it, exactly as it outranks every awaiting card.
+  assert.equal(deriveAwaitingBackground(row(), tele(stepsFence()), "turn-idle", false, NOW, undefined, false, {}, new Set(), new Set(), [], 1), false)
 })

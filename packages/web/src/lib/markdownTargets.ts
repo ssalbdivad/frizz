@@ -157,6 +157,15 @@ export function localImageUrlForTarget(target: LocalMarkdownTarget): string | nu
     : null
 }
 
+// The VIDEOS the same route serves (server/local-image.ts, which must match). Only a ```lightbox gallery
+// draws one (lib/lightbox.ts): a Markdown `![](demo.mp4)` keeps its link, because an `<img>` cannot play
+// a video and the sanitizer mints no `<video>`.
+const PROXIED_VIDEO_PATH = /\.(?:mp4|m4v|webm|mov)$/i
+
+export function isProxiedVideoPath(path: string): boolean {
+  return PROXIED_VIDEO_PATH.test(path)
+}
+
 // Must match the server's `MARKDOWN_FILE_EXT`. A local path with this extension is rendered by Frizz's
 // own reader drawer instead of being handed to the desktop opener — the one local file kind the app
 // knows how to show. The strip mirrors an editor cursor suffix (`README.md:12`) the way

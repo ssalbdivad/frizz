@@ -314,4 +314,4 @@ Useful geometry assertions to run alongside the ink measurement:
 - [ ] Corrections in `em`, proven to scale by re-measuring at a different size
 - [ ] New glyph tone/size compared against the sibling it sits beside (computed values, not eyeball)
 - [ ] If the pattern exists in a real product, the real one was measured and mirrored
-- [ ] Decisive screenshots embedded in the handoff with meaningful alt text; browser cleaned up
+- [ ] Decisive screenshots shown in the handoff in a ```lightbox fence, each captioned; browser cleaned up

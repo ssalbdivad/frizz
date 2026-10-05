@@ -23,10 +23,11 @@ export const CHILD_ARROW = "⤷"
 // than sitting below the muted label it introduces.
 export const CHILD_ARROW_CLASS = "shrink-0 text-[11px] leading-none text-muted-45"
 
-// THE KIND TAG on an operations row — `AGENT` / `SHELL` / `WATCH` on ChildOpRow's sheet density, `File` /
-// `Link` on ThreadLinks. One class, because the two surfaces render one under the other beneath the
-// prompt box and the eye runs down ONE label column: the tag's SIZE (9.5px petite caps) and its COLUMN
-// (`.frizz-kind-tag` in styles.css — a fixed, per-font width) are what put every label at the same x.
+// THE KIND TAG on an operations row — `AGENT` / `SHELL` / `WATCH` on ChildOpRow's card and sheet
+// densities, `File` / `Link` on ThreadLinks. One class, because the two surfaces render one under the
+// other beneath the prompt box and the eye runs down ONE label column: the tag's SIZE (9.5px petite
+// caps) and its COLUMN (`.frizz-kind-tag` in styles.css — a fixed, per-font width) are what put every
+// label at the same x.
 // The saved-reference rows had a 9px tag of their own in a 33px column, which put their labels 14.1px
 // right of the rows above them in mono and 7.2px in sans (maintainer 2026-09-11: "The label is further
 // to the right. Why? There's no reason for that at all").

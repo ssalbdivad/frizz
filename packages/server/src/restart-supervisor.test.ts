@@ -142,6 +142,21 @@ test("public supervisor serves local images without entering or requiring the di
     assert.equal((await getBytes(port, path)).status, 403, "missing browser authority stays forbidden")
     assert.equal((await getBytes(port, path, { origin: "http://attacker.invalid" })).status, 403)
     assert.equal((await get(port, "/ordinary-route")).status, 503, "only local images bypass an unavailable child")
+
+    // A lightbox video keeps playing through a restart: the supervisor answers its byte ranges too.
+    const videoPath = join(imageDir, "flow.webm")
+    const video = Buffer.from(Array.from({ length: 2048 }, (_, i) => i % 241))
+    writeFileSync(videoPath, video)
+    const videoUrl = `/_frizz/local-image?path=${encodeURIComponent(videoPath)}`
+    const range = await getBytes(port, videoUrl, { "sec-fetch-site": "same-origin", range: "bytes=1024-1535" })
+    assert.equal(range.status, 206)
+    assert.equal(range.headers["content-type"], "video/webm")
+    assert.equal(range.headers["content-range"], "bytes 1024-1535/2048")
+    assert.equal(range.headers["accept-ranges"], "bytes")
+    assert.deepEqual(range.body, video.subarray(1024, 1536))
+    const past = await getBytes(port, videoUrl, { "sec-fetch-site": "same-origin", range: "bytes=2048-" })
+    assert.equal(past.status, 416)
+    assert.equal(past.headers["content-range"], "bytes */2048")
   } finally {
     await proxy.close().catch(() => undefined)
   }

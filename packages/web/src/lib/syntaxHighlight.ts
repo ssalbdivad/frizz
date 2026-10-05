@@ -159,6 +159,12 @@ export function highlightToHtml(text: string, language: FenceLanguage): string {
 
 export function renderHighlightedCode(text: string, infoString?: string): string {
   const language = resolveFenceLanguage(infoString)
+  // A ```lightbox fence is a list of picture paths (lib/lightbox.ts), not code. It is escaped as plain
+  // text like any unknown language, but keeps its NAME on the block: that class is how a surface that
+  // injects a whole body as one block of HTML — a signal card, a question card, the file readers — finds
+  // the fence and draws a gallery in its place (components/Lightbox.tsx useLightboxIslands). Anywhere
+  // that pass does not run, it stays a readable code block.
+  const name = (infoString ?? "").trim().toLowerCase() === "lightbox" ? "lightbox" : language
   // Match Marked's stock code renderer: exactly one trailing LF is present in the resulting <code>,
   // preserving selection/copy behavior for both complete and still-streaming (unclosed) fences.
   const code = `${text.replace(/\n$/, "")}\n`
@@ -166,6 +172,6 @@ export function renderHighlightedCode(text: string, infoString?: string): string
   // No whitespace anywhere inside the <pre>: it preserves it, so a newline before the <code> would print
   // as a blank first line. The button follows the block in DOM order so a keyboard walk reaches the code
   // before its affordance, and `title` is the accessible name — `aria-label` is not in the render allowlist.
-  return `<span class="${CODE_BLOCK_CLASS}"><pre><code class="hljs language-${language}">${value}</code></pre>`
+  return `<span class="${CODE_BLOCK_CLASS}"><pre><code class="hljs language-${name}">${value}</code></pre>`
     + `<button type="button" class="${CODE_COPY_CLASS}" title="${COPY_CODE_LABEL}"></button></span>\n`
 }

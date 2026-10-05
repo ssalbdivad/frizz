@@ -90,12 +90,15 @@ test("the rail keeps its checkbox spinner, its indent and its tooltip override",
   assert.doesNotMatch(running, /petite-caps/)
 })
 
-test("the card keeps the pulsing queue indicator and stays free of ops chrome", () => {
+test("the card keeps the pulsing queue indicator and carries the kind tag the sheet does", () => {
   const html = render({ density: "card", onOpen: () => {}, parentSlug: "parent-thread", startedAt: TWELVE_MIN_AGO })
   assert.match(html, /data-running-indicator="queue-subagent"/)
   assert.match(html, /frizz-live-dot--agent/)
   assert.match(html, /data-subagent-parent="parent-thread"/)
-  assert.doesNotMatch(html, /petite-caps/, "a queue card names the work, it is not a second ops toolbar")
+  // The shell, watcher and File/Link rows beneath these lines on a queue card are tagged, and so is
+  // this same row in the drawer (maintainer 2026-10-03: "sometimes that little small caps AGENT label
+  // shows up and other times it doesn't").
+  assert.match(html, /petite-caps[^"]*">AGENT</, "the card tags its rows like the rest of its column")
   assert.doesNotMatch(html, /<svg /, "the card must not borrow the rail's checkbox spinner")
 })
 
