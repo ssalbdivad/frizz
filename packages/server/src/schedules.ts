@@ -305,9 +305,11 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       if (reuse && !starter.isStarting(reuse.slug)) {
         slug = reuse.slug
         if (reuse.snoozed_until !== iso(next)) storage.setSnoozedUntil(slug, iso(next), null)
-        // The note a human edited was for the occurrence that just went; the next one starts from the
-        // schedule's prompt again.
-        if (reuse.lazy_prompt !== sch.prompt) storage.setLazyPrompt(slug, reuse.session_id, sch.prompt)
+        // When an occurrence was CONSUMED (a skip, a failed start), the note a human edited was for the
+        // occurrence that just went, so the next one starts from the schedule's prompt again. When nothing
+        // was consumed — an edit re-pointing the same pending run at a new rule — the note is still for
+        // this run and stays (§6 "Edits": "keeping a per-run prompt edit the human made").
+        if (consumed !== undefined && reuse.lazy_prompt !== sch.prompt) storage.setLazyPrompt(slug, reuse.session_id, sch.prompt)
       } else {
         const made = deps.dispatcher.createLazyThread(
           {

@@ -564,3 +564,22 @@ test("ProviderAuthRequiredError reads as signed out", async () => {
   assert.equal(scheduleStartFailure(new ProviderAuthRequiredError("codex")), "Codex is signed out")
   assert.equal(scheduleStartFailure(new Error("spawn x ENOENT")), "the project folder is missing")
 })
+
+test("a rule edit moves the next run but keeps the note the human wrote for it", async () => {
+  const h = harness()
+  try {
+    const view = h.service.create(WEEKLY)
+    const next = view.nextRun!
+    await h.router.updateLazyPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Just this once: only the bug reports." } })
+    const edited = h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am" })
+    assert.equal(edited.nextRun!.slug, next.slug)
+    assert.equal(edited.nextRun!.at, "2026-10-06T10:00:00.000Z")
+    assert.equal(h.storage.getSession(next.slug)!.lazy_prompt, "Just this once: only the bug reports.")
+    h.at(T("2026-10-06T10:00:05Z"))
+    await h.tick()
+    assert.equal(h.spawned.length, 1)
+    assert.match(h.spawned[0]!.prompt, /Just this once: only the bug reports\.$/)
+  } finally {
+    h.close()
+  }
+})
