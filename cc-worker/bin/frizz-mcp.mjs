@@ -583,7 +583,10 @@ function questionSchema(depth) {
           "Mark the ONE option you would take, and put it first. At most one per question — a " +
           "recommendation on two of three choices says nothing. IF YOU CAN MARK ONE, ASK YOURSELF WHY " +
           "YOU ARE ASKING: you already know the answer, so implement it and say which way you went. " +
-          "This is for the fork you genuinely cannot take yourself.",
+          "This is for the fork you genuinely cannot take yourself. AND IT IS THE DEFAULT: a question " +
+          "still unanswered 10 minutes after you rest on it takes this option for the human (never on " +
+          "a `danger`, `multi` or free-text question), and the answer reaches you marked as Frizz's " +
+          "default — so mark only an option you would act on without them.",
       },
       // `preview` (markdown revealed under the option once picked) is RETIRED from this schema
       // (2026-09-01): detail that decides a choice must be visible before the choice, so it belongs in
@@ -682,6 +685,9 @@ const ASK = {
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
+    "AN UNANSWERED QUESTION DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
+    "`recommended` option for the human and delivers that as the answer, noting it was the default. A " +
+    "`danger`, `multi` or free-text question, or one with no recommendation, waits for the human.\n\n" +
     "WHEN THE HUMAN WRITES INSTEAD OF ANSWERING, THE MESSAGE SETS YOUR OPEN QUESTIONS ASIDE, AND YOUR " +
     "NEXT REST WITHDRAWS THEM. A set-aside question no longer holds your thread: it is not your sign-off, " +
     "does not block `done`, and does not follow you to your next handoff; its card stays answerable only " +

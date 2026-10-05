@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, QUESTION_DEFAULT_AFTER_MS, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2301,6 +2301,36 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
     if (withdrew > 0) {
       log(`waker: withdrew ${withdrew} question(s) the human wrote past`)
+      deps.refreshBoard?.()
+    }
+  }
+
+  // AN UNANSWERED QUESTION TAKES ITS RECOMMENDED OPTION once its card has sat in the queue for
+  // QUESTION_DEFAULT_AFTER_MS (2026-10-05). The clock starts at the later of the ask, a `keep`, and the
+  // REST — a question asked mid-turn is not in front of anybody until the thread stops, and a thread
+  // that wakes again (a sub-agent returning) puts it back in the Active band, where nobody is prompted.
+  // The answer is stored exactly as the card would store it, so evalQuestionAnswers delivers it; its
+  // `text` says it was Frizz's default, not the human's pick. A question with nothing to take — free
+  // text, `multi`, no recommendation, `danger` — waits for the human as before, and so does one they
+  // typed past, which evalSetAsideQuestions withdraws instead.
+  function evalQuestionDefaults(nowMs: number): void {
+    let answered = 0
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele || tele.turn !== "idle") continue
+      const restedMs = Date.parse(tele.lastAssistantAt ?? "")
+      if (!Number.isFinite(restedMs)) continue
+      for (const q of deps.storage.listThreadQuestions(row.slug, { openOnly: true })) {
+        if (nowMs - Math.max(q.asked_at, q.kept_at ?? 0, restedMs) < QUESTION_DEFAULT_AFTER_MS) continue
+        if (questionRepliedPast(q, tele.lastHumanAt)) continue
+        const spec = safeQuestionSpec(q.spec)
+        const answer = spec && recommendedDefaultAnswer(q.id, spec)
+        if (answer && deps.storage.answerThreadQuestion(q.id, JSON.stringify(answer), nowMs)) answered++
+      }
+    }
+    if (answered > 0) {
+      log(`waker: took the recommended option on ${answered} unanswered question(s)`)
       deps.refreshBoard?.()
     }
   }
@@ -4617,6 +4647,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       log(`waker: pr-watch registry pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
+      // Defaults first, so a question this pass answers on the human's behalf goes out in the same tick.
+      evalQuestionDefaults(now())
       evalQuestionAnswers(now())
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err

@@ -613,7 +613,10 @@ export interface ShellBudgetRow {
  *
  *  IT HAS NO EXPIRY, which is the one real difference from ThreadWatchRow. A watch waits on WORK, and
  *  work ends; a question waits on a PERSON, and a person owes an answer until they give one. A question
- *  that timed out would either re-ask as noise or silently drop something the human still owed. */
+ *  that timed out would either re-ask as noise or silently drop something the human still owed. What it
+ *  CAN do instead is be ANSWERED by default: one with a `recommended` option takes it after sitting
+ *  unanswered at rest (QUESTION_DEFAULT_AFTER_MS, scheduler evalQuestionDefaults) — an answer the worker
+ *  is told about, not a drop. */
 export interface ThreadQuestionRow {
   id: string
   thread_slug: string
@@ -1488,6 +1491,8 @@ export const STORAGE_SCHEMA = `
     -- NO EXPIRY COLUMN, deliberately, and the one real difference from thread_watch. A watch waits on
     -- work, which ends; a question waits on a PERSON, and a person owes an answer until they give one.
     -- A timing-out question either re-asks as noise or silently drops something a human still owed.
+    -- (One with a recommended option is ANSWERED with it after a while at rest instead — a real answer
+    -- row, delivered like the human's; see scheduler evalQuestionDefaults.)
     CREATE TABLE IF NOT EXISTS thread_question (
       id          TEXT PRIMARY KEY,
       project_id  TEXT NOT NULL,

@@ -2980,6 +2980,42 @@ export function questionsOwed<Q extends { repliedPast?: true }>(questions: reado
   return questions ? questions.filter((q) => !q.repliedPast) : []
 }
 
+/** HOW LONG A RESTED THREAD WAITS ON AN UNANSWERED QUESTION BEFORE FRIZZ TAKES THE WORKER'S RECOMMENDED
+ *  OPTION FOR IT (2026-10-05). A long-running thread that asks and rests stalls on the human's clock: a
+ *  wave-Z design thread sat for hours on a "narrow the error rule?" card whose recommended option the
+ *  maintainer then picked anyway (maintainer: "it should have a timeout after which it selects
+ *  recommended ... Maybe 10 minutes?"). The clock starts when the card can first be seen — the later of
+ *  the ask, a `keep`, and the rest that put it in the queue — so a question asked mid-turn does not
+ *  expire before the thread has rested. Only questions with something to take qualify; see
+ *  `recommendedDefaultAnswer`. */
+export const QUESTION_DEFAULT_AFTER_MS = 10 * 60_000
+
+/** The `text` an automatic answer carries beside its picked label — read by the worker in the answers
+ *  wake and by the human on the settled card, so neither mistakes Frizz's default for the human's pick. */
+export const DEFAULTED_ANSWER_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS / 60_000}m, so Frizz took the recommended option`
+
+/** The answer Frizz gives an unanswered question on the human's behalf, or undefined when it has none to
+ *  give: a free-text or `multi` question (no single pick to take), one with no option marked
+ *  `recommended`, and a `danger` question — the irreversible call stays the human's however long it
+ *  waits. Follow-ups under the taken option take their own recommendation, or go out with nothing
+ *  chosen, the same shape the card sends for a live follow-up the human left blank. */
+export function recommendedDefaultAnswer(questionId: string, spec: AskedQuestion): QuestionAnswer | undefined {
+  if (spec.danger) return undefined
+  const build = (node: AskedQuestion, root: boolean): QuestionAnswer | undefined => {
+    const taken = node.kind === "question" ? node.options?.find((o) => o.recommended) : undefined
+    if (!taken && root) return undefined
+    const followUps = (taken?.followUps ?? []).flatMap((child) => build(child, false) ?? [])
+    return {
+      questionId,
+      question: node.question,
+      chosen: taken ? [taken.label] : [],
+      ...(root ? { text: DEFAULTED_ANSWER_NOTE } : {}),
+      ...(followUps.length > 0 ? { followUps } : {}),
+    }
+  }
+  return build(spec, true)
+}
+
 export const KeepQuestionInput = z.object({
   slug: ThreadSlug,
   id: z.string().min(1).max(64),

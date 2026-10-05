@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { wakeDeliveryToken } from "@frizz/shared"
+import { QUESTION_DEFAULT_AFTER_MS, wakeDeliveryToken } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { ANSWER_REOFFER_BACKOFF_MS, createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
@@ -403,6 +403,57 @@ test("question: a dismissal rides an answer's message and never wakes anybody on
   // continuation of THAT row's answer, so a tail would print inside the human's own answer chip.
   assert.match(h.resumes[0].message, /^2\. “Name the flag\?” → \(dismissed — decide it yourself; do not re-ask\)$/m)
   assert.equal(h.storage.getThreadQuestion("qst_drop")?.delivered, 1, "and rides along when one comes")
+})
+
+// AN UNANSWERED QUESTION TAKES ITS RECOMMENDED OPTION after QUESTION_DEFAULT_AFTER_MS at rest
+// (2026-10-05) — counted from the REST, not the ask, and never for a question with nothing to take.
+test("question: a rested thread's unanswered question takes its recommended option after the timeout", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const t0 = h.clock.ms
+  const spec = (over: object) => JSON.stringify({ question: "Narrow the error rule?", kind: "question", options: [{ label: "Narrow", recommended: true, followUps: [{ question: "Rewrite the brief?", kind: "question", options: [{ label: "No" }, { label: "Yes", recommended: true }] }] }, { label: "Keep" }], ...over })
+  h.storage.askThreadQuestion({ id: "qst_rec", slug: "t", spec: spec({}), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_danger", slug: "t", spec: spec({ danger: true }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_free", slug: "t", spec: JSON.stringify({ question: "Name it?", kind: "question" }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_none", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A" }, { label: "B" }] }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_multi", slug: "t", spec: JSON.stringify({ question: "Which gates?", kind: "multi", options: [{ label: "A", recommended: true }, { label: "B" }] }), askedAtMs: t0 })
+  // The worker kept working for a while after asking, then rested.
+  const restedMs = t0 + QUESTION_DEFAULT_AFTER_MS
+  h.tele.set("t", { ...tele(undefined, "in-flight"), lastAssistantAt: iso(t0) })
+  const s = h.make()
+  h.clock.ms = restedMs
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_rec")?.state, "open", "not while the thread is still working")
+
+  h.tele.set("t", { ...tele(), lastAssistantAt: iso(restedMs) })
+  h.clock.ms = restedMs + QUESTION_DEFAULT_AFTER_MS - 1
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_rec")?.state, "open", "the clock starts at the rest, not the ask")
+  assert.equal(h.resumes.length, 0)
+
+  h.clock.ms = restedMs + QUESTION_DEFAULT_AFTER_MS
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_rec")?.state, "answered")
+  for (const id of ["qst_danger", "qst_free", "qst_none", "qst_multi"]) assert.equal(h.storage.getThreadQuestion(id)?.state, "open", id)
+  assert.equal(h.resumes.length, 1, "delivered in the same tick")
+  assert.match(h.resumes[0].message, /^1\. “Narrow the error rule\?” → Narrow — No reply in 10m, so Frizz took the recommended option$/m)
+  assert.match(h.resumes[0].message, /“Rewrite the brief\?” → Yes$/m)
+  h.storage.close()
+})
+
+test("question: a question the human typed past is never defaulted", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const t0 = h.clock.ms
+  h.storage.askThreadQuestion({ id: "qst_1", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }] }), askedAtMs: t0 })
+  // The human typed while the turn ran; the worker has not rested since, so it is not yet withdrawn.
+  h.tele.set("t", { ...tele(), lastHumanAt: iso(t0 + 1_000), lastUserAt: iso(t0 + 1_000), lastAssistantAt: iso(t0) })
+  const s = h.make()
+  h.clock.ms = t0 + 2 * QUESTION_DEFAULT_AFTER_MS
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.state, "open")
+  assert.equal(h.resumes.length, 0)
+  h.storage.close()
 })
 
 test("question: an archived thread keeps its answer rather than spending it", async () => {
