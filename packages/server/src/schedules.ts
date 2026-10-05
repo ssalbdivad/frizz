@@ -513,6 +513,10 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       storage.settleScheduleRun(run.id, started
         ? { state: "started", startedAt: run.created_at }
         : { state: "failed", reason: "Frizz stopped" })
+      // A hard kill can land after the daemon took the prompt but before the row stopped being lazy, so
+      // that session id may have a live worker behind it. Never hand it to the next occurrence: drop the
+      // lazy row and let the pass write the next run down under a fresh session id.
+      if (!started && row && row.session_id === run.session_id && isLazyRow(row)) storage.forgetSession(row.slug)
       log(`schedule ${run.schedule_id}: settled a claim from a stopped process as ${started ? "started" : "failed"}`)
     }
   }

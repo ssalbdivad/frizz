@@ -222,7 +222,10 @@ test("a claim a dead process left behind is settled by what its thread shows", a
     assert.equal(ha.history[0]!.state, "failed")
     assert.equal(ha.history[0]!.label, "Didn't start: Frizz stopped")
     assert.equal(ha.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString(), "the next occurrence is materialized")
-    assert.equal(ha.schedule.nextRun!.slug, a.nextRun!.slug, "on the same lazy row, re-snoozed")
+    // The dead process may have handed that session id to a daemon before it died, so the next run is a
+    // fresh lazy row under a fresh session id, never the same one re-snoozed.
+    assert.notEqual(ha.schedule.nextRun!.sessionId, a.nextRun!.sessionId, "a fresh session id for the next run")
+    assert.equal(h.storage.getSession(a.nextRun!.slug)?.session_id === a.nextRun!.sessionId, false, "the cut-off lazy row is gone")
     const hb = h.service.get(b.id)
     assert.equal(hb.history[0]!.state, "started", "its thread started, so the claim got through")
     assert.notEqual(hb.schedule.nextRun!.slug, b.nextRun!.slug)
