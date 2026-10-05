@@ -340,11 +340,6 @@
           "default": true,
           "markdownDescription": "Show Frizz in your color theme's colors, so the sidebar, and a thread you open in an editor tab, match the rest of the editor. Turn it off to see Frizz's own colors. Either way, Frizz follows your theme between light and dark."
         },
-        "frizz.notify": {
-          "type": "boolean",
-          "default": true,
-          "markdownDescription": "Show a notification when a thread in this window's Frizz project needs you — a question, a request to approve, a finished turn — while the Frizz sidebar is out of sight. Only the window you used last shows it."
-        },
         "frizz.selectionHint": {
           "type": "boolean",
           "default": true,

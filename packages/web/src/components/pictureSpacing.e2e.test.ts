@@ -6,19 +6,23 @@ import test from "node:test"
 // set FRIZZ_PICTURE_SPACING_E2E_URL to its origin.
 //
 // The invariant (maintainer 2026-08-11, on an image `Read` with the live shimmer under it: "we need
-// better spacing under the screenshots … it's too close"): a picture is a tool-activity EXCEPTION, so
-// every spacing predicate used to see "a card" and charge the tight 6px run that binds a batch of
+// better spacing under the screenshots … it's too close"): a picture CARD is a tool-activity EXCEPTION,
+// so every spacing predicate used to see "a card" and charge the tight 6px run that binds a batch of
 // compact bands together. A picture is not a compact band — measured 6.19px from the frame's bottom
 // border to the shimmer's box — so it takes PICTURE_STEP against whatever it neighbours, on both sides,
 // while the compact exceptions around it keep the run.
+//
+// The picture card is a SendUserFile delivery now. The image `Read` that prompted the rule folds into
+// the collapsed digest since 2026-10-03 (maintainer: "No images or screenshots are visible unless you
+// make them visible to the user with the light box"), so it is a bare label row and is spaced like one.
 //
 // Measured in the browser rather than asserted on the tree because this is layout, and because the rule
 // is charged in FOUR places (the between-message gap, the working-indicator gap, the seams inside one
 // tool band, and the seams between a message's blocks) that must not drift apart.
 //
 // The picture itself does not have to LOAD: `/local-image` is not served by a plain Vite dev server, so
-// BlockImage falls back to its path text — and the gap is decided by the tool's `outputImage` field,
-// never by whether the bytes arrived. Point the URL at a server that proxies /_frizz to a real stack if
+// the delivery's gallery lists its path as text — and the gap is decided by the tool's `sentImages`
+// field, never by whether the bytes arrived. Point the URL at a server that proxies /_frizz to a real stack if
 // you want to SEE the frames while the numbers are checked.
 const baseUrl = process.env.FRIZZ_PICTURE_SPACING_E2E_URL
 
@@ -95,6 +99,17 @@ test("a picture takes its own gap on both sides, and the compact exceptions arou
     assert.equal(live.error, undefined, `thread transcript must mount a live tail: ${live.error}`)
     near(live.aboveWorking!, PICTURE, "the shimmer under a picture")
 
+    // 1b. An image Read is no picture card: it folds into the digest, a bare label row, so the shimmer
+    //     under it takes the label's ordinary step — and no picture is drawn until the human opens it.
+    await page.goto(fixtureUrl("?case=folded"), { waitUntil: "domcontentloaded" })
+    await page.waitForSelector("[data-working-indicator]")
+    await settled(page)
+    const folded = await tailGap(page)
+    assert.equal(folded.error, undefined, `thread transcript must mount a live tail: ${folded.error}`)
+    near(folded.aboveWorking!, STEP, "the shimmer under a folded image Read")
+    assert.equal(await page.$("[data-tool-image]"), null, "the image Read's card sits inside the collapsed digest")
+    assert.equal(await page.$$eval("[data-virtualized-transcript] img", (imgs) => imgs.length), 0, "no picture is drawn")
+
     // 2. CONTROL: two compact background-op cards in the same shapes. Both the seam between them and
     //    the shimmer below them stay at the tight run — the picture gap is charged to pictures, not to
     //    every card that escapes the digest.
@@ -107,20 +122,20 @@ test("a picture takes its own gap on both sides, and the compact exceptions arou
     for (const gap of control) near(gap, TIGHT, "a compact exception seam")
     near((await tailGap(page)).aboveWorking!, TIGHT, "the shimmer under a compact card")
 
-    // 3. Two pictures batched in ONE message, then an ordinary tool band in the next: the seam inside
-    //    the band and the seam across the message boundary both take the picture's gap.
+    // 3. Two picture cards batched in ONE message, then an ordinary tool band in the next: the seam
+    //    inside the band and the seam across the message boundary both take the picture's gap.
     await page.goto(fixtureUrl("?case=cards"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector('[data-frizz-msg="m4"]')
     await settled(page)
     // The two picture BLOCKS are read as the message column's own children, not as `figure.frizz-bash`.
     // That selector is what this test used to use, and it stopped matching without anything about the
-    // SPACING changing: `/local-image` is not served here, so `BlockImage` hits its `broken` branch and
-    // returns a bare line of path text INSTEAD of the ImageFrame — no `figure`, no `frizz-bash`. The
-    // header above has always said the bytes need not arrive, and the gap is still charged off the
-    // tool's `outputImage`; the probe was the only part that quietly depended on the frame surviving.
-    // Reading the blocks positionally keeps this measuring the rule rather than the chrome, and works
-    // whether or not the picture loads. (Measured 2026-08-24: the gaps were right the whole time — this
-    // file had simply not run since the fallback changed, because nothing set its env gate.)
+    // SPACING changing: `/local-image` is not served here, so the picture falls back to a bare line of
+    // path text INSTEAD of the ImageFrame — no `figure`. The header above has always said the bytes need
+    // not arrive, and the gap is charged off the tool's own field; the probe was the only part that
+    // quietly depended on the frame surviving. Reading the blocks positionally keeps this measuring the
+    // rule rather than the chrome, and works whether or not the picture loads. (Measured 2026-08-24: the
+    // gaps were right the whole time — this file had simply not run since the fallback changed, because
+    // nothing set its env gate.)
     const stacked = await page.evaluate(() => {
       const scope = document.querySelector("[data-virtualized-transcript]")!
       const pictures = scope.querySelector('[data-frizz-msg="m3"] > div > div')!

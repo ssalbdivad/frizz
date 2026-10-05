@@ -1,10 +1,12 @@
 import type { ReactNode } from "react"
 
-// THE frame every rendered image sits in — a screenshot a tool returned, a picture a worker delivered, a
-// path the agent wrote on its own line, a file the human attached. One element so they cannot drift: an
-// outer border in the tool-card family, a little inset padding (the mat), and the picture centered inside
-// it. Optional `header` is a label bar INSIDE that border (the tool name + target + status), so an image
-// card is one framed object rather than a bordered card with a separately bordered picture nested in it.
+// THE frame every rendered image sits in — a lightbox gallery, a path the agent wrote on its own line, a
+// file the human attached. One element so they cannot drift: an outer border in the tool-card family, a
+// little inset padding (the mat), and the picture centered inside it.
+// A screenshot a TOOL returned sits in the same mat inside its own collapsed card (ChatView
+// ToolImageCard), whose border is the frame's, so opening it draws one framed object rather than a
+// bordered card with a separately bordered picture nested in it. A SendUserFile delivery's gallery does
+// the same inside its card (SentFilesCard, LightboxGallery `framed={false}`).
 //
 // The frame SPANS the message width and centers the picture inside the mat, rather than shrink-wrapping
 // it. Shrink-wrapping was tried first and is what "consistent frame" rules out: two image Reads in one
@@ -18,12 +20,11 @@ import type { ReactNode } from "react"
 // without nesting a second border 6px inside the first.
 //
 // `frizz-bash` supplies the chrome AND the typography of the tool-card family (1px border, block radius,
-// mono 12.5px). Carrying the class rather than re-declaring those in Tailwind is what lets
-// `frizz-bash-header` sit inside this frame and render identically to a Bash / Read / Edit header.
-export function ImageFrame({ header, caption, children }: { header?: ReactNode; caption?: ReactNode; children: ReactNode }) {
+// mono 12.5px). Carrying the class rather than re-declaring those in Tailwind keeps a framed picture in
+// the same family as the Bash / Read / Edit cards around it, and its caption in their type.
+export function ImageFrame({ caption, children }: { caption?: ReactNode; children: ReactNode }) {
   return (
     <figure className={IMAGE_FRAME}>
-      {header}
       <div className={IMAGE_FRAME_MAT}>{children}</div>
       {caption}
     </figure>

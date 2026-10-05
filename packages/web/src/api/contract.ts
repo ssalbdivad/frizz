@@ -435,6 +435,8 @@ export interface Api {
   // Opens the machine NATIVE folder picker, server-side, and adds what comes back. The browser API
   // withholds absolute paths on purpose, and a project is a path — so the picker cannot live here.
   projectPick(input: Record<never, never>): Promise<ProjectPickResult>
+  // Builds that picker ahead of the click, so the click only has to show it (macOS; `false` elsewhere).
+  projectPickWarm(input: Record<never, never>): Promise<{ warming: boolean }>
   projectAdd(input: { path: string; exact?: boolean }): Promise<ProjectAddResult>
   pathComplete(input: { path: string }): Promise<{ status: "directory" | "file" | "missing" | "empty"; suggestions: string[] }>
   homeFolderCheck(input: { folder: string }): Promise<{ folder: string; problem: string | null }>
@@ -477,6 +479,8 @@ export interface Api {
   // Opens the machine's native image picker ALREADY IN the project's directory, then stores what
   // comes back. The browser input cannot be aimed anywhere, which is the whole reason this exists.
   projectIconPick(input: { id: string }): Promise<DirectoryPickResult>
+  // Builds that picker when the icon menu opens, so the click only has to show it (macOS; `false` elsewhere).
+  projectIconPickWarm(input: { id: string }): Promise<{ warming: boolean }>
   projectIconSet(input: { id: string; name: string; data: string }): Promise<ProjectCard>
   projectIconClear(input: { id: string }): Promise<ProjectCard>
   // Rename a project: the name on its card and the slug in its URL, and — only with
@@ -637,6 +641,7 @@ export const PROCEDURES = {
   threadLocate: "query",
   projectsList: "query",
   projectPick: "mutation",
+  projectPickWarm: "mutation",
   projectAdd: "mutation",
   pathComplete: "query",
   homeFolderCheck: "query",
@@ -654,6 +659,7 @@ export const PROCEDURES = {
   reportClientZone: "mutation",
   ownSchedule: "mutation",
   projectIconPick: "mutation",
+  projectIconPickWarm: "mutation",
   projectIconSet: "mutation",
   projectIconClear: "mutation",
   projectRename: "mutation",

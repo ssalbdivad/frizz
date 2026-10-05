@@ -232,3 +232,13 @@ test("hintGloss: an issue-only fence glosses as the issue; a PR still wins when 
   assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "for", value: "3d" }]), "Issue acme/app#7")
   assert.equal(hintGloss([{ kind: "issue", value: "acme/app#7" }, { kind: "pr", value: "acme/app#391" }]), "PR acme/app#391")
 })
+
+// STEPS FOR THE HUMAN (2026-10-03) — a fence whose wait is on the reader.
+test("the wait clause counts steps first, as a wait on the reader", () => {
+  const steps = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
+  assert.equal(awaitingWaitClause(steps.slice(0, 1)), "waiting on a step from you")
+  assert.equal(awaitingWaitClause(steps), "waiting on 2 steps from you")
+  // Order is by kind, never by where the worker wrote the key: the reader outranks anything frizz watches.
+  assert.equal(awaitingWaitClause([{ kind: "pr", value: "acme/app#391" }, ...steps]), "waiting on 2 steps from you and acme/app#391")
+  assert.equal(awaitingWaitClause([{ kind: "step", value: "  " }]), null, "a blank step names nothing")
+})

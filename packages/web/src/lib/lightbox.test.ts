@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { lightboxLabel, parseLightboxBody, resolveLightboxPath } from "./lightbox.ts"
+import { isLightboxVideo, lightboxImageFor, lightboxLabel, parseLightboxBody, resolveLightboxPath } from "./lightbox.ts"
 
 test("a lightbox body is one picture per non-blank line, in order", () => {
   assert.deepEqual(parseLightboxBody("/tmp/a.png\n\n  /tmp/b.jpg  \n/tmp/c.webp\n"), [
@@ -49,6 +49,23 @@ test("backticked paths, list items and Markdown images are all accepted", () => 
   assert.deepEqual(parseLightboxBody(String.raw`C:\Users\me\shot.png Windows`), [{ target: String.raw`C:\Users\me\shot.png`, caption: "Windows" }])
 })
 
+test("a video is a line like a picture: its path ends at its extension, and a caption may follow", () => {
+  assert.deepEqual(parseLightboxBody("/tmp/flow.webm  The whole flow\n/Users/me/Screen Recording 2026-10-03 at 1.02.03 PM.mov\n- /tmp/a.MP4: Mobile\n/tmp/b.m4v"), [
+    { target: "/tmp/flow.webm", caption: "The whole flow" },
+    { target: "/Users/me/Screen Recording 2026-10-03 at 1.02.03 PM.mov", caption: undefined },
+    { target: "/tmp/a.MP4", caption: "Mobile" },
+    { target: "/tmp/b.m4v", caption: undefined },
+  ])
+  const base = { dir: "/repo", home: "/Users/me" }
+  assert.equal(resolveLightboxPath("shots/flow.webm", base), "/repo/shots/flow.webm")
+  assert.equal(resolveLightboxPath("/tmp/a.MP4", base), "/tmp/a.MP4")
+  // A format the browser cannot be counted on to play is not a video here; it stays a plain line.
+  assert.equal(resolveLightboxPath("/tmp/a.avi", base), null)
+  assert.equal(isLightboxVideo("/tmp/flow.webm"), true)
+  assert.equal(isLightboxVideo("/tmp/a.MOV"), true)
+  assert.equal(isLightboxVideo("/tmp/a.png"), false)
+})
+
 test("a line naming no image keeps the whole line, so the gallery can show what it could not draw", () => {
   assert.deepEqual(parseLightboxBody("/tmp/diagram.svg\nhttps://example.com/a.png?raw=1"), [
     { target: "/tmp/diagram.svg" },
@@ -78,4 +95,24 @@ test("a picture is labelled by its caption, else by its file name", () => {
   assert.deepEqual(lightboxLabel({ target: "/tmp/a.png", caption: "Before" }, "/tmp/a.png"), { label: "Before", captioned: true })
   assert.deepEqual(lightboxLabel({ target: "/tmp/shots/after.png" }, "/tmp/shots/after.png"), { label: "after.png", captioned: false })
   assert.deepEqual(lightboxLabel({ target: "shots/gone.png" }, null), { label: "gone.png", captioned: false })
+  // A delivered picture's file is a hash-named cache copy: its title names it, and a caption still wins.
+  assert.deepEqual(lightboxLabel({ target: "/c/465ab1.png", title: "The two pages" }, "/c/465ab1.png"), { label: "The two pages", captioned: true })
+  assert.deepEqual(lightboxLabel({ target: "/c/465ab1.png", caption: "Before", title: "The two pages" }, "/c/465ab1.png"), { label: "Before", captioned: true })
+})
+
+test("a picture drawn some other way is captioned by its alt text, unless the alt only names the file", () => {
+  // `![The settings page](/tmp/s.png)`.
+  assert.deepEqual(lightboxImageFor("/tmp/s.png", " The settings page "), { path: "/tmp/s.png", label: "The settings page", captioned: true })
+  // A bare picture line: BlockImage's alt is the basename.
+  assert.deepEqual(lightboxImageFor("/tmp/shots/s.png", "s.png"), { path: "/tmp/shots/s.png", label: "s.png", captioned: false })
+  // `![](~/shots/s.png)`: the sanitizer fills an empty alt with the path as written.
+  assert.deepEqual(lightboxImageFor("/Users/me/shots/s.png", "~/shots/s.png"), { path: "/Users/me/shots/s.png", label: "s.png", captioned: false })
+  assert.deepEqual(lightboxImageFor("/tmp/s.png", ""), { path: "/tmp/s.png", label: "s.png", captioned: false })
+  assert.deepEqual(lightboxImageFor("/tmp/s.png", null), { path: "/tmp/s.png", label: "s.png", captioned: false })
+  // A tool's picture card: served from a hash-named cache copy, called by the file it was a copy of.
+  assert.deepEqual(lightboxImageFor("/tmp/frizz-tool-images-ab/9f2c.png", "Read: shots/board.png"), {
+    path: "/tmp/frizz-tool-images-ab/9f2c.png",
+    label: "board.png",
+    captioned: false,
+  })
 })

@@ -182,14 +182,19 @@ test("the resting card owns the heading, the glyph, the prose and the chips", ()
   // case, and the parameter is what lets one card also state a fence the board has already dropped.
   assert.match(code, /const stated = fence \?\? \(thread\?\.lastFence\?\.kind === "awaiting" \? thread\.lastFence : undefined\)/)
   assert.match(code, /awaitingBackgroundLabel\(work, hints\)/, "the heading reads the stated fence's hints")
-  assert.match(code, /icon=\{shellsAlone\(work\) \? TerminalSquare : Hourglass\}/, "two titles, two glyphs, and no third")
+  assert.match(code, /icon=\{steps\.length > 0 \? ListTodo : shellsAlone\(work\) \? TerminalSquare : Hourglass\}/, "three titles, three glyphs, and no fourth — steps are the one wait on the reader")
   assert.match(code, /const prose = awaitingProseBlock\(stated\?\.body\)/)
   assert.match(code, /const unrowed = unrowedWatchRefs\(work, hints\)/, "a PR the table already rows gets no chip — one PR, one place")
-  // THE SNOOZE IS THE ONE THING THE RUNTIME MAY CHANGE, and it is withheld rather than re-styled: a
-  // thread already bg-snoozed has no rest for the mutation to park.
-  assert.match(code, /const snoozable = thread !== undefined && showsRestingCard\(thread\) && threadLifecycleAvailability\(thread\)\.snooze/)
+  // THE VERBS ARE THE ONLY THINGS THE RUNTIME MAY CHANGE, and each is withheld rather than re-styled: a
+  // thread already bg-snoozed has no rest for the Snooze to park, and a thread that has left the rest its
+  // steps were posted at has nobody waiting on the steps' Done (2026-10-03). A steps card takes no Snooze
+  // at all — the reader is what it waits on.
+  assert.match(code, /const snoozable = thread !== undefined && steps\.length === 0 && showsRestingCard\(thread\) && threadLifecycleAvailability\(thread\)\.snooze/)
+  assert.match(code, /const stepsLive = thread !== undefined && restingOnSteps\(thread, steps\)/)
   // Nothing else may key on the runtime. A second `showsRestingCard` call inside this card is how a
   // heading, a glyph or a truncation rule would start varying with it again.
-  assert.equal(code.match(/showsRestingCard\(/g)?.length, 1, "the runtime reaches exactly one decision, and it is the Snooze")
+  assert.equal(code.match(/showsRestingCard\(/g)?.length, 1, "the runtime reaches the Snooze once")
+  assert.equal(code.match(/restingOnSteps\(/g)?.length, 1, "…and the steps' Done once")
+  assert.doesNotMatch(code, /\.runtime\b/, "and nothing in the card reads the runtime directly")
 })
 

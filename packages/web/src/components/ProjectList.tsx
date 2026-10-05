@@ -70,7 +70,7 @@ import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BANDS, type BandKey } from "./BandLabel.tsx"
-import { ProjectMenu, useAddProject } from "./ProjectActions.tsx"
+import { ProjectMenu, useAddProject, warmProjectPicker } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectSwitcher.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { ROW_ACTION_CLASS, RailRow, type RowScope } from "./Sidebar.tsx"
@@ -1201,7 +1201,7 @@ export function AddProjectRow() {
   const add = useAddProject()
   return (
     <div className={`${ROW_CLASS} ${GROUP_GAP}`}>
-      <button type="button" data-xq-reshape onClick={add.start} disabled={add.pending} className={`${ROW_BUTTON_CLASS} group/add items-center disabled:opacity-60`}>
+      <button type="button" data-xq-reshape onPointerEnter={warmProjectPicker} onFocus={warmProjectPicker} onClick={add.start} disabled={add.pending} className={`${ROW_BUTTON_CLASS} group/add items-center disabled:opacity-60`}>
         <span className={INDICATOR_SLOT}>
           <span className="flex h-4 w-4 items-center justify-center rounded-[30%] border border-dotted border-border-strong text-muted-70 transition-colors group-hover/add:border-fg/40 group-hover/add:text-fg">
             <Plus size={10} strokeWidth={2.25} />

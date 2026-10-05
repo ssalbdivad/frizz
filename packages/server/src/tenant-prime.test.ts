@@ -256,3 +256,55 @@ test("the real timer is interruptible, so a shutdown during the opening wait set
   assert.deepEqual(result.opened, [])
   assert.ok(Date.now() - started < 1_000, "stop() did not cut the opening wait short")
 })
+
+test("a project that stalls does not hold the ones behind it closed — and done still waits for it", async () => {
+  // 2026-10-05: `arktype` took 88-314s to open on the dev server, and every project after it in the
+  // rail — Home included — sat "Not open" for that whole span, where ⌥↑/⌥↓ could not reach it.
+  let release!: () => void
+  const slow = new Promise<void>((resolve) => (release = resolve))
+  const opened: string[] = []
+  const { deps, logs } = harness({
+    activate: async (p) => {
+      if (p.id === "a") await slow
+      opened.push(p.id)
+      return {}
+    },
+    stallMs: 20,
+  })
+  const run = startTenantPrime(deps)
+  let settled = false
+  void run.done.then(() => (settled = true))
+  const deadline = Date.now() + 5_000
+  while (opened.length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 5))
+  assert.deepEqual(opened, ["b", "c"], "the projects behind a stalled one never opened")
+  assert.ok(logs.some((line) => line.startsWith("a is still opening")), JSON.stringify(logs))
+  assert.equal(settled, false, "done resolved with an activation still in flight — shutdown's drain would miss it")
+  release()
+  const result = await run.done
+  assert.deepEqual(result.opened, ["b", "c", "a"])
+})
+
+test("stop() during a stall cuts the stall timer short but still waits for the activation", async () => {
+  let release!: () => void
+  const slow = new Promise<void>((resolve) => (release = resolve))
+  const opened: string[] = []
+  let run: TenantPrimeRun
+  const { deps } = harness({
+    activate: async (p) => {
+      if (p.id === "a") {
+        run.stop()
+        setTimeout(release, 30)
+        await slow
+      }
+      opened.push(p.id)
+      return {}
+    },
+    stallMs: 30_000,
+  })
+  const started = Date.now()
+  run = startTenantPrime(deps)
+  const result = await run.done
+  assert.deepEqual(opened, ["a"])
+  assert.deepEqual(result.opened, ["a"])
+  assert.ok(Date.now() - started < 5_000, "stop() sat out the stall timer")
+})

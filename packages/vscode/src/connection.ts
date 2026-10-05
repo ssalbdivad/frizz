@@ -41,7 +41,6 @@ import {
   EDITOR_MAX_PATH,
   EDITOR_PROTOCOL_VERSION,
   EDITOR_SOCKET_PATH,
-  type EditorAttention,
   type EditorClientMessage,
   type EditorComposeInput,
   type EditorComposed,
@@ -87,8 +86,6 @@ export interface ConnectionHost {
   review?(message: EditorReview): Promise<OpenResult>
   projects(projects: EditorProject[]): void
   status(status: ConnectionStatus): void
-  /** A thread of a project this window has open needs the human (only after `listen(true)`, from a Frizz that takes it). */
-  attention?(message: EditorAttention): void
   log: ConnectionLog
 }
 
@@ -217,10 +214,6 @@ export class EditorConnection {
   #features = new Set<string>()
   /** The last `editor` frame sent on this socket, so an unchanged picture is not sent again. */
   #lastEditor: string | undefined
-  /** Whether this window shows needs-you notifications (`listen`), as last asked; said again on every welcome. */
-  #attention = false
-  /** The last `listen` sent on this socket. */
-  #sentAttention: boolean | undefined
   /** The Frizz at this origin answered the socket with a 404: it predates the editor connection, and so the sidebar. */
   #predatesBridge = false
   readonly #composes = new Map<string, { resolve: (value: EditorComposed) => void; timer: NodeJS.Timeout }>()
@@ -285,21 +278,6 @@ export class EditorConnection {
    */
   get predatesBridge(): boolean {
     return this.#predatesBridge
-  }
-
-  /**
-   * Whether this window shows a notification when a thread needs the human (`frizz.notify`). Told to a
-   * Frizz that takes it now, and again on every welcome; a Frizz that does not is never told, since it
-   * would close the socket on a frame it does not know.
-   */
-  listen(attention: boolean): void {
-    this.#attention = attention
-    this.#sendListen()
-  }
-
-  #sendListen(): void {
-    if (!this.#welcomed || !this.#features.has(EDITOR_FEATURES.attention) || this.#sentAttention === this.#attention) return
-    if (this.#send({ t: "listen", attention: this.#attention })) this.#sentAttention = this.#attention
   }
 
   /** Whether the Frizz this window is connected to takes the editor's picture (its welcome named it). */
@@ -368,7 +346,6 @@ export class EditorConnection {
     this.#welcomed = false
     this.#lastState = undefined
     this.#lastEditor = undefined
-    this.#sentAttention = undefined
     this.#features.clear()
     this.#failComposes("The connection to Frizz closed.")
     if (socket) {
@@ -486,7 +463,6 @@ export class EditorConnection {
       this.#welcomed = false
       this.#lastState = undefined
       this.#lastEditor = undefined
-      this.#sentAttention = undefined
       this.#features.clear()
       this.#failComposes("The connection to Frizz closed.")
       const closed = refusal && !wasWelcomed ? { reason: refusal, incompatible: false } : describeClose(code, buffer.toString())
@@ -517,7 +493,6 @@ export class EditorConnection {
         // just (re)started knows nothing of it.
         this.sendState()
         this.sendEditor()
-        this.#sendListen()
         return
       }
       case "projects":
@@ -546,9 +521,6 @@ export class EditorConnection {
         pending.resolve(message)
         return
       }
-      case "attention":
-        this.#host.attention?.(message)
-        return
       case "hb":
         return
       default:

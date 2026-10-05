@@ -11,9 +11,8 @@ import { stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import { basename, dirname, resolve } from "node:path"
 import type * as vscode from "vscode"
-import { EDITOR_FEATURES, type EditorAttention, type EditorComposeInput, type EditorComposed, type EditorOpen, type EditorProject } from "@frizz/shared/editor-protocol"
+import { EDITOR_FEATURES, type EditorComposeInput, type EditorComposed, type EditorOpen, type EditorProject } from "@frizz/shared/editor-protocol"
 import { EMBED_PROBLEMS_PATH, EMBED_TERMINAL_PATH, type EmbedAddContextMessage, type EmbedCommandMessage, type EmbedComposeMessage, type EmbedEditorContextMessage, type EmbedEditorExtrasMessage, type EmbedReviewMessage } from "@frizz/shared/embed-protocol"
-import { AttentionGate, attentionText, manyText, type AttentionItem, type AttentionToast } from "./attention.ts"
 import { BUILD, buildLabel, builtAtLabel, installedBuild } from "./build-info.ts"
 import { EditorConnection, FocusRecency, type ConnectionStatus, type OpenResult } from "./connection.ts"
 import { registerContextFeed } from "./context-feed.ts"
@@ -56,8 +55,6 @@ export interface FrizzExtensionApi {
   editorExtras(): EmbedEditorExtrasMessage | undefined
   /** This build's label (`0.1.0+1a2b3c4d`), as the hello, the log and the status bar's tooltip say it. */
   build: string
-  /** Every needs-you notification this window showed, its words, oldest first. */
-  notifications(): string[]
   /** A different build found installed under this window, which it offered to reload into. */
   reloadOffered(): string | undefined
   /** The hint beside the selection (`Ctrl+L to add to Frizz`), as it is drawn now; undefined when none is. */
@@ -341,7 +338,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
       panels.refresh()
       hint.refresh()
     },
-    attention: (message) => onAttention(message),
     log: { info: (line) => log.info(line), warn: (line) => log.warn(line), error: (line) => log.error(line) },
   })
   context.subscriptions.push({ dispose: () => connection.stop() })
@@ -484,79 +480,8 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
         sidebar.pushState()
         panels.pushState()
       }
-      if (event.affectsConfiguration("frizz.notify")) connection.listen(notifies())
     }),
   )
-
-  // ── a thread needs you, and the sidebar is out of sight (attention.ts) ───────────────────────────
-  // Frizz picks ONE window for each — of those that listen and have the project open, the one used last —
-  // so this window says it listens only while `frizz.notify` is on: a window with it off never takes one
-  // another window would have shown.
-  const notifies = () => config().get<boolean>("notify", true)
-  const gate = new AttentionGate()
-  const shownNotifications: string[] = []
-  let dueTimer: NodeJS.Timeout | undefined
-  context.subscriptions.push({ dispose: () => clearTimeout(dueTimer) })
-
-  function onAttention(message: EditorAttention): void {
-    if (!notifies()) return
-    // The sidebar in sight shows the card already; what is held goes too, since it shows every one.
-    if (sidebar.visible()) {
-      gate.clear()
-      return
-    }
-    const project = projects.find((candidate) => candidate.id === message.projectId)
-    const mine = workspaceProjects(folders(), projects)
-    const item: AttentionItem = {
-      slug: message.thread.id,
-      ...(project ? { projectSlug: project.slug } : {}),
-      // Named only where it tells two apart: a window on one project knows which one it is.
-      ...(project && mine.length > 1 ? { projectName: project.name } : {}),
-      title: displayTitle(message.thread as Parameters<typeof displayTitle>[0]),
-      needs: message.needs,
-      ...(message.body ? { body: message.body } : {}),
-    }
-    const toast = gate.offer(item, Date.now())
-    if (toast) showAttention(toast)
-    scheduleDue()
-  }
-
-  function scheduleDue(): void {
-    clearTimeout(dueTimer)
-    const at = gate.dueAt()
-    if (at === undefined) return
-    dueTimer = setTimeout(() => {
-      if (sidebar.visible()) gate.clear()
-      const toast = gate.due(Date.now())
-      if (toast) showAttention(toast)
-      scheduleDue()
-    }, Math.max(0, at - Date.now()))
-  }
-
-  function showAttention(toast: AttentionToast): void {
-    const one = toast.items.length === 1 ? toast.items[0] : undefined
-    const text = one ? attentionText(one) : manyText(toast.items)
-    shownNotifications.push(text)
-    log.info(`Told you: ${text}`)
-    void api.window.showInformationMessage(text, "Open").then((choice) => {
-      if (choice !== "Open") return
-      log.info(`Opening ${one ? one.slug : "the queue"} from the notification.`)
-      void openAttention(one)
-    })
-  }
-
-  /** Open: the thread in the sidebar (the queue, for several), or with the sidebar off, in the browser. */
-  async function openAttention(item: AttentionItem | undefined): Promise<void> {
-    if (!useSidebar()) {
-      const origin = connection.origin ?? found?.origin
-      const project = item?.projectSlug ? projects.find((candidate) => candidate.slug === item.projectSlug) : undefined
-      if (origin) openUrl(item && project ? threadUrl(origin, project, item.slug) : projectUrl(origin, project ?? windowProject()))
-      return
-    }
-    await sidebar.reveal(false)
-    if (!(await sidebar.waitReady(SIDEBAR_READY_MS))) return
-    await sidebar.navigate(item?.projectSlug ? { thread: item.slug, project: item.projectSlug } : "queue")
-  }
 
   // ── a new build installed under this window (build-info.ts) ──────────────────────────────────────
   // A window keeps running the code it loaded. `nub run vscode:install` (or any install of the .vsix)
@@ -1317,7 +1242,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   )
 
   log.info(`Frizz extension ${extensionVersion}${builtAt ? ` (built ${builtAt})` : ""} in ${api.env.appName} ${api.version}, window ${windowId}.`)
-  connection.listen(notifies())
   connection.start()
 
   return {
@@ -1332,7 +1256,6 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     review: () => reviews.last(),
     editorExtras: () => extras.last(),
     build: extensionVersion,
-    notifications: () => [...shownNotifications],
     reloadOffered: () => offered?.label,
     selectionHint: () => hint.shown(),
     threadTabs: () => panels.snapshot(),

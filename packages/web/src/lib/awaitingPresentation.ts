@@ -12,6 +12,16 @@ export const AWAITING_FALLBACK_TITLE = "Awaiting"
  *  less than a sentence does. */
 export const AWAITING_NO_PROSE = "Waiting for an external update."
 
+/** The heading of a card handing the human `steps:` when the worker named no `title:` — the one fence
+ *  shape whose wait is on the READER, so the fallback says so instead of the generic "Awaiting". */
+export const STEPS_FALLBACK_TITLE = "For you to do"
+
+/** The steps card's one verb, and EXACTLY the message it sends — an ordinary reply from the human, the
+ *  same thing typing the word would send. Nothing marks it as frizz's, because nothing about it is: the
+ *  worker reads it as the human's own answer to the steps it just posted, and the transcript draws it as
+ *  their bubble. Anything more the human has to say goes through the prompt box. */
+export const STEPS_DONE = "Done"
+
 /** The PRs this fence is parked on, in fence order, deduped — clickable, because the fence line is the
  *  only place the ref exists and a card that names a PR without reaching it is a dead end (maintainer
  *  2026-07-31: "obviously this should have a link to the PR being watched").
@@ -153,6 +163,8 @@ function stripFenceSyntax(body: string): string {
 export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | null {
   const count = (kind: AwaitingHint["kind"]) => hints.filter((h) => h.kind === kind && h.value.trim()).length
   const parts = [
+    // Steps first: the reader is the one being waited on, which outranks anything frizz is watching.
+    plural(count("step"), "step from you", "steps from you"),
     ...prWatchRefs(hints).map((pr) => pr.ref),
     plural(count("shell"), "agent terminal", "agent terminals"), // the strip's own noun for the same row
     plural(count("agent"), "sub-agent", "sub-agents"),

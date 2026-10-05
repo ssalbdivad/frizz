@@ -13,6 +13,7 @@ import { MarkdownScopeContext, useMarkdownHtml, type MarkdownScope } from "../li
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
 import { CodeBody } from "./CodeBody.tsx"
+import { useLightboxIslands } from "./Lightbox.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -148,10 +149,14 @@ function FileReader({ id, path, title, depth, widthDepth }: ReaderProps) {
   // Only a Markdown file is parsed at all: running a `.ts` file through the Markdown pipeline to throw
   // the result away would be the drawer's single most expensive step.
   const { front, body: source } = splitFrontmatter(markdown ? raw : "")
-  const html = useMarkdownHtml(source, { baseDir: localFileDir(resolved), asDocument: true })
+  const baseDir = localFileDir(resolved)
+  const html = useMarkdownHtml(source, { baseDir, asDocument: true })
   const inner = useInnerHtml(html)
   const ref = useRef<HTMLDivElement>(null)
   useLocalFileCodeLinks(ref, html)
+  // A report's ```lightbox fence is a gallery here too, its relative paths resolved against the
+  // document's own directory like its links.
+  const galleries = useLightboxIslands(ref, html, baseDir)
   // A link inside another project's document is that project's too: follow it with the same scope,
   // before the page-wide interceptor (lib/local-file-links.ts) reads it as the page's.
   const followScoped = scope
@@ -186,6 +191,7 @@ function FileReader({ id, path, title, depth, widthDepth }: ReaderProps) {
               <>
                 {front && <Frontmatter source={front} />}
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
+                {galleries}
                 {body.data?.truncated && <TruncatedNote />}
               </>
             ) : !markdown && raw ? (

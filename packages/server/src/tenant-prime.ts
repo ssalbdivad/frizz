@@ -83,6 +83,22 @@ const PRIME_MIN_GAP_MS = 25
  */
 const PRIME_MAX_GAP_MS = 1_500
 
+/**
+ * How long one activation may hold the pass before the pass moves on without it.
+ *
+ * THE PASS IS SERIAL, SO ONE SLOW PROJECT USED TO HOLD EVERY PROJECT BEHIND IT CLOSED. On the
+ * maintainer's dev server (2026-10-05, which restarts whenever server code lands) `arktype` opened in
+ * 13s, 88s and 314s on three boots, and `app`, `beanemachine`, `local` and Home — the projects queued
+ * after it — sat "Not open" for that whole span: no badge, no prompt box, and ⌥↑/⌥↓ stepped straight
+ * past them (lib/crossProject.ts stepPick only lands on an open project). "Can't access home".
+ *
+ * So an activation still running after this long is left to finish on its own and the pass carries on.
+ * It is not abandoned: `done` still waits for it, which is what keeps shutdown's drain complete (see
+ * TenantPrimeRun.stop). Every activation seen on that log except the pathological ones finished well
+ * inside it, so an ordinary boot stays exactly as serial as it was.
+ */
+const PRIME_STALL_MS = 5_000
+
 /** The pause after an activation that took `tookMs` — a 50% duty cycle, clamped at both ends. */
 function gapAfter(tookMs: number): number {
   return Math.min(PRIME_MAX_GAP_MS, Math.max(PRIME_MIN_GAP_MS, tookMs))
@@ -121,6 +137,8 @@ export interface TenantPrimeDeps {
   startDelayMs?: number
   /** Pins the pause between projects; the default TRACKS the last activation (see gapAfter). */
   gapMs?: number
+  /** Overrides PRIME_STALL_MS. A real timer, not `delay`: tests inject a `delay` that never waits. */
+  stallMs?: number
   log?: (message: string) => void
 }
 
@@ -131,7 +149,11 @@ export interface TenantPrimeResult {
   skipped: string[]
   /** Tried and would not open — reported by the tenant seam, one dead card each. */
   failed: string[]
-  /** How long each of `opened` took, in ms, same order. Logged, and what the pacing is tuned against. */
+  /**
+   * How long each of `opened` took, in ms, same order. Logged, and what the pacing is tuned against.
+   * Both are in the order activations FINISHED, which a stalled one (PRIME_STALL_MS) can put out of
+   * rail order.
+   */
   tookMs: number[]
 }
 
@@ -143,8 +165,9 @@ export interface TenantPrimeRun {
    * opened is in the tenant map BEFORE the map is drained — a project activated after that drain would
    * be a leaked SQLite handle and a tailer nothing ever stops.
    *
-   * It cuts the wait between projects short, but it cannot interrupt an activation already in flight;
-   * that one finishes and lands in the map, which is what makes the drain complete.
+   * It cuts the wait between projects short, but it cannot interrupt an activation already in flight —
+   * including one the pass moved on from because it stalled; `done` waits for every one of them, and
+   * each lands in the map, which is what makes the drain complete.
    */
   stop: () => void
 }
@@ -170,12 +193,30 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
 
   const delay = deps.delay ?? defaultDelay
 
+  // Resolves `undefined` after `ms`, or at once on stop(): a shutdown must not sit out a stall timer
+  // before it gets to wait for the activation itself.
+  let interruptStall: (() => void) | undefined
+  const stall = (ms: number): Promise<undefined> =>
+    new Promise<undefined>((resolve) => {
+      if (stopped) return resolve(undefined)
+      const finish = () => {
+        clearTimeout(timer)
+        interruptStall = undefined
+        resolve(undefined)
+      }
+      const timer = setTimeout(finish, ms)
+      timer.unref?.()
+      interruptStall = finish
+    })
+
   const run = async (): Promise<TenantPrimeResult> => {
     const result: TenantPrimeResult = { opened: [], skipped: [], failed: [], tookMs: [] }
     await delay(deps.startDelayMs ?? PRIME_START_DELAY_MS)
     // How long the PREVIOUS activation took, which is the pause the next one waits. Undefined until the
     // first project is open — so a run of skips (already-open, stale, served elsewhere) costs nothing.
     let lastTookMs: number | undefined
+    // Activations the pass moved on from (PRIME_STALL_MS), collected before `done` resolves.
+    const stalled: Promise<number>[] = []
     for (const entry of deps.list()) {
       if (stopped) break
       if (entry.stale || deps.isOpen(entry.id)) {
@@ -209,24 +250,41 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
       const resolveMs = (deps.monotonicNow?.() ?? performance.now()) - resolveStartedAt
       if (lastTookMs !== undefined) await delay(deps.gapMs ?? gapAfter(lastTookMs))
       if (stopped) break
-      try {
-        const startedAt = deps.monotonicNow?.() ?? performance.now()
-        const opened = await deps.activate(project)
-        const tookMs = Math.round(resolveMs + ((deps.monotonicNow?.() ?? performance.now()) - startedAt))
-        lastTookMs = tookMs
-        if (opened === undefined) result.failed.push(entry.id)
-        else {
-          result.opened.push(entry.id)
-          result.tookMs.push(tookMs)
-          log(`opened ${project.name} in ${tookMs}ms`)
+      const startedAt = deps.monotonicNow?.() ?? performance.now()
+      const name = project.name
+      const id = entry.id
+      // Never rejects, and records its own outcome — so it reads the same whether the pass waited for it
+      // or moved on and collects it at the end.
+      const attempt = (async (): Promise<number> => {
+        try {
+          const opened = await deps.activate(project)
+          const tookMs = Math.round(resolveMs + ((deps.monotonicNow?.() ?? performance.now()) - startedAt))
+          if (opened === undefined) result.failed.push(id)
+          else {
+            result.opened.push(id)
+            result.tookMs.push(tookMs)
+            log(`opened ${name} in ${tookMs}ms`)
+          }
+          return tookMs
+        } catch (error) {
+          // activate() is documented not to throw. Belt and braces: this pass is a floating promise, and
+          // an unhandled rejection out of it would take down a server that is otherwise perfectly healthy.
+          result.failed.push(id)
+          log(`priming ${name} threw: ${detail(error)}`)
+          return Math.round(resolveMs + ((deps.monotonicNow?.() ?? performance.now()) - startedAt))
         }
-      } catch (error) {
-        // activate() is documented not to throw. Belt and braces: this pass is a floating promise, and
-        // an unhandled rejection out of it would take down a server that is otherwise perfectly healthy.
-        result.failed.push(entry.id)
-        log(`priming ${project.name} threw: ${detail(error)}`)
-      }
+      })()
+      const stallMs = deps.stallMs ?? PRIME_STALL_MS
+      const tookMs = await Promise.race([attempt, stall(stallMs)])
+      // Settled in time: retire its stall timer, which would otherwise fire later and unhook the next one's.
+      interruptStall?.()
+      if (tookMs === undefined) {
+        stalled.push(attempt)
+        log(`${name} is still opening after ${stallMs}ms — opening the rest meanwhile`)
+        lastTookMs = stallMs
+      } else lastTookMs = tookMs
     }
+    await Promise.all(stalled)
     if (result.opened.length > 0) log(`opened ${result.opened.length} more project(s) so their queue badges are live`)
     return result
   }
@@ -239,6 +297,7 @@ export function startTenantPrime(deps: TenantPrimeDeps): TenantPrimeRun {
     stop: () => {
       stopped = true
       interrupt?.()
+      interruptStall?.()
     },
   }
 }

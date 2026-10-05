@@ -248,6 +248,32 @@ test("nesting: a quiet descendant with something LIVE under it keeps its row", (
   }
 })
 
+// A descendant is RUNNING-only on the board, so for one the stale misreading was worse than a grey
+// dot: a grandchild blocked in a wait it sized itself (`timeout: 3600000`, say) left the tree at minute
+// 15 while it was still working. It is live until that call's declared bound, the same as a direct child.
+test("nesting: a descendant blocked in a Bash wait it sized itself keeps its row until that call's deadline passes", () => {
+  // One fixture per reading: the subtree is memoized per second, so a second reading inside the same
+  // fixture would only read the first one back.
+  const grand = (call: { [key: string]: unknown }, issuedMinutesAgo: number) => {
+    const f = fixture()
+    try {
+      rmSync(join(f.subagents, "agent-aGreat.jsonl")) // the leaf is gone, so nothing below keeps aGrand shown
+      const issued = new Date(Date.now() - issuedMinutesAgo * 60_000)
+      const path = join(f.subagents, "agent-aGrand.jsonl")
+      writeFileSync(path, `${JSON.stringify({ type: "assistant", timestamp: issued.toISOString(), message: { id: "m-wait", stop_reason: "tool_use", content: [{ type: "tool_use", id: "toolu_wait", name: "Bash", input: call }] } })}\n`)
+      utimesSync(path, issued, issued) // the call is the last thing it wrote
+      f.tailer.tick()
+      return f.tailer.get(SLUG)?.subAgents.find((v) => v.id === "toolu_grand")?.state
+    } finally {
+      cleanup(f)
+    }
+  }
+  const wait = { command: "until grep -q '^DONE' gates.log; do sleep 15; done", timeout: 3_600_000 }
+  assert.equal(grand(wait, 20), "running", "20 minutes into the hour it declared, it is still on the board")
+  assert.equal(grand(wait, 80), undefined, "20 minutes past that hour with nothing written, it leaves")
+  assert.equal(grand({ command: "cargo build" }, 20), undefined, "a call that names no timeout keeps the plain clock")
+})
+
 test("nesting: a branch whose ROOT child is gone is over, whatever its own mtimes say", () => {
   const f = fixture()
   try {

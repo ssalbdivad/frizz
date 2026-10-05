@@ -96,6 +96,29 @@ test("the approved light palette keeps questions neutral and actions subtly outl
   assert.match(picker, /const label = githubLabelColors\(color\)/)
 })
 
+// REGRESSION (2026-10-03). The hover edge is a box-shadow coloured color-mix(currentColor …), which
+// Chrome cannot interpolate from the resting `none`: a transition that animates box-shadow holds the
+// edge transparent for its whole duration and pops it in on the last frame. The GitHub icon and the
+// send button did that beside a paperclip that showed its edge on the first frame. A STATIC
+// button-outline is exempt: its edge is already there at rest, and measured it stays visible.
+test("a hover-revealed icon edge never rides a box-shadow transition", () => {
+  const src = new URL("../", import.meta.url)
+  const files = readdirSync(src, { recursive: true, encoding: "utf8" }).filter((f) => /\.tsx?$/.test(f) && !/\.test\.tsx?$/.test(f))
+  const animatesShadow = /^(?:[\w-]+:)*transition(?:-all|-shadow)?$|^(?:[\w-]+:)*transition-\[[^\]]*box-shadow/
+  const offenders: string[] = []
+  let checked = 0
+  for (const file of files) {
+    for (const [literal] of readFileSync(new URL(file, src), "utf8").matchAll(/"[^"\n]*"|`[^`]*`/g)) {
+      if (!literal.includes("icon-hover-outline")) continue
+      checked++
+      const bad = literal.split(/[\s"`{}]+/).filter((token) => animatesShadow.test(token))
+      if (bad.length) offenders.push(`${file}: ${bad.join(" ")}`)
+    }
+  }
+  assert.ok(checked >= 10, `found only ${checked} icon-hover-outline class strings — the scan is broken`)
+  assert.deepEqual(offenders, [])
+})
+
 test("both palettes are complete, including OS fallback and recovery subset parity", () => {
   const css = readFileSync(new URL("../theme.css", import.meta.url), "utf8")
   const dark = declarations(css.split(':root, :root[data-theme="dark"] {')[1]!.split("}")[0]!)

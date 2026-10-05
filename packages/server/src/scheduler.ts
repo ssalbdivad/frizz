@@ -2488,7 +2488,11 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // "TypeScript legs still running on 1a5d0804 … waiting on the checks and your merge" — a worker
       // that could have registered a PR watcher and been told the moment CI settled, waiting on nothing
       // for a day instead.
-      const nameless = park.items.length === 0
+      //
+      // `steps:` NAME THE HUMAN (2026-10-03), so a fence carrying only steps is not this case: it waits on
+      // the one party whose reply wakes the thread, from the queue it is already in. With no `for:` it
+      // falls through the malformed-fence skip below and is simply honoured; with one, it expires.
+      const nameless = park.items.length === 0 && park.steps.length === 0
       // HONOURED ⇒ the corrective allowance comes back. A park frizz can actually honour is the one
       // event that proves a correction landed, and — unlike any activity signal — not one frizz can
       // cause by correcting. Guarded on a non-zero count so this is a transition, not a write on every
@@ -2605,6 +2609,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // spelling the parser now refuses.
         return `- \`${AWAITING_KEY_OF[i.kind]}: [${i.value}]\` — ${note}`
       })
+      // A park on `steps:` that ran out is the only status line here frizz cannot read off a registry:
+      // the human may have done the steps without pressing anything, so the line sends the worker to
+      // check the world rather than to re-post the same steps blind.
+      if (park.steps.length > 0) {
+        status.push(`- \`steps:\` (${park.steps.length}) — the human has not replied; check whether they were done anyway before you post them again`)
+      }
       // When EVERY dead name simply finished, the news is not "your fence is wrong" — it is "the thing
       // you were waiting for is done". Different fact, different next action.
       const allFinished = dead.length > 0 && dead.every(finishedItem)

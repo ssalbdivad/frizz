@@ -15,7 +15,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { declaredWaitIds, hasDeclaredBackgroundPark, hasDeclaredWait } from "./board.ts"
-import { parkExpiresAt, parkForMaxMs, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
+import { parkExpiresAt, parkForMaxMs, parkIsHonoured, readAwaitingPark, unaccountedItems } from "./awaiting.ts"
 import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, isParkCorrection, parseParkWake, NEEDS_INPUT_REQUIRED_AT, PARK_CORRECTION_NEEDS_INPUT_LEAD, PR_WATCH_FOR_MAX_MS } from "@frizz/shared"
 import { createScheduler } from "./scheduler.ts"
 import type { FenceView, SessionTelemetry } from "./tailer.ts"
@@ -136,12 +136,12 @@ test("a park expires, so nothing parks forever", () => {
 // short-lived kind at all. Capping that one at a day is what bumped a thread daily for four days against
 // an external PR nobody had touched: the watcher could be armed for months and the fence expired first.
 test("a park naming only PRs may stand for months; anything else is still capped at a day", () => {
-  const prs = { items: [{ kind: "pr" as const, value: "acme/app#391" }], forMs: 180 * 24 * 60 * 60_000 }
+  const prs = { items: [{ kind: "pr" as const, value: "acme/app#391" }], forMs: 180 * 24 * 60 * 60_000, steps: [] }
   const at = Date.parse(AT)
   assert.equal(parkForMaxMs(prs), PR_WATCH_FOR_MAX_MS)
   assert.equal(parkExpiresAt(prs, at), at + 180 * 24 * 60 * 60_000, "the duration as written, uncapped")
   // MIXED ⇒ THE LOW CEILING. The shell in the list is still a shell, and the sentence covers it too.
-  const mixed = { items: [...prs.items, { kind: "shell" as const, value: "bzvtnt3ig" }], forMs: prs.forMs }
+  const mixed = { items: [...prs.items, { kind: "shell" as const, value: "bzvtnt3ig" }], forMs: prs.forMs, steps: [] }
   assert.equal(parkForMaxMs(mixed), AWAITING_FOR_MAX_MS)
   assert.equal(parkExpiresAt(mixed, at), at + AWAITING_FOR_MAX_MS)
   // …and a year is a ceiling, not a floor: a PR park asking for hours gets hours.
@@ -900,19 +900,19 @@ test("unaccountedItems: an `issues:` entry is checked against the ISSUE registra
 })
 
 test("parkForMaxMs: a park naming only issues and PRs earns the year; an issue beside a shell keeps the day", () => {
-  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
-  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), PR_WATCH_FOR_MAX_MS)
-  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }], forMs: 1, steps: [] }), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "pr", value: "acme/app#7" }], forMs: 1, steps: [] }), PR_WATCH_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "issue", value: "acme/app#9" }, { kind: "shell", value: "bash_1" }], forMs: 1, steps: [] }), AWAITING_FOR_MAX_MS)
 })
 
 test("parkForMaxMs: a sub-agent anywhere in the park caps it at the 30-minute check-in", () => {
   const at = Date.parse("2026-10-03T10:00:00Z")
-  const lanes = { items: [{ kind: "agent" as const, value: "wzkorrv4u" }, { kind: "agent" as const, value: "wt5dxjxhp" }], forMs: 8 * 60 * 60_000 }
+  const lanes = { items: [{ kind: "agent" as const, value: "wzkorrv4u" }, { kind: "agent" as const, value: "wt5dxjxhp" }], forMs: 8 * 60 * 60_000, steps: [] }
   assert.equal(parkForMaxMs(lanes), AGENT_PARK_FOR_MAX_MS)
   assert.equal(parkExpiresAt(lanes, at), at + AGENT_PARK_FOR_MAX_MS, "for: 8h becomes a 30-minute check-in")
   assert.equal(parkExpiresAt({ ...lanes, forMs: 10 * 60_000 }, at), at + 10 * 60_000, "a shorter for: stands as written")
-  assert.equal(parkForMaxMs({ items: [{ kind: "agent", value: "a1" }, { kind: "pr", value: "acme/app#7" }], forMs: 1 }), AGENT_PARK_FOR_MAX_MS)
-  assert.equal(parkForMaxMs({ items: [{ kind: "shell", value: "bash_1" }], forMs: 1 }), AWAITING_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "agent", value: "a1" }, { kind: "pr", value: "acme/app#7" }], forMs: 1, steps: [] }), AGENT_PARK_FOR_MAX_MS)
+  assert.equal(parkForMaxMs({ items: [{ kind: "shell", value: "bash_1" }], forMs: 1, steps: [] }), AWAITING_FOR_MAX_MS)
 })
 
 // ---- THE `needs_input:` ANSWER (2026-10-01) -------------------------------------------------------
@@ -973,5 +973,45 @@ test("a legacy park owes no answer", async () => {
   try {
     await h.s.tick()
     assert.deepEqual(h.queued(), [])
+  } finally { h.close() }
+})
+
+// ---- STEPS FOR THE HUMAN (2026-10-03) --------------------------------------------------------------
+// `steps:` NAME THE HUMAN as the wait. The human is the one party frizz never has to watch: the thread
+// sits in their queue, and their reply is the wake — so a fence carrying only steps needs no item and no
+// `for:`, and must not be bumped as one that "names nothing".
+
+const STEPS = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
+const NOBODY_LIVE = { shells: new Set<string>(), agents: new Set<string>(), timers: new Set<string>(), prs: new Set<string>() }
+
+test("a park on steps alone is honoured with no item and no for:, and runs on the human's clock", () => {
+  const park = readAwaitingPark(STEPS)
+  assert.deepEqual(park.steps, ["Run `npm login`", "Approve the prompt"])
+  assert.equal(parkIsHonoured(park, NOBODY_LIVE), true)
+  assert.equal(parkForMaxMs(park), PR_WATCH_FOR_MAX_MS, "a person's clock is not a day's")
+  // An item named beside the steps must still be live: steps are not a way to park on a dead shell.
+  assert.equal(parkIsHonoured(readAwaitingPark([...STEPS, { kind: "shell", value: "bGONE" }, { kind: "for", value: "2h" }]), NOBODY_LIVE), false)
+  // And without steps, nothing changed: a fence naming nothing is still not a park.
+  assert.equal(parkIsHonoured(readAwaitingPark([{ kind: "for", value: "2h" }]), NOBODY_LIVE), false)
+})
+
+test("SOURCE 12 leaves a steps fence alone — legacy or new contract, no for:, no needs_input line", async () => {
+  for (const spawnedAt of ["2026-08-15T11:00:00.000Z", new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) + 60_000).toISOString()]) {
+    const h = parkHarness(STEPS, { spawnedAt, body: "The publish step runs as the maintainer." })
+    try {
+      await h.s.tick()
+      assert.deepEqual(h.queued(), [], `nothing to correct (dispatched ${spawnedAt}): the human's reply is the wake`)
+    } finally { h.close() }
+  }
+})
+
+test("a steps fence with a for: that ran out sends the worker to check whether the steps happened", async () => {
+  const h = parkHarness([...STEPS, { kind: "for", value: "30s" }], { restedAt: new Date(Date.now() - 10 * 60_000).toISOString() })
+  try {
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1)
+    assert.match(rows[0].fence_id, /^park:expired:/)
+    assert.match(rows[0].message, /`steps:` \(2\) — the human has not replied; check whether they were done anyway/)
   } finally { h.close() }
 })

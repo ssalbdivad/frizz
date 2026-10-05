@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundSubject, hasAwaitingWaitRows, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
+import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
 import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces, and since 2026-08-15 one TABLE: every kind of live work the thread declared
@@ -470,4 +470,33 @@ test("Stop draws the footer on its own where there is no rest to park", () => {
   assert.match(html, /data-awaiting-stop-shells="1"/)
   assert.match(html, /data-awaiting-snooze="true" data-card-actions="true"/, "the Stop rides the shared action footer")
   assert.match(html, /-mx-4 -mb-4 mt-3 flex/, "the band still sits flush with the card's bottom")
+})
+
+// ---- STEPS FOR THE HUMAN (2026-10-03) --------------------------------------------------------------
+// A fence carrying `steps:` waits on the READER. The steps themselves render through the markdown
+// sanitizer, which needs a real DOM this runner does not have — the drawn card and its one verb are
+// pinned in a real browser by AwaitingSteps.e2e.test.ts. What is DOM-free is pinned here: the
+// heading, and the one test that decides whether the verbs may be offered at all.
+const stepHints = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
+
+test("a steps card is headed for the reader unless the worker titled it", () => {
+  assert.equal(awaitingBackgroundLabel(thread([], []), stepHints), "For you to do")
+  // It outranks the shape headings: the reader is the wait even while a shell runs beside it.
+  assert.equal(awaitingBackgroundLabel(thread([], [shell("running")]), stepHints), "For you to do")
+  assert.equal(awaitingBackgroundLabel(thread([], []), [{ kind: "title", value: "Sign in to npm" }, ...stepHints]), "Sign in to npm")
+})
+
+test("the steps' Done is offered only while the thread rests on exactly those steps", () => {
+  const steps = stepHints.map((h) => h.value)
+  const resting = { runtime: "turn-idle", lastFence: { kind: "awaiting", body: "", hints: stepHints } } as Parameters<typeof restingOnSteps>[0]
+  assert.equal(restingOnSteps(resting, steps), true)
+  // A turn running — the human already replied, or anything else woke the worker — has nobody waiting.
+  assert.equal(restingOnSteps({ ...resting, runtime: "running" } as typeof resting, steps), false)
+  // The board has moved past this fence: a newer rest, or none (the tailer clears it on the reply).
+  assert.equal(restingOnSteps({ ...resting, lastFence: undefined } as typeof resting, steps), false)
+  assert.equal(restingOnSteps({ ...resting, lastFence: { kind: "done", body: "", hints: stepHints } } as typeof resting, steps), false)
+  assert.equal(restingOnSteps(resting, [steps[0]]), false, "a card for other steps is a record, not the ask")
+  assert.equal(restingOnSteps(resting, [...steps].reverse()), false)
+  assert.equal(restingOnSteps(resting, []), false, "no steps, no Done")
+  assert.equal(restingOnSteps(undefined, steps), false, "a sub-agent's transcript has no thread to reply to")
 })

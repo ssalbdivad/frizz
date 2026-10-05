@@ -54,6 +54,14 @@ stack rules:
 - **`real-subsystem-harness`** — for behavior no browser can reach: the broker socket, spawn/exec
   paths, migrations, a detached daemon's environment. Real resource, real function, negative control.
 
+# Never put a macOS keychain dialog on the maintainer's screen
+
+**Every command that starts Chrome or Chromium directly carries `--use-mock-keychain`**: a `--headless` screenshot, `--print-to-pdf`, `--dump-dom`, or a script that builds the command line. Chrome stores its "Chrome Safe Storage" key in the login keychain when it starts, and macOS finds that keychain through `HOME`. Under a temporary `HOME` with no keychain, which is what every sandbox here gives its workers, the write fails with `errSecNoDefaultKeychain` (-25307) and macOS puts a modal *"Keychain Not Found — A keychain cannot be found to store "Chrome.""* on the maintainer's screen, once per Chrome start. 23 Chrome processes did that in two lightbox e2e runs on 2026-10-03, all started by sandboxed workers obeying a prompt that said to use headless Chrome from the command line (maintainer: *"It's still fucking happening"*).
+
+- `scripts/shot.mjs`, Puppeteer, Playwright and the chrome-devtools MCP pass the flag already. The rule is for a raw `"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" …` command, and for every prompt you write that asks a sandboxed worker for Chrome: the worker runs whatever command it writes, so put the flag in the prompt.
+- **Never give a sandbox `HOME` an empty keychain to make the dialog stop.** Claude Code reads the keychain before `~/.claude/.credentials.json`, and its next token write into an empty keychain deletes that file. Under `--creds` that is the maintainer's real file, through the `.claude` link (`update()` in the secure-storage fallback of Claude Code 2.1.288). `frizz-stack` § A real Claude worker covers sandboxes.
+- To name the process after the fact: `/usr/bin/log show --last 1h --style compact --predicate 'eventMessage CONTAINS "MacOS error: -25307"'`. A Chrome in that list took the dialog path; a `security` or `codex` there only read the keychain. (In zsh, a bare `log` is a builtin.)
+
 # Visual alignment is the implementer's job, not a review someone else does
 
 **Load the `visual-review` skill whenever you place an icon, glyph, emoji, badge, chip, or counter next

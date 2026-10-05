@@ -26,13 +26,13 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, SquareTerminal, TerminalSquare } from "lucide-react"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, SquareTerminal, TerminalSquare } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadTerminal, ThreadView, ThreadWatchView } from "@frizz/shared"
-import { awaitingFenceTitle, isDirectSubAgent } from "@frizz/shared"
+import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
 import { subAgentName } from "../groups.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_FALLBACK_TITLE } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed, liveAgeSince } from "../lib/durationLabels.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
 import { AGENT_GLYPH_STROKE } from "../lib/childOps.ts"
@@ -46,6 +46,7 @@ import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { PRIMER, PRIMER_DANGER_LINK } from "../lib/primer.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
+import { StepsDone, StepsList } from "./AwaitingSteps.tsx"
 import { useShellFolderHint } from "./ThreadTerminals.tsx"
 import { CARD_ACTION_EXPLAINER, CARD_ACTION_RADIUS, CardActions, CARD_BODY, CARD_LINK, CARD_PRIMARY_ACTION, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
@@ -152,7 +153,7 @@ export function awaitingBackgroundLabel(
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">,
   hints: readonly AwaitingHint[],
 ): string {
-  return awaitingFenceTitle(hints) ?? (shellsAlone(thread) ? SHELLS_ALONE_TITLE : AWAITING_FALLBACK_TITLE)
+  return awaitingFenceTitle(hints) ?? (awaitingSteps(hints).length > 0 ? STEPS_FALLBACK_TITLE : shellsAlone(thread) ? SHELLS_ALONE_TITLE : AWAITING_FALLBACK_TITLE)
 }
 
 /** The shell-only rest's title. The maintainer named this shape "Background shells running" (2026-08-04);
@@ -179,6 +180,16 @@ function armedTimerWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView
  *  heading; stating that once here beats an optional chain at every reader below. */
 const NO_LIVE_WORK: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches"> = { id: "", subAgents: [], bgShells: [], watches: [] }
 const NO_HINTS: readonly AwaitingHint[] = []
+
+/** Is the thread resting on EXACTLY these steps right now — the board's own last fence, at rest? Only
+ *  then may the card offer the steps' Done. A fence the transcript hands in (`fence`) is a rest the
+ *  thread may already have left: the tailer clears `lastFence` on the human's very next message, so a
+ *  steps card drawn after the reply is a record of what was asked, and a second Done would send twice. */
+export function restingOnSteps(thread: Pick<ThreadView, "runtime" | "lastFence"> | undefined, steps: readonly string[]): boolean {
+  if (steps.length === 0 || thread?.runtime !== "turn-idle" || thread.lastFence?.kind !== "awaiting") return false
+  const live = awaitingSteps(thread.lastFence.hints)
+  return live.length === steps.length && live.every((step, i) => step === steps[i])
+}
 
 /** The watched PRs that get a CHIP: the `prs:` the fence names which the wait table does not already
  *  row. A registered PR is a github row below — verdict glyph, check counts, the same link — so a chip
@@ -1167,7 +1178,7 @@ function AwaitingAskUpdate({ thread }: { thread: Pick<ThreadView, "id" | "sessio
   )
 }
 
-export function AwaitingBackgroundCard({ thread, fence }: {
+export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
@@ -1193,12 +1204,20 @@ export function AwaitingBackgroundCard({ thread, fence }: {
    *  any more — the tailer clears `lastFence` on the very user record that bumps it — so the caller that
    *  parsed it out of the message hands it in here instead of a second renderer growing around it. */
   fence?: { body: string; hints: readonly AwaitingHint[] }
+  // The optimistic exit for the STEPS verb: replying "Done" takes the thread out of the queue, and puts
+  // it back if the send fails. Only a surface with a card to fade passes it.
+  onReplied?: () => void
+  onReplyFailed?: () => void
 }) {
   // The thread's live work, as the rows and the heading read it. A card with no owning thread has none
   // of it — no rows, no shell-only heading — rather than a branch at every use below.
   const work = thread ?? NO_LIVE_WORK
   const stated = fence ?? (thread?.lastFence?.kind === "awaiting" ? thread.lastFence : undefined)
   const hints = stated?.hints ?? NO_HINTS
+  // `steps:` — the fence is waiting on the HUMAN to perform these (2026-10-03). Drawn under the prose on
+  // every surface; the verbs that answer them only while the thread rests on them (restingOnSteps).
+  const steps = awaitingSteps(hints)
+  const stepsLive = thread !== undefined && restingOnSteps(thread, steps)
   const waiting = awaitsResults(work)
   // THE WORKER'S OWN HANDOFF, opening the card (maintainer 2026-08-24: "the rendered message at the
   // top of the card, followed by a horizontal divider, followed by all of the awaited items"). Until
@@ -1227,7 +1246,11 @@ export function AwaitingBackgroundCard({ thread, fence }: {
   // shape that still reaches this card through ChatView's fence block — a thread the human has already
   // bg-snoozed — which would offer a park the mutation refuses (router.snoozeAwaitingBackground guards
   // on the rest instant). A thread running past its rest draws no awaiting card at all since 2026-09-24.
-  const snoozable = thread !== undefined && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  //
+  // NOT ON A STEPS CARD. The thread is waiting on the reader, so the footer carries the steps' own verbs;
+  // an event-snooze ("until new activity") would hide a card whose only new activity is the reader's own
+  // reply. The lifecycle footer's wall-clock Snooze still parks it for anyone who means "not now".
+  const snoozable = thread !== undefined && steps.length === 0 && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
   // THE STOP IS NOT GATED ON THE REST. Ending a shell is valid whenever one is running and the server can
   // reach it — a bg-snoozed thread drawn through ChatView's fence block still has live shells worth
   // stopping, even though it has no rest left to park. Owned and not archived, though: a foreign thread
@@ -1249,7 +1272,9 @@ export function AwaitingBackgroundCard({ thread, fence }: {
       // heading and the hourglass, which is honest for it — a thread holding a sub-agent or a PR
       // watcher genuinely IS waiting on something to come back. A per-kind glyph would rebuild the
       // per-kind card the consolidation removed, exactly as a per-kind title did.
-      icon={shellsAlone(work) ? TerminalSquare : Hourglass}
+      // STEPS TAKE A THIRD, and only because their wait is of a different kind: the reader is the one
+      // being waited on, so the card is a to-do rather than a status.
+      icon={steps.length > 0 ? ListTodo : shellsAlone(work) ? TerminalSquare : Hourglass}
       // WRAPPED AT ANY CHARACTER, because this heading can now be WORKER-AUTHORED. Every other card in
       // the family carries a code-authored label, so the header's wrap-don't-truncate rule never had to
       // survive an unbreakable token; a `title:` naming a branch, a URL or a base64 id is one. Measured
@@ -1274,8 +1299,9 @@ export function AwaitingBackgroundCard({ thread, fence }: {
         // lines, which never reach the reader — has no handoff to open on, and if it has no rows either
         // the card would be a bare heading. That is reachable only off a thread with nothing live (a
         // sub-agent's own transcript above all), and the sentence below is what it says instead.
-        : groups.length === 0 && !hasUnrowedWork(work) ? <p className={CARD_BODY}>{AWAITING_NO_PROSE}</p>
+        : groups.length === 0 && !hasUnrowedWork(work) && steps.length === 0 ? <p className={CARD_BODY}>{AWAITING_NO_PROSE}</p>
         : null}
+      {steps.length > 0 && <StepsList steps={steps} />}
       {unrowed.length > 1 && (
         // `gap-x-3` rather than a punctuation separator: the refs are a set of targets, not a sentence,
         // and a wrapped "·" stranded at a line end reads as a typo. They wrap onto as many lines as the
@@ -1335,7 +1361,9 @@ export function AwaitingBackgroundCard({ thread, fence }: {
           carries the Stop to the band's right edge, apart from the pair. Stop-first (the sign-in card's
           Retry-before-Sign-in order) was drawn and rejected: at 780px it forced the caption onto two
           lines at widths where it fits one today. Alone, the Stop sits at the band's left edge. */}
-      {footer ? (
+      {stepsLive ? (
+        <StepsDone slug={thread.id} onReplied={onReplied} onReplyFailed={onReplyFailed} />
+      ) : footer ? (
         <CardActions data-awaiting-snooze>
           {/* Snooze and its caption as ONE flex item, sized to their content. The caption alone has a
               flex-basis of 0, so beside a Stop the row would fit all three on one line by folding the

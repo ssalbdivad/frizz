@@ -30,8 +30,6 @@
 //                                            title row shows
 //   POST /__e2e/click     {selector}         click an element of the workbench with a real mouse
 //   POST /__e2e/shot      {path}             save a screenshot of the whole workbench to `path`
-//   POST /__e2e/attention {message}          send an `attention` frame (a thread that needs the human) to
-//                                            the newest editor socket, as the real server picks one window
 //   POST /__e2e/features  {features, ready}  what the next welcome names, and whether the page says it is
 //                                            ready — `[]` and false is a Frizz from before the sidebar
 //
@@ -242,12 +240,6 @@ export class FakeFrizz {
           this.#features = input.features as string[]
           this.#pageReady = input.ready !== false
           return json(200, { ok: true })
-        case "/__e2e/attention": {
-          const ws = this.#sockets.at(-1)
-          if (!ws) return json(409, { error: "no editor connected" })
-          this.#send(ws, { t: "attention", ...input.message })
-          return json(200, { ok: true })
-        }
         case "/__e2e/press":
         case "/__e2e/click":
         case "/__e2e/shot":

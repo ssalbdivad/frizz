@@ -1,4 +1,4 @@
-import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, awaitingNeedsInput, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, awaitingNeedsInput, awaitingSteps, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -55,6 +55,9 @@ export interface AwaitingPark {
    *  PARK. Uncapped here because the ceiling depends on what the park NAMES (parkForMaxMs), which this
    *  field alone cannot know — `parkExpiresAt` is the one place it is applied. */
   forMs: number | null
+  /** `steps:` — what the HUMAN must perform. Non-empty means the park waits on them, which needs no
+   *  item and no `for:`: their reply is the wake (see parkIsHonoured). */
+  steps: string[]
 }
 
 /** Read the structural fence. Unknown keys are already dropped by the tailer's parse, so everything
@@ -74,7 +77,7 @@ export function readAwaitingPark(hints: readonly AwaitingHint[]): AwaitingPark {
       forMs = parseAwaitingDurationRaw(value)
     }
   }
-  return { items, forMs }
+  return { items, forMs, steps: awaitingSteps(hints) }
 }
 
 /** What frizz can see running for one thread, in the shape the check needs. Every id a fence may name
@@ -169,10 +172,17 @@ function liveKey(i: AwaitingItem): string {
 /** Is this a park frizz will honour — at least one item, every item live, and a usable `for:`?
  *
  *  AT LEAST ONE ITEM is not pedantry. An awaiting fence naming nothing is a worker claiming to wait with
- *  no way to be woken, which is precisely the silent stall the grammar exists to make impossible. */
+ *  no way to be woken, which is precisely the silent stall the grammar exists to make impossible.
+ *
+ *  STEPS ARE THE ONE WAIT THAT NEEDS NEITHER (2026-10-03). A fence listing `steps:` waits on the HUMAN,
+ *  and the human is the one party frizz never has to watch: the thread sits in their queue
+ *  (awaitingNeedsInput reads steps as `true`), and their reply — the card's Done, or anything they
+ *  type — is itself the wake. Any item named beside the steps must still be live, and a
+ *  `for:` beside them still runs out (parkExpiresAt), as a re-check the worker asked for. */
 export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean {
-  if (park.items.length === 0) return false
-  if (park.forMs === null) return false
+  const onHuman = park.steps.length > 0
+  if (park.items.length === 0 && !onHuman) return false
+  if (park.forMs === null && !onHuman) return false
   return unaccountedItems(park.items, live).length === 0
 }
 
@@ -203,7 +213,8 @@ export function needsInputParkHolds(hints: readonly AwaitingHint[], live: LiveAc
  *  A SUB-AGENT anywhere in the list caps it at 30 minutes: that wake is the parent's check-in on its
  *  children, not a timeout (AGENT_PARK_FOR_MAX_MS). */
 export function parkForMaxMs(park: AwaitingPark): number {
-  if (park.items.length === 0) return AWAITING_FOR_MAX_MS
+  // Steps alone move on the HUMAN's clock, which is no more a day's than a maintainer's review is.
+  if (park.items.length === 0) return park.steps.length > 0 ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
   if (park.items.some((i) => i.kind === "agent")) return AGENT_PARK_FOR_MAX_MS
   // An issue earns the PR's ceiling for the PR's reason: it sits on its maintainers' clock too.
   return park.items.every((i) => i.kind === "pr" || i.kind === "issue") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS

@@ -1505,67 +1505,6 @@ const steps: Step[] = [
     },
   },
   {
-    name: "a thread that needs you while the sidebar is out of sight is a notification here, and its Open shows the thread in the sidebar",
-    modes: ["fake"],
-    async run({ api, project }) {
-      assert.ok((await fakeLog()).frames.some((frame) => frame.t === "listen" && frame.attention), "the window asks to be told")
-      await vscode.commands.executeCommand("notifications.clearAll")
-      await vscode.commands.executeCommand("frizz.sidebar.focus")
-      await until("the sidebar in sight and ready", () => api.sidebar().visible && api.sidebar().ready, 30_000)
-      const before = api.notifications().length
-      const attention = (id: string, title: string, body: string) =>
-        fake("/__e2e/attention", { message: { projectId: project.id, thread: { id, title }, needs: "question", body } })
-
-      // In sight, the card is in front of the human already: no toast.
-      await attention("fake-thread", "Fake thread", "Which branch?")
-      await sleep(500)
-      assert.equal(api.notifications().length, before)
-
-      await vscode.commands.executeCommand("workbench.view.explorer")
-      await until("the sidebar out of sight", () => !api.sidebar().visible)
-      await attention("other-thread", "Other thread", "Which branch should I merge into?")
-      await until("the notification", () => api.notifications().length === before + 1)
-      // Named as the board names it: the thread's handle (threads.ts displayTitle).
-      assert.equal(api.notifications().at(-1), "other-thread has a question: Which branch should I merge into?")
-
-      // Open, pressed with a real mouse on the toast's own button.
-      const from = await received()
-      await until("the toast's Open", () => workbench<boolean>(`(() => {
-        const open = [...document.querySelectorAll(".notification-toast .monaco-button")].find((button) => button.textContent.trim() === "Open")
-        open?.setAttribute("data-e2e-open", "")
-        return Boolean(open)
-      })()`))
-      // The toast slides in: the button is clicked where it comes to rest, as a hand would, and again
-      // if the first press found it still moving.
-      const shown = async () => api.sidebar().visible && (await pageReceived("frizz:navigate", from)).length > 0
-      for (let attempt = 0; attempt < 3 && !(await shown()); attempt++) {
-        await sleep(800)
-        if (await workbench<boolean>(`Boolean(document.querySelector("[data-e2e-open]"))`)) assert.ok(await click("[data-e2e-open]"))
-        await until("the thread shown in the sidebar", shown, 5_000).catch(() => undefined)
-      }
-      await until("the thread shown in the sidebar", shown, 10_000)
-      assert.deepEqual((await pageReceived("frizz:navigate", from))[0], { type: "frizz:navigate", to: { thread: "other-thread", project: project.slug } })
-
-      // frizz.notify off: the window tells Frizz it is not listening, and shows nothing.
-      const frizz = vscode.workspace.getConfiguration("frizz")
-      const listens = async () => (await fakeLog()).frames.filter((frame) => frame.t === "listen").map((frame) => frame.t === "listen" && frame.attention)
-      try {
-        await frizz.update("notify", false, vscode.ConfigurationTarget.Global)
-        await until("listen off", async () => (await listens()).at(-1) === false)
-        await vscode.commands.executeCommand("workbench.view.explorer")
-        await until("the sidebar out of sight", () => !api.sidebar().visible)
-        await attention("third-thread", "Third thread", "Anything?")
-        await sleep(500)
-        assert.equal(api.notifications().length, before + 1)
-      } finally {
-        await frizz.update("notify", undefined, vscode.ConfigurationTarget.Global)
-      }
-      await until("listen on again", async () => (await listens()).at(-1) === true)
-      await vscode.commands.executeCommand("notifications.clearAll")
-      await vscode.commands.executeCommand("frizz.sidebar.focus")
-    },
-  },
-  {
     name: "a Frizz from before the sidebar is named as the cause at once, not after the 20s wait",
     modes: ["fake"],
     async run({ api }) {

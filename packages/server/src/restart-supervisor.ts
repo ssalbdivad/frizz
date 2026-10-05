@@ -3,6 +3,7 @@
 // crash.  This intentionally contains no source-watch logic: stable and legacy launchers can share it.
 import { request as requestHttp, createServer, type IncomingMessage, type ServerResponse, type Server } from "node:http"
 import { connect } from "node:net"
+import { pipeline } from "node:stream"
 import {
   AccessStore,
   describeDevice,
@@ -22,7 +23,7 @@ import {
   rejectWebSocketUpgrade,
   type LocalAuthorityPolicy,
 } from "./local-origin.ts"
-import { resolveLocalImage } from "./local-image.ts"
+import { localImageHeaders, localImageStream, resolveLocalImage } from "./local-image.ts"
 import { recoveryPage, unauthorizedPage, unlistedHostPage } from "./supervisor-pages.ts"
 import { FRIZZ_ROUTE_PREFIX, frizzRoute } from "@frizz/shared"
 
@@ -660,7 +661,7 @@ export class RestartSupervisorProxy {
     }
 
     const url = new URL(req.url ?? "/", "http://frizz.invalid")
-    const result = resolveLocalImage(url.searchParams.get("path") ?? undefined)
+    const result = resolveLocalImage(url.searchParams.get("path") ?? undefined, req.headers.range)
     const origin = typeof req.headers.origin === "string"
       ? allowedLocalCorsOrigin(req.headers.origin, this.options.port, this.policy)
       : undefined
@@ -669,18 +670,24 @@ export class RestartSupervisorProxy {
       "access-control-expose-headers": "x-frizz-boot",
       vary: "Origin",
     }
-    if (result.status !== 200) {
+    if (result.status === 416) {
+      res.writeHead(416, { ...sharedHeaders, "content-range": `bytes */${result.size}`, "accept-ranges": "bytes" })
+      res.end()
+      return
+    }
+    if (result.status === 400 || result.status === 404) {
       res.writeHead(result.status, { ...sharedHeaders, "content-type": "text/plain; charset=UTF-8" })
       res.end(String(result.status))
       return
     }
-    res.writeHead(200, {
-      ...sharedHeaders,
-      "content-type": result.contentType,
-      "content-length": result.body.length,
-      "cache-control": "private, max-age=60",
-    })
-    res.end(req.method === "HEAD" ? undefined : result.body)
+    res.writeHead(result.status, { ...sharedHeaders, ...localImageHeaders(result) })
+    const stream = req.method === "HEAD" ? null : localImageStream(result)
+    if (!stream) {
+      res.end()
+      return
+    }
+    // A media element abandons ranges constantly; `pipeline` closes the file whichever side ends first.
+    pipeline(stream, res, () => undefined)
   }
 
   /**

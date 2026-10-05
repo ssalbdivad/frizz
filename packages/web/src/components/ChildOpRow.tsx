@@ -34,9 +34,16 @@ export type ChildOpKind = "AGENT" | "WORKFLOW" | "SHELL" | "GITHUB"
 //   rail  — the sidebar's indented child rows. The [ ]/[/] checkbox motif (BoxSpinner) that the whole
 //           rail speaks, at 12px, indented to clear the parent row's indicator column. NEVER swap this
 //           for the pulsing dot: matching the parent rows is the point. The rail keeps carrying the raw
-//           subagent type in its tooltip, which is now the only place it appears at all.
-//   card  — a queue card's live child lines: the pulsing live dot and the label, no kind tag.
+//           subagent type in its tooltip, which is now the only place it appears at all. No kind tag.
+//   card  — a queue card's live child lines: dot + petite-caps kind tag + label, like the sheet.
 //   sheet — the drawer's background-ops strip: dot + petite-caps kind tag + label.
+// THE CARD CARRIES THE KIND TAG TOO (maintainer 2026-10-03: "sometimes that little small caps AGENT
+// label shows up and other times it doesn't, and I don't know why"). It used to be left off as "ops
+// chrome", but the card's column was never agents alone: the shell, watcher and File/Link rows beneath
+// these lines render through the drawer's own strip, tag and all. So one card mixed tagged and untagged
+// rows — the agent labels starting a tag's width left of every other label in the column — and the same
+// child gained and lost its tag as the thread moved between the queue and the drawer. The two prompt-box
+// densities now differ only in the indicator hook and the press handling below.
 // The dismiss × is NOT one of those differences any more — see `onDismiss`.
 // All three carry the light-gray DURATION the child has been working — right-justified at the end of the
 // row (maintainer 2026-07-27), so a column of rows reads its numbers down one edge instead of at
@@ -233,7 +240,7 @@ export function ChildOpRow({
     <>
       <span aria-hidden className={CHILD_ARROW_CLASS}>{CHILD_ARROW}</span>
       {indicator}
-      {sheet && <span className={CHILD_KIND_TAG_CLASS}>{KIND_TAG[kind]}</span>}
+      {!rail && <span className={CHILD_KIND_TAG_CLASS}>{KIND_TAG[kind]}</span>}
       {labelText}
     </>
   )

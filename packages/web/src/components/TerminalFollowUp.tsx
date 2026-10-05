@@ -84,7 +84,7 @@ export function TerminalFollowUp({ id, lastCommand, autoFocus, onRan }: {
         disabled={!hasContent || pending}
         title="Run (Enter)"
         aria-label="Run command"
-        className={`icon-hover-outline absolute ${RAIL_SEND_OFFSET} flex h-6 w-6 items-center justify-center rounded-md transition-all ${
+        className={`icon-hover-outline absolute ${RAIL_SEND_OFFSET} flex h-6 w-6 items-center justify-center rounded-md transition-[color,background-color,opacity,scale] ${
           hasContent && !pending ? "bg-fg text-bg hover:opacity-90 active:scale-95" : "bg-panel-2 text-muted"
         }`}
       >

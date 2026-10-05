@@ -310,7 +310,7 @@ test("allowed: absolute png → 200 with content-type", () => {
   assert.equal(r.status, 200)
   if (r.status === 200) {
     assert.equal(r.contentType, "image/png")
-    assert.deepEqual(r.body, PNG)
+    assert.equal(r.size, PNG.length)
   }
 })
 
@@ -356,6 +356,43 @@ test("/_frizz/local-image route serves an agent screenshot under /tmp end-to-end
   assert.equal(served.status, 200, "worker screenshot serves")
   assert.equal(served.headers.get("content-type"), "image/png")
   assert.deepEqual(Buffer.from(await served.arrayBuffer()), PNG)
+})
+
+test("/_frizz/local-image route plays a video: byte ranges, a HEAD with no body, a 416 past the end", async () => {
+  const port = 49_235
+  const app = originTestApp(port)
+  const dir = mkdtempSync(join(tmpdir(), "frizz-video-route-"))
+  const video = join(dir, "flow.webm")
+  const bytes = Buffer.from(Array.from({ length: 4096 }, (_, i) => i % 253))
+  writeFileSync(video, bytes)
+  const url = `http://127.0.0.1:${port}/_frizz/local-image?path=${encodeURIComponent(video)}`
+  const headers = { host: `127.0.0.1:${port}`, "sec-fetch-site": "same-origin" }
+
+  // What a <video> sends first, and then for a seek.
+  const opening = await app.request(url, { headers: { ...headers, range: "bytes=0-" } })
+  assert.equal(opening.status, 206)
+  assert.equal(opening.headers.get("content-range"), "bytes 0-4095/4096")
+  assert.deepEqual(Buffer.from(await opening.arrayBuffer()), bytes)
+  const seek = await app.request(url, { headers: { ...headers, range: "bytes=1000-1999" } })
+  assert.equal(seek.status, 206)
+  assert.equal(seek.headers.get("content-type"), "video/webm")
+  assert.equal(seek.headers.get("content-length"), "1000")
+  assert.equal(seek.headers.get("accept-ranges"), "bytes")
+  assert.deepEqual(Buffer.from(await seek.arrayBuffer()), bytes.subarray(1000, 2000))
+
+  const whole = await app.request(url, { headers })
+  assert.equal(whole.status, 200)
+  assert.equal(whole.headers.get("accept-ranges"), "bytes")
+  assert.deepEqual(Buffer.from(await whole.arrayBuffer()), bytes)
+
+  const head = await app.request(url, { method: "HEAD", headers })
+  assert.equal(head.status, 200)
+  assert.equal(head.headers.get("content-length"), "4096")
+  assert.equal((await head.arrayBuffer()).byteLength, 0)
+
+  const past = await app.request(url, { headers: { ...headers, range: "bytes=4096-" } })
+  assert.equal(past.status, 416)
+  assert.equal(past.headers.get("content-range"), "bytes */4096")
 })
 
 test("/_frizz/local-visualization binds a directive basename to the owning thread session", async () => {

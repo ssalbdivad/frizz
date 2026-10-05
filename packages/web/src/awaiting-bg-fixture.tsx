@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
+import { MemoryRouter } from "react-router"
 import type { BoardSnapshot, ThreadView as ThreadViewModel, TranscriptMessage } from "@frizz/shared"
 import type { GithubRefCard } from "@frizz/shared"
 import { GithubHovercards } from "./components/GithubHovercards.tsx"
@@ -44,8 +45,13 @@ const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString()
 const wantAll = params.get("all") === "1"
 const wantAgents = wantAll || params.get("agents") === "1"
 const wantWatch = wantAll || watchMode !== null
+// ?steps=1 — STEPS FOR THE HUMAN (2026-10-03): a fence handing the reader things only they can do, with
+// no live work beside it — the shape a worker parks on when it needs a sign-in. ?steps=titled adds the
+// worker's own heading. The Done button draws because the thread rests on these steps.
+const stepsMode = params.get("steps")
+const wantSteps = stepsMode !== null
 // Shells are the DEFAULT shape; ?agents=1 swaps them for sub-agents, and ?watch=1 for a lone watcher.
-const wantShells = wantAll || (!wantAgents && watchMode !== "1" && watchMode !== "one")
+const wantShells = wantAll || (!wantSteps && !wantAgents && watchMode !== "1" && watchMode !== "one")
 const shellOnly = wantShells && !wantAgents
 // ?title=<text> — the WORKER'S OWN HEADING (2026-08-26), which replaces the derived "Awaiting" /
 // "Background shells running". Bare `?title` seeds a heading that WRAPS at this card's narrowest (368px
@@ -56,7 +62,9 @@ const shellOnly = wantShells && !wantAgents
 const titleParam = params.get("title")
 const declaredTitle = titleParam === "" ? "Spread ask and soundness issue on two TypeScript issues" : titleParam
 
-const tail = shellOnly
+const tail = wantSteps
+  ? "The 4.2.0 tag is cut and verified. The publish step runs as the acme-bot account, and no token for it is available to this thread."
+  : shellOnly
   ? "Left the dev server and the CI poller running; I'll pick this back up when they report."
   : "Dispatched two audit sub-agents; I'll fold their findings in when they return."
 
@@ -143,9 +151,20 @@ const thread = {
       ]
     : []),
   ],
-  // The standing fence. Only seeded with ?title, because a fence body renders as the card's opening
-  // prose and the default fixture is deliberately the no-prose shape.
-  ...(declaredTitle === null ? {} : {
+  // The standing fence. Only seeded with ?title or ?steps, because a fence body renders as the card's
+  // opening prose and the default fixture is deliberately the no-prose shape.
+  ...(wantSteps ? {
+    lastFence: {
+      kind: "awaiting",
+      body: tail,
+      hints: [
+        ...(stepsMode === "titled" ? [{ kind: "title", value: "Sign in to npm so the acme 4.2.0 release can publish" }] : []),
+        { kind: "step", value: "Run `npm login --auth-type=web` in a terminal on this machine." },
+        { kind: "step", value: "Approve the browser prompt with the **acme-bot** account." },
+        { kind: "step", value: "Reply here once `npm whoami` prints `acme-bot`." },
+      ],
+    },
+  } : declaredTitle === null ? {} : {
     lastFence: {
       kind: "awaiting",
       body: tail,
@@ -204,6 +223,15 @@ window.fetch = async (input, init) => {
     window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: "stopBackgroundOp", body: JSON.parse(String(init?.body ?? "{}")) } }))
     return new Response(JSON.stringify({ result: { stopped: true, dismissed: true, note: null, descendantsStopped: 0 } }), { headers: { "content-type": "application/json" } })
   }
+  // The steps' Done is an ordinary reply, so it arrives HERE, as the composer's would — recorded with
+  // the exact message, so the e2e can read the words the worker would receive.
+  // The reply starts the worker's turn in production, which takes the thread out of the queue; model
+  // that by pruning it, so the queue's 8s un-hide guard does not bring the card back.
+  if (url.pathname === "/_frizz/rpc/followUp") {
+    window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc: "followUp", body: JSON.parse(String(init?.body ?? "{}")) } }))
+    if (store.board) store.board = { ...store.board, threads: store.board.threads.filter((t) => t.id !== SLUG) } as BoardSnapshot
+    return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
   }
@@ -221,8 +249,14 @@ function Fixture() {
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <TooltipProvider>
-      <Fixture />
-      <GithubHovercards />
+      {/* A SEND from this card (the steps' Done, or the composer) marks the thread steered, and the working
+          status row that then draws reads the router (StatusRow's project-scoped links) — outside a router
+          context it throws on render. A MemoryRouter gives it that context without an address bar, as in
+          the sidebar fixtures. */}
+      <MemoryRouter>
+        <Fixture />
+        <GithubHovercards />
+      </MemoryRouter>
     </TooltipProvider>
   </QueryClientProvider>,
 )

@@ -122,6 +122,15 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 // `needs_input:` answer is what lets frizz keep such a rest out of the queue, and a message nobody is
 // queued to read is not a handoff — so the summarise-everything rule binds the rest that DOES need the
 // human, and that rest covers the quiet stretches too.
+//
+// STEPS FOR THE HUMAN RIDE THE AWAITING FENCE (2026-10-03, maintainer: "There should be a way for an
+// agent to sign off with explicit instructions for the user to perform. A new awaitable thing." — then,
+// of a first cut that registered each set of steps as a row behind its own MCP verb: "I don't think this
+// requires persistently registering it. Is there a way to do this just inside of the awaiting card?").
+// Before `steps:`, "what the human must do" had exactly one home — the prose of a handoff — so nothing
+// tracked it and nothing woke the worker once it was done. The contract ROUTES to the key at the places
+// a worker decides how to hand over (the awaiting grammar, the recommendation rule, the dangling-idea
+// rule, waiting on a person); the key's own bullet carries the rest.
 const SIGNALS = `## End-of-turn signals — your final message IS the interface
 
 When you come to rest NEEDING the human, your last message is the whole interface: the human reads it
@@ -242,7 +251,8 @@ card of three names plus "keep the current one", and the other seven were never 
     verdict is that SOMEONE SHOULD NOW DO SOMETHING — merge it, decline it, post this comment, pick
     one of these designs, press the button you are not allowed to press — that someone is the human,
     so register the question with \`mcp__frizz__ask\`, your recommendation as option A, and rest on
-    it. Same for anything you WROTE
+    it. Once nothing is left to DECIDE and only the human's act remains, the steps go to them under
+    \`steps:\` in an \` \`\`\`awaiting \` fence instead. Same for anything you WROTE
     but did not SEND (a drafted comment, reply, issue body or release note): \`done\` files that draft
     away with the thread.
   - Follow-up work you DISCOVERED blocks \`done\` just as hard as work you were assigned, even when it
@@ -252,8 +262,9 @@ card of three names plus "keep the current one", and the other seven were never 
   - **A \`done\` MESSAGE SAYS WHAT HAPPENED. DELETE EVERY DANGLING "WORTH DOING LATER".** "One thing to
     carry forward…", "a follow-up could…" — a forward-reference in a dismissal card is too weak to act
     on and archived unread. Each one resolves four ways and there is no fifth — DO it, SPAWN it onto
-    its own card, ASK about it, or DROP it. Something the human must do NOW ("re-pull before you
-    restart") is not a dangling idea; that is the handoff, and it belongs in the prose.
+    its own card, ASK about it, or DROP it. Something the human must DO ("re-pull before you
+    restart") is not a dangling idea either: hand it to them under \`steps:\` in an \` \`\`\`awaiting \`
+    fence, which keeps the thread in their queue until they report back.
   - Two cases earn \`done\` without landed code, by the same test — the deliverable is a FILE the human
     opens without this thread. A commissioned research or audit EFFORT whose finished report is
     written to that file earns \`done\`; so does a PLANNING session whose plan file is FULLY written and
@@ -263,8 +274,9 @@ card of three names plus "keep the current one", and the other seven were never 
     design outlives the thread's dismissal. Neither exception stretches to a report that ENDS IN A DECISION the
     human has yet to make: write the file AND ask the question.
 
-- \` \`\`\`awaiting \` — you have STOPPED, and you are waiting on work that is actually running (never on
-  a human — that is a question). The fence is PURE STRUCTURE: YAML frontmatter naming what frizz can
+- \` \`\`\`awaiting \` — you have STOPPED, and you are waiting on work that is actually running, or on the
+  human to PERFORM steps you cannot (\`steps:\`, below). A DECISION you need from them is a question, never
+  a fence. The fence is PURE STRUCTURE: YAML frontmatter naming what frizz can
   look up and saying whether the human is needed, then — only when they are — \`---\` and Markdown prose.
   The everyday shape is a QUIET PARK, the fence alone:
 
@@ -288,9 +300,20 @@ card of three names plus "keep the current one", and the other seven were never 
   Three of the five audits are in \`audits/\` and can be read now; the other two are still running.
   \`\`\`
 
+  And when the human must DO something you cannot — here, the release needs their npm session:
+
+  \`\`\`awaiting
+  title: Sign in to npm so the release can publish
+  steps:
+    - Run \`npm login --auth-type=web\` in a terminal on this machine.
+    - Approve the browser prompt with the maintainer account.
+  ---
+  The publish step runs as the maintainer, and no token for that account is available to this thread.
+  \`\`\`
+
   - **THE BODY, WHEN THERE IS ONE, IS ONE OR TWO SENTENCES: what the human can look at now, what is
     still running, and what it gates.** Not the plan for when it lands — no "When it lands:" list, no
-    steps, no sub-bullets. You will be woken when it lands and can do the next step then.
+    numbered plan, no sub-bullets. You will be woken when it lands and can do the next step then.
   - **\`needs_input:\` — REQUIRED, \`true\` or \`false\`: does the human need to look NOW?** \`false\` keeps
     the thread out of their queue until the work wakes you, and the fence is the whole message.
     \`true\` puts it in their queue while the work keeps running — the live work is listed on the card —
@@ -306,8 +329,8 @@ card of three names plus "keep the current one", and the other seven were never 
     wrong \`false\` cannot hide the thread.
   - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Four PLURAL keys taking LISTS (either list form;
     a single item may be written bare), plus the scalars \`for:\`, \`needs_input:\` and \`title:\`. **NO PROSE ABOVE THE
-    \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` value is the
-    one exception: frizz reads it verbatim, so \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
+    \`---\`, EVER** — a colon or a \` #\` inside a sentence breaks the parse. (The \`title:\` and \`steps:\`
+    values are the exceptions: frizz reads them verbatim, so code, \`#391\` and a colon are safe there.) There is no \`reason:\` key any more;
     the reason goes in the body, which is the handoff the human reads. **THE SINGULAR KEYS ARE GONE** — \`shell:\`,
     \`agent:\`, \`timer:\`, \`pr:\` and \`reason:\`, one per line, were the grammar until 2026-08-24; YAML
     cannot express a repeated key, so they became the lists above. Write one and frizz tells you what
@@ -353,6 +376,15 @@ card of three names plus "keep the current one", and the other seven were never 
     issues"). It wraps, so name the wait fully; a HEADING, though, not the handoff — past 120
     characters it is trimmed on a word boundary. Without it the card is headed "Awaiting", which is
     true of every park and specific to none.
+  - \`steps:\` — the human must PERFORM something you cannot: sign in, approve a prompt, merge what you
+    may not, press a button you are not allowed to press. One \`- \` item per step, each written to be
+    followed COLD by someone who has read nothing else; frizz reads them verbatim. Steps NAME THE HUMAN
+    as the wait, so the fence needs no other name and no \`for:\` (add one only if you want to be woken
+    to re-check), and it always puts the thread in their queue — \`needs_input:\` may be left out. Their
+    card shows the steps over one **Done** button, and its click comes back to you as their reply,
+    \`Done\`, the same as anything they type; anything else they need to tell you — a step that failed,
+    the account they used — comes as a message of their own. An act is not a decision: never ask
+    WHETHER they will do it, and never call \`done\` while it is still owed.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, names which of them you stopped for,
@@ -362,16 +394,9 @@ card of three names plus "keep the current one", and the other seven were never 
     **A FENCE THAT NAMES NOTHING IS NOT A PARK** — \`for:\` describes a wait, it is not one — so
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
     if nothing is actually running, end with \`\`\`done or register a question with \`mcp__frizz__ask\`.
-  - **WAITING ON A PERSON IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`. There is no human gate, no
-    prose park, and no question fence. **That includes a STEP only the human can perform** — a 2FA or
-    one-time-password prompt, a browser login, an approval button, a command that needs credentials you
-    do not hold. It is not "just a step for them to run": the work is blocked on a person, so register
-    it (\`question\`: "Run \`<command>\` to approve publishing?", options "Ran it" / "Skip publishing")
-    and the thread waits in the queue where they will see it. A sub-agent still running does NOT turn
-    that into an \`awaiting\` park: an \`awaiting\` card files the thread under Snoozed, and a step
-    the human owes sits there unseen. (A worker once parked on its sub-agent with a 2FA command in the
-    prose, writing "nothing here is waiting on an answer from you"; the publish sat blocked behind a
-    snoozed card nobody opened.)
+    (\`steps:\` count: they name the human.)
+  - **WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION** — \`mcp__frizz__ask\`. **WAITING ON ONE
+    TO ACT IS \`steps:\`.** There is no human gate, no prose park, and no question fence.
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never \` \`\`\`awaiting \` them
     BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
     For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
@@ -430,26 +455,48 @@ changed direction through the message/follow-up path and reconcile conflicting r
 returns. Contain an unstable service by restarting only the affected service, never by stopping
 a writer. Only an explicit user instruction naming the interruption permits it.`
 
-// The `lightbox` paragraph announces a CAPABILITY rather than a rule — no worker writes a fence it has
-// never heard of (packages/web/src/components/Lightbox.tsx draws it). "Above any closing signal fence"
-// because parseSignalFence (tailer.ts) is END-anchored: a gallery written after a ```done would turn the
-// sign-off into prose and leave the rest unsigned.
-const VISUAL_EVIDENCE = `## Visual evidence in handoffs
+// The ONE way a worker shows the human a picture or a video (maintainer 2026-10-03: "this should be the
+// dominant way for agents to be servicing images to the user, and other forms of multimedia … like
+// videos … The agent should be told that, by default, everything is collapsed"). The first paragraph is
+// the fact a worker cannot see from inside its own session: Frizz folds every tool call into a collapsed
+// digest, a picture a tool returned included (web lib/toolActivity.isToolActivityException), so a
+// screenshot it took is on nobody's screen. Until then a worker could reasonably believe its image Read
+// had shown the human the shot, because it once did.
+//
+// Only the fence is taught. A Markdown \`![](…)\` and a bare path line still render, for every transcript
+// written before this, but a second way to do the same thing is a second thing to choose between.
+// SendUserFile is not taught either: it is not in a dispatched worker's tool list, and no transcript on
+// the maintainer's machine has ever called it.
+//
+// "Above any closing signal fence" because parseSignalFence (tailer.ts) is END-anchored: a gallery
+// written after a \`\`\`done would turn the sign-off into prose and leave the rest unsigned. And not INSIDE
+// one either: its own closing \`\`\` line would close the signal fence early. The surfaces named after it
+// are the ones a worker cannot see from its own messages — the done card's registered body, an option's
+// description and a Markdown file draw galleries too (useLightboxIslands). An awaiting fence's body is
+// deliberately not among them: the resting card reads it through capFenceBody's 500 characters, which a
+// few absolute paths outrun. The path advice is the headless-browser skill's: \`/tmp\` is emptied at boot,
+// and a card is read hours or days later.
+const VISUAL_EVIDENCE = `## Showing the human pictures and video
 
-Embed the small, decisive set of screenshots in your handoff with meaningful alt text rather than
-listing raw paths — \`![descriptive alt](/absolute/path.png)\`. Frizz renders eligible absolute local
-image paths through its guarded local-image proxy; only eligible workspace or explicitly allowlisted
-image files can embed, and a path outside that safe boundary stays non-navigable. Do not bulk-embed
-irrelevant screenshots. Always keep a concise textual finding alongside them, so the handoff still
-reads when images are unavailable.
-
-Several screenshots go in ONE \`lightbox\` fence — an image path per line, an optional caption after
-it — which Frizz draws as a gallery the human clicks through. Keep it above any closing signal fence:
+Your tool calls are out of the human's sight: Frizz folds every one into a collapsed row they would
+have to open, a picture a tool returned included — a screenshot you took, an image you read. So nothing
+you LOOK at is on their screen. A picture or a video reaches them only when you put it there, in a
+\`lightbox\` fence: one path per line, an optional caption after it, drawn as a gallery they open, zoom
+into and page through. One file is a fence of one line.
 
 \`\`\`lightbox
 /abs/before.png  Before the fix
 /abs/after.png   After the fix
-\`\`\``
+/abs/flow.webm   The whole flow, recorded
+\`\`\`
+
+Pictures are \`.png\`, \`.jpg\`, \`.gif\` or \`.webp\`; videos are \`.mp4\`, \`.webm\` or \`.mov\`, and play in
+the viewer. Show the small, decisive set, from a path that outlives a reboot — your scratch directory,
+never \`/tmp\` — and keep a one-line finding beside it, so the message still reads without it. Keep the
+fence above any closing signal fence, never inside one. The same fence is a gallery in the body of
+\`mcp__frizz__done\`, in an \`mcp__frizz__ask\` option's description — the screens a design would ship,
+beside the choice — and in a Markdown report the human opens in Frizz, where a relative path resolves
+against the report's folder.`
 
 
 const REGISTERED_LINKS = `## Saved links and files
@@ -927,16 +974,7 @@ its outbox and is unaffected:
 - \`mcp__frizz__timer\` is your own alarm clock: \`action: "set"\` with \`prompt\` plus \`in_seconds\` or an
   ISO \`at\`, delivered exactly once, mid-turn, and then gone. You may hold MANY at once; \`action: "list"\`
   shows them and \`action: "cancel"\` withdraws one by id. Use it to come back to something at a specific
-  time — never to poll something a background shell, a sub-agent or a monitor can wake you for.
-
-## Showing the human files and images
-
-\`SendUserFile\` is the preferred way to show IMAGES, and the only reliable one for screenshots under
-your scratch directory. Pass an ARRAY to render several in one captioned block:
-\`SendUserFile({ files: ["/abs/a.png", "/abs/b.png"], caption: "before vs after", status: "proactive" })\`
-— \`"proactive"\` when the human is away and should get a push, else \`"normal"\`. Reach for it eagerly
-whenever you have screenshots worth showing: it renders the whole decisive set inline, which a terminal
-agent cannot do.`,
+  time — never to poll something a background shell, a sub-agent or a monitor can wake you for.`,
   // § Bounded native delegation describes the NATIVE `spawn_agent` surface, which frizz does not
   // configure at all. The only `-c` overrides frizz puts on a codex app-server are the frizz MCP mount
   // and `default_tools_approval_mode` (backend/codex-mcp.ts `codexAppServerArgv`, the single argv

@@ -247,7 +247,7 @@ import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
 import { resolveProjectLabel } from "./project-identity.ts"
 import { findByPath, readRegistry, registerProject } from "./project-registry.ts"
-import { pickDirectory, pickImageFile } from "./directory-picker.ts"
+import { pickDirectory, pickImageFile, warmDirectoryPicker, warmImagePicker } from "./directory-picker.ts"
 import { completePath } from "./path-complete.ts"
 import Database from "./sqlite.ts"
 import { projectStateDir } from "./frizz-paths.ts"
@@ -973,6 +973,18 @@ function storeProjectIcon(id: string, name: string, bytes: Buffer): ProjectCard 
   const updated = setProjectIcon(id, path)
   if (!updated) throw new Error("No such project.")
   return projectCard(updated, entry.stale)
+}
+
+/**
+ * Where a project's icon picker opens, and what it asks. Shared by the pick and the build ahead of it,
+ * because a panel built in any other directory is not the one the pick shows.
+ */
+function iconPicker(id: string): { startIn: string | undefined; prompt: string } {
+  const entry = listProjects().find((project) => project.id === id)
+  if (!entry) throw new Error("No such project.")
+  // A directory that has since been moved or deleted is not a reason to refuse the dialog — it just
+  // opens wherever the OS would have opened it anyway.
+  return { startIn: entry.stale ? undefined : entry.path, prompt: `Choose an icon for ${entry.name ?? entry.slug}` }
 }
 
 /** The picked FILE's bytes, read from disk — the native picker hands back a path, not an upload. */
@@ -4192,9 +4204,11 @@ export function createRouter(ctx: AppContext) {
           throw new Error(
             "This thread is running autonomously — decide it yourself and proceed. Its standing " +
             `instruction is:\n\n${goal}\n\nSay which way you went and why in your write-up, so the ` +
-            "human can course-correct. If the call is genuinely theirs — something destructive, " +
-            "irreversible, or an act you are not permitted to take — say so in your final message " +
-            "instead; a thread on autonomous mode is not a thread with no human reading it.",
+            "human can course-correct. If the call is genuinely theirs — something destructive or " +
+            "irreversible — say so in your final message instead; a thread on autonomous mode is not a " +
+            "thread with no human reading it. An ACT only the human can perform (a sign-in, an approval, " +
+            "a button you may not press) is not a call: list it under `steps:` in an ```awaiting fence, " +
+            "which autonomous mode allows.",
           )
         }
         // REFUSED, not stored, and named one fault at a time in the worker's own vocabulary — a shape
@@ -5441,15 +5455,22 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ id: z.string().min(1) }),
       output: DirectoryPickResult,
       handler: async ({ input }) => {
-        const entry = listProjects().find((project) => project.id === input.id)
-        if (!entry) throw new Error("No such project.")
-        // A directory that has since been moved or deleted is not a reason to refuse the dialog —
-        // it just opens wherever the OS would have opened it anyway.
-        const startIn = entry.stale ? undefined : entry.path
-        const picked = await pickImageFile(startIn, `Choose an icon for ${entry.name ?? entry.slug}`)
+        const { startIn, prompt } = iconPicker(input.id)
+        const picked = await pickImageFile(startIn, prompt)
         if (picked.kind !== "picked") return picked
         return { kind: "picked" as const, project: setProjectIconFromFile(input.id, picked.path) }
       },
+    }),
+
+    /**
+     * Build that image picker now: the project's icon menu has opened, and "Choose an icon…" is one
+     * move away. The same split as `projectPickWarm` — on macOS the click then only shows a panel that
+     * is already built (see directory-picker.ts); everywhere else this answers `false`.
+     */
+    projectIconPickWarm: mutation({
+      input: z.object({ id: z.string().min(1) }),
+      output: z.object({ warming: z.boolean() }),
+      handler: async ({ input }) => ({ warming: warmImagePicker(iconPicker(input.id).startIn) }),
     }),
 
     projectIconSet: mutation({
@@ -5540,10 +5561,24 @@ export function createRouter(ctx: AppContext) {
       output: ProjectPickResult,
       handler: async () => {
         const picked = await pickDirectory()
+        // Folders tend to be added several at a time (2026-10-03: three dialogs inside 33 seconds), so
+        // the next panel is built while this one's board loads. One that is never asked for dies idle.
+        if (picked.kind !== "unavailable") warmDirectoryPicker()
         if (picked.kind !== "picked") return picked
         const added = addProjectAtPath(picked.path)
         return added.kind === "added" ? { kind: "picked" as const, project: added.project } : added
       },
+    }),
+
+    /**
+     * Build the folder picker now: the pointer or keyboard focus has reached "Add a project", and the
+     * click is a moment away. On macOS a cold panel takes ~0.9s to draw and a built one ~0.09s (see
+     * directory-picker.ts); everywhere else nothing is built ahead and this answers `false`.
+     */
+    projectPickWarm: mutation({
+      input: z.object({}),
+      output: z.object({ warming: z.boolean() }),
+      handler: async () => ({ warming: warmDirectoryPicker() }),
     }),
 
     /**

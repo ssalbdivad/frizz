@@ -6,6 +6,7 @@ import {
   coalesceToolActivityMessages,
   currentToolActivity,
   historicalToolActivityMessages,
+  isPictureTool,
   isToolActivityException,
   liveRuntimeStartedAt,
   liveToolActivityRun,
@@ -145,27 +146,47 @@ test("an orphaned codex poll folds into the run while a real detached job keeps 
   assert.deepEqual(compact[0].message.tools.map((call) => call.name), ["Read", "Wait", "Poll process", "Grep"])
 })
 
-test("a call whose result is a picture keeps its card and splits the run", () => {
+// Maintainer 2026-10-03: "we should stop having special rendering where we display screenshots in the
+// read tool … No images or screenshots are visible unless you make them visible to the user with the
+// light box". A picture a tool RETURNED is the worker looking, so it folds like any other call.
+test("a call whose result is a picture folds into the run like any other call", () => {
   // An image Read: the harness returns the picture as the WHOLE result, so there is no excerpt text —
   // `outputImage` is the only signal that this Read is a screenshot rather than a source file.
   const imageRead = tool("Read", { detail: "/tmp/shots/board.png", outputImage: "/tmp/frizz-tool-images/ab.png", status: "completed" })
   const shot = tool("mcp__chrome-devtools__take_screenshot", { outputImage: "/tmp/frizz-tool-images/cd.png", status: "completed" })
-  const delivery = tool("SendUserFile", { sentImages: ["/tmp/frizz-tool-images/ef.png"], caption: "before vs after", status: "completed" })
-  for (const call of [imageRead, shot, delivery]) assert.equal(isToolActivityException(call), true)
+  for (const call of [imageRead, shot]) {
+    assert.equal(isToolActivityException(call), false)
+    assert.equal(isPictureTool(call), false, "a folded call is never a picture edge for the spacing")
+  }
 
-  // A Read of ORDINARY source, and a delivery of non-image files, stay in the digest.
-  assert.equal(isToolActivityException(tool("Read", { detail: "src/a.ts", read: "export const x = 1" })), false)
+  const compact = coalesceToolActivityMessages([
+    toolMessage("one", [tool("Bash"), tool("Grep")]),
+    toolMessage("shot", [imageRead, shot], "2026-07-30T12:00:01.000Z"),
+    toolMessage("two", [tool("Edit")], "2026-07-30T12:00:02.000Z"),
+  ])
+
+  assert.deepEqual(compact.map((entry) => entry.message.tools.map((call) => call.name)), [
+    ["Bash", "Grep", "Read", "mcp__chrome-devtools__take_screenshot", "Edit"],
+  ])
+})
+
+test("a delivery of pictures to the human keeps its card and splits the run", () => {
+  const delivery = tool("SendUserFile", { sentImages: ["/tmp/frizz-tool-images/ef.png"], caption: "before vs after", status: "completed" })
+  assert.equal(isToolActivityException(delivery), true)
+  assert.equal(isPictureTool(delivery), true)
+
+  // A delivery of non-image files stays in the digest: its chips say no more than the digest's label.
   assert.equal(isToolActivityException(tool("SendUserFile", { sentFiles: ["notes.pdf"] })), false)
 
   const compact = coalesceToolActivityMessages([
     toolMessage("one", [tool("Bash"), tool("Grep")]),
-    toolMessage("shot", [imageRead], "2026-07-30T12:00:01.000Z"),
+    toolMessage("sent", [delivery], "2026-07-30T12:00:01.000Z"),
     toolMessage("two", [tool("Edit")], "2026-07-30T12:00:02.000Z"),
   ])
 
   assert.deepEqual(compact.map((entry) => entry.message.tools.map((call) => call.name)), [
     ["Bash", "Grep"],
-    ["Read"],
+    ["SendUserFile"],
     ["Edit"],
   ])
 })

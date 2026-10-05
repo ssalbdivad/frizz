@@ -271,9 +271,10 @@ export interface EditorFeatures {
 /**
  * What this window wants to be told beyond v1 — sent only to a server whose welcome names
  * EDITOR_FEATURES.attention, once after the welcome and again when it changes. `attention`: this window
- * shows a notification when a thread needs the human (the extension's `frizz.notify` setting). A window
- * that never says so — an older extension, or one with the setting off — is never the one a thread's
- * notification goes to, so it cannot swallow one another window would have shown.
+ * shows a notification when a thread needs the human. Only older extensions send it: the toast and its
+ * `frizz.notify` setting were removed on 2026-10-05, so the current extension never listens. A window that
+ * never says so is never the one a thread's notification goes to, so it cannot swallow one another window
+ * would have shown.
  */
 export interface EditorListen {
   t: "listen"

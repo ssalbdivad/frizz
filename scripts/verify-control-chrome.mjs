@@ -54,11 +54,18 @@ try {
       await page.evaluate(async theme => (await import('/src/lib/theme.ts')).setThemePreference(theme), theme)
       const selectors = ['[data-header-shell] .icon-hover-outline', 'button[title^="Attach"]', '[aria-label="Investigate this issue and make recommendations"]', '[aria-label="Send"]']
       const edge = selector => page.$eval(selector, el => getComputedStyle(el).getPropertyValue('--tw-inset-ring-shadow'))
+      // The PAINTED edge two frames into the hover, not the variable: `--tw-inset-ring-shadow` flips at
+      // once even when a box-shadow transition holds the drawn edge transparent until its last frame —
+      // the GitHub icon and send button hitch this check used to pass (styles.css, icon-hover-outline).
+      const paintedEdge = selector => page.$eval(selector, el => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(() => done(getComputedStyle(el).boxShadow.split(/,(?![^(]*\))/).find(layer => layer.includes('inset')) ?? '')))))
       for (const selector of selectors) {
         await page.mouse.move(0, 0)
         await page.evaluate(() => document.activeElement?.blur())
         assert.doesNotMatch(await edge(selector), /inset/, `No resting icon edge: ${selector}`)
         await page.hover(selector)
+        const painted = await paintedEdge(selector)
+        assert.match(painted, /1px inset/, `Hover paints the icon edge at once: ${selector}`)
+        assert.doesNotMatch(painted, /^\s*(rgba\(0, 0, 0, 0\)|transparent)/, `Hover paints the icon edge at once, not transparent: ${selector}`)
         assert.match(await edge(selector), /inset/, `Hover reveals the icon edge: ${selector}`)
         await page.mouse.move(0, 0)
         await page.keyboard.press('Tab')

@@ -1334,6 +1334,47 @@ test("tailer: surfaces running vs stale sub-agents (via injected mtime) and clea
   assert.ok(h.changes.n > before2, "clearing a sub-agent marks the board dirty")
 })
 
+// ---- a child blocked in a wait it SIZED ITSELF (2026-10-03) ----
+//
+// A sub-agent waiting on a Rust build ran `until grep -q '^DONE' …; do sleep 15; done` under
+// `timeout: 3600000`, wrote its tool_use, and then nothing for the hour it asked for — so at minute 15
+// it read "stale", a grey dot beside its working siblings. Shaped from that transcript's tail: a child
+// whose latest call is still pending is live until that call's declared bound plus a grace
+// (pending-call.ts), and only then does silence count against it.
+function childBash(id: string, input: { [key: string]: unknown }, at = "2026-07-01T00:00:05.000Z", messageId = "msg_wait") {
+  return JSON.stringify({ type: "assistant", timestamp: at, message: { id: messageId, stop_reason: "tool_use", content: [{ type: "tool_use", id, name: "Bash", input }] } })
+}
+function childResult(id: string, at = "2026-07-01T00:00:06.000Z") {
+  return JSON.stringify({ type: "user", timestamp: at, message: { role: "user", content: [{ type: "tool_result", tool_use_id: id, content: "ok" }] } })
+}
+const HOUR_WAIT = { command: "until grep -q '^DONE' /tmp/gates.log; do sleep 15; done", description: "Wait for the Rust gates to finish", timeout: 3_600_000 }
+
+test("tailer: a sub-agent blocked in a Bash wait it sized itself reads running until that call's deadline and grace pass", () => {
+  const child = (lines: string[]) => {
+    const h = harness()
+    h.storage.upsertSession(row())
+    const transcript = join(h.logDir, "child.jsonl")
+    writeFileSync(transcript, lines.map((l) => l + "\n").join(""))
+    fixture(h.logDir, "sid", [IN_FLIGHT, JSON.stringify(dispatch("toolu_bg", "child")), JSON.stringify(launch("toolu_bg", transcript))])
+    // The child's last append is its own tool_use record, as on the real tail.
+    const t = makeTailer(h, { mtimeMs: () => Date.parse("2026-07-01T00:00:05.000Z") })
+    return (iso: string) => {
+      h.clock.ms = Date.parse(iso)
+      t.tick()
+      return t.get("t")?.subAgents[0]?.state
+    }
+  }
+
+  const waiting = child([childBash("toolu_wait", HOUR_WAIT)])
+  assert.equal(waiting("2026-07-01T00:20:00.000Z"), "running", "20 minutes into the hour it declared: quiet, not dead")
+  assert.equal(waiting("2026-07-01T01:01:00.000Z"), "running", "past the deadline but inside the harness's grace to write the result")
+  assert.equal(waiting("2026-07-01T01:10:00.000Z"), "stale", "well past its own deadline with nothing written: lost")
+
+  // The controls: the plain clock, unchanged, for every child not blocked in a call that named a timeout.
+  assert.equal(child([childBash("toolu_wait", { command: "cargo build" })])("2026-07-01T00:20:00.000Z"), "stale", "a call that names no timeout keeps the 15-minute clock")
+  assert.equal(child([childBash("toolu_wait", HOUR_WAIT), childResult("toolu_wait")])("2026-07-01T00:20:00.000Z"), "stale", "a wait that already returned buys nothing")
+})
+
 test("tailer: a `stopped` recovery notification clears EVERY orphaned sub-agent through the real tick loop", () => {
   // Integration form of the orphan-retirement fix, driven through createTailer.tick() (not applyRecord
   // in isolation): three background agents left with no completion record, then the real multi-id
@@ -3204,8 +3245,16 @@ test("tailer: a PRESENT transcript binds directly — no discovery, transcript_i
   assert.equal(h.storage.getSession("t")?.transcript_id ?? null, null, "no drift → transcript_id never written")
 })
 
+// The stall sink of a fixture project (which has no stateDir) is the per-INSTALL directory, shared by
+// every run of this suite on the machine — and several agents run it at once here. A fixed slug let one
+// run's leading rmSync delete the log another run had just written, between its write and its read
+// (ENOENT on `really-stalled.stall.log`, 2026-10-03). The pid keeps each run's file its own.
+function stallSlug(base: string): string {
+  return `${base}-${process.pid}`
+}
+
 test("tailer: a transcript missing past the grace window → noTranscript degraded state (not an eternal spinner)", () => {
-  const slug = "stall-thread"
+  const slug = stallSlug("stall-thread")
   const h = harness()
   // Per-project now — keyed on the tailer's project.stateDir. This fixture project has none, so both
   // sides fall back to the per-install directory; ask for it the same way or this looks in an empty one.
@@ -3236,7 +3285,7 @@ test("tailer: a transcript missing past the grace window → noTranscript degrad
 // `lastActivityAt` never satisfy sniffPane's quiet gate — the pane was never captured and the row
 // carded as a bare "Stalled" while the reason sat unread in the stall log.
 test("tailer: a present-but-EMPTY (0-byte) transcript past grace is treated as MISSING → degraded (0-byte crash-net hole closed)", () => {
-  const slug = "empty-thread"
+  const slug = stallSlug("empty-thread")
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   const h = harness()
@@ -4428,7 +4477,7 @@ test("tailer: the BACKOFF never delays a transcript that appears at the pinned p
 
 test("tailer: an exited+archived row flags noTranscript but raises NO boot-failure alarm", () => {
   const h = harness()
-  const slug = "filed-away"
+  const slug = stallSlug("filed-away")
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   // A thread the operator finished with and archived. Its transcript never existed and never will.
@@ -4447,7 +4496,7 @@ test("tailer: an exited+archived row flags noTranscript but raises NO boot-failu
 
 test("tailer: a LIVE row still raises the boot-failure alarm (the archived skip is not a blanket mute)", () => {
   const h = harness()
-  const slug = "really-stalled"
+  const slug = stallSlug("really-stalled")
   const stallLog = join(frizzTempDir("frizz-worker-logs"), `${slug}.stall.log`)
   try { rmSync(stallLog) } catch { /* not there */ }
   h.storage.upsertSession(row({ slug, thread_name: `frizz-${slug}`, exited: 0, archived: 0 }))

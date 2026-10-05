@@ -75,6 +75,13 @@ test("unknown and missing languages are escaped plaintext, never executable mark
   }
 })
 
+test("a lightbox fence keeps its name on the block, escaped as plain text", () => {
+  const html = renderHighlightedCode("/tmp/a <b>.png  Before\n", " Lightbox ")
+  assert.match(html, /<code class="hljs language-lightbox">\/tmp\/a &lt;b&gt;\.png  Before\n<\/code>/)
+  // Only the bare name: an info string with more words is an ordinary unknown language.
+  assert.match(renderHighlightedCode("x\n", "lightbox extra"), /class="hljs language-plaintext"/)
+})
+
 test("long lines remain intact for the surface CSS to scroll or wrap", () => {
   const longToken = "x".repeat(1_024)
   const html = renderHighlightedCode(longToken, "plaintext")

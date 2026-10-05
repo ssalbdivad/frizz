@@ -447,11 +447,11 @@ function Chip({
       // button's hit area, and a click on the code you are reading must still pick the option. The
       // guards keep it from double-firing or over-reaching: a click the BUTTON caught bubbles here
       // with the button as target (closest matches, skip — a second call would un-toggle a multi), a
-      // link keeps its own click, and a text-selection drag inside the code block is reading, not
-      // choosing.
+      // link keeps its own click, a picture opens the lightbox (a gallery tile is a button), and a
+      // text-selection drag inside the code block is reading, not choosing.
       onClick={(e) => {
         if (disabled) return
-        if ((e.target as Element).closest("a, button, .local-file-action, .local-file-code")) return
+        if ((e.target as Element).closest("a, button, img[data-local-path], .local-file-action, .local-file-code")) return
         if (window.getSelection()?.toString()) return
         onClick()
       }}

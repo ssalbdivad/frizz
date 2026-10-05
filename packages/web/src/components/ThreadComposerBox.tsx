@@ -1,6 +1,6 @@
 import { useContext, useMemo, useState, type ReactElement, type ReactNode } from "react"
 import { useSnapshot } from "valtio"
-import { expandUserCommandDraft, type AccountBackend, type ThreadSkill, type ThreadView } from "@frizz/shared"
+import { awaitingSteps, expandUserCommandDraft, type AccountBackend, type ThreadSkill, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { showToast, store } from "../store.ts"
 import { outgoingMessage } from "../lib/editorContext.ts"
@@ -150,7 +150,11 @@ export function ThreadComposerBox({
   const isMobile = useIsMobile()
   const phoneBar = isMobile && surface === "chatComposer"
   const turnRunning = thread?.runtime === "running" || thread?.runtime === "spawning"
-  const canComplete = thread ? threadLifecycleAvailability(thread).archive && !turnRunning : false
+  // NOT WHILE THE THREAD WAITS ON STEPS (`steps:` in its last fence). The card above carries its own
+  // "Done", which means "I did the steps" and sends a reply; this one would mean "archive the thread",
+  // and two Done verbs one above the other on a phone read as the same button.
+  const stepsOpen = thread?.lastFence?.kind === "awaiting" && awaitingSteps(thread.lastFence.hints).length > 0
+  const canComplete = thread ? threadLifecycleAvailability(thread).archive && !turnRunning && !stepsOpen : false
 
   function send(interrupt = false) {
     const text = message.trim()

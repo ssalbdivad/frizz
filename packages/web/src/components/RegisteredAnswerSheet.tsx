@@ -1,4 +1,4 @@
-import { useContext, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react"
+import { useContext, useEffect, useLayoutEffect, useRef, useState, type MouseEvent, type ReactNode } from "react"
 import { Check } from "lucide-react"
 import type { AskedOption, RegisteredQuestionView } from "@frizz/shared"
 import { useBackDismiss } from "../lib/backDismiss.ts"
@@ -165,8 +165,15 @@ function OptionRow({ option, multi, on, onClick }: { option: AskedOption; multi:
   // A multi-line description (or a legacy `preview`) is the option's rich body — a list, a diff — and
   // it decides the choice, so it renders in full under the label, as the desktop card does.
   const body = [line ? undefined : option.description?.trim(), option.preview?.trim()].filter(Boolean).join("\n\n")
+  // A picture in the body — a gallery tile, a Markdown image — is there to be LOOKED AT before choosing:
+  // its tap opens the lightbox (its own handler, or lib/local-file-links.ts) and does not also pick the
+  // option, as on the desktop card (QuestionBlockCard's Chip).
+  const pick = (e: MouseEvent) => {
+    if ((e.target as Element).closest("[data-lightbox-tile], img[data-local-path]")) return
+    onClick()
+  }
   return (
-    <button type="button" role={multi ? "checkbox" : "radio"} aria-checked={on} data-answer-option data-on={on || undefined} onClick={onClick} className={`${ROW} text-left`}>
+    <button type="button" role={multi ? "checkbox" : "radio"} aria-checked={on} data-answer-option data-on={on || undefined} onClick={pick} className={`${ROW} text-left`}>
       <Mark multi={multi} on={on} />
       <span className="min-w-0 flex-1">
         <span className="block text-[15.5px] font-medium leading-[21px] text-fg">

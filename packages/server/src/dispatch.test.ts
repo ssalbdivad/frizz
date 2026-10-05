@@ -435,8 +435,8 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
     assert.match(c, /only the affected service, never by stopping a writer/)
-    assert.match(c, /!\[descriptive alt\]\(\/absolute\/path\.png\)/)
-    assert.match(c, /eligible absolute local image paths through its guarded local-image proxy/)
+    assert.match(raw, /## Showing the human pictures and video/)
+    assert.match(c, /reaches them only when you put it there, in a `lightbox` fence/)
   }
 })
 
@@ -657,20 +657,37 @@ test("runtime release gate: WIPED — no worker surface carries browser-QA opini
     assert.doesNotMatch(c, /agent-browser/i)
     // The generic, repo-agnostic verification rule stays — it names no browser.
     assert.match(c, /Verify behavior end-to-end before calling anything done/i)
-    // …as does the handoff-rendering guidance for screenshots a worker DOES produce.
-    assert.match(c, /Visual evidence in handoffs/)
+    // …as does the guidance for SHOWING the human the screenshots a worker does produce.
+    assert.match(c, /Showing the human pictures and video/)
     assert.match(c, /End-of-turn signals/)
   }
 })
 
-test("visual-evidence handoffs: provider contracts keep embeds safe, useful, and interpretable", () => {
+// Maintainer 2026-10-03: the lightbox "should be the dominant way for agents to be servicing images to
+// the user, and other forms of multimedia … like videos … The agent should be told that, by default,
+// everything is collapsed. No images or screenshots are visible unless you make them visible to the user
+// with the light box."
+test("showing pictures: both contracts say tool output is collapsed and the lightbox fence is the one way to show media", () => {
   for (const raw of [loadWorkerPrompt("claude"), loadWorkerPrompt("codex")]) {
     const c = raw.replace(/\s+/g, " ") // pin content, not line-wrap
-    assert.match(c, /meaningful alt text/i)
-    assert.match(c, /eligible workspace[\s\S]{0,80}allowlisted image files/i)
-    assert.match(c, /outside that safe boundary[\s\S]{0,80}non-navigable/i)
-    assert.match(c, /(?:Do not[\s\S]{0,60}bulk-embed|screenshot bulk[\s\S]{0,30}forbidden)/i)
-    assert.match(c, /concise textual finding[\s\S]{0,100}when images are unavailable/i)
+    // The fact a worker cannot see from inside its session: what it looked at is not on screen.
+    assert.match(c, /folds every one into a collapsed row/)
+    assert.match(c, /a picture a tool returned included/)
+    assert.match(c, /nothing you LOOK at is on their screen/)
+    // The one way, for pictures AND video.
+    assert.match(c, /reaches them only when you put it there, in a `lightbox` fence/)
+    assert.match(raw, /```lightbox\n\/abs\/before\.png {2}Before the fix\n/)
+    assert.match(c, /videos are `\.mp4`, `\.webm` or `\.mov`/)
+    // Useful and durable: a small set, a finding beside it, a path that survives a reboot.
+    assert.match(c, /small, decisive set/)
+    assert.match(c, /never `\/tmp`/)
+    assert.match(c, /one-line finding beside it/)
+    // Where it may and may not go: never after or inside a signal fence (the parser is END-anchored).
+    assert.match(c, /above any closing signal fence, never inside one/)
+    assert.match(c, /gallery in the body of `mcp__frizz__done`/)
+    // The retired ways are not taught: no second syntax to choose between, no tool a worker lacks.
+    assert.doesNotMatch(c, /!\[descriptive alt\]/)
+    assert.doesNotMatch(c, /SendUserFile/)
   }
 })
 
