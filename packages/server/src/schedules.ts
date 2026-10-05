@@ -669,8 +669,9 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
   function runView(sch: ThreadScheduleRow, run: ThreadScheduleRunRow): ScheduleRunView {
     const row = run.thread_slug ? storage.getSession(run.thread_slug) : undefined
     const live = row && row.session_id === run.session_id ? row : undefined
-    const title = live?.title ?? undefined
-    const handle = (title && threadHandle(title)) || run.thread_slug || ""
+    // The slug, not a handle derived from the title: runs share their schedule's title, so the second
+    // "Daily ok" run is `daily-ok-2` on the board and its history row must say so.
+    const handle = run.thread_slug || (live?.title ? threadHandle(live.title) : "")
     const threadState = run.thread_slug ? (live ? (live.state === "archived" || live.archived === 1 ? "archived" : "open") : "deleted") : undefined
     const label = run.summary?.trim() ? run.summary.trim()
       : run.state === "started" ? `@${handle}${run.reason ? ` · ${run.reason}` : ""}`
