@@ -10,12 +10,16 @@
 // Calendar all landed on RRULE for the same reason, and models write it fluently.
 //
 // Why our own engine (zero deps) and not `rrule-temporal`: that one needs `temporal-polyfill` on every
-// Node we support (~1.7 MB into the published server), and its RFC-correct handling of a local time
-// that does not exist SKIPS the occurrence — a daily 02:30 job silently does not run on the
-// spring-forward day. For a job, the right answer is "run at the next valid time" (what cron, GitHub
-// Actions and croner do), and owning the engine makes that one line instead of a fight. `rrule.js` is
-// unmaintained since 2023 and returns zoned results as fake-UTC Dates. (Prior art compared 2026-10-05:
-// `plans/scheduled-threads.md`.)
+// Node we support (~1.7 MB into the published server), and it SKIPS a local time that does not exist —
+// a daily 02:30 job silently does not run on the spring-forward day. RFC 5545 (§3.3.10 by way of §3.3.5)
+// reads a nonexistent local time with the offset from before the gap, i.e. it shifts FORWARD, which is
+// also what cron, GitHub Actions and croner do; this engine does that. `rrule.js` is unmaintained since
+// 2023 and returns zoned results as fake-UTC Dates. Differentially tested 2026-10-05 against
+// rrule-temporal over 4,272 comparisons (2,136 rules, five zones): no engine date errors; every
+// mismatch was the DST shift above, HOURLY stepping (below), or a reference-side bug.
+//
+// HOURLY steps WALL-CLOCK hours, as RFC 5545 computes recurrences in local time: `INTERVAL=3` across a
+// spring-forward night reads 00:00, 03:00, 05:00 elapsed-wise, where an elapsed-time stepper says 06:00.
 //
 // The engine is deliberately brute force: enumerate the candidate LOCAL days of each period, filter by
 // the BY* parts, apply BYSETPOS over the period, then convert each surviving wall time to an instant.
@@ -232,8 +236,24 @@ function expand(c: CompiledSchedule, afterMs: number, emit: (ms: number) => bool
   const horizonDay = Math.max(startDay, dayNumber(...wallDay(zonedWall(Math.max(afterMs, c.dtstartMs), tz)))) + HORIZON_DAYS
   let emitted = 0
   let lastMs = -Infinity
+  const untilDay =
+    rule.until === undefined ? Infinity
+    : rule.until.kind === "local" ? dayNumber(rule.until.wall.y, rule.until.wall.mo, rule.until.wall.d)
+    : Math.floor(rule.until.ms / DAY_MS) + 1
   for (;;) {
-    if (periodFirstDay(rule.freq, period) > horizonDay) return
+    const firstDay = periodFirstDay(rule.freq, period)
+    if (firstDay > horizonDay || firstDay > untilDay) return
+    // An HOURLY rule on a day its BY* parts exclude would otherwise walk all 24 hours of it, which made a
+    // rarely-firing rule walk the whole ten-year horizon an hour at a time (361ms measured). Jump to the
+    // first period of the next day on the INTERVAL grid instead.
+    if (rule.freq === "HOURLY") {
+      const [y, mo, d] = civilFromDay(firstDay)
+      if (!dayMatches(rule, dtstart, y, mo, d, firstDay)) {
+        const nextDayStart = (firstDay + 1) * 24
+        period += Math.ceil((nextDayStart - period) / rule.interval) * rule.interval
+        continue
+      }
+    }
     for (const wall of periodWalls(c, period)) {
       if (rule.until?.kind === "local" && compareWall(wall, rule.until.wall) > 0) return
       const ms = wallToInstant(wall, tz)

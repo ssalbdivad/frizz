@@ -228,3 +228,24 @@ test("formatOccurrence renders in the schedule's zone", () => {
   assert.equal(formatOccurrence(Date.parse("2026-10-12T13:00:00Z"), NY), "Mon Oct 12, 9am")
   assert.equal(formatOccurrence(Date.parse("2026-10-12T13:00:00Z"), "Europe/Berlin"), "Mon Oct 12, 3pm")
 })
+
+test("DST edges outside New York: a midnight gap, and fall-back east of UTC takes the first instance", () => {
+  // Santiago springs forward at 00:00 → 01:00 on 2026-09-06.
+  assert.deepEqual(next("FREQ=DAILY;BYHOUR=0;BYMINUTE=30", { dtstart: "2026-09-05T00:00", tz: "America/Santiago", n: 3 }), [
+    "2026-09-05T00:30",
+    "2026-09-06T01:30",
+    "2026-09-07T00:30",
+  ])
+  // Sydney falls back 03:00 → 02:00 on 2026-04-05; 02:30 happens twice and runs at the first (AEDT).
+  const c = compiled("FREQ=DAILY;BYHOUR=2;BYMINUTE=30", "2026-04-04T00:00", "Australia/Sydney")
+  const runs = occurrencesAfter(c, c.dtstartMs - 1, 2)
+  assert.equal(new Date(runs[1]!).toISOString(), "2026-04-04T15:30:00.000Z")
+})
+
+test("a rarely-firing hourly rule stays fast", () => {
+  const c = compiled("FREQ=HOURLY;INTERVAL=4;BYMONTH=2;BYMONTHDAY=29;BYHOUR=8", "2026-10-05T00:00", "UTC")
+  const started = performance.now()
+  const runs = occurrencesAfter(c, c.dtstartMs, 3)
+  assert.ok(performance.now() - started < 50, "under 50ms")
+  assert.deepEqual(runs.map((ms) => new Date(ms).toISOString().slice(0, 13)), ["2028-02-29T08", "2032-02-29T08", "2036-02-29T08"])
+})
