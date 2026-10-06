@@ -290,6 +290,42 @@ export const BROAD_QUALIFIERS = [
   "Berlin time", "London time", "Tokyo time", "in London", "Europe/Berlin", "America/Los_Angeles", "my time", "+0200",
 ]
 
+/** Qualifiers found by the second break-it round (fix round 2, 2026-10-06), by the class of WHEN they change —
+ *  new members of the classes `BROAD_QUALIFIERS` holds, which it could never hold all of. Round 2 answers with
+ *  CLASSES, not more members: a closed-class word (a preposition, a subordinator, a modal) cannot open the
+ *  imperative a task starts with, so right after a phrase it is part of WHEN (`WHEN_AFTER`). Same five
+ *  placements, both scopes and the field. */
+export const ROUND2_QUALIFIERS: Record<string, string[]> = {
+  frequency: ["fortnightly", "biweekly", "alternating weeks", "on alternate weeks", "twice", "two times", "3x", "half-hourly", "semi-weekly"],
+  bound: ["til EOY", "til the end of the year", "'til Christmas", "through year end", "for the rest of the year", "until further notice", "up until the launch"],
+  condition: ["so long as CI is green", "providing CI is green", "given CI is green", "should CI be green", "depending on the load", "weather permitting", "where possible", "barring outages", "if possible"],
+  anchor: ["following each release", "right after standup", "just before standup", "shortly after the deploy", "prior to the release", "ahead of standup", "upon each release", "post-launch"],
+  zone: ["NZT", "AET", "SAST", "BRT", "AST", "WIB", "IDT", "Kyiv time", "in Kyiv", "Warsaw", "-0500"],
+  clock: ["and again at 5", "then at 5", "and later at 5", "at half past", "at quarter past", "at the half hour"],
+}
+
+/** Two HELD-OUT sets of the same classes, written for fix round 2 to measure whether the closed-class rule
+ *  generalizes rather than memorizes: #1 before any round-2 change (529 of 3,060 reads silently prefixed before
+ *  the fix, 9 after it, none offered in the box), #2 after it (14 of 2,520, none offered). Each was measured
+ *  once, its residue fixed in class, and is pinned here so it stays fixed. */
+export const ROUND2_HELD_OUT: Record<string, string[]> = {
+  frequency: ["every second week", "on alternating weekdays", "thrice", "four times", "2x", "bimonthly", "semimonthly", "tri-weekly", "every few days", "every other week", "four times weekly", "two or three times", "once or twice", "every few weeks", "semiannually", "tri-monthly"],
+  bound: ["through the end of March", "until the end of the sprint", "up to the release", "till further notice", "ending in December", "for the remainder of Q4", "until we ship", "until the freeze lifts", "through the holidays", "until the migration is done", "for six weeks", "up through Friday", "ending next month", "until mid-November"],
+  condition: ["as long as the queue is short", "provided that CI passes", "in the event of failures", "assuming nothing is on fire", "when convenient", "time permitting", "unless told otherwise", "on condition that CI passes", "if needed", "only on green builds", "except on release days", "if nobody objects", "unless I say otherwise", "as long as I'm away", "budget permitting", "in case of outages"],
+  anchor: ["immediately after standup", "soon after the deploy", "directly after each merge", "just after lunch", "before each release", "upon arrival", "in the wake of each deploy", "pre-release", "half an hour before standup", "right before lunch", "after the nightly build", "ahead of each sprint review", "around lunchtime", "just past noon", "before EOD"],
+  zone: ["HST", "Pacific Standard Time", "AEST", "in Berlin", "Lisbon time", "UTC−5", "-03:00", "Melbourne", "Chicago", "CEST", "ET", "CST", "Eastern", "in Tokyo", "Singapore time", "IST", "UTC+5:30", "Oslo", "WET"],
+  clock: ["and then at 6", "plus at 5", "and at noon too", "at a quarter past", "at twenty past", "at ten to", "and once more at 4", "and also at 6", "plus noon", "and at 9pm", "at five past", "around half past", "at 10ish"],
+}
+
+/** A second sentence that changes WHEN, in either scope (fix round 2): the opening window ends at the first
+ *  sentence, and the words that bound or qualify the schedule came after it. */
+export const SECOND_SENTENCES = [
+  "every Monday at 9am triage new issues. Stop after Christmas.",
+  "every Monday at 9am triage new issues — fortnightly is fine",
+  "every Monday at 9am triage new issues. Do this for the rest of the year.",
+  "every Monday at 9am triage new issues. Only while the beta runs.",
+]
+
 // ---- the pinned cases ------------------------------------------------------------------------------------------
 
 export type CaseSource =
@@ -413,7 +449,7 @@ export const CASES: PinnedCase[] = [
   { text: "at the start of each sprint, groom the backlog", source: "probe", edges: "cue open vague «at the start of each sprint»" },
   { text: "every 90 minutes check the queue", source: "probe", edges: "cue open unsupported «every 90 minutes»" },
   { text: "evry monday at 9 triage issues", source: "probe", edges: "none", anywhere: "cue inside typo «evry»" },
-  { text: "every Monday at 9 and every Friday at 5 sync the roadmap", source: "probe", edges: "cue open compound «and every Friday at 5» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
+  { text: "every Monday at 9 and every Friday at 5 sync the roadmap", source: "probe", edges: "cue open compound «and every Friday at 5»" },
   { text: "quarterly, review the access permissions", source: "probe", edges: "ambiguous open «quarterly»" },
   { text: "every weekday at 9 PT post the summary", source: "probe", edges: "cue open zone «PT»" },
   { text: "until christmas, every morning check the holiday traffic dashboard", source: "probe", edges: "none", anywhere: "cue inside leftover «until christmas» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00" },
@@ -486,7 +522,7 @@ export const CASES: PinnedCase[] = [
   { text: "every other fri", source: "todoist", edges: "exact open «every other fri» FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=9;BYMINUTE=0 @2026-10-09T09:00 time:9am" },
   { text: "every quarter", source: "todoist", edges: "ambiguous open «every quarter»" },
   { text: "quarterly", source: "todoist", edges: "ambiguous open «quarterly»" },
-  { text: "Every mon at 8pm, tue at 9pm", source: "todoist", edges: "cue open compound «tue at 9pm» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=20;BYMINUTE=0 @2026-10-05T20:00" },
+  { text: "Every mon at 8pm, tue at 9pm", source: "todoist", edges: "cue open compound «tue at 9pm»" },
   { text: "every day except", source: "todoist", edges: "cue open condition «except» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00" },
   { text: "every 2, 15, 27", source: "todoist", edges: "none" },
   { text: "every 3rd friday", source: "todoist", edges: "cue open vague «every 3rd friday»" },
@@ -535,7 +571,7 @@ export const CASES: PinnedCase[] = [
   { text: "do it now", source: "prior-art", edges: "none" },
   { text: "at 4pm EST the deploy broke", source: "prior-art", edges: "none" },
   { text: "fix the monthly report generator", source: "prior-art", edges: "none" },
-  { text: "every Monday at 9am triage new issues and also every friday", source: "prior-art", edges: "cue open compound «every friday» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00", note: "rrule.js read Mondays only (prior art §4)." },
+  { text: "every Monday at 9am triage new issues and also every friday", source: "prior-art", edges: "cue open compound «every friday»", note: "rrule.js read Mondays only (prior art §4)." },
   { text: "every weekday at 9am except holidays", source: "prior-art", edges: "cue open condition «except holidays» core FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00", note: "rrule.js dropped the qualifier (prior art §4)." },
   { text: "every Monday at 9am for 3 weeks", source: "prior-art", edges: "exact open «every Monday at 9am for 3 weeks» FREQ=WEEKLY;COUNT=3;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00", note: "rrule.js dropped the limit (prior art §4)." },
   { text: "every monday until christmas", source: "prior-art", edges: "cue open leftover «until christmas» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
@@ -590,9 +626,9 @@ export const CASES: PinnedCase[] = [
   { text: "tomorrow morning summarize the incidents", source: "kind", edges: "none", anywhere: "exact open «tomorrow morning» FREQ=DAILY;COUNT=1;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 time:9am(morning)" },
   { text: "this afternoon at 3 rerun the flaky tests", source: "kind", edges: "none", anywhere: "exact open «this afternoon at 3» FREQ=DAILY;COUNT=1;BYHOUR=15;BYMINUTE=0 @2026-10-05T15:00" },
   { text: "in 30 minutes check the canary", source: "kind", edges: "none", anywhere: "exact open «in 30 minutes» FREQ=DAILY;COUNT=1;BYHOUR=15;BYMINUTE=2 @2026-10-05T15:02" },
-  { text: "every Monday at 9am and Friday at 5pm sync", source: "kind", edges: "cue open compound «and Friday at 5pm» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
-  { text: "every Monday at 9am, Friday at 5pm sync", source: "kind", edges: "cue open compound «Friday at 5pm» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
-  { text: "every morning and evening check the queue", source: "kind", edges: "cue open compound «and evening» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00" },
+  { text: "every Monday at 9am and Friday at 5pm sync", source: "kind", edges: "cue open compound «and Friday at 5pm»" },
+  { text: "every Monday at 9am, Friday at 5pm sync", source: "kind", edges: "cue open compound «Friday at 5pm»" },
+  { text: "every morning and evening check the queue", source: "kind", edges: "cue open compound «and evening»" },
   { text: "first day of every quarter, review access", source: "kind", edges: "exact open «first day of every quarter» FREQ=YEARLY;BYMONTH=1,4,7,10;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0 @2027-01-01T09:00 time:9am" },
   { text: "the first weekday of each quarter at 10am plan the roadmap", source: "kind", edges: "exact open «the first weekday of each quarter at 10am» FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=10;BYMINUTE=0 @2027-01-01T10:00" },
   { text: "every 45 minutes check the queue", source: "kind", edges: "cue open unsupported «every 45 minutes»" },

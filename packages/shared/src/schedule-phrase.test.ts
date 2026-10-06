@@ -12,6 +12,9 @@ import {
   PROBE_NOW,
   PROBE_OVERRIDES,
   RESIDUAL_OFFERS,
+  ROUND2_HELD_OUT,
+  ROUND2_QUALIFIERS,
+  SECOND_SENTENCES,
   SPEC_NOW,
   SPEC_TABLE,
   STRONG_QUALIFIERS,
@@ -952,4 +955,202 @@ test("break: readingsConsistent holds an assumed day and time to the core's freq
   const monthBase = { rrule: month.core.rrule, dtstart: month.core.dtstart, tz: NY, assumed: month.core.assumed }
   assert.equal(readingsConsistent(monthBase, { rrule: "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-15T09:00", tz: NY }, SPEC_NOW), true)
   assert.equal(readingsConsistent(monthBase, { rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", tz: NY }, SPEC_NOW), false)
+})
+
+// ---- the break-it battery, round 2 (fix round 2, 2026-10-06) ------------------------------------------------------
+// A second adversarial pass (/tmp/live-grammar-break-2) found exact readings that were still silently wrong, each
+// a NEW member of a class round 1 had closed with a list. Each finding is pinned here as the class it broke, in
+// both scopes the box reads with; a cue at the open edge is still offered, so the cost of being wrong this way
+// is one model read after Tab, never a run at the wrong time.
+
+/** Not exact in either scope: the reading is a cue (or dark), never one the box could create as it stands. */
+function neverExact(texts: readonly string[], scopes: readonly Scope[] = BOTH): string[] {
+  const out: string[] = []
+  for (const text of texts) for (const scope of scopes) {
+    const r = read(text, scope)
+    if (r.kind === "exact") out.push(`${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+  }
+  return out
+}
+/** A cue's core is shown in the ledge and checked against the model's answer (§4.3): one that the unread words
+ *  ADD runs to, or move the clock of, would show the wrong next run and turn a faithful answer into the disagree
+ *  state (Create disabled). Such a cue carries no core. */
+function coreless(texts: readonly string[]): string[] {
+  const out: string[] = []
+  for (const text of texts) for (const scope of BOTH) {
+    const r = read(text, scope)
+    if (r.kind === "cue" && r.core) out.push(`${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+  }
+  return out
+}
+
+test("break 2: an hourly rule's minute it cannot place is never :00, and a second minute is a compound", () => {
+  const texts = [
+    "every hour at half past check CI",
+    "every hour at the half hour check CI",
+    "every hour at quarter past check CI",
+    "every hour at quarter to check CI",
+    "every hour at xx:30 check CI",
+    "every hour at HH:30 check CI",
+    "hourly at :05 and :35 check CI",
+    "every hour at :15 and :45 check CI",
+    "every hour at :15, :45 check CI",
+    "every hour at :00 and :30 check CI",
+    "every 30 minutes offset by 10 check CI",
+  ]
+  assert.deepEqual(neverExact(texts), [])
+  // The core would echo `every hour · next 3pm` and refuse the model's :30: no core.
+  assert.deepEqual(coreless(texts.filter((t) => !/offset/.test(t))), [])
+  // A minute it CAN place still reads.
+  const ok = read("every hour at :30 check CI", "edges")
+  assert.ok(ok.kind === "exact" && ok.rrule === "FREQ=HOURLY;BYMINUTE=30", summarizeReading("every hour at :30 check CI", ok))
+})
+
+test("break 2: a count or a fraction glued to an adverb is not one run per period", () => {
+  const close = [
+    "check the queue twice daily",
+    "check the queue two times daily",
+    "check the queue 3x daily",
+    "post the digest twice weekly",
+    "post the digest twice monthly",
+    "post the digest three times weekly",
+    "post the digest 3 times weekly",
+    "back up the db 4x nightly",
+    "check CI twice hourly",
+  ]
+  const mode = ["twice daily, check the queue", "post the digest semi-weekly", "post the digest twice-monthly", "check CI half-hourly", "check CI bi-hourly", "post the digest every week, twice"]
+  assert.deepEqual(neverExact([...close, ...mode]), [])
+  for (const text of close) assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+  // Like "twice a day": a vague cue, which the model reads after Tab.
+  for (const text of ["twice daily, check the queue", "twice weekly sync the roadmap"]) {
+    const r = read(text, "edges")
+    assert.ok(r.kind === "cue" && r.why === "vague" && isScheduleOffer(r), `${text}: ${summarizeReading(text, r)}`)
+  }
+})
+
+test("break 2: an adjective that limits which days is not every one of them", () => {
+  const close = [
+    "sync with design on alternate Thursdays",
+    "sync with design on alternating Thursdays",
+    "deploy on odd Fridays",
+    "deploy on even Fridays",
+    "run the full suite on odd weekdays",
+    "rotate the on-call on alternate Mondays at 10am",
+    "check CI on most weekdays at 9am",
+    "check CI on some Mondays at 9am",
+    "check CI on certain weekdays at 9am",
+    "check CI on select Fridays at 4pm",
+    "check CI on the first two Mondays at 9am",
+    "check CI on the remaining Fridays at 4pm",
+  ]
+  assert.deepEqual(neverExact([...close, "alternate Mondays at 9am check CI", "most weekdays at 9am check CI"]), [])
+  for (const text of close) assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+})
+
+test("break 2: an abbreviated month, weekday or span is a calendar word, wherever it sits", () => {
+  assert.deepEqual(
+    neverExact([
+      "every weekday at 9am Oct 12-30 triage new issues",
+      "every weekday at 9am Oct 12 to Oct 30 triage new issues",
+      "every Monday at 9am Sep–Dec triage new issues",
+      "every Monday at 9am Nov-Jan triage new issues",
+      "every day at 9am Dec 1-24 post the advent puzzle",
+      "every day at 9am to Dec 24 post the advent puzzle",
+      "every day at 9am triage new issues (Mon–Fri only)",
+      "every day at 9am triage new issues, Mon-Fri only",
+      "every day at 9am triage new issues, no Sat/Sun",
+      "every day at 9am triage new issues — Sat/Sun off",
+      "every day at 9am triage new issues; not Sat",
+      "every day at 9am triage new issues (Oct–Dec)",
+      "every day at 9am triage new issues, H2 only",
+      "every day at 9am triage new issues through EOQ",
+      "every day at 9am triage new issues til EOQ",
+      "every day at 9am triage new issues — 2 weeks",
+      "every day at 9am triage new issues for 2 wks",
+      "every day at 9am triage new issues for a fortnight",
+      "every day at 9am triage new issues x14",
+      "every day at 9am triage new issues, 14 runs max",
+    ]),
+    [],
+  )
+  // The words that only LOOK like it stay the task's.
+  for (const text of ["every Monday at 9am build for x86", "every Monday at 9am ask Jan for the report", "every morning check what we sat on", "every Monday at 9am review the H1 copy"]) {
+    assert.equal(read(text, "edges").kind, "exact", `${text}: ${line(text, "edges")}`)
+  }
+})
+
+test("break 2: no silent prefix for the round-2 qualifiers, by class — five placements, both scopes, the field", () => {
+  const phrases = ["every day at 9am", "every Monday at 9am", "every weekday at 9am", "every 2 hours", "nightly", "every morning"]
+  const task = "triage new issues"
+  const failures: string[] = []
+  for (const [cls, qs] of [...Object.entries(ROUND2_QUALIFIERS), ...Object.entries(ROUND2_HELD_OUT).map(([c, q]) => [`held-out ${c}`, q] as const)]) {
+    for (const ph of phrases) {
+      for (const q of qs) {
+        for (const text of [`${ph} ${q} ${task}`, `${ph}, ${q}, ${task}`, `${task} ${ph} ${q}`, `${q}, ${ph} ${task}`, `${task}, ${ph}, ${q}`]) {
+          const at = text.indexOf(q)
+          for (const scope of BOTH) {
+            const r = read(text, scope)
+            if (leftOutside(r, { start: at, end: at + q.length })) failures.push(`${cls} ${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+          }
+        }
+        const field = `${ph} ${q}`
+        const r = read(field, "field")
+        if (leftOutside(r, { start: ph.length + 1, end: field.length })) failures.push(`${cls} field: ${JSON.stringify(field)} → ${summarizeReading(field, r)}`)
+      }
+    }
+  }
+  for (const text of SECOND_SENTENCES) for (const scope of BOTH) {
+    const r = read(text, scope)
+    if (r.kind === "exact") failures.push(`second sentence ${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+  }
+  assert.deepEqual(failures.slice(0, 40), [], `${failures.length} silent prefixes`)
+})
+
+test("break 2: a zone said after the clock is a zone cue, whatever its spelling", () => {
+  const zones = [
+    "NZT", "AET", "SAST", "BRT", "ART", "WIB", "AST", "NST", "PHT", "ICT", "EAT", "WAT", "CAT", "IDT", "PST8PDT",
+    "Kyiv", "Warsaw", "Oslo", "Helsinki", "Austin", "Boston", "Portland", "-0500",
+  ]
+  const failures: string[] = []
+  for (const zone of zones) {
+    for (const [text, scopes] of [
+      [`every Monday at 9am ${zone} triage new issues`, BOTH],
+      [`triage new issues every Monday at 9am ${zone}`, ["anywhere"]],
+    ] as const) {
+      for (const scope of scopes) {
+        const r = read(text, scope)
+        if (!(r.kind === "cue" && r.why === "zone")) failures.push(`${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+      }
+    }
+  }
+  assert.deepEqual(failures, [])
+  // A lowercase word that only spells an abbreviation is the task's verb.
+  for (const text of ["every morning cat the error log and summarize it", "every Monday at 9am eat the backlog"]) {
+    assert.equal(read(text, "edges").kind, "exact", `${text}: ${line(text, "edges")}`)
+  }
+})
+
+test("break 2: a spelled clock or a second clock is never dropped, and a guess never swallows a stated hour", () => {
+  const texts = [
+    "every weekday at quarter to 5 write the summary",
+    "every day at half past nine check the queue",
+    "every weekday at quarter past 9 triage new issues",
+    "every day at oh nine hundred check",
+    "every day at 9 thirty check the queue",
+    "every day at noon-thirty post lunch",
+    "every weekday at 9 to 5 monitor the queue",
+    "every weekday at 9 and again at 5 check",
+    "every Monday at 9am then at 5 triage",
+    "every Monday at 9am and later at 5 triage",
+    "every day at lunch post the menu",
+    "every Monday at standup, read out the open incidents",
+  ]
+  assert.deepEqual(neverExact(texts), [])
+  // A second clock or a moved minute over a STATED clock: the core would show one run a day at the wrong time.
+  assert.deepEqual(coreless(["every day at 9 thirty check the queue", "every weekday at 9 to 5 monitor the queue", "every weekday at 9 and again at 5 check", "every Monday at 9am then at 5 triage", "every Monday at 9am and later at 5 triage"]), [])
+  // "6 and 18": the 18 says which 6 the human meant — both runs, read.
+  for (const scope of BOTH) {
+    const r = read("every day at 6 and 18 check", scope)
+    assert.ok(r.kind !== "exact" || /;BYHOUR=6,18;/.test(r.rrule), `${scope}: ${summarizeReading("every day at 6 and 18 check", r)}`)
+  }
 })

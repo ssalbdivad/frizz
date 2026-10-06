@@ -46,8 +46,11 @@ import { THREAD_HANDLE_MAX_CHARS, threadHandle } from "./thread-handle.ts"
 /** Bumped whenever a phrase could read differently. A local reading carries it to the server, which
  *  refuses a skew rather than re-reading with a different grammar (§1.3.4, §10.1).
  *  2 — fix round 1 (2026-10-06): a night's clock, an ordinal's unit, zones, the broad qualifiers, the edge
- *  guards; "every night at 2" read 2pm under 1 and 2am under 2. */
-export const SCHEDULE_GRAMMAR_VERSION = 2
+ *  guards; "every night at 2" read 2pm under 1 and 2am under 2.
+ *  3 — fix round 2 (2026-10-06): the closed-class words after a phrase, a count before an adverb, a limiting
+ *  adjective before a day, abbreviated calendar words, more zones, spelled and second clocks; "every hour at
+ *  half past" read :00 under 2 and is a cue under 3. */
+export const SCHEDULE_GRAMMAR_VERSION = 3
 
 export type Span = { start: number; end: number }
 export type Edge = "open" | "close" | "inside" | "field"
@@ -185,12 +188,20 @@ const GATE = /\b(?:every|everyday|each|daily|nightly|hourly|weekly|bi-?weekly|fo
 // ---- the qualifier, event and leftover scans ----------------------------------------------------------------
 
 /** A condition anywhere in the text: the run would have to check it, so the model must read it. */
-const STRONG_CONDITION = /\b(?:unless|except|excluding|excepting|only\s+(?:if|when|on|during|after|before)|but\s+not|other\s+than|skip|skipping|holidays?|business\s+hours|working\s+hours|office\s+hours|work\s+hours)(?![\w'’])/
+const STRONG_CONDITION = /\b(?:unless|except|excluding|excepting|only\s+(?:if|when|while|whilst|whenever|on|during|after|before|until|till|once|as\s+long|so\s+long)|but\s+not|other\s+than|skip|skipping|holidays?|business\s+hours|working\s+hours|office\s+hours|work\s+hours|as\s+long\s+as|so\s+long\s+as|provided\s+that|providing|barring|on\s+condition|in\s+the\s+event|[a-z]+\s+permitting)(?![\w'’])/
 /** A bound anywhere outside the span: never silently dropped. */
 const BOUND_ANYWHERE = new RegExp(
-  `\\bfor\\s+(?:the\\s+)?(?:next\\s+|following\\s+)?(?:${NUM}|an?|one)\\s+(?:days?|weeks?|months?|times|runs)${END}|\\b(?:until|till|starting|beginning|ending)${END}` +
+  `\\bfor\\s+(?:the\\s+)?(?:next\\s+|following\\s+)?(?:${NUM}|an?|one|a\\s+few|a\\s+couple(?:\\s+of)?|several)\\s+(?:days?|weeks?|wks?|fortnights?|months?|mos?|years?|yrs?|times|runs)${END}|\\b(?:until|till|til|starting|beginning|ending)${END}|['’]til${END}` +
     // A start said as "from Nov 2" or "as of Monday": the same promise as "starting".
-    `|\\b(?:from|as\\s+of|effective)\\s+(?:${MONTH}\\s*\\d|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}|\\d{1,2}/\\d{1,2}|(?:next\\s+)?${WD_ONE}|tomorrow|today|next\\s+(?:week|month))`,
+    `|\\b(?:from|as\\s+of|effective)\\s+(?:${MONTH}\\s*\\d|\\d{1,2}(?:st|nd|rd|th)?\\s+(?:of\\s+)?${MONTH}|\\d{1,2}/\\d{1,2}|(?:next\\s+)?${WD_ONE}|tomorrow|today|next\\s+(?:week|month))` +
+    // Fix round 2: "through EOQ", "for the rest of the year", "— 2 weeks", "x14", "14 runs max", "stop after
+    // Christmas" — a bound said another way. "through" is a bound only before a date ("go through the logs").
+    `|\\b(?:through|thru)\\s+(?:eo[qmwy]|${MONTH}|q[1-4]|h[12]|the\\s+end|year[\\s-]?end|${WD_NAME}|next|\\d)` +
+    `|\\bfor\\s+(?:the\\s+)?(?:rest|remainder|balance)\\s+of${END}` +
+    `|(?<=^|\\s)[-—–]\\s*(?:${NUM}|an?)\\s+(?:days?|weeks?|wks?|fortnights?|months?)${END}` +
+    `|(?<=^|[\\s(])x\\s?(?!(?:86|64|32)\\b)\\d{1,3}(?=\\s*(?:$|[.,;:!?)]|runs?\\b|times\\b|max\\b|total\\b))` +
+    `|\\b(?:${NUM})\\s+runs${END}|\\b(?:${NUM})\\s+times\\s+(?:max|maximum|total|tops|in\\s+total)${END}|\\b(?:max|maximum|at\\s+most|no\\s+more\\s+than|up\\s+to)\\s+(?:${NUM})\\s+(?:runs|times)${END}` +
+    `|\\b(?:stop|end|finish|pause|halt|cease)(?:s|ped|ping|ed|ing)?\\s+(?:after|on|by|once|before|following)${END}`,
 )
 /** Schedule words left over in the read region. */
 const RESIDUAL = new RegExp(
@@ -204,6 +215,7 @@ const RESIDUAL = new RegExp(
   ].join("|"),
 )
 const HALF_HOUR = /^on\s+the\s+(?:half\s+)?hour/
+const HALF_HOUR_AFTER = /^[\s,;:—–(-]*on\s+the\s+(?:half\s+)?hour(?![\w'’])/
 const STRONG_EVENT = new RegExp(
   [
     "\\b(?:every\\s+time|each\\s+time|whenever|as\\s+soon\\s+as)\\b",
@@ -240,14 +252,31 @@ const DECLARATIVE_AFTER = /^[\s,;:—–-]*(?:the(?!\s+(?:next|following|coming|
 // words below cannot start one, so right after a phrase they are part of WHEN, and the grammar does not read
 // them: the reading is a cue and the model reads it in the mode.
 
-/** A word of the calendar: a weekday, a class of days, a month, a quarter, a holiday. */
-const CAL_WORD = `(?:${WD}|weekends?|week\\s?days?|workdays?|business\\s+days?|january|february|march|april|june|july|august|september|october|november|december|q[1-4]|holidays?)(?![\\w'’])`
-const ZONE_ABBR = "pt|pst|pdt|et|est|edt|ct|cst|cdt|mt|mst|mdt|utc|gmt|cet|cest|bst|ist|jst|kst|aest|aedt|acst|awst|nzst|nzdt|wet|west|eet|eest|msk|hst|akst|akdt|sgt|hkt|z|zulu"
+/** A month by its abbreviation (fix round 2: "Oct 12-30", "Sep–Dec" read as the task's first words). "may" is
+ *  a verb and has no abbreviation. */
+const MONTH_ABBR = "(?:jan|feb|mar|apr|jun|jul|aug|sept?|oct|nov|dec)\\.?"
+/** A word of the calendar: a weekday, a class of days, a month (by name or abbreviation), a quarter, the end
+ *  of a quarter, month, week or year, a holiday. */
+const CAL_WORD = `(?:${WD}|weekends?|week\\s?days?|workdays?|business\\s+days?|january|february|march|april|june|july|august|september|october|november|december|${MONTH_ABBR}|q[1-4]|eo[qmwy]|holidays?)(?![\\w'’])`
+/** Zone abbreviations, case-insensitive. Fix round 2 added the ones its break-it pass found missing (NZT, AET,
+ *  SAST, BRT, AST, WIB, IDT, …) and the POSIX names (PST8PDT). */
+const ZONE_ABBR = "pt|pst|pdt|et|est|edt|ct|cst|cdt|mt|mst|mdt|utc|uct|gmt|cet|cest|bst|ist|idt|jst|kst|aest|aedt|aet|acst|acdt|awst|nzst|nzdt|nzt|wet|west|eet|eest|msk|hst|akst|akdt|sgt|hkt|pht|ict|wib|wita|sast|brt|bdt|pkt|npt|ast|adt|nst|ndt|clt|cot|gst|trt|myt|z|zulu|pst8pdt|est5edt|cst6cdt|mst7mdt"
+/** Zone abbreviations that are also English words, read as zones only when typed in capitals ("9am CAT" is
+ *  Central Africa, "every morning cat the error log" is a command). Matched against the ORIGINAL text. */
+const ZONE_ABBR_UPPER = /^[\s,;:(\[—–-]*(?:ART|CAT|EAT|WAT|WIT|PET|GET|BOT|VET|SST)(?![\w'’/])/
+/** A bare offset right after a clock, with an ASCII hyphen too ("9am -0500", "9am -05:00"). Four digits or
+ *  hh:mm: "9am-5pm" is a window, not a zone. Matched before the separators the other checks skip. */
+const ZONE_OFFSET_BARE = /^[\s,;:(\[]*[+−-]\s?\d{2}:?\d{2}(?!\d)/
 const IANA_ZONE = "(?:africa|america|antarctica|arctic|asia|atlantic|australia|europe|indian|pacific|etc)/[a-z_+-]+(?:/[a-z_+-]+)?"
 const ZONE_OFFSET = "(?:utc|gmt)?\\s*[+−]\\s*\\d{1,2}(?::?\\d{2})?(?!\\d)|(?:utc|gmt)\\s*-\\s*\\d{1,2}(?::?\\d{2})?(?!\\d)"
 const ZONE_PLACE = "london|berlin|paris|madrid|lisbon|dublin|amsterdam|stockholm|zurich|munich|tokyo|seoul|beijing|shanghai|singapore|sydney|melbourne|auckland|india|japan|china|germany|france|uk|europe|nyc|ny|new\\s+york|sf|la|san\\s+francisco|los\\s+angeles|seattle|chicago|denver|toronto|vancouver|bangalore|mumbai|delhi|dubai|hong\\s+kong|pacific|eastern|central|mountain|atlantic|hawaii|alaska"
+/** More cities a person names as a zone, said bare right after a clock (fix round 2: "9am Kyiv", "9am Boston").
+ *  Hand-picked, not drawn from `Intl.supportedValuesOf`: a browser's and the server's ICU can differ ("Kyiv"
+ *  is not in every one), and the server re-derives what the browser read. Names that are English words
+ *  ("Phoenix", "Reading", "Center") are left out; "<city> time" and "in <city>" already read any word. */
+const ZONE_CITY = "kyiv|kiev|lviv|warsaw|krakow|oslo|helsinki|copenhagen|vienna|prague|budapest|bucharest|athens|istanbul|moscow|rome|milan|brussels|barcelona|edinburgh|manchester|riga|tallinn|vilnius|belgrade|sofia|zagreb|reykjavik|minsk|geneva|frankfurt|hamburg|boston|austin|portland|atlanta|miami|dallas|houston|philadelphia|philly|detroit|minneapolis|nashville|pittsburgh|baltimore|raleigh|salt\\s+lake\\s+city|las\\s+vegas|san\\s+diego|san\\s+jose|sacramento|honolulu|anchorage|montreal|ottawa|calgary|edmonton|winnipeg|halifax|mexico\\s+city|bogota|lima|santiago|buenos\\s+aires|sao\\s+paulo|são\\s+paulo|caracas|kolkata|calcutta|chennai|hyderabad|pune|karachi|lahore|dhaka|kathmandu|colombo|bangkok|jakarta|manila|hanoi|saigon|ho\\s+chi\\s+minh|kuala\\s+lumpur|taipei|osaka|perth|brisbane|adelaide|wellington|tel\\s+aviv|jerusalem|riyadh|doha|abu\\s+dhabi|tehran|cairo|lagos|nairobi|johannesburg|cape\\s+town|casablanca|accra|shenzhen|guangzhou|hangzhou"
 /** A zone right after a phrase: an abbreviation, an IANA name, an offset, a place, or any "<words> time". */
-const ZONE_AFTER = new RegExp(`^[\\s,;:(\\[—–-]*(?:in\\s+)?(?:${IANA_ZONE}|${ZONE_OFFSET}|(?:${ZONE_ABBR})(?:\\s+time)?(?![\\w'’/])|(?:${ZONE_PLACE})(?![\\w'’/])|(?:[a-z.]+\\s+){1,2}time(?![\\w'’]))`)
+const ZONE_AFTER = new RegExp(`^[\\s,;:(\\[—–-]*(?:in\\s+)?(?:${IANA_ZONE}|${ZONE_OFFSET}|(?:${ZONE_ABBR})(?:\\s+time)?(?![\\w'’/])|(?:${ZONE_PLACE}|${ZONE_CITY})(?![\\w'’/])|(?:[a-z.]+\\s+){1,2}time(?![\\w'’]))`)
 /** A zone anywhere: the spellings that cannot be anything else. */
 const ZONE_ANYWHERE = new RegExp(`\\b(?:${IANA_ZONE})|\\b(?:utc|gmt)\\s*[+−-]\\s*\\d|\\b(?:${ZONE_PLACE}|my|local|server)\\s+time(?![\\w'’])`)
 /** "every hour and a half", "every hour or so": the interval is not the one the core says. */
@@ -265,29 +294,102 @@ const QUALIFIER_AFTER = new RegExp(
  *  hold the very day the human excluded, so the reading keeps no core. */
 const STATEMENT_AFTER = /^[\s,;:—–-]*(is|are|isn['’]t|aren['’]t|was|were|['’]s|['’]re|off|too|also|excluded|included|frozen|blocked|closed|out|free)(?![\w'’])/
 /** A clock the grammar could not parse, right after a phrase: "at 9p", "at 1430", "at 9h30", "at about 9",
- *  "9", "at ９am", "at nine". The phrase alone would read 9am, assumed, and save the clock as the task. */
-const CLOCK_AFTER = /^[\s,]*(?:(?:at|@|around|about|approx\.?|approximately|~|circa|roughly|by)\s*)*(?:[\d０-９][\w:.０-９]*|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?![\w'’]))/
+ *  "9", "at ９am", "at nine". The phrase alone would read 9am, assumed, and save the clock as the task. Fix
+ *  round 2: a minute (", :45"), a number past twelve ("9 thirty", "oh nine hundred"), "half" and "quarter", and
+ *  a hyphen ("noon-thirty"). */
+const CLOCK_WORD = "one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|oh|hundred|half|quarter"
+const CLOCK_AFTER = new RegExp(`^(?:-|[\\s,]*)(?:(?:at|@|around|about|approx\\.?|approximately|~|circa|roughly|by)\\s*)*(?:[\\d０-９][\\w:.０-９]*|:\\d{1,2}|(?:${CLOCK_WORD})(?![\\w'’]))`)
+/** Unread words after a closed-class word that name a time of day — "to 5", "past 9", "until noon", ":30",
+ *  "half", "lunch" — so the core's STATED clock is not the one the human means (§4.3). A bare count is not
+ *  one ("for 2 weeks" is a bound being typed). */
+const CLOCK_MENTION = new RegExp(`\\b(?:at|@|to|till|til|until|then|again|later|past|by|around|about|before|after)\\s+[\\d０-９]|${CLOCK_STRICT}|:\\d{2}|\\b(?:${CLOCK_WORD}|noon|midnight|midday|o['’]clock|lunch\\w*|standup|eod|cob|offset|delay|lag|later|earlier)(?![\\w'’])`)
 /** Calendar words anywhere in the read region, outside the phrase: never eaten, never ignored. A weekday by
  *  its full name (a possessive is the task's: "prepare Monday's notes"), a class of days in the plural, a
- *  month by its full name ("may" and "march" are verbs), a quarter, a season after its preposition. */
+ *  month by its full name ("may" and "march" are verbs), a quarter, a season after its preposition.
+ *  Fix round 2, the abbreviations — only where nothing else can be meant, since "sat", "sun", "wed" and "Jan"
+ *  are words and names: a month before a day or a span ("Oct 12-30", "(Oct–Dec)"), a weekday in a span or a
+ *  list ("Mon–Fri", "Sat/Sun") or after a no or before an only/off ("not Sat", "Sat off"), the end of a
+ *  quarter, month, week or year (EOQ), and a half of the year after its preposition ("in H2", "H2 only"). */
 const CALENDAR_RESIDUAL = new RegExp(
-  `\\b(?:${WD_NAME}s?|weekends|weekdays|workdays|business\\s+days|january|february|april|june|july|august|september|october|november|december|q[1-4]|(?:in|this|over|during|through)\\s+(?:the\\s+)?(?:summer|winter|spring|fall|autumn))(?![\\w'’])`,
+  `\\b(?:${WD_NAME}s?|weekends|weekdays|workdays|business\\s+days|january|february|april|june|july|august|september|october|november|december|q[1-4]|(?:in|this|over|during|through)\\s+(?:the\\s+)?(?:summer|winter|spring|fall|autumn))(?![\\w'’])` +
+    `|\\b${MONTH_ABBR}(?=\\s*(?:\\d|[-–—/]|to\\s|through\\s|thru\\s|only\\b|\\)))` +
+    `|\\b${WD_ABBR}\\.?\\s*[-–—/&]\\s*${WD_ABBR}(?![\\w'’])` +
+    `|\\b(?:no|not|except|excluding|skip|skipping|w/o|without|never|only)\\s+(?:on\\s+)?${WD_ABBR}(?![\\w'’])` +
+    `|\\b${WD_ABBR}\\.?\\s+(?:only|off)(?![\\w'’])` +
+    `|\\beo[qmwy](?![\\w'’])|(?:\\b(?:in|during|through|for|over|by)\\s+)h[12](?![\\w'’])|\\bh[12]\\s+only\\b`,
 )
 
 const TOUCH_AFTER = /^[\s,;:—–(-]*(unless|except|excluding|only(?:\s+(?:if|when|on|during|after|before))?|if|when|whenever|for|until|till|thru|through|starting|beginning|from|after|before|but(?:\s+not)?|skip|skipping|ending|between|during|while|provided|assuming|as\s+long\s+as|this\s+(?:week|month|year|quarter)|next\s+(?:week|month|year)|today|tonight|tomorrow)(?![\w'’])/
-const TOUCH_BEFORE_WORD = /(?:^|[^\w'’])(until|till|by|before|after|since|from|for|unless|except|excluding|excl\.?|omitting|besides|minus|without|w\/o|save|bar|barring|if|when|only|stop|stopping|quit|never|not|no|nor|don['’]?t|doesn['’]?t)\s+$/
+const TOUCH_BEFORE_WORD = /(?:^|[^\w'’])(until|till|by|before|after|past|since|from|for|unless|except|excluding|excl\.?|omitting|besides|minus|without|w\/o|save|bar|barring|if|when|only|stop|stopping|quit|never|not|no|nor|don['’]?t|doesn['’]?t)\s+$/
 /** A deadline or anchor two words before: "have it done by Friday every week", "after standup every day" —
  *  or a first run named before its date: "nightly first run on Oct 20" (the adverb unread, the date taken). */
 const TOUCH_BEFORE_PAIR = /(?:^|[^\w'’])((?:until|till|by|before|after|since|from)\s+[^\s,;:.!?\u0001]+|first\s+(?:run|one|time|occurrence)s?)\s+$/
 const CLAUSE_QUALIFIER = /^[\s(\[]*(on\s+(?:odd|even|alternate|alternating|non-?\w+)|\d+\s?x|unless|except|excluding|only|if|when|whenever|until|till|for|starting|beginning|after|before|but|while|provided|assuming|apart|aside|besides|save|minus|without|w\/o|excl|omitting|bar|barring|no|not|never|nor|in|within|over|throughout|through|thru|during|around|this|these|next|the\s+(?:next|following|coming|rest)|first|once|as|max|maximum|at\s+most|up\s+to|stopping|stop|every|each|x\d|\d)(?![\w'’])/
 /** A second day's own clock, so the compound's unread words are the whole second rule. */
 const CONJ_CLOCK = `(?:\\s+(?:at|@)\\s*${CLOCK_ANY}|\\s+${CLOCK_STRICT})?`
+// Fix round 2: "and again at 5", "then at 5", "and later at 5", "and :35" — a second clock said with a filler
+// word between, or a second minute.
 const CONJOINED = new RegExp(
-  `^\\s*,?\\s*(?:and|&|plus|or)\\s+(?:also\\s+)?(?:(?:every|each|on|at|in\\s+the)\\s+)?(?:(?:${WD}|(?:morning|afternoon|evening|night)s?${END}|weekends?${END}|weekdays?${END})${CONJ_CLOCK}|${CLOCK_ANY}|\\d|noon|midnight|tomorrow|tonight)` +
+  `^\\s*,?\\s*(?:and|&|plus|or|then)\\s+(?:(?:also|again|then|later|once\\s+more|too)\\s+)*(?:(?:every|each|on|at|in\\s+the)\\s+)?(?:(?:${WD}|(?:morning|afternoon|evening|night)s?${END}|weekends?${END}|weekdays?${END})${CONJ_CLOCK}|${CLOCK_ANY}|\\d|:\\d{1,2}|noon|midnight|tomorrow|tonight)` +
     // "every Mon at 8pm, Tue at 9pm": a second day with its own clock, joined by a comma alone.
     `|^\\s*,\\s*(?:(?:every|each|on)\\s+)?${WD}\\s+(?:at|@)\\s*(?:${CLOCK_ANY}|noon|midnight)`,
 )
 const OBJECT_BEFORE = /(?:^|[^\w'’])(?:the|a|an|this|that|our|my|your|their|its|his|her|skip|skipping|except|excluding|excl\.?|omitting|save|bar|barring|without|w\/o|minus|besides|not|never|during|over|through|all|both|no|most|some)\s+$/
+
+// ---- the closed classes (fix round 2, 2026-10-06) ------------------------------------------------------------
+// Round 1 answered "a word after the phrase changes WHEN" with lists of the words its break-it pass found, and
+// round 2's pass found fifty more in the same classes ("so long as", "providing", "right after", "til EOY",
+// "fortnightly", "NZT"). A list of members cannot close an open class; the classes these words come from ARE
+// closed. A task starts with an imperative verb, and English has a fixed, short stock of prepositions,
+// subordinating conjunctions and modals, none of which can open one. So right after a phrase they are WHEN or
+// the task's setting, never its first word — and they split in two:
+// - words that are about time or a condition whatever follows them ("after", "until", "following", "given",
+//   "unless", a modal, an offset, a count): always part of WHEN, unread, and the reading is a cue;
+// - words that place the task as often as they time it ("on main", "to keep CI green", "with the new client",
+//   "by priority"): part of WHEN only before a word of time (`TEMPORAL_NEXT`: "on alternate weeks", "to Dec 24",
+//   "by EOD", "with a 10 minute offset"), which is a far smaller and closed set than the things a task acts on.
+// "post", "back", "round", "like", "save" and "bar" are verbs, "because"/"though" give reasons, and "via",
+// "per", "using" are manners: none is in either. A clause BEFORE a phrase that opens with one is the same
+// (`CLAUSE_WHEN`). Round 1's lists still run first and keep their words ("for", "in", "from", "as", "over" are
+// always WHEN there).
+
+/** A second frequency or a count: "fortnightly", "twice", "3x", "half-hourly", "alternate". */
+const FREQ_ADV = "(?:(?:semi|bi|tri|half|twice|thrice)-?)?(?:hourly|daily|nightly|weekly|fortnightly|monthly|quarterly|yearly|annually)"
+/** Always WHEN. */
+const WHEN_ALWAYS =
+  // prepositions and subordinators of time and condition
+  "after|ahead\\s+of|amid(?:st)?|at|barring|before|besides|between|circa|considering|depending|despite|during|even|except|excepting|excluding|following|given|lest|minus|notwithstanding|once|past|pending|prior|provided|providing|since|supposing|throughout|through|thru|till|['’]?til|unless|until|upon|whether|while|whilst|within|without|w/o|whenever|when|if|" +
+  // a time prefix
+  "(?:post|pre|mid)-[a-z]+|" +
+  // a modal — except a request ("could you …")
+  "(?:can|could|would|will)(?!\\s+(?:you|u|someone|somebody|we)\\b)|should|might|must|may|shall|ought|were|had|" +
+  // an offset before its anchor: "right after standup", "10 minutes before the deploy"
+  "(?:right|just|shortly|immediately|directly|soon|straight|promptly|well|long|only)\\s+(?:after|before|following|prior|ahead|upon|once|when|past)|" +
+  `(?:${NUM}|an?|half\\s+an?|a\\s+few|a\\s+couple(?:\\s+of)?|several)\\s+(?:minutes?|mins?|hours?|hrs?|days?|weeks?)\\s+(?:after|before|past|from|later|earlier|ahead|prior|into)|` +
+  // a second frequency or a count
+  `twice|thrice|(?:${NUM}|a\\s+few|several|multiple)(?:\\s+(?:or|to)\\s+(?:${NUM}))?\\s+times|once\\s+or\\s+twice|\\d+\\s?x|x\\s?\\d+|${FREQ_ADV}|bi-?weekly|bi-?monthly|alternat(?:e|ing)|every|each|other|` +
+  // a participle that moves the runs, an absolute "<x> permitting", "up until"
+  "offset|staggered|shifted|[a-z]+\\s+permitting|up\\s+(?:until|till|['’]?til|through|thru|to)"
+/** WHEN only before a word of time. */
+const WHEN_IF_TIME = "about|above|across|against|along|among(?:st)?|around|atop|behind|below|beneath|beside|beyond|by|including|inside|into|near|of|off|on|onto|outside|to|toward|towards|under|unto|with|where|wherever"
+/** A word of time, after at most a determiner: a number, a clock word, a calendar word, a unit, an ordinal or a
+ *  position in a period, a span's limit, an event a schedule hangs on, or a condition's object. */
+const TEMPORAL_NEXT = `\\s+(?:(?:the|a|an|this|that|these|those|each|every|its|our|your|their|my|odd|even)\\s+)?(?:[\\d０-９]|(?:${CLOCK_WORD}|${CAL_WORD}|noon|midnight|midday|today|tomorrow|tonight|eod|cob|${FREQ_ADV}|odd|even|alternate|alternating|other|non-[a-z]+|first|second|third|fourth|fifth|last|next|following|previous|final|end|start|beginning|top|bottom|middle|rest|remainder|exceptions?|occasion|demand|request|call|time|times|schedule|cadence|frequency|interval|delay|offset|lag|gap|buffer|pause|break|minutes?|mins?|hours?|hrs?|days?|nights?|mornings?|afternoons?|evenings?|weeks?|weekends?|months?|quarters?|years?|fortnights?|sprints?|releases?|deploys?|deployments?|launch|standups?|lunch\\w*|christmas|xmas|thanksgiving|easter|possible|needed|necessary|applicable|appropriate|feasible|required)(?![\\w'’]))`
+const WHEN_WORDS = `${WHEN_ALWAYS}|(?:${WHEN_IF_TIME})(?=${TEMPORAL_NEXT})`
+const WHEN_AFTER = new RegExp(`^[\\s,;:—–(\\[-]*(${WHEN_WORDS})(?![\\w'’])`)
+const CLAUSE_WHEN = new RegExp(`^[\\s(\\[]*(${WHEN_WORDS})(?![\\w'’])`)
+/** A count of runs: a frequency word, never a condition. */
+const COUNT_WORD = new RegExp(`^(?:twice|thrice|(?:${NUM}|a\\s+few|several|multiple)(?:\\s+(?:or|to)\\s+(?:${NUM}))?\\s+times|once\\s+or\\s+twice|\\d+\\s?x|x\\s?\\d+|${FREQ_ADV}|bi-?weekly|bi-?monthly|alternat(?:e|ing)|every|each|other)$`)
+/** A second frequency anywhere, said as one — "…, fortnightly is fine", "weekly would do" — where it cannot be
+ *  an adjective ("the weekly digest"): before punctuation, the end, or a verb of being or judgement. */
+const FREQ_RESIDUAL = new RegExp(`\\b(?:${FREQ_ADV}|bi-?weekly|bi-?monthly)(?=\\s*(?:$|[.,;:!?)\\n—–]|(?:is|are|works?|would|should|could|instead|too|also|okay|ok|fine|rather|please|then)(?![\\w'’])))`)
+/** A sequencing word right before a phrase: "and again at 5, nightly", "then every Friday". */
+const SEQUENCE_BEFORE = /(?:^|[^\w'’])((?:(?:and|plus|or)\s+)?(?:again|then|later|also|once\s+more)|plus)\s+$|^\s*(and|or)\s+$/
+/** An adjective that limits WHICH of the days a plural names: "alternate Thursdays", "odd Fridays", "most
+ *  weekdays", "the first two Mondays". Every one of them is a superset: the core stays, the words are unread. */
+const LIMIT_BEFORE = new RegExp(
+  `(?:^|[^\\w'’])((?:alternate|alternating|odd|even|most|some|certain|select(?:ed)?|specific|particular|random|occasional|several|various|few|many|(?:the\\s+)?(?:first|last|next|remaining|following|other|final)(?:\\s+(?:${NUM}|few|couple(?:\\s+of)?))?|the\\s+(?:${NUM})))\\s+$`,
+)
 
 const CONDITION_WORDS = new Set(["unless", "except", "excluding", "only", "if", "when", "whenever", "but", "skip", "skipping", "during", "while", "provided", "assuming", "apart", "aside", "besides", "save", "bar", "barring", "minus", "without", "w/o", "excl", "excl.", "omitting", "no", "not", "never", "nor", "once", "as", "in case", "don't", "dont", "don’t", "doesn't", "doesnt", "doesn’t"])
 const OFFSET_WORDS = new Set(["after", "before"])
@@ -679,7 +781,7 @@ const MODS: ModDef[] = [
   },
   {
     // until Oct 30 · through 10/30 · ending Saturday
-    src: `(?:until|till|til|through|thru|ending(?:\\s+on)?|up\\s+to)\\s+(${DATE_WORDS})${END}`,
+    src: `(?:(?:up\\s+)?(?:until|till|til|through|thru)|ending(?:\\s+on)?|up\\s+to)\\s+(${DATE_WORDS})${END}`,
     back: true,
     build: (m, at, ctx) => {
       const date = dateOf(m[1]!, ctx)
@@ -808,7 +910,8 @@ function clockMod(text: string, at: number, core: Core): Mod[] | undefined {
 const MOD_RES = MODS.map((d) => ({
   def: d,
   sticky: new RegExp(d.src, "y"),
-  back: d.back ? new RegExp(`(?<![\\w:@])(?:${d.src})[\\s,]*$`) : undefined,
+  // Not after a sign: "-03:00, nightly" is an offset, not a clock to run at (fix round 2).
+  back: d.back ? new RegExp(`(?<![\\w:@+−-])(?:${d.src})[\\s,]*$`) : undefined,
 }))
 
 // ---- cores ----------------------------------------------------------------------------------------------------
@@ -975,9 +1078,11 @@ const CORES: CoreDef[] = [
     },
   },
   // twice a week · three times a day · a few times a month · regularly · every payday · each sprint · every
-  // 2nd week (every other week to some; "every 2nd" alone read as the 2nd of the month, the week dropped)
+  // 2nd week (every other week to some; "every 2nd" alone read as the 2nd of the month, the week dropped) ·
+  // twice daily · 3x weekly · semi-weekly · half-hourly (fix round 2: the adverb after the count read alone,
+  // "check the queue twice daily" offered once a day with "twice" saved as the task's last word)
   {
-    re: G(`\\b(?:every|each)\\s+${DAY_ORD}\\s+(?:minute|min|hour|hr|day|night|morning|afternoon|evening|week|weekend|fortnight|month|quarter|year)s?${END}|\\b(?:twice|thrice|(?:${NUM}|a\\s+few|a\\s+couple(?:\\s+of)?|several|multiple|many)\\s+times)\\s+(?:a|an|per|each|every)\\s+(?:day|week|month|hour|year|quarter)${END}|\\b(?:regularly|periodically|every\\s+so\\s+often|from\\s+time\\s+to\\s+time|occasionally|every\\s+now\\s+and\\s+then)${END}|\\b(?:at\\s+the\\s+(?:start|beginning|end)\\s+of\\s+)?(?:every|each)\\s+(?:payday|pay\\s+day|sprint|iteration|cycle)${END}`),
+    re: G(`\\b(?:twice|thrice|(?:${NUM}|a\\s+few|a\\s+couple(?:\\s+of)?|several|multiple)\\s+times|\\d+\\s?x)[\\s-]+(?:hourly|daily|nightly|weekly|fortnightly|monthly|quarterly|yearly|annually)${END}|\\b(?:semi|half|tri|twice|thrice)-?(?:hourly|daily|nightly|weekly|monthly|quarterly|yearly|annually)${END}|\\bbi-?(?:hourly|daily|nightly|yearly|annually|annual)${END}|\\b(?:every|each)\\s+${DAY_ORD}\\s+(?:minute|min|hour|hr|day|night|morning|afternoon|evening|week|weekend|fortnight|month|quarter|year)s?${END}|\\b(?:twice|thrice|(?:${NUM}|a\\s+few|a\\s+couple(?:\\s+of)?|several|multiple|many)\\s+times)\\s+(?:a|an|per|each|every)\\s+(?:day|week|month|hour|year|quarter)${END}|\\b(?:regularly|periodically|every\\s+so\\s+often|from\\s+time\\s+to\\s+time|occasionally|every\\s+now\\s+and\\s+then)${END}|\\b(?:at\\s+the\\s+(?:start|beginning|end)\\s+of\\s+)?(?:every|each)\\s+(?:payday|pay\\s+day|sprint|iteration|cycle)${END}`),
     build: () => ({ type: "vague" }),
   },
   // ---- one-offs: read only in the mode and in "Change when" ----
@@ -1239,7 +1344,10 @@ function assembleRule(core: Core, mods: Mod[], ctx: Ctx): Built | undefined {
   const part = partOf(tod?.key)
   const clockMod = mod("clock")
   // A clock read before its time of day was found ("every day in the evening at 6") is settled by it now.
-  const clocks = clockMod?.clocks.map((c) => (c.guess && part ? settleClock(c.guess.bare, c.mi, part, c.guess.span) : c))
+  const settled = clockMod?.clocks.map((c) => (c.guess && part ? settleClock(c.guess.bare, c.mi, part, c.guess.span) : c))
+  // A guess that lands on an hour the list STATES is the other one (fix round 2): in "at 6 and 18" the 18 says
+  // which 6 was meant, and the work-hours guess (6pm) merged into it — one run a day, the 6am run gone.
+  const clocks = settled?.map((c) => (c.guess && settled.some((o) => o !== c && !o.guess && o.h === c.h && o.mi === c.mi) ? { h: c.guess.other, mi: c.mi } : c))
   /** A night or an evening that runs past midnight: "at 2" on it is the NEXT calendar day's 2am. */
   const pastMidnight = (part === "night" || part === "evening") && !!clocks?.some((c) => c.h < 6)
 
@@ -1698,13 +1806,21 @@ function judge(p: Prep, ctx: Ctx, c: Candidate, cands: Candidate[], region: Span
   const event = firstOutside(STRONG_EVENT, m, 0)
   if (event) return asCue(event, "condition")
   const touch = touching(p, region, span)
-  if (touch) return asCue(touch.unread, touch.why, !touch.noCore)
+  if (touch) {
+    // Unread words that name a time of day over a core whose clock was SAID ("at 9 thirty", "at 9 and again
+    // at 5", "every hour at half past"): the core would show a run the human did not ask for, and a faithful
+    // model reading could never pass `readingsConsistent` against it (§4.3). An assumed time is no constraint,
+    // so that core stays (fix round 2).
+    const clockish = !!touch.clockish && !exact?.assumed.some((a) => a.part === "time")
+    return asCue(touch.unread, touch.why, !touch.noCore && !clockish)
+  }
   const condition = firstOutside(STRONG_CONDITION, m, 0)
   if (condition) return asCue(trimSpan(p, clauseOf(p, condition)), "condition")
   const zone = firstOutside(ZONE_ANYWHERE, m, 0)
   if (zone) return asCue(zone, "zone")
+  // A second rule adds runs, so no core is shown (fix round 2, as for a conjoined one in `touching`).
   const second = cands.find((k) => k !== c && outside(k))
-  if (second) return asCue({ start: second.start, end: second.end }, "compound")
+  if (second) return asCue({ start: second.start, end: second.end }, "compound", false)
   const residual = firstOutside(RESIDUAL, sub, region.start)
   // "on the half hour" changes the core's own minute, so the core would mislead: no core for it.
   if (residual) return HALF_HOUR.test(m.slice(residual.start, residual.end)) ? asCue(residual, "unsupported", false) : asCue(residual, "leftover")
@@ -1712,6 +1828,9 @@ function judge(p: Prep, ctx: Ctx, c: Candidate, cands: Candidate[], region: Span
   if (bound) return asCue(bound, "leftover")
   const calendar = firstOutside(CALENDAR_RESIDUAL, sub, region.start)
   if (calendar) return asCue(calendar, "leftover")
+  // "…, fortnightly is fine" (fix round 2): a second frequency said as one, anywhere.
+  const freq = firstOutside(FREQ_RESIDUAL, m, 0)
+  if (freq) return asCue(freq, "compound")
   if (!exact) return { kind: "none" }
   return {
     kind: "exact",
@@ -1759,21 +1878,33 @@ function clauseOf(p: Prep, hit: Span): Span {
 
 /** A qualifier-shaped word right against the phrase that the phrase did not absorb (§3.1). `noCore`: the
  *  words before it may not be a rule at all ("every Monday, Friday is off-limits"), so no core is shown. */
-function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWhy; noCore?: true } | undefined {
+/** A touch's unread words, and what they do to the core: `noCore` — the core is not what the words say at all
+ *  (a statement, a count that ADDS runs, a second rule); `clockish` — the words name a time of day, so a core
+ *  whose clock was SAID would show the wrong run (one whose clock was assumed stays: an assumed part is no
+ *  constraint, §4.3). */
+type Touch = { unread: Span; why: CueWhy; noCore?: true; clockish?: true }
+
+function touching(p: Prep, region: Span, span: Span): Touch | undefined {
   const m = p.masked
   const after = m.slice(span.end, region.end)
   /** The words a match after the phrase covers, without the separators it began with. */
   const hit = (mm: RegExpExecArray, why: CueWhy, opts: { clause?: boolean; noCore?: true } = {}) => {
-    const lead = /^[\s,;:—–(\[-]*/.exec(mm[0])![0].length
+    // A colon before a digit is a minute's (", :45"), not a separator.
+    const lead = /^(?:[\s,;—–(\[-]|:(?!\d))*/.exec(mm[0])![0].length
     const s = { start: span.end + lead, end: span.end + mm[0].length }
     return { unread: trimSpan(p, opts.clause ? clauseOf(p, s) : s), why, ...(opts.noCore ? { noCore: true as const } : {}) }
   }
-  const zone = ZONE_AFTER.exec(after)
+  const offset = ZONE_OFFSET_BARE.exec(after)
+  if (offset) {
+    const lead = /^[\s,;:(\[]*/.exec(offset[0])![0].length
+    return { unread: { start: span.end + lead, end: span.end + offset[0].length }, why: "zone" }
+  }
+  const zone = ZONE_AFTER.exec(after) ?? ZONE_ABBR_UPPER.exec(p.text.slice(span.end, region.end))
   if (zone) return hit(zone, "zone")
   const approx = APPROX_AFTER.exec(after)
   if (approx) return hit(approx, approx[1] ? "unsupported" : "vague")
   const clock = CLOCK_AFTER.exec(after)
-  if (clock) return hit(clock, "leftover")
+  if (clock) return { ...hit(clock, "leftover"), clockish: true }
   const statement = STATEMENT_AFTER.exec(after)
   if (statement) return hit(statement, "condition", { clause: true, noCore: true })
   const a = TOUCH_AFTER.exec(after)
@@ -1782,22 +1913,52 @@ function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWh
     const start = span.end + a[0].length - a[1]!.length
     return { unread: trimSpan(p, clauseOf(p, { start, end: span.end + a[0].length })), why: whyOf(word) }
   }
+  // A second rule ADDS runs: no core can be a faithful reading's superset (fix round 2 — with the core kept, the
+  // model's right answer to "every Monday at 9am and Friday at 5pm" was the disagree state).
   const conj = CONJOINED.exec(after)
-  if (conj) return { unread: trimSpan(p, { start: span.end, end: span.end + conj[0].length }), why: "compound" }
+  if (conj) return { unread: trimSpan(p, { start: span.end, end: span.end + conj[0].length }), why: "compound", noCore: true }
   const q = QUALIFIER_AFTER.exec(after)
   if (q) return hit(q, whyOf(q[1]!.replace(/\s+/g, " ")), { clause: true })
+  // "on the half hour" moves the core's own minute: unsupported, no core (it reads as the residual below when
+  // it does not touch the phrase).
+  const half = HALF_HOUR_AFTER.exec(after)
+  if (half) return hit(half, "unsupported", { noCore: true })
+  // Fix round 2: any closed-class word (a preposition, a subordinator, a modal, an offset, a second frequency
+  // or a count) — see WHEN_WORDS. A count ADDS runs ("every day at 9am, twice"), so its core is not shown.
+  const when = WHEN_AFTER.exec(after)
+  if (when) {
+    const word = when[1]!.replace(/\s+/g, " ")
+    if (COUNT_WORD.test(word)) return hit(when, "vague", { noCore: true })
+    const touch = hit(when, whyOf(word.split(" ")[0]!), { clause: true })
+    // "at" names a time whatever follows it ("at xx:30", "at lunch", "at the half hour"), as does an offset.
+    const clockish = word === "at" || word === "@" || /\s(?:after|before|past|from|later|earlier|ahead|prior|into)$/.test(word) || CLOCK_MENTION.test(m.slice(touch.unread.start, touch.unread.end))
+    return clockish ? { ...touch, clockish: true } : touch
+  }
   const before = m.slice(region.start, span.start)
   const w = TOUCH_BEFORE_WORD.exec(before) ?? TOUCH_BEFORE_PAIR.exec(before)
   if (w) {
     const at = region.start + w.index + w[0].trimEnd().length - w[1]!.length
     return { unread: { start: at, end: at + w[1]!.length }, why: whyOf(w[1]!.split(/\s+/)[0]!) }
   }
+  // "and again at 5, nightly": a second clock said BEFORE the phrase it joins (fix round 2).
+  const again = SEQUENCE_BEFORE.exec(before)
+  if (again) {
+    const word = (again[1] ?? again[2])!
+    const at = region.start + again.index + again[0].trimEnd().length - word.length
+    return { unread: { start: at, end: at + word.length }, why: "compound", noCore: true }
+  }
+  // "alternate Thursdays", "the first two Mondays" (fix round 2): which of the days, unread.
+  const limit = LIMIT_BEFORE.exec(before)
+  if (limit) {
+    const at = region.start + limit.index + limit[0].trimEnd().length - limit[1]!.length
+    return { unread: { start: at, end: at + limit[1]!.length }, why: "vague" }
+  }
   // A clause that OPENS with a qualifier and runs into the phrase with no comma: "if the build is green
   // every Monday at 9am". A qualifier inside the task ("check if the build is green every Monday at
   // 9am") is the task's own, and stays out of this.
   const open = Math.max(...[",", ";", ":", ".", "!", "?", "\n", "—", "–", "(", MASK].map((ch) => before.lastIndexOf(ch)))
   const lead = before.slice(open + 1)
-  const opener = CLAUSE_QUALIFIER.exec(lead)
+  const opener = CLAUSE_QUALIFIER.exec(lead) ?? CLAUSE_WHEN.exec(lead)
   if (opener && lead.trim().length > opener[0].trim().length) {
     const at = region.start + open + 1 + opener[0].length - opener[1]!.length
     return { unread: trimSpan(p, { start: at, end: span.start }), why: whyOf(opener[1]!) }
@@ -1805,16 +1966,18 @@ function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWh
   // The clause before, when a comma joins it to the phrase: "if CI is red, every Monday at 9am …"
   if (/[,;:—–]\s*$/.test(before)) {
     const trimmed = before.replace(/[,;:—–]\s*$/, "")
-    const cut = Math.max(trimmed.lastIndexOf(","), trimmed.lastIndexOf(";"), trimmed.lastIndexOf(":"), trimmed.lastIndexOf("."), trimmed.lastIndexOf("\n"), trimmed.lastIndexOf("—"), trimmed.lastIndexOf("–"))
+    // A colon between digits is a clock's or an offset's ("-03:00, every day …"), not a clause's.
+    const cut = Math.max(trimmed.lastIndexOf(","), trimmed.lastIndexOf(";"), trimmed.search(/:(?!\d)[^:]*$/), trimmed.lastIndexOf("."), trimmed.lastIndexOf("\n"), trimmed.lastIndexOf("—"), trimmed.lastIndexOf("–"))
     const clause = trimmed.slice(cut + 1)
-    const q = CLAUSE_QUALIFIER.exec(clause)
+    const q = CLAUSE_QUALIFIER.exec(clause) ?? CLAUSE_WHEN.exec(clause)
     if (q) {
       const at = region.start + cut + 1 + q[0].length - q[1]!.length
       return { unread: trimSpan(p, { start: at, end: region.start + trimmed.length }), why: whyOf(q[1]!) }
     }
     // A clause of the calendar or a zone, whatever word opens it: "Sundays off, every day at 9am …",
     // "Berlin time, every Monday at 9am …".
-    const zoneBefore = ZONE_AFTER.test(clause) || ZONE_ANYWHERE.test(clause)
+    const original = p.text.slice(region.start + cut + 1, region.start + trimmed.length)
+    const zoneBefore = ZONE_AFTER.test(clause) || ZONE_ANYWHERE.test(clause) || ZONE_OFFSET_BARE.test(clause) || ZONE_ABBR_UPPER.test(original)
     if (zoneBefore || new RegExp(`\\b${CAL_WORD}`).test(clause)) {
       return { unread: trimSpan(p, { start: region.start + cut + 1, end: region.start + trimmed.length }), why: zoneBefore ? "zone" : "leftover" }
     }
