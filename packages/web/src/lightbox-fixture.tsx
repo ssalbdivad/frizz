@@ -124,6 +124,7 @@ function AnswerSheet() {
     onText: () => {},
     dismiss: () => {},
     dismissing: false,
+    dismissed: new Set(),
     submit: () => {},
     cancelDefault: () => {},
     commit: () => {},
