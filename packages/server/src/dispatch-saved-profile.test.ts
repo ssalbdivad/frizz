@@ -11,12 +11,13 @@ import { cwdSlug, type Project } from "./project.ts"
 import type { BoardManager } from "./board.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import type { BackendKind } from "./backend/types.ts"
+import type { ChooseEffort, ChooseEffortInput } from "./effort-chooser.ts"
 
 // A dispatch that names no model launches on the operator's CURRENT profile — the machine-wide record
 // the prompt box writes — never on the per-project Settings pair, which no surface has written since
 // that record existed and which therefore held a months-old choice (or nothing) in every project.
 
-function harness(saved: Partial<Record<BackendKind, { model?: string; effort?: Settings["effort"] }>>) {
+function harness(saved: Partial<Record<BackendKind, { model?: string; effort?: Settings["effort"] }>>, chooseEffort?: ChooseEffort) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-saved-profile-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "saved-profile", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -44,6 +45,7 @@ function harness(saved: Partial<Record<BackendKind, { model?: string; effort?: S
     getSettings: () => ({ ...defaultSettings(), model: "haiku", effort: "low" }),
     dispatchProfile: (kind) => saved[kind] ?? {},
     claudeBroker,
+    ...(chooseEffort ? { chooseEffort } : {}),
   })
   return { storage, dispatcher, spawned }
 }
@@ -71,4 +73,31 @@ test("a model-only dispatch borrows the saved effort only when it names the save
   const other = harness({ claude: { model: "opus", effort: "ultracode" } })
   await other.dispatcher.dispatch({ prompt: "Do the thing", model: "haiku" }, { backend: "claude" })
   assert.deepEqual(other.spawned, [{ model: "haiku", effort: undefined }])
+})
+
+// "auto" is a dispatch value only: the chooser turns it into a level off the model's own ladder before
+// launch, and both the spawn and the persisted row carry that level — never "auto".
+test("an auto effort launches on the level the chooser reads off the prompt", async () => {
+  const asked: ChooseEffortInput[] = []
+  const { storage, dispatcher, spawned } = harness({ claude: { model: "opus", effort: "auto" } }, async (input) => {
+    asked.push(input)
+    return "ultracode"
+  })
+  const { slug } = await dispatcher.dispatch({ prompt: "Audit every package" }, { backend: "claude" })
+  assert.equal(asked[0]?.prompt, "Audit every package")
+  assert.deepEqual(asked[0]?.efforts, ["low", "medium", "high", "xhigh", "max", "ultracode"])
+  assert.deepEqual(spawned, [{ model: "opus", effort: "ultracode" }])
+  assert.equal(storage.getSession(slug)?.effort, "ultracode")
+})
+
+test("an auto effort on Haiku is offered no ultracode, and without a chooser launches on high", async () => {
+  const asked: ChooseEffortInput[] = []
+  const haiku = harness({}, async (input) => (asked.push(input), input.fallback))
+  await haiku.dispatcher.dispatch({ prompt: "Rename foo", model: "haiku", effort: "auto" }, { backend: "claude" })
+  assert.deepEqual(asked[0]?.efforts, ["low", "medium", "high", "xhigh", "max"])
+  assert.deepEqual(haiku.spawned, [{ model: "haiku", effort: "high" }])
+
+  const bare = harness({})
+  await bare.dispatcher.dispatch({ prompt: "Rename foo", model: "opus", effort: "auto" }, { backend: "claude" })
+  assert.deepEqual(bare.spawned, [{ model: "opus", effort: "high" }])
 })

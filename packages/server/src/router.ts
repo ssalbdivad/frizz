@@ -264,6 +264,11 @@ export function validateGithubDispatchProfile(input: z.infer<typeof GithubBatchI
   // itself (refusing an agent that is not on PATH) — there is no model/effort catalogue to check.
   if (input.backend === "acp") return
   if (input.effort === undefined) throw new Error(`Unsupported ${input.backend} model/effort pair: ${input.model} / (no effort)`)
+  // "auto" is resolved per dispatch from the model's own ladder, so it is valid on any model; only the model is checked.
+  if (input.effort === "auto") {
+    if (!threadProfileOptions(input.backend).options.some((option) => option.model === input.model)) throw new Error(`Unsupported ${input.backend} model: ${input.model}`)
+    return
+  }
   validateThreadProfile(input.backend, input.model, input.effort)
 }
 

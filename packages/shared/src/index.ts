@@ -4523,7 +4523,11 @@ export const Settings = z.object({
   // and ultracode is a separate session-scoped setting meaning "xhigh + standing dynamic-workflow
   // orchestration". It travels the wire as an effort because that is how Claude Code's own `/effort`
   // presents it; resolveClaudeEffort (server/backend/claude-effort.ts) translates it at the spawn edge.
-  effort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
+  //
+  // "auto" is not a level either: it asks Frizz to pick one per dispatch from the prompt (a short Haiku
+  // call, server/effort-chooser.ts) before anything launches. It is a DISPATCH value only — a started
+  // thread's row records the concrete level that call chose, so no runtime ever sees "auto".
+  effort: z.enum(["auto", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
   notifications: z.boolean(),
   // There is no `projectRail` key any more. It toggled a permanent column of project icons down the
   // left edge until 2026-09-30, when the All projects view and per-tab notifications superseded it.

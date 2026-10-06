@@ -36,7 +36,7 @@ export type ScheduleRunState = z.infer<typeof ScheduleRunState>
 
 // Mirrors of Backend and Settings.effort in index.ts, kept local for the reason in the header comment.
 export const ScheduleBackend = z.enum(["claude", "codex", "acp"])
-export const ScheduleEffort = z.enum(["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"])
+export const ScheduleEffort = z.enum(["auto", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"])
 
 // ---- copy ------------------------------------------------------------------------------------------------
 

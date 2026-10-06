@@ -103,7 +103,8 @@ const CEILING_EFFORTS = ["ultra", "ultracode"]
 
 // Column order for the matrix. The ceiling sorts last, and a model that cannot honour it simply
 // renders an empty cell in that column.
-const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", ...CEILING_EFFORTS]
+// Auto leads: it is the default, and it chooses among the columns to its right.
+const EFFORT_ORDER = ["auto", "low", "medium", "high", "xhigh", "max", ...CEILING_EFFORTS]
 
 export function profileGridEfforts(groups: readonly ProfileGridGroup[]): string[] {
   const efforts = new Set(groups.flatMap((group) => group.options.flatMap((option) => option.efforts)))

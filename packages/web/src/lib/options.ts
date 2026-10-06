@@ -193,12 +193,17 @@ export function claudeEfforts(model: string | undefined): string[] {
 
 // Labels span BOTH ladders: Claude's low..max (plus ultracode) and codex's "ultra". An unlabeled effort
 // (a future codex level) falls back to a Title-cased slug in the option builders below.
-export const EFFORT_LABEL: Record<string, string> = { low: "Low", medium: "Medium", high: "High", xhigh: "X-high", max: "Max", ultra: "Ultra", ultracode: "Ultracode" }
+export const EFFORT_LABEL: Record<string, string> = { auto: "Auto", low: "Low", medium: "Medium", high: "High", xhigh: "X-high", max: "Max", ultra: "Ultra", ultracode: "Ultracode" }
 
 // The full effort ordering, low→high — used to clamp a stored effort into a codex model's supported set,
 // and to order the profile grid's columns. "ultracode" sorts last to match how Claude Code's own
 // /effort lists it; it RUNS at xhigh but carries orchestration on top, so it is the ladder's ceiling.
 const EFFORT_ORDER = ["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]
+
+// "Auto" — the dispatch surfaces' default: the server reads the prompt and picks a level off the chosen
+// model's ladder before launch (server/effort-chooser.ts). It is offered ONLY where a thread is about to
+// start (the prompt box, the GitHub batch, a schedule) — a running thread already has a concrete level.
+export const AUTO_EFFORT = "auto"
 
 function effortLabel(e: string): string {
   return EFFORT_LABEL[e] ?? e.charAt(0).toUpperCase() + e.slice(1)
@@ -218,7 +223,7 @@ export function claudeEffortOptions(model: string | undefined, opts: { withDefau
 // ultracode can be unsupported, and it degrades to xhigh: the level it actually runs at, minus the
 // orchestration the smaller model cannot carry. "" (use the default) passes through untouched.
 export function claudeEffortForModel(model: string | undefined, effort: string): string {
-  if (!effort) return effort
+  if (!effort || effort === AUTO_EFFORT) return effort
   return effort === ULTRACODE && !claudeEfforts(model).includes(ULTRACODE) ? "xhigh" : effort
 }
 
@@ -238,7 +243,7 @@ export function codexEffortOptions(model: CodexModel | undefined, opts: { withDe
 // unsupported one clamps DOWN the ordered ladder to the highest supported level at or below it (so max →
 // xhigh only for a model that stops at xhigh), else the model's default effort.
 export function codexEffortForModel(model: CodexModel | undefined, effort: string): string {
-  if (!model || !effort) return effort
+  if (!model || !effort || effort === AUTO_EFFORT) return effort
   if (model.efforts.includes(effort)) return effort
   const idx = EFFORT_ORDER.indexOf(effort)
   const atOrBelow = model.efforts.filter((e) => {

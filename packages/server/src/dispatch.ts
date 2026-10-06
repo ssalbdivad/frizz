@@ -12,7 +12,7 @@ import {
   ThreadSlug,
   slugify,
   threadIdentityName,
-  type Settings,
+  Settings,
   PermissionMode,
   type ProviderAuth,
 } from "@frizz/shared"
@@ -37,6 +37,9 @@ import { acpAgentIdFromModel } from "./backend/acp-agents.ts"
 import { acpModelIdFromModel } from "@frizz/shared"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
+import { claudeEffortsFor } from "./backend/thread-profiles.ts"
+import { readCodexModels } from "./backend/codex-models.ts"
+import { AUTO_EFFORT, type ChooseEffort } from "./effort-chooser.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { readBoard, type FrizzBoard, type FrizzThread } from "./frizz.ts"
 import { SYSTEM_PROMPT_DIR, cleanupAdoptionSessionFiles, systemPromptPath, writeMcpConfigFile } from "./session-files.ts"
@@ -844,6 +847,9 @@ export interface DispatchDeps {
   // and holds a caller's hard-coded title to the same uniqueness rule. Absent (tests) ⇒ the row keeps
   // its dispatch chop / caller title exactly as before, and nothing is minted.
   threadNamer?: ThreadNamer
+  // Resolves an "auto" effort to a concrete level from the prompt (effort-chooser.ts) before launch.
+  // Absent (tests) ⇒ "auto" launches on the fallback level, so nothing ever spawns with "auto".
+  chooseEffort?: ChooseEffort
   // Failure cleanup targets only the exact freshly-spawned slug and its session-id-keyed files
   // (cleanupDispatchFiles), so a failed dispatch can never disturb a neighbouring thread.
   // Provider auth preflight (claude-auth plan, Slice A): resolves the target provider's credential
@@ -880,6 +886,20 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
   function savedProfile(kind: BackendKind, settings: Settings): { model?: string; effort?: Settings["effort"] } {
     return deps.dispatchProfile ? deps.dispatchProfile(kind) : { model: settings.model, effort: settings.effort }
+  }
+
+  // "auto" → the level the chooser reads off the prompt, from the ladder this model offers. Everything
+  // downstream — the spawn and the persisted row — sees only the concrete level. The fallback is the level
+  // a fixed default used to launch on: high where the ladder has it, else the model's own default.
+  async function concreteEffort(kind: BackendKind, model: string | undefined, effort: Settings["effort"], prompt: string): Promise<Settings["effort"]> {
+    if (effort !== AUTO_EFFORT) return effort
+    if (kind === "acp") return undefined
+    const codex = kind === "codex" ? readCodexModels().find((candidate) => candidate.slug === model) : undefined
+    const efforts = kind === "codex" ? codex?.efforts ?? [] : claudeEffortsFor(model ?? "")
+    const fallback = efforts.includes("high") ? "high" : codex?.defaultEffort ?? efforts[0]
+    if (!fallback) return undefined
+    const chosen = deps.chooseEffort ? await deps.chooseEffort({ prompt, efforts, fallback }) : fallback
+    return Settings.shape.effort.parse(chosen)
   }
 
   // Build the detached-spawn command through the backend seam for the chosen `kind` (falling back to
@@ -975,7 +995,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // effort can name a level this one lacks (ultracode on Haiku), so it launches on the CLI default.
       const saved = input.model === undefined || input.effort === undefined ? savedProfile(kind, settings) : {}
       const model = input.model ?? saved.model
-      const effort = input.effort ?? (model === saved.model ? saved.effort : undefined)
+      const effort = await concreteEffort(kind, model, input.effort ?? (model === saved.model ? saved.effort : undefined), input.prompt)
 
       // Session-first: provision the thread's scratch DIRECTORY (empty; the worker fills it or does
       // not) — NO .frizz/<slug>.md file. It keys on the frizz-minted sessionId, which stays the row's

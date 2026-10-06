@@ -32,6 +32,7 @@ import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
+import { createEffortChooser } from "./effort-chooser.ts"
 import { readTranscriptYielding, sourceForThread } from "./transcript.ts"
 import { forkPointOf } from "./fork-point.ts"
 import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
@@ -1094,6 +1095,15 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     acpBridge,
     claudeBroker,
     threadNamer,
+    // "auto" effort → a level read off the prompt by Haiku, before launch (effort-chooser.ts). Its own
+    // completer with a short timeout: it blocks the dispatch, so it must never queue behind the namer's
+    // mints, and a slow answer falls back to a fixed level. FRIZZ_AUTO_EFFORT=0 skips the model.
+    chooseEffort: createEffortChooser({
+      complete: process.env.FRIZZ_AUTO_EFFORT === "0"
+        ? undefined
+        : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), timeoutMs: 20_000, concurrency: 4 }),
+      log: (message) => frizzLog.warn("dispatch", `auto effort: ${message}`),
+    }),
     // Auth preflight (claude-auth plan, Slice A): Claude reads its local credential and confirms only
     // a positive signed-out against its CLI (readClaudePreflightAuth — the comment there records why
     // the CLI must not sit on the signed-in path); Codex reads the local auth.json/env. Both block

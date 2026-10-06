@@ -12,6 +12,7 @@ import {
 import type { SelectGroup, SelectOption } from "../components/ui/Select.tsx"
 import type { ProfileGridGroup } from "./profileGrid.ts"
 import {
+  AUTO_EFFORT,
   CLAUDE_MODELS,
   claudeModelOptions,
   claudeEfforts,
@@ -129,10 +130,11 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAge
         model: option.value,
         label: option.label,
         edition: claudeModels.find((model) => model.alias === option.value)?.edition,
-        defaultEffort: "high",
+        defaultEffort: AUTO_EFFORT,
         // Per-model, exactly like the codex rows below: the ultracode rung exists only on the
-        // xhigh-capable models, so Haiku's row leaves that grid cell empty.
-        efforts: claudeEfforts(option.value),
+        // xhigh-capable models, so Haiku's row leaves that grid cell empty. Auto leads every row: it
+        // picks from the rest of that row at dispatch.
+        efforts: [AUTO_EFFORT, ...claudeEfforts(option.value)],
       })),
     },
     {
@@ -141,8 +143,8 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAge
       options: codexModels.map((model) => ({
         model: model.slug,
         label: model.displayName,
-        defaultEffort: model.defaultEffort,
-        efforts: model.efforts,
+        defaultEffort: AUTO_EFFORT,
+        efforts: [AUTO_EFFORT, ...model.efforts],
       })),
     },
     ...(acpOptions.length ? [{ id: "acp", label: "ACP agents", options: acpOptions }] : []),
@@ -177,14 +179,16 @@ export function resolveDispatchPreferences(
     : backend === "codex"
       ? codexModels.some((candidate) => candidate.slug === model)
       : acpAgents.some((candidate) => candidate.available && candidate.id === acpAgentId)
-  const defaultEffort = backend === "claude" ? "high" : codexModel?.defaultEffort ?? ""
+  // Auto unless the operator made another level the default: the server picks one from the prompt.
+  const defaultEffort = backend === "claude" || codexModel ? AUTO_EFFORT : ""
   // An ACP agent has no effort axis in Frizz — it runs on its own CLI's model and effort — so its
   // effort is "" and always "available": there is nothing to be unavailable.
   const effort = backend === "acp" ? "" : profile.effort ?? defaultEffort
+  const autoOption = { value: AUTO_EFFORT, label: "Auto" }
   const baseEfforts = backend === "claude"
-    ? claudeEffortOptions(model, { withDefault: false })
-    : backend === "codex"
-      ? codexEffortOptions(codexModel, { withDefault: false })
+    ? [autoOption, ...claudeEffortOptions(model, { withDefault: false })]
+    : backend === "codex" && codexModel
+      ? [autoOption, ...codexEffortOptions(codexModel, { withDefault: false })]
       : []
   const effortAvailable = backend === "acp" || baseEfforts.some((option) => option.value === effort)
   const effortOptions = effort && !effortAvailable
