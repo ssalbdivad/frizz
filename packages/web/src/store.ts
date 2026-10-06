@@ -147,7 +147,7 @@ export const store = proxy({
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; actions?: readonly ToastAction[] } | null,
   // A schedule was just created from the prompt box: the project row whose schedules count should flash once
-  // (ProjectList QuietToggles, plans/schedule-live-reading.md §5.11), so the eye travels from where it was
+  // (ProjectList QuietToggles, plans/schedule-live-reading.md), so the eye travels from where it was
   // made to where it lives. `seq` replays the flash for a second create; it clears itself (flashScheduleCount).
   scheduleFlash: null as { projectId: string; seq: number } | null,
   // The open image LIGHTBOX — one ```lightbox gallery's pictures and which of them is on screen. Here
@@ -204,7 +204,7 @@ export type ToastLink = { label: string; slug: string; project?: string }
 // act belongs to whoever raised the toast: its thread's project client, and the card it faded out.
 export type ToastAction = { label: string; run: () => void }
 // AT MOST TWO verbs, in the order given: a created schedule offers Undo, then Open
-// (plans/schedule-live-reading.md §10.3). A toast is a strip, and a third button turns it into a menu.
+// (plans/schedule-live-reading.md). A toast is a strip, and a third button turns it into a menu.
 // `action` is sugar for a one-verb toast and leads the list when both are passed.
 export const MAX_TOAST_ACTIONS = 2
 export function showToast(text: string, opts?: { detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction; actions?: readonly ToastAction[] }) {
@@ -214,7 +214,7 @@ export function showToast(text: string, opts?: { detail?: string; spinner?: bool
 }
 
 let scheduleFlashSeq = 0
-/** Flash a project's schedules count once (§5.11). The flag lives long enough for the count the create just
+/** Flash a project's schedules count once. The flag lives long enough for the count the create just
  *  changed to arrive with the projects poll, then goes, so a later re-render never replays it. */
 export function flashScheduleCount(projectId: string): void {
   const seq = ++scheduleFlashSeq

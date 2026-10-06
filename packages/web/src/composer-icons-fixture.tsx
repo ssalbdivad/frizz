@@ -21,9 +21,9 @@ const authed = !params.has("unauthed")
 const heals = params.has("heals")
 // `?lazy` passes `onSaveLazy`, as the new-thread box does: the lazy-save glyph joins the rail beside send.
 const lazy = params.has("lazy")
-// `?schedule` also passes `onSchedule` (implies `?lazy`, which the schedule slot needs): the schedule glyph
-// joins left of the snail, as in the new-thread box. `?schedule=hint` / `?schedule=on` draw its lit states.
-const schedule = params.get("schedule")
+// `?send=schedule` draws Send as it reads when Enter will create a schedule (the repeat glyph in place of the
+// arrow, ScheduleComposer.tsx), and `?send=pending` as it reads while Enter is held for a schedule check.
+const send = params.get("send")
 let githubStatusCalls = 0
 const originalFetch = window.fetch
 window.fetch = async (input, init) => {
@@ -49,8 +49,9 @@ function Fixture() {
           value={value}
           onChange={setValue}
           onSubmit={() => {}}
-          {...(lazy || schedule !== null ? { onSaveLazy: () => {} } : {})}
-          {...(schedule !== null ? { onSchedule: () => {}, schedule: schedule === "hint" || schedule === "on" ? schedule : "off" } : {})}
+          {...(lazy ? { onSaveLazy: () => {} } : {})}
+          {...(send === "schedule" ? { sendGlyph: "schedule" as const } : {})}
+          {...(send === "pending" ? { sendPending: true } : {})}
           placeholder="Describe the task…"
           minHeight={96}
           maxHeight={340}

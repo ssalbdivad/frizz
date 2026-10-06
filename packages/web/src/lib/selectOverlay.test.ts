@@ -43,7 +43,7 @@ function escape() {
   return { prevented, stopped }
 }
 
-test("a schedule-mode claim keeps the dialog open only while focus is inside the claiming box", () => {
+test("a schedule strip's claim keeps the dialog open only while focus is inside the claiming box", () => {
   let focus: string | null = "dialog-textarea"
   let on = true
   const left: string[] = []
@@ -58,13 +58,13 @@ test("a schedule-mode claim keeps the dialog open only while focus is inside the
     () => focus,
   ))
 
-  // First Escape: the mode leaves, the dialog stays (Radix sees preventDefault).
+  // First Escape: the strip is dismissed, the dialog stays (Radix sees preventDefault).
   assert.deepEqual(escape(), { prevented: 1, stopped: 1 })
   assert.deepEqual(left, ["dialog"])
   // Second Escape: nothing left to claim, so the dialog closes as before.
   assert.deepEqual(escape(), { prevented: 0, stopped: 1 })
 
-  // Mode on again, but focus is OUTSIDE the box (a drawer's button, the page body): not this claim's key.
+  // A strip again, but focus is OUTSIDE the box (a drawer's button, the page body): not this claim's key.
   on = true
   focus = "page-button"
   assert.deepEqual(escape(), { prevented: 0, stopped: 1 })
@@ -79,7 +79,7 @@ test("a schedule-mode claim keeps the dialog open only while focus is inside the
   assert.equal(on, true)
 })
 
-test("two boxes in the mode on one draft: only the focused one claims", () => {
+test("two boxes on one draft, both showing its strip: only the focused one claims", () => {
   let focus = "page-textarea"
   const acted: string[] = []
   const claim = (name: string, nodes: string[]) => registerEscapeClaim(focusedEscapeClaim(
@@ -113,8 +113,8 @@ test("an open Select still wins Escape over a claim", () => {
 })
 
 test("a claim can PASS: the dialog stays, and the key goes on to the box's open menu or IME (fix round 1, X4)", () => {
-  // The `c` dialog's box with its slash menu open, in the mode: Radix asks the claim at the document's capture
-  // phase, before the box's own handler. The menu is the box's to close first (§7), as on the page — so the
+  // The `c` dialog's box with its slash menu open and the strip showing: Radix asks the claim at the document's
+  // capture phase, before the box's own handler. The menu is the box's to close first, as on the page — so the
   // claim neither acts nor lets the dialog close, and the key travels on to the box.
   let menuOpen = true
   let on = true
@@ -129,14 +129,14 @@ test("a claim can PASS: the dialog stays, and the key goes on to the box's open 
     () => "dialog-textarea",
   ))
   assert.deepEqual(escape(), { prevented: 1, stopped: 0 }, "the menu's Escape: the dialog stays, the key is not stopped")
-  assert.equal(on, true, "and the mode is untouched")
+  assert.equal(on, true, "and the strip is untouched")
   menuOpen = false
   let prevented = 0
   let stopped = 0
   handleDialogEscape({ preventDefault: () => prevented++, stopPropagation: () => stopped++, isComposing: true })
   assert.deepEqual({ prevented, stopped }, { prevented: 1, stopped: 0 }, "an IME's Escape is its own cancel")
   assert.equal(on, true)
-  assert.deepEqual(escape(), { prevented: 1, stopped: 1 }, "the next Escape leaves the mode")
+  assert.deepEqual(escape(), { prevented: 1, stopped: 1 }, "the next Escape dismisses the strip")
   assert.equal(on, false)
   assert.deepEqual(escape(), { prevented: 0, stopped: 1 }, "and the one after closes the dialog")
   unregister()

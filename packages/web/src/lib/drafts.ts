@@ -65,7 +65,7 @@ export class DraftStore {
   get(key: string): string { return this.snapshot.entries[key]?.value ?? "" }
   set(key: string, value: string): void { this.setMany({ [key]: value }) }
   // Several values in ONE commit and so ONE notify ("" deletes, as `set` does): a draft that moves keys with
-  // its siblings (lib/stagedContext.ts carryDraft) lands whole, never as text without the mode it was typed in.
+  // its siblings (lib/stagedContext.ts carryDraft) lands whole, never as text without what was said about it.
   setMany(values: Readonly<Record<string, string>>): void {
     const entries = { ...this.snapshot.entries }
     const now = Date.now()
@@ -77,10 +77,9 @@ export class DraftStore {
   }
   clear(key: string): void { this.clearMany([key]) }
   // Several keys in ONE commit and so ONE notify. A draft that spans keys (a new thread's prompt, its
-  // profile pick and its schedule mode, lib/scheduleDraftState.ts) must never be observed half-cleared:
-  // a subscriber rendering between two single-key clears saw the prompt gone and the mode still on, or —
-  // the order that matters — the mode gone and the prompt still there, which is a box where Enter starts
-  // a thread from text that was being set up as a schedule.
+  // profile pick and its schedule dismissal, lib/scheduleDraftState.ts) must never be observed
+  // half-cleared: a subscriber rendering between two single-key clears saw one draft's text with
+  // another's state.
   clearMany(keys: readonly string[]): void {
     if (!keys.some((key) => this.snapshot.entries[key])) return
     const drop = new Set(keys)
@@ -120,9 +119,10 @@ export const draftKey = {
   // The profile picked for that same prompt (useDraftDispatchPick): `{backend, model, effort}` as JSON,
   // one small non-secret record, kept and cleared with the prompt it belongs to.
   dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
-  // That same prompt's SCHEDULE MODE (lib/scheduleDraftState.ts): `{v, on, dismissed}` as JSON, so what
-  // Enter does with the draft lives and dies with the draft — across a remount and a same-tab reload, and
-  // cleared in the same commit as the prompt (clearDispatchDraft). Absent means off, nothing dismissed.
+  // What the human said about that same prompt's SCHEDULE (lib/scheduleDraftState.ts): `{v, dismissed,
+  // undone}` as JSON — "not a schedule", or an Undo — so what Enter does with the draft lives and dies with
+  // the draft: across a remount and a same-tab reload, and cleared in the same commit as the prompt
+  // (clearDispatchDraft). Absent means nothing dismissed.
   dispatchSchedule: (projectDir: string | undefined) => `dispatch-schedule:${projectDraftScope(projectDir)}:new`,
   // A thread's "Spinoff" dialog (SpinoffDialog) — the instructions for the new thread, one per thread.
   spinoff: (projectDir: string | undefined, slug: string) => `spinoff:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,

@@ -949,7 +949,7 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
   ]
   const shown = entries.filter((entry) => entry.count > 0)
   // A schedule just created from the prompt box for THIS project: its count flashes once (store.ts
-  // flashScheduleCount, plans/schedule-live-reading.md §5.11).
+  // flashScheduleCount, plans/schedule-live-reading.md).
   const scheduleFlash = useSnapshot(store).scheduleFlash
   if (shown.length === 0) return null
   return (

@@ -146,9 +146,9 @@ export function restoreContextItems(key: string, items: ComposerContextItem[]): 
  * the chips filed under the old project (review C5): the new box showed `@a.ts:12-20` as bare text,
  * the dispatch went out with no definition behind it, and the next reload's load dropped the orphans.
  *
- * `siblings`: `[from, to]` keys whose values belong to this text and travel with it — the schedule mode
- * (fix round 2). Each lands in the SAME commit as the text, replacing whatever the target key held (a
- * value of "" clears it), and leaves in the same commit as the text leaves.
+ * `siblings`: `[from, to]` keys whose values belong to this text and travel with it — what the human said
+ * about its schedule (lib/scheduleDraftState.ts). Each lands in the SAME commit as the text, replacing whatever
+ * the target key held (a value of "" clears it), and leaves in the same commit as the text leaves.
  */
 export function carryDraft(from: string, to: string, siblings: readonly (readonly [string, string])[] = []): void {
   if (from === to) return

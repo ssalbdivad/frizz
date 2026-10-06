@@ -1774,31 +1774,24 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
 }
 
 /* THE SCHEDULE MARKS — the prompt box's reading of its own words (Composer `marks`, ComposerMark;
-   plans/schedule-live-reading.md §5.1, §6). Painted on a <mark> in the highlight layer behind the textarea,
-   whose text is transparent, so every tone is paint and nothing else: ZERO-LAYOUT by construction — the 1px
-   side pad is bought back by the -1px margin, and vertical padding never moves an inline box. The geometry
-   lives HERE and nowhere else, so a measurement has one place to land.
+   plans/schedule-live-reading.md). Painted on a <mark> in the highlight layer behind the textarea, whose text is
+   transparent, so every tone is paint and nothing else: ZERO-LAYOUT by construction — the 1px side pad is bought
+   back by the -1px margin, and vertical padding never moves an inline box. The geometry lives HERE and nowhere
+   else, so a measurement has one place to land.
 
-   THE UNDERLINE (offer, unread, reading) is a background on the mark's padding box, pinned to its BOTTOM
-   edge, so it sits below the font's content area — below every descender — at `--sched-underline-pad` under
-   it. Not `text-decoration`: a dotted decoration's dot size and pitch are the browser's, not ours, and a
-   decoration cannot be revealed left to right. `box-decoration-break: clone` gives each line of a wrapped
-   phrase its own padding and its own underline.
+   THE PENDING CUE is a background on the mark's padding box, pinned to its BOTTOM edge, so it sits below the
+   font's content area — below every descender — at `--sched-underline-pad` under it. Not `text-decoration`: a
+   dashed decoration's dash and pitch are the browser's, not ours. `box-decoration-break: clone` gives each line
+   of a wrapped word its own padding and its own line.
 
-   The readings it is set from (scratch/optics-live-box.ts, the real page, 13px sans — system-ui, which
-   resolves to DejaVu Sans on the Linux box measured; dark; dsf 6; 2026-10-06). The dots are drawn in the
-   MIRROR, but the text the eye reads is the TEXTAREA's, and the two land up to ~0.6px apart depending on
-   where the box falls on the subpixel grid (baseline 107.0 in one layout, 107.56 in another), so the
-   clearance is set for the unlucky placement, read in pixels:
-     pad 0.18em → 2.17px clear of the `y` of "every" (lucky placement), 5.5px under the baseline: a line of
-                  its own, detached from the words;
-     pad 0.11em → 1.17px lucky but 0.17–0.4px unlucky (seen at 24x: the dots all but touching the tail);
-     pad 0.15em → 1.59px clear of the deepest descender in geometry (canvas `g y p j q`), 1.17px in pixels
-                  at the UNLUCKY placement, three runs identical; dot centre 0.399em under the baseline.
-   Re-measure, never re-guess, if the box's font size or the family changes. */
+   The clearance (scratch/optics-live-box.ts, the real page, 13px sans — system-ui, which resolves to DejaVu Sans
+   on the Linux box measured; dark; dsf 6; 2026-10-06). The line is drawn in the MIRROR, but the text the eye
+   reads is the TEXTAREA's, and the two land up to ~0.6px apart depending on where the box falls on the subpixel
+   grid, so the clearance is set for the unlucky placement: pad 0.15em → 1.59px clear of the deepest descender in
+   geometry (canvas `g y p j q`), 1.17px in pixels at the unlucky placement. Re-measure, never re-guess, if the
+   box's font size or the family changes. */
 [data-composer-mark] {
   --sched-underline-pad: 0.15em;
-  --sched-dot: color-mix(in srgb, var(--color-fg) 40%, transparent);
   --sched-dash: color-mix(in srgb, var(--color-fg) 25%, transparent);
   color: transparent;
   background-color: transparent;
@@ -1808,94 +1801,37 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
   box-decoration-break: clone;
   background-repeat: no-repeat;
 }
-/* offer — 1.5px dots on a 4px pitch at fg/40: "this reads as a schedule", nothing accepted (never the
-   accent before accept, I-12). Drawn left to right on arrival by its MASK, so the dots themselves never
-   slide; a mark that keeps its element (Composer keys it) never redraws, so a phrase that extends draws
-   only its new tail.
-   That tail is a SECOND mark abutting the first, so the seam must not show: no side pad (the fill's 1px
-   overlapped the two by 2px and drew a doubled dot at `Monday|at`), and `round` tiling, which fits a whole
-   number of ~4px tiles to each mark with its dot centred — every mark ends half a pitch from its edge, so
-   the pitch runs straight across the seam. */
-[data-composer-mark="offer"] {
-  margin: 0;
-  padding-left: 0;
-  padding-right: 0;
-  background-image: radial-gradient(circle at 50% 50%, var(--sched-dot) 0.6px, transparent 0.85px);
-  background-size: 4px 1.5px;
-  background-repeat: round no-repeat;
-  background-position: 0 100%;
-  -webkit-mask-image: linear-gradient(#000, #000);
-  mask-image: linear-gradient(#000, #000);
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-size: 100% 100%;
-  mask-size: 100% 100%;
-  animation: sched-reveal 180ms cubic-bezier(0.16, 1, 0.3, 1);
-}
-/* unread — a 3px-on-2px dash at fg/25, centred on the dots' line: words the box will not guess at. */
-[data-composer-mark="unread"],
-[data-composer-mark="reading"] {
+/* pending — a 3px-on-2px dash at fg/25 under a schedule word, while the model reads the words for a schedule.
+   The most the box ever shows before it knows: no banner, no strip, nothing that moves the layout. It fades in
+   only once the read has been out for 900ms, so an answer from the cache, or a quick one, never shows it — and
+   "fix the bug from this morning" never flashes anything that says schedule. */
+[data-composer-mark="pending"] {
   background-image: repeating-linear-gradient(90deg, var(--sched-dash) 0 3px, transparent 3px 5px);
   background-size: 100% 1px;
   background-position: 0 calc(100% - 0.25px);
+  animation: sched-pending-in 240ms ease-out 900ms backwards;
 }
-/* reading — the dash, with a soft band sweeping behind the words while the model reads them (2.2s, the
-   house shimmer's period). */
-[data-composer-mark="reading"] {
-  background-image:
-    repeating-linear-gradient(90deg, var(--sched-dash) 0 3px, transparent 3px 5px),
-    linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--color-fg) 9%, transparent) 50%, transparent 100%);
-  background-size: 100% 1px, 200% 100%;
-  background-position: 0 calc(100% - 0.25px), 200% 0;
-  animation: sched-shimmer 2.2s linear infinite;
-}
-/* accepted — today's accent fill, swept in left to right as the offer becomes the mode's reading; grow — a
-   run the model's answer added, fading in; wash — the fill washing bright and back as the schedule is
-   created. The fill's own 1px pad all round, and the radius, are the old highlight's. */
+/* accepted — the accent fill, swept in left to right as a reading arrives: the words Enter turns into WHEN. A
+   reading that is replaced in place keeps its element (Composer keys it by where the phrase starts), so it never
+   sweeps again. wash — the fill washing bright and back as the schedule is created. The fill's own 1px pad all
+   round, and the radius, are the old highlight's. */
 [data-composer-mark="accepted"],
-[data-composer-mark="grow"],
 [data-composer-mark="wash"] {
   border-radius: 3px;
   padding-bottom: 1px;
   background-image: linear-gradient(color-mix(in srgb, var(--color-accent) 15%, transparent), color-mix(in srgb, var(--color-accent) 15%, transparent));
   background-size: 100% 100%;
 }
-/* Two fills that MEET — the model's grow run beside the core it grew from, and both of them washing — are one
-   run: no side pad and no radius at the seam. With them, the two 1px pads overlapped into a 2px sliver at
-   twice the alpha, and the two radii cut a notch top and bottom (seen at `Monday|unless` in M1, real Sonnet
-   answer, 2026-10-06). `+` skips text nodes, which is safe only because a grow run always abuts its core by
-   construction (ScheduleComposer `marks`), and a wash only ever replaces those. */
-[data-composer-mark="accepted"]:has(+ [data-composer-mark="grow"]),
-[data-composer-mark="grow"]:has(+ [data-composer-mark="accepted"]),
-[data-composer-mark="wash"]:has(+ [data-composer-mark="wash"]) {
-  margin-right: 0;
-  padding-right: 0;
-  border-top-right-radius: 0;
-  border-bottom-right-radius: 0;
-}
-[data-composer-mark="accepted"] + [data-composer-mark="grow"],
-[data-composer-mark="grow"] + [data-composer-mark="accepted"],
-[data-composer-mark="wash"] + [data-composer-mark="wash"] {
-  margin-left: 0;
-  padding-left: 0;
-  border-top-left-radius: 0;
-  border-bottom-left-radius: 0;
-}
 [data-composer-mark="accepted"] { animation: sched-fill 160ms cubic-bezier(0.16, 1, 0.3, 1); }
-[data-composer-mark="grow"] { animation: overlay-in 120ms ease-out; }
 /* The wash is the fill as a COLOUR, which interpolates (an image does not): 15% → 30% → 15%. */
 [data-composer-mark="wash"] {
   background-image: none;
   background-color: color-mix(in srgb, var(--color-accent) 15%, transparent);
   animation: sched-wash 220ms ease-out;
 }
-@keyframes sched-reveal {
-  from { -webkit-mask-size: 0% 100%; mask-size: 0% 100%; }
-  to { -webkit-mask-size: 100% 100%; mask-size: 100% 100%; }
-}
-@keyframes sched-shimmer {
-  from { background-position: 0 calc(100% - 0.25px), 200% 0; }
-  to { background-position: 0 calc(100% - 0.25px), -200% 0; }
+@keyframes sched-pending-in {
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 @keyframes sched-fill {
   from { background-size: 0% 100%; }
@@ -1904,8 +1840,9 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
 @keyframes sched-wash {
   40% { background-color: color-mix(in srgb, var(--color-accent) 30%, transparent); }
 }
-/* The ledge's arrival under the box (ScheduleComposer.tsx): opacity and a 2px rise, 60ms after the dots
-   start drawing, while its slot's grid row opens from 0fr. */
+/* The strip's arrival under the box (ScheduleComposer.tsx): opacity and a 2px rise, 60ms after the mark starts
+   filling, while its slot's grid row opens from 0fr. A strip that only changes what it says keeps its element,
+   so it never arrives twice. */
 @keyframes sched-ledge-in {
   from { opacity: 0; transform: translateY(2px); }
   to { opacity: 1; transform: translateY(0); }
@@ -1916,11 +1853,9 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
 [data-sched-flash] { animation: queue-flash 0.9s ease-out; }
 @media (prefers-reduced-motion: reduce) {
   [data-composer-mark] { animation: none; }
+  /* The pending cue still waits its 900ms — a wait is not motion — and then simply appears. */
+  [data-composer-mark="pending"] { animation: sched-pending-in 1ms step-end 900ms backwards; }
   .sched-ledge-in { animation: none; }
-  /* The house pop-in / overlay-in carry no override of their own (Radix layers share them, and their exit
-     handshake is theirs to change); inside the slot — Create's arrival, the model's echo fading in — they
-     are this feature's motion, so they stop here. Found by driving the real box under emulated reduced
-     motion: Create still popped. */
   [data-schedule-slot] .pop-in,
   [data-schedule-slot] .overlay-in { animation: none; }
   [data-sched-flash] {

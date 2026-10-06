@@ -40,21 +40,20 @@ export function dismissOpenSelect(): boolean {
 }
 
 // ESCAPE CLAIMS: something INSIDE a dialog that owns the first Escape itself — the new-thread box's schedule
-// mode, which Escape leaves (plans/schedule-live-reading.md §7). Radix runs a dialog's Escape at the
-// document's capture phase, before any handler in the dialog's own tree, so the `c` dialog closed — taking
-// the box, its mode and the panel with it — before the box ever saw the key. A claim is asked first: it
-// returns true only when it ACTED (it left the mode), and then the dialog stays open; the next Escape, with
-// nothing left to claim, closes it as before.
+// strip, which Escape dismisses, or its held Enter, which Escape cancels (plans/schedule-live-reading.md). Radix
+// runs a dialog's Escape at the document's capture phase, before any handler in the dialog's own tree, so the
+// `c` dialog closed — taking the box and its strip with it — before the box ever saw the key. A claim is asked
+// first: it returns true only when it ACTED, and then the dialog stays open; the next Escape, with nothing left to
+// claim, closes it as before.
 //
-// A claim must decide for ITSELF whether this Escape is its: two boxes can be in the mode at once (the page
-// box and the `c` dialog over it share one draft), and only the one holding focus may take the key.
-// `focusedEscapeClaim` builds that check.
+// A claim must decide for ITSELF whether this Escape is its: two boxes can show one draft's strip at once (the
+// page box and the `c` dialog over it), and only the one holding focus may take the key. `focusedEscapeClaim`
+// builds that check.
 //
 // A claim can also PASS: the key is not the claim's, but it belongs to the focused editor, which has not seen
-// it yet — the box's open slash or mention menu (Escape closes it first, §7), or an IME composing (Escape is
-// its cancel). The dialog then stays open and the key goes on to the editor, exactly as on the page with no
-// dialog around the box. Before PASS the claim answered for the menu: in the dialog, Esc with a menu open
-// left the mode and kept the menu, one Enter from accepting its row (fix round 1, X4).
+// it yet — the box's open slash or mention menu (Escape closes it first), or an IME composing (Escape is its
+// cancel). The dialog then stays open and the key goes on to the editor, exactly as on the page with no dialog
+// around the box.
 export type EscapeVerdict = boolean | "pass"
 export type EscapeEvent = { isComposing?: boolean }
 type EscapeClaim = (event?: EscapeEvent) => EscapeVerdict

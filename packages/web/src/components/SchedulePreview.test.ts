@@ -1,75 +1,52 @@
-// The live preview's pure half (plans/schedule-live-reading.md §3.4, §5.6, §11): which parts render dim for
-// what the grammar assumed, the guessed-meridiem line, the next line it decorates, and the field's publish
-// points. The rendered pixels are checked in a real browser, not here.
+// The preview's pure half (SchedulePreview.tsx): what a model's rule will do, rebuilt from the rule and the clock —
+// its words, its zone, its condition, its next runs — and what the drawer's Change when shows for the words in its
+// field, with the last reading kept while new words are read and Save only on a reading of exactly those words.
+// The rendered pixels are checked in a real browser, not here.
 import assert from "node:assert/strict"
 import test from "node:test"
-import { compileSchedule, describeScheduleParts, readSchedulePhrase } from "@frizz/shared"
-import { UNPHRASABLE_COPY, changeWhenView, meridiemLine, previewSegments, schedulePreviewModel, unphrasableRule } from "./SchedulePreview.tsx"
-import type { InterpretScheduleResult } from "@frizz/shared"
-import type { ModelReadOk, ModelReadView } from "../lib/scheduleModelRead.ts"
-import { holdsQualifier, publishesNow } from "../lib/scheduleWhenField.ts"
+import { SCHEDULE_NOT_FOUND_COPY, type InterpretScheduleResult } from "@frizz/shared"
+import { CHANGE_WHEN_BUDGET_COPY, CHANGE_WHEN_FAILED_COPY, UNPHRASABLE_COPY, changeWhenView, describeRule, schedulePreviewModel, unphrasableRule } from "./SchedulePreview.tsx"
+import type { ModelReadOk } from "../lib/scheduleModelRead.ts"
 
 const NY = "America/New_York"
 const NOW = Date.parse("2026-10-05T14:32:00-04:00")
+const WEEKLY = { rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00" }
 
-function read(words: string) {
-  const r = readSchedulePhrase(words, { nowMs: NOW, tz: NY, scope: "field" })
-  assert.equal(r.kind, "exact", `${words} reads exact`)
-  if (r.kind !== "exact") throw new Error("unreachable")
-  return r
+function answer(words: string, rrule = WEEKLY.rrule, dtstart = WEEKLY.dtstart): ModelReadOk {
+  return {
+    ok: true, phrase: words, phraseStart: 0, phraseEnd: words.length, prompt: "", whenText: words, rrule,
+    dtstart, tz: NY, title: "Post digest", preview: { describe: "", echo: "", nextLine: "", upcoming: [] },
+  }
 }
 
-function segments(words: string) {
-  const r = read(words)
-  const c = compileSchedule({ rrule: r.rrule, dtstart: r.dtstart, tz: NY })
-  assert.ok(c.ok)
-  if (!c.ok) throw new Error("unreachable")
-  return previewSegments(describeScheduleParts(c.value, NOW), r.assumed)
-    .map((s) => (s.assumed ? `[${s.text}]` : s.text)).join("")
-}
-
-test("dim parts: a time nobody typed, the day of 'weekly', only the pm of 'at 3'", () => {
-  assert.equal(segments("every Monday at 9am"), "every Monday at 9am", "nothing assumed, nothing dim")
-  assert.equal(segments("every morning"), "every day at [9am]")
-  assert.equal(segments("weekly"), "every [Monday] at [9am]")
-  assert.equal(segments("every Thursday at 3"), "every Thursday at 3[pm]")
-  assert.equal(segments("weekdays at 8:30"), "every weekday at 8:30[am]")
-  assert.equal(segments("every Mon at 8 and 5"), "every Monday at 8[am] and 5[pm]")
-  assert.equal(segments("the 1st of every month"), "on the 1st of every month at [9am]")
-  // A window's pair settles its numbers: nothing is dim.
-  assert.equal(segments("every 2 hours on weekdays from 9 to 5"), "every 2 hours from 9am to 5pm on weekdays")
-})
-
-test("each dim part says why and how to change it", () => {
-  const r = read("every morning")
-  const c = compileSchedule({ rrule: r.rrule, dtstart: r.dtstart, tz: NY })
-  if (!c.ok) throw new Error("compiles")
-  const dim = previewSegments(describeScheduleParts(c.value, NOW), r.assumed).find((s) => s.assumed)
-  assert.equal(dim?.tip, "“Morning” reads as 9am. Add a time to change it.")
-  assert.equal(meridiemLine(read("every Thursday at 3").assumed), "Read “3” as 3pm. Type “3am” if you meant morning.")
-  assert.equal(meridiemLine(read("every weekday at 9").assumed), "Read “9” as 9am. Type “9pm” if you meant evening.")
-  assert.equal(meridiemLine(read("every Mon at 8 and 5").assumed), "Read “8” as 8am, “5” as 5pm. Add am or pm to change one.")
-  assert.equal(meridiemLine(read("every Monday at 9am").assumed), undefined)
-})
-
-test("the model: the echo's parts, its zone suffix, the condition, and the shared next line split", () => {
-  const r = read("every Monday at 9am")
-  const m = schedulePreviewModel({ title: "Triage issues", rrule: r.rrule, dtstart: r.dtstart, tz: NY, condition: "unless it's a holiday" }, NOW, NY)
+test("the model: the rule's words, its zone suffix, the condition, and the next runs from the clock", () => {
+  const m = schedulePreviewModel({ title: "Triage issues", ...WEEKLY, tz: NY, condition: "unless it's a holiday" }, NOW, NY)
   assert.ok(m.ok)
   if (!m.ok) return
+  assert.equal(m.describe, "every Monday at 9am")
   assert.equal(m.zone, "")
   assert.deepEqual(m.tail, ["unless it's a holiday"])
   assert.deepEqual(m.next, ["Mon Oct 12", "Mon Oct 19", "Mon Oct 26"])
   assert.equal(m.firstAt, "2026-10-12T13:00:00.000Z")
-  const away = schedulePreviewModel({ title: "Triage issues", rrule: r.rrule, dtstart: r.dtstart, tz: NY }, NOW, "Europe/Berlin")
+  const away = schedulePreviewModel({ title: "Triage issues", ...WEEKLY, tz: NY }, NOW, "Europe/Berlin")
   assert.ok(away.ok && away.zone === " New York time")
   // A dense rule names its runs a day and puts times on its dates.
-  const dense = read("every 15 minutes")
-  const d = schedulePreviewModel({ title: "Check deploy", rrule: dense.rrule, dtstart: dense.dtstart, tz: NY }, NOW, NY)
+  const d = schedulePreviewModel({ title: "Check deploy", rrule: "FREQ=HOURLY;BYMINUTE=0,15,30,45", dtstart: "2026-10-05T14:45", tz: NY }, NOW, NY)
   assert.ok(d.ok)
   if (d.ok) {
     assert.deepEqual(d.tail, ["96 runs a day"])
     assert.equal(d.next[0], "Mon Oct 5, 2:45pm")
+  }
+})
+
+test("the next runs move on with the clock, with no new read", () => {
+  const before = schedulePreviewModel({ title: "Triage issues", ...WEEKLY, tz: NY }, NOW, NY)
+  // A week and a day later, the same rule: the first run is the Monday after next.
+  const later = schedulePreviewModel({ title: "Triage issues", ...WEEKLY, tz: NY }, NOW + 8 * 86_400_000, NY)
+  assert.ok(before.ok && later.ok)
+  if (before.ok && later.ok) {
+    assert.equal(before.next[0], "Mon Oct 12")
+    assert.equal(later.next[0], "Mon Oct 19")
   }
 })
 
@@ -79,57 +56,34 @@ test("a rule checkSchedule refuses previews as its own words, with nothing to sa
   assert.match(!m.ok ? m.error : "", /never runs again/)
 })
 
-test("the field publishes at a word's end or a wholesale change, never mid-word", () => {
-  assert.equal(publishesNow("insertText", "every Monday ", 13), true)
-  assert.equal(publishesNow("insertText", "every Monday,", 13), true)
-  assert.equal(publishesNow("insertText", "every Mon", 9), false)
-  assert.equal(publishesNow("insertText", "every Monday at 9", 17), false)
-  // The caret, not the end of the text, decides: typing inside a word earlier in the field is mid-word.
-  assert.equal(publishesNow("insertText", "every Monday at 9am", 8), false)
-  assert.equal(publishesNow("insertFromPaste", "every Monday at 9am", 19), true)
-  assert.equal(publishesNow("historyUndo", "every Mon", 9), true)
-  assert.equal(publishesNow("deleteContentBackward", "every Monday at 9a", 18), false)
-  assert.equal(publishesNow("deleteContentBackward", "every Monday at ", 16), true)
-  assert.equal(publishesNow("deleteContentBackward", "", 0), true)
-})
-
-test("a qualifier still being typed holds the reading it qualifies; a finished one or another rule does not", () => {
-  const at = (words: string) => readSchedulePhrase(words, { nowMs: NOW, tz: NY, scope: "field" })
-  const thursday = at("every Thursday")
-  assert.equal(holdsQualifier(thursday, "every Thursday at", at("every Thursday at")), true, "the time is not typed yet")
-  const monday = at("every Monday")
-  assert.equal(holdsQualifier(monday, "every Monday unless", at("every Monday unless")), true)
-  // The cue's core is not what is on screen: a different rule is news.
-  assert.equal(holdsQualifier(monday, "every Thursday at", at("every Thursday at")), false)
-  // Finished: an exact reading is never held.
-  assert.equal(holdsQualifier(thursday, "every Thursday at 3pm", at("every Thursday at 3pm")), false)
-  // Nothing on screen to hold.
-  assert.equal(holdsQualifier(undefined, "every Thursday at", at("every Thursday at")), false)
-})
-
-// Fix round 3 (drawer-model-raw-rrule): the prompt box refuses a model reading `describeSchedule` cannot put in
-// words (fix round 1, model-raw-rrule-echo), but the drawer's Change when did not. Driven on a real stack: the
-// words `the second and fourth Monday` went to the model, its valid answer
-// `FREQ=MONTHLY;BYDAY=MO;BYSETPOS=2,4;BYHOUR=9;BYMINUTE=0` previewed as `Post digest · on the rule FREQ=…`
-// with Save enabled, Enter saved it, and the drawer header and the project row then read `on the rule FREQ=…`.
-// The human never confirms RRULE text (I-11): the Change when shows the panel's copy, and no Save.
-test("Change when: a model reading no words cover is refused with the panel's copy, never offered as RRULE text", () => {
-  const words = "the second and fourth Monday"
-  const answer = (rrule: string): ModelReadOk => ({
-    ok: true, phrase: words, phraseStart: 0, phraseEnd: words.length, prompt: "", whenText: words, rrule,
-    dtstart: "2026-10-12T09:00", tz: NY, title: "Post digest",
-    preview: { describe: "", echo: "", nextLine: "", upcoming: [] },
-  })
-  const readerFor = (result: InterpretScheduleResult) => ({ view: (): ModelReadView => ({ status: "answered", result }) })
-  const shown = { words, reading: readSchedulePhrase(words, { nowMs: NOW, tz: NY, scope: "field" }) }
-  assert.ok(shown.reading.kind === "none" || shown.reading.kind === "cue", `the grammar declines it (${shown.reading.kind}), so the model reads it`)
-
+test("the human never confirms RRULE text: a rule the house cannot phrase is refused with copy", () => {
   const raw = "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=2,4;BYHOUR=9;BYMINUTE=0"
   assert.equal(unphrasableRule(raw, "2026-10-12T09:00", NY), true, "the house's words for it would be `on the rule FREQ=…`")
-  assert.deepEqual(changeWhenView({ shown, reader: readerFor(answer(raw)), tz: NY, nowMs: NOW, stale: false }), { kind: "copy", copy: UNPHRASABLE_COPY })
+  assert.equal(unphrasableRule("FREQ=MONTHLY;BYDAY=2MO;BYHOUR=9;BYMINUTE=0", "2026-10-12T09:00", NY), false)
+  assert.equal(describeRule(WEEKLY.rrule, WEEKLY.dtstart, NY), "every Monday at 9am")
+  assert.deepEqual(changeWhenView({ view: { status: "answered", result: answer("the second and fourth Monday", raw) }, stale: undefined }), { kind: "copy", copy: UNPHRASABLE_COPY })
+})
 
-  // A rule the house CAN phrase is the model's reading, to save.
-  const phrased = "FREQ=MONTHLY;BYDAY=2MO;BYHOUR=9;BYMINUTE=0"
-  assert.equal(unphrasableRule(phrased, "2026-10-12T09:00", NY), false)
-  assert.equal(changeWhenView({ shown, reader: readerFor(answer(phrased)), tz: NY, nowMs: NOW, stale: false }).kind, "model")
+test("Change when: the field's own answer, a refusal said as copy, a failure and a spent budget", () => {
+  const words = "every Monday at 9am"
+  assert.deepEqual(changeWhenView({ view: { status: "answered", result: answer(words) }, stale: undefined }), { kind: "model", result: answer(words), fresh: true })
+  // The field means nothing but WHEN, so "couldn't find a schedule" is the answer to show, not a reason to keep quiet.
+  assert.deepEqual(changeWhenView({ view: { status: "answered", result: { ok: false, error: SCHEDULE_NOT_FOUND_COPY } }, stale: undefined }), { kind: "copy", copy: SCHEDULE_NOT_FOUND_COPY })
+  assert.deepEqual(changeWhenView({ view: { status: "answered", result: { ok: false, error: "Couldn't read that just now: overloaded" } }, stale: undefined }), { kind: "copy", copy: CHANGE_WHEN_FAILED_COPY })
+  assert.deepEqual(changeWhenView({ view: { status: "failed", message: "network down" }, stale: undefined }), { kind: "copy", copy: CHANGE_WHEN_FAILED_COPY })
+  assert.deepEqual(changeWhenView({ view: { status: "budget" }, stale: undefined }), { kind: "copy", copy: CHANGE_WHEN_BUDGET_COPY })
+})
+
+test("Change when, stale-while-revalidate: the last reading stays while new words are read, never to be saved", () => {
+  const before: InterpretScheduleResult = answer("every Monday at 9am")
+  const kept = changeWhenView({ view: { status: "reading" }, stale: before })
+  assert.deepEqual(kept, { kind: "model", result: before, fresh: false }, "kept, and `fresh: false` means no Save")
+  assert.deepEqual(changeWhenView({ view: { status: "none" }, stale: before }), { kind: "model", result: before, fresh: false }, "waiting out the idle")
+  assert.deepEqual(changeWhenView({ view: { status: "reading" }, stale: undefined }), { kind: "reading" }, "nothing before it: the reading line")
+  assert.deepEqual(changeWhenView({ view: { status: "none" }, stale: undefined }), { kind: "none" })
+  // A refusal of earlier words is not kept: only a reading is.
+  assert.deepEqual(changeWhenView({ view: { status: "reading" }, stale: { ok: false, error: SCHEDULE_NOT_FOUND_COPY } }), { kind: "reading" })
+  // The new answer replaces it in place.
+  const after = answer("every Tuesday at 9am", "FREQ=WEEKLY;BYDAY=TU;BYHOUR=9;BYMINUTE=0", "2026-10-06T09:00")
+  assert.deepEqual(changeWhenView({ view: { status: "answered", result: after }, stale: before }), { kind: "model", result: after, fresh: true })
 })

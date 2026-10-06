@@ -308,7 +308,7 @@ function PromptForm({
   })), [])
 
   // ENTER — and the send button, and ⌘↵, which is Enter here — is the one submit. The account aliases are
-  // settled first, as before; then the words decide (ScheduleComposer.tsx, lib/scheduleIntent.ts `submitAct`):
+  // settled first, as before; then the words decide (ScheduleComposer.tsx, lib/scheduleIntent.ts `submitStep`):
   // a schedule in them is created, anything else starts the thread through `startNow`, and words with a
   // schedule word the model has not answered for yet hold the send until it does.
   function submit() {

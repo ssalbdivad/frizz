@@ -367,10 +367,11 @@ export function Composer({
   // Send wears the repeat glyph and says "Create schedule", because Enter and a click create it and start
   // nothing. The glyph and Enter's act never disagree.
   sendGlyph?: "send" | "schedule"
-  // The send button's title, when the caller knows better than the default — a phone, which has no Enter to name.
+  // The send button's title, when the caller knows better than the default — a phone, which has no Enter to name,
+  // or a send that is being held (`sendPending`), which says what it is waiting for.
   sendTitle?: string
   // The caller is holding the send — checking the words for a schedule, or creating one — while the text stays
-  // live (unlike `busy`): the button spins and says so.
+  // live (unlike `busy`): the button spins.
   sendPending?: boolean
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
@@ -1578,7 +1579,7 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title={sendPending ? "Checking…" : sendTitle ?? (sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`)}
+        title={sendTitle ?? (sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`)}
         aria-label={sendGlyph === "schedule" ? "Create schedule" : "Send"}
         aria-busy={sendPending || undefined}
         data-composer-send={sendGlyph}

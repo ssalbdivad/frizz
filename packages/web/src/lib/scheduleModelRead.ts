@@ -27,6 +27,9 @@ import {
 //   budgeted. `reset` refills it when the draft starts over.
 // - A CALL THAT HANGS is given up after READ_TIMEOUT_MS: its text reads as failed and the queued text goes out.
 //   A verdict that arrives later is still cached.
+// - WHAT STAYS ON SCREEN while the words are read again (stale-while-revalidate) is the answer for the newest
+//   text the box itself showed before them, in the order they were typed (`useNewestAnswer`) — never simply
+//   the last answer to land, which can be an older text's, queued behind a newer one.
 //
 // The text is read as given. Callers send it TRIMMED: the server trims it anyway (`InterpretScheduleInput`),
 // and the answer's offsets index what it read, so a caller maps them onto its own text by adding the
@@ -120,13 +123,10 @@ export interface ModelReader {
   /** Drop the queued follow-up: the text no longer needs the model. */
   cancelQueued(): void
   view(text: string): ModelReadView
-  /** The newest answer that landed, for whatever text, and a number that grows with every landing — what a
-   *  reading shown while the next one is read (stale-while-revalidate) is taken from. */
-  lastAnswer(): { text: string; result: InterpretScheduleResult; seq: number } | undefined
   /** Automatic reads spent since the last reset. */
   spent(): number
-  /** Start over (the draft was cleared): the budget refills, and this session's failures, non-verdict answers
-   *  and last answer are forgotten. A read still out lands in the cache as usual. */
+  /** Start over (the draft was cleared): the budget refills, and this session's failures and non-verdict
+   *  answers are forgotten. A read still out lands in the cache as usual. */
   reset(): void
   subscribe(listener: () => void): () => void
 }
@@ -163,8 +163,6 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
   /** This session's answers that are not cached (non-verdicts), by text; bounded. */
   const answers = new Map<string, InterpretScheduleResult>()
   const failures = new Map<string, string>()
-  let last: { text: string; result: InterpretScheduleResult; seq: number } | undefined
-  let landings = 0
 
   const notify = () => { for (const l of [...listeners]) l() }
   const cached = (text: string) => cachedModelRead(deps.keyOf(text, now()), now())
@@ -209,7 +207,6 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
           answers.set(text, result)
           while (answers.size > 20) answers.delete(answers.keys().next().value!)
         }
-        last = { text, result, seq: ++landings }
         finish()
       },
       (error: unknown) => {
@@ -263,14 +260,12 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
       if (refusedForBudget === text) return { status: "budget" }
       return { status: "none" }
     },
-    lastAnswer: () => last,
     spent: () => spent,
     reset() {
       spent = 0
       refusedForBudget = undefined
       failures.clear()
       answers.clear()
-      last = undefined
       notify()
     },
     subscribe(listener) {
@@ -317,22 +312,45 @@ export function clearSharedModelReaders(): void {
   sharedReaders.clear()
 }
 
+/** How many earlier texts a box remembers, in the order they were typed, to find what to keep on screen. */
+export const TYPED_HISTORY_MAX = 24
+
+/** `history` with `text` moved to its newest end (it is the text on screen now), bounded. Empty text starts over. */
+export function typedHistory(history: readonly string[], text: string): readonly string[] {
+  if (!text) return []
+  if (history[history.length - 1] === text) return history
+  return [...history.filter((t) => t !== text), text].slice(-TYPED_HISTORY_MAX)
+}
+
 /**
- * The newest answer known for `text` or before it — what stays on screen while `text` is read
- * (stale-while-revalidate): the answer for `text` itself when there is one, else the newest that landed for any
- * earlier text, which is newer than what was shown when the typing outran the read. An answer found for the text
- * itself (a cache hit, an Undo) outranks every landing up to the moment it stops being the text — even one that
- * lands for an older text while it is shown. A failed read is no answer, so what was on screen before it stays.
- * Cleared with the text.
+ * What stays on screen while `text` is read (stale-while-revalidate): `text`'s own answer when there is one, else
+ * the answer for the newest text typed BEFORE it that has one. "Newest" is the typing order (`history`, oldest
+ * first), not the order the answers landed: with one read out and the latest text queued behind it, an older
+ * text's answer routinely lands after a newer one's was shown, and taking "the last to land" put the older
+ * reading back on screen. A failed read is no answer, so what was shown before it stays.
  */
+export function newestAnswer(
+  history: readonly string[],
+  text: string,
+  view: (text: string) => ModelReadView,
+): { text: string; result: InterpretScheduleResult } | undefined {
+  if (!text) return undefined
+  const own = view(text)
+  if (own.status === "answered" && !isFailedRead(own.result)) return { text, result: own.result }
+  for (let i = history.length - 1; i >= 0; i--) {
+    const before = history[i]!
+    if (before === text) continue
+    const v = view(before)
+    if (v.status === "answered" && !isFailedRead(v.result)) return { text: before, result: v.result }
+  }
+  return undefined
+}
+
+/** `newestAnswer` for a box: it keeps the box's own typing history. Cleared with the text. */
 export function useNewestAnswer(reader: ModelReader, text: string): { text: string; result: InterpretScheduleResult } | undefined {
-  const newest = useRef<{ text: string; result: InterpretScheduleResult; seq: number } | undefined>(undefined)
-  const view = reader.view(text)
-  const landed = reader.lastAnswer()
-  if (!text) newest.current = undefined
-  else if (view.status === "answered" && !isFailedRead(view.result)) newest.current = { text, result: view.result, seq: landed?.seq ?? 0 }
-  else if (landed && landed.seq > (newest.current?.seq ?? 0) && !isFailedRead(landed.result)) newest.current = landed
-  return newest.current
+  const history = useRef<readonly string[]>([])
+  history.current = typedHistory(history.current, text)
+  return newestAnswer(history.current, text, (t) => reader.view(t))
 }
 
 /** A reader for the component's lifetime — or, with `share`, the one every box on that draft uses — and a

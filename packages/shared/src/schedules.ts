@@ -45,28 +45,6 @@ export const SCHEDULE_PRESENCE_COPY = "Frizz can't tell when you're at the keybo
 export const SCHEDULE_SPACING_COPY = "Runs can't be closer than 15m apart."
 export const SCHEDULE_CAP_COPY = `A project can hold ${SCHEDULES_PER_PROJECT_MAX} schedules. Delete one first.`
 
-// ---- the server's two refusals of a local reading (plans/schedule-live-reading.md §10.1) ------------------
-// A rule the browser read with its own grammar (`source: { kind: "local" }`) is re-read on the server before
-// anything is written. Two outcomes refuse it, and the client answers each differently — re-read and show
-// what moved, or ask for a reload — so each is a CODE, not just words. The RPC error envelope carries one
-// readable string (packages/rpc/src/server.ts), so the code rides as the message's first word, the way
-// `AUTH_REQUIRED:claude` does, and `scheduleRefusalOf` reads it back off any thrown error.
-
-/** The words read differently on the server than they did in the browser (the minute rolled over, a
- *  midnight passed, or the page sent words it had not read): nothing was written; read them again. */
-export const SCHEDULE_READING_MOVED = "schedule-reading-moved"
-/** The page reads with a different grammar version than the server: nothing was written, and re-reading
- *  in the same page would only get the same answer — the page has to reload. */
-export const SCHEDULE_GRAMMAR_STALE = "schedule-grammar-stale"
-export type ScheduleRefusal = typeof SCHEDULE_READING_MOVED | typeof SCHEDULE_GRAMMAR_STALE
-
-/** Which of the two refusals an RPC failure is, or undefined for any other failure. */
-export function scheduleRefusalOf(error: unknown): ScheduleRefusal | undefined {
-  const message = error instanceof Error ? error.message : typeof error === "string" ? error : ""
-  const m = /^(schedule-reading-moved|schedule-grammar-stale)(?![\w-])/.exec(message)
-  return m ? (m[1] as ScheduleRefusal) : undefined
-}
-
 /** "America/New_York" → "New York"; a zone with no city reads as itself. */
 export function cityOfZone(tz: string): string {
   const last = tz.split("/").pop() ?? tz
@@ -386,15 +364,6 @@ const ScheduleFields = {
   backend: ScheduleBackend,
 }
 
-/** Where a rule came from, when it was not the model. `grammar` is the `SCHEDULE_GRAMMAR_VERSION` of the
- *  bundle that read it, so a tab running an old bundle after a server upgrade is told to reload instead of
- *  looping on a refused re-read (plans/schedule-live-reading.md §1.3.4). */
-export const ScheduleSource = z.object({
-  kind: z.literal("local"),
-  grammar: z.number().int().positive(),
-}).strict()
-export type ScheduleSource = z.infer<typeof ScheduleSource>
-
 /** A human's new schedule — the interpreter's result, confirmed. `tz` defaults to the reported zone. */
 export const CreateScheduleInput = z.object({
   title: ScheduleFields.title,
@@ -407,13 +376,10 @@ export const CreateScheduleInput = z.object({
   model: ScheduleFields.model,
   effort: ScheduleFields.effort.optional(),
   backend: ScheduleFields.backend.optional(),
-  /** The title is the browser's provisional one (`provisionalScheduleTitle`), so the server may rename it
-   *  once through the thread namer — only while nobody has touched the row since (plans/
-   *  schedule-live-reading.md §10.2). */
+  /** The title is the browser's provisional one (`provisionalScheduleTitle`) — the model named no task — so
+   *  the server may rename it once through the thread namer, only while nobody has touched the row since
+   *  (plans/schedule-live-reading.md). */
   titleAuto: z.literal(true).optional(),
-  /** The rule came from the browser's local grammar, not the model: the server re-reads `whenText` with
-   *  the same grammar and refuses a version skew or a reading that moved (§10.1). */
-  source: ScheduleSource.optional(),
 }).strict()
 export type CreateScheduleInput = z.infer<typeof CreateScheduleInput>
 
@@ -433,8 +399,6 @@ export const UpdateScheduleInput = z.object({
   model: ScheduleFields.model.optional(),
   effort: ScheduleFields.effort.optional(),
   backend: ScheduleFields.backend.optional(),
-  /** As on create: a rule read by the local grammar, which the server re-derives from `whenText`. */
-  source: ScheduleSource.optional(),
 }).strict()
 export type UpdateScheduleInput = z.infer<typeof UpdateScheduleInput>
 

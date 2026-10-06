@@ -9,16 +9,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { Hono } from "hono"
 import { mountRouter } from "@frizz/rpc/server"
-import {
-  SCHEDULE_GRAMMAR_STALE,
-  SCHEDULE_GRAMMAR_VERSION,
-  SCHEDULE_READING_MOVED,
-  parseScheduledRunPrompt,
-  readSchedulePhrase,
-  scheduleRefusalOf,
-  type BoardSnapshot,
-  type ThreadView,
-} from "@frizz/shared"
+import { parseScheduledRunPrompt, type BoardSnapshot, type ThreadView } from "@frizz/shared"
 import { createDispatcher } from "./dispatch.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, isLazyRow, isScheduledLazyRow } from "./storage.ts"
@@ -30,7 +21,7 @@ import type { Tailer } from "./tailer.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import { createLazyThreadStarter } from "./lazy-start.ts"
-import { createScheduleService, createStartCap, rederiveLocalReading, type ScheduleServiceDeps } from "./schedules.ts"
+import { createScheduleService, createStartCap, type ScheduleServiceDeps } from "./schedules.ts"
 
 const T = (iso: string) => Date.parse(iso)
 // Monday 2026-10-05, in UTC so the arithmetic reads off the page.
@@ -651,7 +642,7 @@ test("Mark as done then Undo before the next pass leaves the next run at its tim
   }
 })
 
-// ---- the provisional title's rename (plans/schedule-live-reading.md §10.2, §15.1 "Title compare-and-set") --
+// ---- the provisional title's rename (plans/schedule-live-reading.md, "Title compare-and-set") ------------------
 
 /** A namer whose answers the test releases by hand, recording what it was asked. */
 function heldNamer() {
@@ -758,150 +749,9 @@ test("titleAuto with no namer (FRIZZ_THREAD_NAMER=0) keeps the provisional title
   }
 })
 
-// ---- the server re-derives a local reading (plans/schedule-live-reading.md §10.1, §15.1 "Server") ---------
-// A rule the browser read with the local grammar arrives with `source`; the server reads `whenText` again with
-// the same grammar at its own clock and writes only a rule that reads back identically.
+// ---- the create over the wire ---------------------------------------------------------------------------------
 
-const LOCAL = { kind: "local" as const, grammar: SCHEDULE_GRAMMAR_VERSION }
-
-test("a local reading that reads back identically is created; a model reading (no source) is gated as before", async () => {
-  const h = harness()
-  try {
-    // At Mon 8am UTC "every Monday at 9am" first runs at 9am today: WEEKLY's own rrule and dtstart.
-    const view = h.service.create({ ...WEEKLY, source: LOCAL })
-    assert.equal(view.rrule, WEEKLY.rrule)
-    assert.equal(view.dtstart, WEEKLY.dtstart)
-    assert.ok(view.nextRun, "it is a real schedule, with its next run")
-    // A model reading may carry a rule the grammar would not read from these words (a condition, a guess):
-    // with no `source` nothing re-reads it.
-    const model = h.service.create({ ...WEEKLY, whenText: "every Monday unless it's a holiday", condition: "unless it's a holiday" })
-    assert.equal(model.condition, "unless it's a holiday")
-  } finally {
-    h.close()
-  }
-})
-
-test("a local reading whose rule or start differs is refused as schedule-reading-moved, and nothing is written", async () => {
-  const h = harness()
-  try {
-    const before = h.storage.allSessions().length
-    const cases = [
-      { ...WEEKLY, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=9;BYMINUTE=0" },
-      { ...WEEKLY, dtstart: "2026-10-12T09:00" },
-      // Words with more in them than a phrase: the field must be the WHOLE string.
-      { ...WEEKLY, whenText: "every Monday at 9am triage new issues" },
-      // Words the grammar hands to the model: a cue is never a local reading.
-      { ...WEEKLY, whenText: "every Monday at 9am unless it's a holiday" },
-    ]
-    for (const input of cases) {
-      assert.throws(() => h.service.create({ ...input, source: LOCAL }), (error: Error) => {
-        assert.equal(scheduleRefusalOf(error), SCHEDULE_READING_MOVED, error.message)
-        return true
-      })
-    }
-    assert.equal(h.storage.listSchedules().length, 0, "no schedule")
-    assert.equal(h.storage.allSessions().length, before, "and no next run")
-  } finally {
-    h.close()
-  }
-})
-
-test("the server's clock decides: a reading whose runs from now are the same is created at the server's start", async () => {
-  // Read in the browser at 14:39 UTC: "every day at 2:40pm" first runs at 14:40 today. Saved at 14:41 the
-  // same words start tomorrow — and every run from now on is the same run: created, at the server's start.
-  // (Until fix round 1 this was refused, and a browser whose clock ran behind the server's read the same
-  // start again, was refused a second time, and was told to reload.)
-  const h = harness({ nowMs: T("2026-10-05T14:41:00Z") })
-  try {
-    const read = { ...WEEKLY, whenText: "every day at 2:40pm", rrule: "FREQ=DAILY;BYHOUR=14;BYMINUTE=40", dtstart: "2026-10-05T14:40" }
-    const made = h.service.create({ ...read, source: LOCAL })
-    assert.equal(made.dtstart, "2026-10-06T14:40", "stored as the server reads it")
-    assert.equal(made.nextRun!.occurrenceAt, new Date(T("2026-10-06T14:40:00Z")).toISOString())
-  } finally {
-    h.close()
-  }
-})
-
-test("rederiveLocalReading: a start the clocks disagree on is accepted only when every run from now agrees (fix round 1)", () => {
-  const NY = "America/New_York"
-  // The skew repro: the browser reads "every 15 minutes" at 14:44:40 (first run 14:45), the server
-  // re-derives 30s later (first run 15:00). Same rule, same runs from the server's now.
-  const at = T("2026-10-05T14:44:40-04:00")
-  const read = readSchedulePhrase("every 15 minutes", { nowMs: at, tz: NY, scope: "field" })
-  assert.ok(read.kind === "exact")
-  assert.equal(read.dtstart, "2026-10-05T14:45")
-  for (const [skew, start] of [[2_000, "2026-10-05T14:45"], [30_000, "2026-10-05T15:00"], [90_000, "2026-10-05T15:00"]] as const) {
-    const dtstart = rederiveLocalReading(LOCAL, { whenText: "every 15 minutes", rrule: read.rrule, dtstart: read.dtstart, tz: NY }, at + skew)
-    assert.equal(dtstart, start, `server ${skew / 1000}s ahead: created, at the server's start`)
-  }
-  // Read identically: the start it was sent.
-  assert.equal(rederiveLocalReading(LOCAL, { whenText: "every 15 minutes", rrule: read.rrule, dtstart: read.dtstart, tz: NY }, at), "2026-10-05T14:45")
-  // A once is its start: a run the human saw that the server would not make is refused, never moved.
-  const once = readSchedulePhrase("today at 2:45pm", { nowMs: at, tz: NY, scope: "field" })
-  assert.ok(once.kind === "exact", "today at 2:45pm reads at 14:44:40")
-  assert.throws(
-    () => rederiveLocalReading(LOCAL, { whenText: "today at 2:45pm", rrule: once.rrule, dtstart: once.dtstart, tz: NY }, at + 30_000),
-    (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
-  )
-  // A count is anchored at its start: moving the start moves the last run, so it is refused too.
-  assert.throws(
-    () => rederiveLocalReading(LOCAL, { whenText: "every 15 minutes", rrule: `${read.rrule};COUNT=4`, dtstart: read.dtstart, tz: NY }, at + 30_000),
-    (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
-  )
-  // And a start that changes which runs come (an interval anchored elsewhere) is refused.
-  assert.throws(
-    () => rederiveLocalReading(LOCAL, { whenText: "every 2 days at 9am", rrule: "FREQ=DAILY;INTERVAL=2;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-07T09:00", tz: NY }, at),
-    (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
-  )
-})
-
-test("a grammar version the server does not run is refused as schedule-grammar-stale, before any re-read", async () => {
-  const h = harness()
-  try {
-    for (const grammar of [SCHEDULE_GRAMMAR_VERSION + 1, ...(SCHEDULE_GRAMMAR_VERSION > 1 ? [SCHEDULE_GRAMMAR_VERSION - 1] : [])]) {
-      // The words and the rule agree, so only the version can be what refuses it.
-      assert.throws(() => h.service.create({ ...WEEKLY, source: { kind: "local", grammar } }), (error: Error) => {
-        assert.equal(scheduleRefusalOf(error), SCHEDULE_GRAMMAR_STALE, error.message)
-        return true
-      })
-    }
-    assert.equal(h.storage.listSchedules().length, 0)
-  } finally {
-    h.close()
-  }
-})
-
-test("update: a local reading is re-derived against the words that will be stored", async () => {
-  const h = harness()
-  try {
-    const view = h.service.create(WEEKLY)
-    // Change when, read locally: "every Tuesday at 10am" at Mon 8am UTC first runs Tue Oct 6 10:00.
-    const tuesday = { whenText: "every Tuesday at 10am", rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", dtstart: "2026-10-06T10:00" }
-    const moved = (patch: object) => assert.throws(
-      () => h.service.update({ id: view.id, ...patch, source: LOCAL }),
-      (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
-    )
-    moved({ ...tuesday, dtstart: "2026-10-13T10:00" })
-    moved({ ...tuesday, rrule: WEEKLY.rrule })
-    // A rule sent without its words is held to the STORED words, which read as the old rule.
-    moved({ rrule: tuesday.rrule, dtstart: tuesday.dtstart })
-    assert.throws(
-      () => h.service.update({ id: view.id, ...tuesday, source: { kind: "local", grammar: SCHEDULE_GRAMMAR_VERSION + 1 } }),
-      (error: Error) => scheduleRefusalOf(error) === SCHEDULE_GRAMMAR_STALE,
-    )
-    const untouched = h.service.get(view.id).schedule
-    assert.equal(untouched.rrule, WEEKLY.rrule, "every refusal wrote nothing")
-    assert.equal(untouched.revision, view.revision)
-    const saved = h.service.update({ id: view.id, revision: view.revision, ...tuesday, tz: "UTC", source: LOCAL })
-    assert.equal(saved.rrule, tuesday.rrule)
-    assert.equal(saved.whenText, "every Tuesday at 10am")
-    assert.equal(saved.nextRun!.occurrenceAt, new Date(T("2026-10-06T10:00:00Z")).toISOString(), "the next run moved to the new rule")
-  } finally {
-    h.close()
-  }
-})
-
-test("the refusal's code survives the wire: the RPC envelope's error names it for the browser", async () => {
+test("createSchedule over the wire: a provisional title is accepted, and a field the schema does not know is refused", async () => {
   const h = harness()
   try {
     const app = new Hono()
@@ -912,28 +762,18 @@ test("the refusal's code survives the wire: the RPC envelope's error names it fo
         headers: { "content-type": "application/json" },
         body: JSON.stringify(input),
       })
-      return { status: response.status, json: await response.json() as { error?: string; result?: { id: string } } }
+      return { status: response.status, json: await response.json() as { error?: string; result?: { id: string; title: string } } }
     }
-    const stale = await post({ ...WEEKLY, source: { kind: "local", grammar: SCHEDULE_GRAMMAR_VERSION + 1 } })
-    assert.equal(stale.status, 500)
-    assert.equal(scheduleRefusalOf(stale.json.error), SCHEDULE_GRAMMAR_STALE, stale.json.error)
-    const moved = await post({ ...WEEKLY, dtstart: "2026-10-12T09:00", source: LOCAL })
-    assert.equal(scheduleRefusalOf(moved.json.error), SCHEDULE_READING_MOVED, moved.json.error)
-    const made = await post({ ...WEEKLY, source: LOCAL, titleAuto: true })
+    const made = await post({ ...WEEKLY, titleAuto: true })
     assert.equal(made.status, 200)
     assert.match(made.json.result!.id, /^sch_/)
-    // The schema refuses a source that is not the local grammar's.
-    const odd = await post({ ...WEEKLY, source: { kind: "model", grammar: 1 } })
-    assert.equal(odd.status, 400)
+    assert.equal(made.json.result!.title, "Triage issues")
+    // The retired local grammar's `source` (it never reached main): the strict schema refuses it outright
+    // rather than creating a rule nothing re-read.
+    const old = await post({ ...WEEKLY, source: { kind: "local", grammar: 4 } })
+    assert.equal(old.status, 400)
+    assert.equal(h.storage.listSchedules().length, 1)
   } finally {
     h.close()
   }
-})
-
-test("rederiveLocalReading: an invalid zone is said plainly, not as a moved reading", () => {
-  assert.throws(
-    () => rederiveLocalReading(LOCAL, { whenText: "every Monday at 9am", rrule: WEEKLY.rrule, dtstart: WEEKLY.dtstart, tz: "Mars/Olympus" }, MON_8AM),
-    (error: Error) => scheduleRefusalOf(error) === undefined && /not an IANA time zone/.test(error.message),
-  )
-  assert.doesNotThrow(() => rederiveLocalReading(undefined, { whenText: "anything", rrule: "x", dtstart: "y", tz: "Mars/Olympus" }, MON_8AM), "no source, no re-read")
 })

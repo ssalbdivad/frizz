@@ -25,15 +25,18 @@ import { modelReadKey, useModelReader, useNewestAnswer, type ModelReadOk } from 
 import { classifyEdit, createReadScheduler, type BoxInputEvent, type ChangeKind, type ReadScheduler } from "../lib/scheduleReadScheduler.ts"
 import {
   NO_TASK_COPY,
+  SUBMIT_READY,
   classifyResult,
   knownOf,
   liftsDismissal,
   phraseSpan,
   readTextOf,
   stripView,
-  submitAct,
+  submitStep,
   type ScheduleKnown,
-  type SubmitAct,
+  type SubmitEvent,
+  type SubmitFacts,
+  type SubmitPhase,
 } from "../lib/scheduleIntent.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -54,7 +57,7 @@ import type { ComposerMark } from "./Composer.tsx"
 // and the send button wears ↻: Enter creates that schedule. × (or Esc) says "not a schedule", and Enter starts
 // the thread. Text with no schedule word looks exactly as the box always has; words with one that turn out not
 // to be a schedule ("fix the bug from this morning") show nothing but a faint mark on the word while the read is
-// out. What each submit does is lib/scheduleIntent.ts (`submitAct`), pure and tested; this file executes it.
+// out. What each submit does is lib/scheduleIntent.ts (`submitStep`), pure and tested; this file executes it.
 
 /** What the box hands in. */
 export interface LiveScheduleInput {
@@ -105,11 +108,11 @@ export interface LiveSchedule {
 
 // ---- copy -------------------------------------------------------------------------------------------------------
 
-const HOLD_COPY = "Checking for a schedule…"
-const FAIL_COPY = "Couldn't check for a schedule."
-const UNDONE_COPY = "Schedule undone."
+export const HOLD_COPY = "Checking for a schedule…"
+export const FAIL_COPY = "Couldn't check for a schedule."
+export const UNDONE_COPY = "Schedule undone."
 /** What every line that is not a schedule ends with: what Enter does now. A phone names its send button. */
-const startsNow = (phone: boolean) => (phone ? "Send starts it now." : "Enter starts it now.")
+export const startsNow = (phone: boolean) => (phone ? "Send starts it now." : "Enter starts it now.")
 /** The interpreter's title when the model gave none (schedule-interpreter.ts): such a schedule is created with
  *  the box's provisional title and `titleAuto`, so the thread namer names it. */
 const UNNAMED_TITLE = "Scheduled run"
@@ -135,7 +138,7 @@ const firstLine = (s: string) => s.split("\n")[0] ?? ""
 
 /** A reading the box cannot put on screen or save becomes a refusal: a rule with no words for it (never ask the
  *  human to confirm RRULE text), or nothing left to run once the phrase is cut. */
-function vetter(prose: string, readText: string, promptOf: (cut: string) => string) {
+export function vetter(prose: string, readText: string, promptOf: (cut: string) => string) {
   return (r: ModelReadOk): string | undefined => {
     if (unphrasableRule(r.rrule, r.dtstart, r.tz)) return UNPHRASABLE_COPY
     const span = phraseSpan(prose, readText, r)
@@ -225,10 +228,11 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   // ---- the dismissal ----------------------------------------------------------------------------------------
 
   const dismissed = draft.dismissed
-  // "Not a schedule" holds until the model reads a different phrase out of the words, or none (it was said
-  // about those words, and they are gone). Written back, so editing back to the old phrase reads it afresh.
+  // "Not a schedule" holds until the phrase it was said about is gone: no schedule word is left, or the model
+  // reads a different phrase out of the words, or none. Written back, so editing back to the old phrase reads it
+  // afresh.
   useEffect(() => {
-    if (trigger && liftsDismissal(known, dismissed)) setDraft(SCHEDULE_DRAFT_NONE)
+    if (liftsDismissal({ trigger, known, dismissed })) setDraft(SCHEDULE_DRAFT_NONE)
   }, [trigger, known, dismissed])
   const dismiss = (phrase: string) => setDraft({ v: 2, dismissed: phrase })
 
@@ -272,6 +276,8 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   })
   const draftCreating = useDraftCreating(draftKey)
   const creating = committing || draftCreating
+  const creatingRef = useRef(creating)
+  creatingRef.current = creating
 
   /** Undo: delete the schedule, put the words back — merged with anything typed since, the chips, the pick — and
    *  DISMISS the reading, so Enter now starts the thread; the strip says so, with Schedule it to take it back.
@@ -291,20 +297,22 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     )
   }
 
+  /** Create `result`, read from exactly the words in the box now (the submit machine never hands it another). */
   const commit = (result: ModelReadOk) => {
     const now = latest.current
-    if (!now.profile || creating) return
-    const span = phraseSpan(prose, text, result)
-    const prompt = span ? now.promptOf(cutPhrase(prose, span)) : ""
+    if (!now.profile || creatingRef.current) return
+    const words = now.prose
+    const span = phraseSpan(words, readTextOf(words), result)
+    const prompt = span ? now.promptOf(cutPhrase(words, span)) : ""
     if (!prompt) return
     const named = result.title.trim() !== "" && result.title !== UNNAMED_TITLE
     create.mutate({
-      prose,
+      prose: words,
       phrase: result.phrase,
       startedAt: Date.now(),
-      draftKey,
+      draftKey: now.draftKey,
       onCreated: now.onCreated,
-      landed: beginDraftCreate(draftKey),
+      landed: beginDraftCreate(now.draftKey),
       input: {
         // The model's title when it gave one; else the box's provisional title, which the namer replaces.
         title: named ? result.title : provisionalScheduleTitle(prompt),
@@ -324,59 +332,44 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   // ---- submit -----------------------------------------------------------------------------------------------
 
-  // A HELD ENTER: the text has a schedule word and no answer yet. The send spins, a line says what it is waiting
-  // for, and the answer decides; typing cancels it, and it gives up after HOLD_TIMEOUT_MS.
-  const [hold, setHold] = useState<{ text: string; since: number } | null>(null)
-  // The text a held Enter could not check: "Couldn't check for a schedule", and the next Enter starts it now.
-  const [failShown, setFailShown] = useState<string | null>(null)
-
-  const perform = (act: SubmitAct, forText: string) => {
-    switch (act.act) {
-      case "dispatch":
-        setFailShown(null)
-        latest.current.startNow()
-        return
-      case "create":
-        commit(act.result)
-        return
-      case "hold":
-        setFailShown(null)
-        setHold({ text: forText, since: Date.now() })
-        // Read now, past the budget: a submit always asks.
-        readerRef.current.request(forText, { explicit: true })
-        return
-      case "stop":
-        if (act.why === "failed") setFailShown(forText)
-        return
+  // THE SUBMIT MACHINE (lib/scheduleIntent.ts `submitStep`): Enter dispatches, creates, or HOLDS for the answer
+  // about exactly these words — the send spins and, after a beat, a line says what it is waiting for; typing
+  // cancels it; it gives up after HOLD_TIMEOUT_MS with "Couldn't check for a schedule", and the next Enter starts
+  // the thread. This hook only runs the steps.
+  const [phase, setPhase] = useState<SubmitPhase>(SUBMIT_READY)
+  const phaseRef = useRef(phase)
+  const facts: SubmitFacts = { text, trigger, known, dismissed }
+  const factsRef = useRef(facts)
+  factsRef.current = facts
+  const step = (event: SubmitEvent) => {
+    const next = submitStep(phaseRef.current, event, factsRef.current)
+    if (next.phase !== phaseRef.current) {
+      phaseRef.current = next.phase
+      setPhase(next.phase)
     }
+    const then = next.then
+    if (!then) return
+    if (then.run === "dispatch") latest.current.startNow()
+    else if (then.run === "create") commit(then.result)
+    // A held Enter always asks, past the budget; a text already out is not sent twice.
+    else readerRef.current.request(factsRef.current.text, { explicit: true })
   }
+  const stepRef = useRef(step)
+  stepRef.current = step
+  // The answer landing, an edit, a dismissal: a held Enter acts on what is now known, or is cancelled.
+  useEffect(() => stepRef.current({ type: "update" }), [text, trigger, known, dismissed])
+  useEffect(() => {
+    if (phase.kind !== "holding") return
+    const t = setTimeout(() => stepRef.current({ type: "timeout" }), Math.max(0, HOLD_TIMEOUT_MS - (Date.now() - phase.since)))
+    return () => clearTimeout(t)
+  }, [phase])
+  const holding = phase.kind === "holding"
+  const holdNote = useDelayedTrue(holding, HOLD_NOTE_DELAY_MS)
 
   const submit = () => {
-    if (creating || hold) return
-    perform(submitAct({ trigger, known, dismissed, failShown: failShown === text, at: "enter" })!, text)
+    if (creatingRef.current) return
+    step({ type: "enter", now: Date.now() })
   }
-
-  useEffect(() => {
-    if (!hold) return
-    if (hold.text !== text) {
-      // Typing during the hold cancels it; Enter again submits.
-      setHold(null)
-      return
-    }
-    const act = submitAct({ trigger, known, dismissed, failShown: false, at: "landed" })
-    if (!act) return
-    setHold(null)
-    perform(act, hold.text)
-  }, [hold, text, trigger, known, dismissed])
-  useEffect(() => {
-    if (!hold) return
-    const t = setTimeout(() => {
-      setHold(null)
-      setFailShown(hold.text)
-    }, Math.max(0, HOLD_TIMEOUT_MS - (Date.now() - hold.since)))
-    return () => clearTimeout(t)
-  }, [hold])
-  const holdNote = useDelayedTrue(hold !== null, HOLD_NOTE_DELAY_MS)
 
   // ---- what the box draws -------------------------------------------------------------------------------------
 
@@ -388,10 +381,12 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     stale,
     dismissed: dismissed ? { phrase: dismissed, undone: draft.undone === true } : undefined,
   })
-  const failed = failShown === text && (known.kind === "pending" || known.kind === "failed")
+  // A reading of earlier words is being replaced: the read for these is out, or due once the typing rests.
+  const revalidating = strip.kind === "schedule" && !strip.fresh && (view.status === "reading" || view.status === "none")
+  const failed = phase.kind === "failed" && phase.text === text
   const onEscape = () => {
-    if (hold) {
-      setHold(null)
+    if (phaseRef.current.kind === "holding") {
+      step({ type: "escape" })
       return true
     }
     if (strip.kind === "schedule" && !creating) {
@@ -405,33 +400,33 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   if (strip.kind === "schedule") {
     const span = phraseSpan(prose, strip.readText, strip.result)
     if (span) marks.push({ ...span, tone: creating ? "wash" : "accepted", key: `p:${span.start}` })
-  } else if (strip.kind === "pending" && !hold) {
+  } else if (strip.kind === "pending" && !holding) {
     // The faint cue: a read of these words is out. It fades in late (styles.css), so a quick answer never shows it.
     for (const s of scheduleTriggerSpans(prose, exclude)) marks.push({ start: s.start, end: s.end, tone: "pending", key: `t:${s.start}` })
   }
 
   let line: { kind: string; node: ReactNode; announce: string } | null = null
-  if (hold && holdNote) {
+  if (holding && holdNote) {
     line = { kind: "hold", announce: HOLD_COPY, node: <ScheduleSlot kind="hold" phone={phone} line={<span data-schedule-copy className="min-w-0 flex-1 shimmer-text">{HOLD_COPY}</span>} /> }
   } else if (failed) {
     const copy = `${FAIL_COPY} ${startsNow(phone)}`
     line = {
       kind: "failed",
       announce: copy,
-      node: <ScheduleSlot kind="failed" phone={phone} line={<CopyLine copy={copy} action={{ label: "Try again", run: () => perform({ act: "hold" }, text) }} />} />,
+      node: <ScheduleSlot kind="failed" phone={phone} line={<CopyLine copy={copy} action={{ label: "Try again", run: () => step({ type: "enter", now: Date.now(), retry: true }) }} />} />,
     }
   } else if (strip.kind === "schedule") {
     const each = eachRun(prose, strip.readText, strip.result, promptOf)
     const describe = describeRule(strip.result.rrule, strip.result.dtstart, strip.result.tz)
     line = {
       kind: "schedule",
-      announce: `${phone ? "Send" : "Enter"} schedules this: ${describe}.${phone ? "" : " Esc starts it now instead."}`,
+      announce: `${phone ? "Send" : "Enter"} schedules this: ${describe}.${phone ? "" : " Esc if it is not a schedule."}`,
       node: (
         <ScheduleSlot
           kind="schedule"
           phone={phone}
-          updating={!strip.fresh}
-          line={<StripLine result={strip.result} nowMs={nowMs} tz={tz} phone={phone} updating={!strip.fresh} onClose={creating ? undefined : () => dismiss(strip.result.phrase)} />}
+          updating={revalidating}
+          line={<StripLine result={strip.result} nowMs={nowMs} tz={tz} phone={phone} updating={revalidating} onClose={creating ? undefined : () => dismiss(strip.result.phrase)} />}
           body={each ? <EachRunLine each={each} /> : undefined}
         />
       ),
@@ -458,15 +453,15 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   const current = line?.node ?? null
   const slot = useLinger(current, SLOT_LINGER_MS)
-  const schedules = strip.kind === "schedule" && !hold
+  const schedules = strip.kind === "schedule" && !holding
   return {
     marks,
     slot,
     slotOpen: current !== null,
     announcement,
     sendGlyph: schedules ? "schedule" : "send",
-    sendTitle: schedules ? (phone ? "Create schedule" : "Create schedule (Enter)") : undefined,
-    sendPending: hold !== null || creating,
+    sendTitle: holding ? HOLD_COPY : creating ? "Creating the schedule…" : schedules ? (phone ? "Create schedule" : "Create schedule (Enter)") : undefined,
+    sendPending: holding || creating,
     creating,
     submit,
     onEscape,
@@ -483,13 +478,13 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
 /** The first line of what each run would be sent: the prompt with the phrase cut out, from the prose as it is
  *  now (the phrase found in it, for a reading of an earlier text), else from the words the model read. */
-function eachRun(prose: string, readText: string, result: ModelReadOk, promptOf: (cut: string) => string): string {
+export function eachRun(prose: string, readText: string, result: ModelReadOk, promptOf: (cut: string) => string): string {
   const span = phraseSpan(prose, readText, result)
   const prompt = span ? promptOf(cutPhrase(prose, span)) : promptOf(cutPhrase(readText, { start: result.phraseStart, end: result.phraseEnd }))
   return firstLine(prompt)
 }
 
-function toastDetail(view: ScheduleView, nowMs: number): string | undefined {
+export function toastDetail(view: ScheduleView, nowMs: number): string | undefined {
   const describe = capitalize(view.describe)
   const first = view.upcoming[0]
   if (!first) return describe
