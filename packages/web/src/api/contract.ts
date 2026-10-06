@@ -44,6 +44,7 @@ import type {
   RunTerminalInput,
   StartTerminalResult,
   ThreadWorkingDir,
+  ThreadStats,
   ProjectQueue,
   ThreadHandoff,
   UpsertOwnLinkInput,
@@ -419,6 +420,8 @@ export interface Api {
   accountLogout(input: AccountLogoutInput): Promise<AccountLogoutResult>
   // A thread's TERMINALS (server thread-terminals.ts): where a new one would start, and its verbs.
   threadWorkingDir(input: { slug: string }): Promise<ThreadWorkingDir>
+  // The ⋯ menu's Thread info: what the thread has consumed (server thread-stats.ts).
+  threadStats(input: { slug: string }): Promise<ThreadStats>
   terminalStart(input: StartTerminalInput): Promise<StartTerminalResult>
   terminalStop(input: TerminalInput): Promise<Record<never, never>>
   terminalRestart(input: TerminalInput): Promise<Record<never, never>>
@@ -633,6 +636,7 @@ export const PROCEDURES = {
   authStatus: "query",
   accountLogout: "mutation",
   threadWorkingDir: "query",
+  threadStats: "query",
   terminalStart: "mutation",
   terminalStop: "mutation",
   terminalRestart: "mutation",

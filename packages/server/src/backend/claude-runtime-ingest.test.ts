@@ -373,6 +373,21 @@ test("context window: the init alias picks THIS thread's row out of a multi-mode
   ingest.close()
 })
 
+// The thread info view's live cost: the newest result's cumulative figure, latched per session and
+// kept through a result that omits it (a telemetry gap must not blank a reading already shown).
+test("session cost: the newest result's total wins, a result without one keeps it, release forgets it", async () => {
+  const ingest = createClaudeRuntimeIngest({ nudge: () => {} })
+  assert.equal(ingest.totalCost(sessionId), undefined)
+  ingest.onEvent("t", sessionId, { ...ev.result, totalCostUsd: 0.5 } as ClaudeQueryEvent)
+  ingest.onEvent("t", sessionId, { ...ev.result, totalCostUsd: 1.75 } as ClaudeQueryEvent)
+  ingest.onEvent("t", sessionId, ev.result)
+  await ingest.drain()
+  assert.equal(ingest.totalCost(sessionId), 1.75)
+  ingest.release(sessionId)
+  assert.equal(ingest.totalCost(sessionId), undefined)
+  ingest.close()
+})
+
 test("context window: no alias + more than one billed model reports NOTHING", async () => {
   // A wrong denominator is worse than none: the dial would silently read against a sub-agent's window.
   const ingest = createClaudeRuntimeIngest({ nudge: () => {} })

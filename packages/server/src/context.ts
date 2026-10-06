@@ -172,6 +172,9 @@ export interface AppContext {
   // Session-broker bridge for Claude: the detached daemon that owns every claude thread's SDK session.
   // Undefined only under the FRIZZ_CLAUDE_BROKER_BRIDGE="0" kill switch, which leaves claude no transport.
   claudeBroker?: ClaudeAgentBrokerBridge
+  // The broker's event fold (backend/claude-runtime-ingest.ts), for readings only it has — the live
+  // session cost the thread info view shows. Undefined exactly when `claudeBroker` is.
+  claudeRuntimeIngest?: ClaudeRuntimeIngest
   board: BoardManager
   tailer: Tailer
   dispatcher: Dispatcher
@@ -1315,6 +1318,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     codexAppServer,
     acpBridge,
     claudeBroker,
+    claudeRuntimeIngest,
     board,
     tailer,
     dispatcher,

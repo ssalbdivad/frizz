@@ -3559,6 +3559,50 @@ export const ThreadWorkingDir = z.object({
 }).strict()
 export type ThreadWorkingDir = z.infer<typeof ThreadWorkingDir>
 
+// THE THREAD INFO VIEW (⋯ menu → Thread info): what a thread has consumed, read off its own transcript
+// by server thread-stats.ts. Token buckets follow the API's accounting: `input` is fresh input only, and
+// `cacheRead` / `cacheWrite` are the prompt prefix read back from or newly written to the cache, so a
+// request's whole input is the three summed. Codex reports no cache writes; its `cacheWrite` stays 0.
+export const ThreadTokenUsage = z.object({
+  input: z.number(),
+  cacheWrite: z.number(),
+  cacheRead: z.number(),
+  output: z.number(),
+}).strict()
+export type ThreadTokenUsage = z.infer<typeof ThreadTokenUsage>
+
+export const ThreadModelUsage = z.object({
+  model: z.string(),
+  requests: z.number(),
+  tokens: ThreadTokenUsage,
+}).strict()
+export type ThreadModelUsage = z.infer<typeof ThreadModelUsage>
+
+export const ThreadStats = z.object({
+  backend: z.enum(["claude", "codex", "acp"]),
+  // False when there is no transcript to read (an ACP thread, a session that never started): every
+  // count below is then zero and means "unknown", not "none".
+  recorded: z.boolean(),
+  startedAt: z.string().optional(),
+  lastActivityAt: z.string().optional(),
+  // Times the agent was set going: a prompt, a follow-up, a wake. Tool results do not count.
+  turns: z.number(),
+  // Model requests, the unit the provider bills.
+  requests: z.number(),
+  toolCalls: z.number(),
+  compactions: z.number(),
+  subAgents: z.number(),
+  // The thread's own requests, then its sub-agents' — kept apart so the cost of fanning out is visible.
+  tokens: ThreadTokenUsage,
+  subAgentTokens: ThreadTokenUsage,
+  models: z.array(ThreadModelUsage),
+  // Claude only: what Claude Code prices the session at, at API rates (on a subscription this is what
+  // the work would have cost, not a charge). `partial`: the newest reading predates later requests,
+  // so the true figure is higher.
+  cost: z.object({ usd: z.number(), partial: z.boolean() }).strict().optional(),
+}).strict()
+export type ThreadStats = z.infer<typeof ThreadStats>
+
 /** One spinoff edge as a thread sees it — either end. `childSlug` is null while the parent has not yet
  *  dispatched it. */
 export const SpinoffView = z.object({

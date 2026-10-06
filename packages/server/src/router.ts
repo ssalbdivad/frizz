@@ -67,6 +67,7 @@ import {
   TerminalInput,
   StartTerminalResult,
   ThreadWorkingDir,
+  ThreadStats,
   BackgroundShellOutputInput,
   BackgroundShellOutputResult,
   RenameThreadInput,
@@ -201,6 +202,7 @@ import {
   threadTranscriptSource,
   withSpinoffChildOrigin,
 } from "./transcript.ts"
+import { readThreadStats, unrecordedStats } from "./thread-stats.ts"
 import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
 import { reviewTargetOf } from "./review-target.ts"
 import { openExternalUrl } from "./open-external.ts"
@@ -5257,6 +5259,21 @@ export function createRouter(ctx: AppContext) {
       input: SlugInput,
       output: ThreadWorkingDir,
       handler: async ({ input }) => threadWorkingDir(input.slug),
+    }),
+
+    // THE THREAD INFO VIEW (⋯ menu → Thread info): tokens, turns, requests and cost, read off the
+    // thread's transcript on demand (thread-stats.ts says why not off the fold).
+    threadStats: query({
+      input: SlugInput,
+      output: ThreadStats,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`no session registered for ${input.slug}`)
+        const backend = row.backend === "codex" ? "codex" : row.backend === "acp" ? "acp" : "claude"
+        const source = threadTranscriptSource(ctx.project, ctx.storage, input.slug, ctx.backendFor)
+        if (!source) return unrecordedStats(backend)
+        return readThreadStats(source, source.backend === "claude" ? ctx.claudeRuntimeIngest?.totalCost(row.session_id) : undefined)
+      },
     }),
 
     terminalStart: mutation({

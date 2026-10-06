@@ -1702,6 +1702,7 @@ function mapResult(raw: Record<string, unknown>): ClaudeQueryEvent {
     result: optionalText(raw.result, "result.result", CLAUDE_AGENT_SDK_MAX_EVENT_TEXT_BYTES),
     errors: raw.errors === undefined ? [] : boundedStringArray(raw.errors, "result.errors", 32, 8 * 1024),
     ...(windows === undefined ? {} : { modelContextWindows: windows }),
+    ...(typeof raw.total_cost_usd === "number" && Number.isFinite(raw.total_cost_usd) && raw.total_cost_usd >= 0 ? { totalCostUsd: raw.total_cost_usd } : {}),
   }
 }
 

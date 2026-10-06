@@ -259,6 +259,12 @@ export interface ClaudeResultEvent {
    * the session.
    */
   modelContextWindows?: Record<string, number>
+  /**
+   * What Claude Code prices the session at so far (`total_cost_usd`), at API rates whatever the plan.
+   * Cumulative for the session — a resumed session carries its earlier cost forward — so the latest
+   * reading is the whole figure. Optional for the same reason as the windows: it is telemetry.
+   */
+  totalCostUsd?: number
 }
 
 export interface ClaudePromptSuggestionEvent {
