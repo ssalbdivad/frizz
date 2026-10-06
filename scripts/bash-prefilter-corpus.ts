@@ -7,17 +7,21 @@
 //
 //   nub scripts/bash-prefilter-corpus.ts --out <file.jsonl>                     every distinct input
 //   nub scripts/bash-prefilter-corpus.ts --fixture <file.jsonl> [--only <re>]   the checked-in sample
+//   nub scripts/bash-prefilter-corpus.ts --fixture <file.jsonl> --from <in.jsonl>   re-sample a corpus file
 //
 // Each output line is `{"cwd", "subAgent", "tool_input"}`: everything that varies per call. The test
 // wraps it in the envelope (hookStdin) to get the exact bytes Claude writes. The full corpus is a
-// one-off (it is the maintainer's private history); the fixture is a bounded, secret-screened sample
-// restricted by default to this repo's own transcripts, and is what
-// packages/server/src/bash-background-prefilter.test.ts replays on every run.
+// one-off (it is the maintainer's private history); the fixture is a bounded, secret-screened,
+// STRATIFIED sample (pickFixture) restricted by default to this repo's own transcripts, and is what
+// packages/server/src/bash-background-prefilter.test.ts replays on every run. `--from` reads entries
+// from an existing corpus or fixture file instead of the transcripts — how the 2026-10-06 fixture was
+// cut from the 2026-10-02 one without letting any new history into the repo.
 import { execFileSync } from "node:child_process"
-import { createReadStream, readdirSync, statSync, writeFileSync } from "node:fs"
+import { createReadStream, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir, userInfo } from "node:os"
 import { join } from "node:path"
 import { createInterface } from "node:readline"
+import { bashHookResponse } from "../cc-worker/hooks/bash-background.mjs"
 
 const args = process.argv.slice(2)
 const flag = (name: string) => {
@@ -26,6 +30,7 @@ const flag = (name: string) => {
 }
 const out = flag("--out")
 const fixture = flag("--fixture")
+const from = flag("--from")
 const only = new RegExp(flag("--only") ?? (fixture ? "^-home-ssalb-frizz" : "."))
 const root = flag("--root") ?? join(homedir(), ".claude", "projects")
 if (!out && !fixture) throw new Error("usage: bash-prefilter-corpus.ts --out <file> | --fixture <file> [--only <re>] [--root <dir>]")
@@ -53,7 +58,10 @@ const entries: Entry[] = []
 let files = 0
 let toolUses = 0
 
-for (const project of readdirSync(root)) {
+if (from) {
+  for (const line of readFileSync(from, "utf8").split("\n")) if (line) entries.push(JSON.parse(line) as Entry)
+}
+for (const project of from ? [] : readdirSync(root)) {
   if (!only.test(project)) continue
   const projectDir = join(root, project)
   // Other sessions create and delete throwaway projects while this runs; a vanished one is skipped.
@@ -125,9 +133,55 @@ if (fixture) {
   let seed = 0x2f6b
   const rand = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff
   const shuffled = eligible.map((e) => [rand(), e] as const).sort((a, b) => a[0] - b[0]).map(([, e]) => e)
-  // Over-sample the inputs that exercise a check, so every branch of the pre-filter is hit by real text.
-  const interesting = (e: Entry) => /&|"timeout"|run_in_background|worktree|\\u/.test(JSON.stringify(e))
-  const picked = [...shuffled.filter(interesting).slice(0, 700), ...shuffled.filter((e) => !interesting(e)).slice(0, 300)]
+  const picked = pickFixture(shuffled)
   writeFileSync(fixture, picked.map((e) => line(scrub(e) as Entry)).join("\n") + "\n")
   console.error(`fixture: ${picked.length} of ${eligible.length} eligible (${entries.length - eligible.length} over 2KB or secret-shaped)`)
+}
+
+// A STRATIFIED SAMPLE of ~100, not a random 1,000 (2026-10-06). The random draw (700 inputs that held a
+// trigger, 300 that did not) made the test replay 1,000 real calls on every run to reach the 22 that node
+// acts on; the branches are what the sample is for, so it is cut by them instead. Each stratum keeps the
+// first few of the shuffled entries in it:
+//   - every input node ACTS on (a denial or advice), up to ACTED per answer, worker and sub-agent apart:
+//     the real calls each skip check exists to send to node;
+//   - inputs node answers `{}` but that hold a trigger the pre-filter must still hand off on (a `\u`
+//     escape, the word `worktree`, a bare `&`, a `run_in_background` or `timeout` key), up to HANDED per
+//     trigger and side: the pre-filter's conservative hand-offs on real text;
+//   - PLAIN inputs with none of those, per side: the calls the pre-filter exists to answer itself.
+// The labels below only sort entries into strata; the test, not this, decides what is right.
+function pickFixture(shuffled: Entry[]): Entry[] {
+  const ACTED = 10
+  const HANDED = 3
+  const PLAIN = 25
+  const worker = { FRIZZ_THREAD: "thread-under-test" }
+  const answer = (e: Entry) => {
+    const stdin = JSON.stringify({ cwd: e.cwd, ...(e.subAgent ? { agent_id: "a1" } : {}), tool_input: e.tool_input })
+    const out = JSON.stringify(bashHookResponse(stdin, ["node", "bash-background.mjs"], worker))
+    if (out === "{}") return undefined
+    if (/"permissionDecision":"deny"/.test(out)) return /worktree/i.test(out) ? "deny worktree" : "deny job"
+    return e.tool_input.run_in_background === true ? "advice background" : "advice timeout"
+  }
+  const trigger = (e: Entry) => {
+    const text = JSON.stringify(e)
+    const command = typeof e.tool_input.command === "string" ? e.tool_input.command : ""
+    if (/\\u/.test(text)) return "unicode-escape"
+    if (/worktree(?![A-Za-z0-9_])/.test(command)) return "worktree"
+    if (/(?:^|[^&<>])&(?![&>])/.test(command)) return "ampersand"
+    if ("run_in_background" in e.tool_input) return "background"
+    if ("timeout" in e.tool_input) return "timeout"
+    return undefined
+  }
+  const taken = new Map<string, number>()
+  const picked: Entry[] = []
+  for (const e of shuffled) {
+    const acted = answer(e)
+    const handed = acted ? undefined : trigger(e)
+    const [stratum, cap] = acted ? [`acted ${acted}`, ACTED] : handed ? [`handed ${handed}`, HANDED] : ["plain", PLAIN]
+    const key = `${stratum} ${e.subAgent ? "sub-agent" : "worker"}`
+    if ((taken.get(key) ?? 0) >= cap) continue
+    taken.set(key, (taken.get(key) ?? 0) + 1)
+    picked.push(e)
+  }
+  console.error([...taken].sort().map(([k, n]) => `  ${k}: ${n}`).join("\n"))
+  return picked
 }

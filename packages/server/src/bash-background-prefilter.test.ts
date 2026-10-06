@@ -4,6 +4,8 @@
 // - THE PROPERTY, on real inputs: every Bash call in the checked-in corpus sample (real worker and
 //   sub-agent calls from this repo's own transcripts, rebuilt as the exact stdin Claude writes — see
 //   scripts/bash-prefilter-corpus.ts) that the pre-filter answers itself is one node answers `{}`.
+//   The sample is ~100 calls cut by branch (every call node acts on, the hand-offs each trigger forces,
+//   and plain calls), not a random 1,000: it reaches the same checks with the same counts (2026-10-06).
 //   Point BASH_PREFILTER_CORPUS at a full corpus built by that script to run the same check over all
 //   of it.
 // - The same property on adversarial inputs aimed at each check, every node test's command, and
@@ -269,7 +271,7 @@ const MUST_SKIP = [
 test("every corpus call the pre-filter answers itself, node answers {} too", { skip }, async (t) => {
   const path = process.env.BASH_PREFILTER_CORPUS ?? join(here, "bash-background-prefilter.corpus.jsonl")
   const stdins = loadCorpus(path)
-  assert.ok(stdins.length >= 500, `corpus at ${path} holds ${stdins.length} inputs`)
+  assert.ok(stdins.length >= 80, `corpus at ${path} holds ${stdins.length} inputs`)
   const verdict = await check(stdins, {}, process.env.BASH_PREFILTER_CORPUS ? 24 : 12)
   t.diagnostic(`${path}: ${stdins.length} inputs — ${verdict.skipped} answered by sh, ${verdict.handedOff} handed to node (${verdict.neededNode} of them needed it)`)
   assert.deepEqual(verdict.violations.slice(0, 10), [])
@@ -293,7 +295,7 @@ test("adversarial inputs: never skipped where node acts, the hand-off is byte-id
 const SHELLS = [["dash"], ["bash"], ["bash", "--posix"], ["busybox", "sh"]].filter(([cmd, ...args]) => spawnSync(cmd, [...args, "-c", "true"]).status === 0)
 test("every POSIX shell available here takes the same decisions", { skip }, async (t) => {
   t.diagnostic(`shells: ${SHELLS.map((s) => s.join(" ")).join(", ")}`)
-  const sample = [...ADVERSARIAL, ...MUST_SKIP, ...loadCorpus(join(here, "bash-background-prefilter.corpus.jsonl")).slice(0, 300)]
+  const sample = [...ADVERSARIAL, ...MUST_SKIP, ...loadCorpus(join(here, "bash-background-prefilter.corpus.jsonl"))]
   const reference = (await check(sample, { shell: ["sh"] })).outputs
   for (const shell of SHELLS) {
     const verdict = await check(sample, { shell })
