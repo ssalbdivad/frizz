@@ -2020,10 +2020,14 @@ test("a worker scratch write triggers no board rebuild, while a top-level .md st
     await board.start()
     const afterStart = builds
     assert.ok(afterStart >= 1, "the initial build ran")
-    assert.deepEqual(ignored, [join(dir, ".frizz", "threads"), join(dir, ".frizz", ".session-state")])
+    assert.deepEqual(ignored, [join(dir, ".frizz", "threads"), join(dir, ".frizz", ".session-state"), join(dir, ".frizz", "worktrees")])
 
-    // NEGATIVE: the scratch directory Frizz hands every worker, and the CLI's sentinel dir.
-    fire([join(dir, ".frizz", "threads", "2f0a", "scratch.md"), join(dir, ".frizz", ".session-state", "2f0a.seen")])
+    // NEGATIVE: the scratch directory Frizz hands every worker, the CLI's sentinel dir, and agent worktrees.
+    fire([
+      join(dir, ".frizz", "threads", "2f0a", "scratch.md"),
+      join(dir, ".frizz", ".session-state", "2f0a.seen"),
+      join(dir, ".frizz", "worktrees", "fix-x", "README.md"),
+    ])
     await settle()
     assert.equal(builds, afterStart, "worker scratch must not rebuild the board")
 
@@ -2042,6 +2046,40 @@ test("a worker scratch write triggers no board rebuild, while a top-level .md st
     fail()
     await settle()
     assert.equal(builds, afterStart + 2, "a watcher error rebuilds rather than going quiet")
+  } finally {
+    await board.stop()
+    storage.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a .frizz watcher that cannot start does not fail the board", async () => {
+  // 2026-10-06: a worktree build deleted a directory mid-walk, @parcel/watcher's subscribe rejected
+  // with ENOENT, start() rethrew it, and the whole project failed to open — scheduler included.
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-watch-fail-"))
+  mkdirSync(join(dir, ".frizz"))
+  const project: Project = { dir, id: "board-watch-fail", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
+  const storage = createStorage(join(dir, "ui.db"), "p")
+  const tailer = {
+    get: () => undefined,
+    foreignIds: () => [],
+    subAgent: () => undefined,
+    forget: () => {},
+    start: () => {},
+    stop: () => {},
+    tick: () => {},
+  } satisfies Tailer
+  let attempts = 0
+  const board = createBoard(project, storage, new Bus(), tailer, "watch-fail-boot", {
+    subscribe: async () => {
+      attempts++
+      throw new Error("inotify_add_watch on '/x/.frizz/worktrees/a/out' failed: No such file or directory")
+    },
+  })
+  try {
+    await board.start()
+    assert.equal(attempts, 1, "the watcher was attempted")
+    assert.ok(await board.snapshot(), "the board still serves")
   } finally {
     await board.stop()
     storage.close()
