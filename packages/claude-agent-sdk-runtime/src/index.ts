@@ -2,7 +2,7 @@
 // peer stays here while the existing server continues using Zod 3. No schema instance crosses the
 // boundary: the server adapter imports only the query function and SDK TypeScript declarations.
 
-export { query } from "@anthropic-ai/claude-agent-sdk"
+export { query, startup } from "@anthropic-ai/claude-agent-sdk"
 export type {
   CanUseTool,
   ElicitationRequest,
@@ -12,4 +12,5 @@ export type {
   SDKControlInitializeResponse,
   SDKMessage,
   SDKUserMessage,
+  WarmQuery,
 } from "@anthropic-ai/claude-agent-sdk"

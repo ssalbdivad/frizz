@@ -1137,11 +1137,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   const scheduleService = schedules
   // Its own completer, so reading a schedule never queues behind a fleet's name mints. Same switch as the
-  // namer: FRIZZ_THREAD_NAMER=0 turns every Frizz-side model call off.
+  // namer: FRIZZ_THREAD_NAMER=0 turns every Frizz-side model call off. The prompt box reads as the human
+  // types — a burst of reads, one at a time — so it keeps one CLI started ahead for the next read (`spare`,
+  // claude-oneshot.ts), closed after a minute unused. 30s, down from 90s: one read at a time means a
+  // stuck read holds up every read behind it, and the box gives up on a read at submit after 15s anyway.
   const scheduleInterpreter = createScheduleInterpreter({
     complete: process.env.FRIZZ_THREAD_NAMER === "0"
       ? undefined
-      : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), model: SCHEDULE_INTERPRETER_MODEL, timeoutMs: 90_000, concurrency: 1 }),
+      : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), model: SCHEDULE_INTERPRETER_MODEL, timeoutMs: 30_000, concurrency: 1, spare: { idleMs: 60_000 } }),
   })
 
   // Durable timer waker + legacy pr/ci compatibility. Reuses the SAME resume path as followUp;
