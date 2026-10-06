@@ -243,8 +243,8 @@ test("touching the phrase, made exact: an edit to the task alone keeps the readi
   const P = "every day unless it's a holiday"
   const keeps: [read: string, now: string, prompt: string, why: string][] = [
     [`${P}, post the digest`, `${P}, post the weekly digest`, "post the weekly digest", "a word inside the task, after the comma"],
-    // (The shared cutPhrase keeps a full stop at the seam; the prompt is always its cut, byte for byte.)
-    [`${P}. Post the digest.`, `${P}. Post the digest to #eng.`, ". Post the digest to #eng.", "the end of the task's sentence"],
+    // (The prompt is always the shared cutPhrase's cut, byte for byte; it drops the phrase's own full stop.)
+    [`${P}. Post the digest.`, `${P}. Post the digest to #eng.`, "Post the digest to #eng.", "the end of the task's sentence"],
     [`${P}, post the digest`, `${P}, post the digest. Then ping me.`, "post the digest. Then ping me.", "a sentence after the task's first word"],
     [`post the digest ${P}`, `post the weekly digest ${P}`, "post the weekly digest", "a task before it, short of the word next to it"],
     [`post the digest ${P}`, `post the digest ${P}.`, "post the digest.", "a full stop with no word after it: nothing continues the clause"],

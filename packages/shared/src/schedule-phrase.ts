@@ -2665,7 +2665,9 @@ export function locatePhrase(text: string, phrase: string, near?: number): Span 
 export function cutPhrase(text: string, span: Span): string {
   const before = text.slice(0, span.start).replace(/[\s,;:–—-]+$/u, "")
   const after = text.slice(span.end).replace(/^[\s,;:–—-]+/u, "")
-  if (!before.trim()) return after.trim()
+  // A phrase that opened the text took its sentence with it: the stop that ended it ("Every day at 9am. Post
+  // the digest.") has nothing left to end, so it goes too.
+  if (!before.trim()) return after.replace(/^[.!?]+(?=\s|$)/u, "").trim()
   if (!after.trim()) return before.trim()
   return `${before}${/^[.!?)]/.test(after) ? "" : " "}${after}`.trim()
 }

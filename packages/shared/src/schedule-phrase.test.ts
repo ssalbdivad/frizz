@@ -685,6 +685,10 @@ test("cutPhrase takes the phrase and its seam, and changes nothing else", () => 
   assert.equal(cut("triage — every Monday at 9am — the inbox", "every Monday at 9am"), "triage the inbox")
   assert.equal(cut("Ping me every morning at 9am. Keep it short", "every morning at 9am"), "Ping me. Keep it short")
   assert.equal(cut("every Monday at 9am", "every Monday at 9am"), "")
+  // A phrase that was its own opening sentence leaves no stray full stop behind it.
+  assert.equal(cut("Every Monday at 9am. Post the digest.", "Every Monday at 9am"), "Post the digest.")
+  assert.equal(cut("Every Monday at 9am... post the digest", "Every Monday at 9am"), "post the digest")
+  assert.equal(cut("every Monday at 9am .gitignore audit", "every Monday at 9am"), ".gitignore audit")
   // Its own whitespace and case are kept: only the seam is tidied.
   assert.equal(cut("every Monday at 9am  Triage   NEW issues", "every Monday at 9am"), "Triage   NEW issues")
 })
