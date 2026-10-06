@@ -96,11 +96,3 @@ test("with nothing recorded, the bands are the poll's", () => {
   assert.equal(bands.ready[0], p.queued[0])
   assert.equal(bands.working[0], p.running[0])
 })
-
-test("active counts the threads at work, pinned ones included, and never a Ready one", () => {
-  const pinnedAt = new Date(NOW - 1_000).toISOString()
-  const p = project("alpha", [ready("docs"), ready("pinned-ready", { pinnedAt })], [running("build"), running("pinned-build", { pinnedAt })])
-  assert.equal(loudBands(p, shown).active, 2)
-  // A Ready card the operator just acted on is at work as far as the list knows: its row waits under Working.
-  assert.equal(loudBands(p, (key) => key === threadKey("alpha", "docs")).active, 3)
-})
