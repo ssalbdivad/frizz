@@ -280,6 +280,14 @@ function useRegisterNavigate(): void {
 }
 
 /** The focused single-thread page. Deliberately OUTSIDE the layout. */
+/** A drawer's fullscreen page on All projects — or, carrying a query-era view (`?project=`), its board's. */
+function FullRoute() {
+  const { pathname, search } = useLocation()
+  const legacy = legacyViewRedirect(pathname, search)
+  if (legacy !== undefined) return <Navigate to={legacy} replace />
+  return <StandaloneRoute />
+}
+
 function StandaloneRoute() {
   const { thread, slug } = useParams()
   useRegisterNavigate()
@@ -315,7 +323,7 @@ function StandaloneRoute() {
 export const router = createBrowserRouter([
   // The focused single-thread pages sit OUTSIDE the layout.
   { path: "/thread/:thread/full", element: <StandaloneRoute /> },
-  { path: `${CROSS_PROJECT_PATH}/thread/:thread/full`, element: <StandaloneRoute /> },
+  { path: `${CROSS_PROJECT_PATH}/thread/:thread/full`, element: <FullRoute /> },
   { path: `${PROJECT_PATH}/thread/:thread/full`, element: <StandaloneRoute /> },
   {
     element: <RootLayout />,
