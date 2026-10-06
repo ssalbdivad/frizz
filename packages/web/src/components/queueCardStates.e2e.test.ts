@@ -20,6 +20,11 @@ import test, { after, before } from "node:test"
 //        both fenced and registered draws exactly one (B1, restored 2026-09-29).
 //   10   a park queued only for its unread reply reads "Replied", and Mark as read records it seen and
 //        takes the card out (maintainer 2026-10-01 on @expand-defaults).
+//   11   a rest handing the human `steps:` draws the drawer's steps card ON THE QUEUE CARD — numbered steps
+//        under the worker's title, one Done — and Done replies "Done" into the CARD's project and takes
+//        the card out at once (upstream fe668a8d; the card drew the fence as bare prose until 2026-10-06).
+//   12   a rest on a declared agent terminal draws the resting card, whose event-snooze parks the thread
+//        through the card's project and takes the card out.
 //   7-9  the terminal net: a frozen native ask and a bare permission prompt — two states the server queues a
 //        thread on without journaling an interaction — draw their card, the copy asks the CARD's project
 //        for the command, and the net stands down when an answerable interaction is journaled (B2).
@@ -283,5 +288,66 @@ test("a park queued only for its reply reads Replied, and Mark as read records i
   await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
   const seen = (await rpcLog()).calls.filter((c) => /\/rpc\/threadSeen$/.test(c.path)).map((c) => c.path)
   assert.deepEqual(seen, ["/_frizz/fixture-card/rpc/threadSeen"], "seen is recorded in the card's own project")
+  assert.deepEqual(errors, [])
+})
+
+test("a rest handing the human steps draws the steps card, and Done replies into the card's project and takes it out", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  await open("case=steps")
+  await page!.waitForSelector(`${FIRST} [data-awaiting-steps] li`)
+  const card = await page!.$eval(FIRST, (el) => ({
+    chip: (el.querySelector("[data-awaiting-background] [data-card-chip]") as HTMLElement | null)?.innerText.trim(),
+    title: (el.querySelector("[data-awaiting-background] [data-card-title]") as HTMLElement | null)?.innerText.trim(),
+    steps: [...el.querySelectorAll("[data-awaiting-steps] li")].map((li) => (li as HTMLElement).innerText.trim()),
+    numbered: el.querySelector("[data-awaiting-steps] ol") !== null,
+    body: (el.querySelector("[data-awaiting-background] .card-md p") as HTMLElement | null)?.innerText.trim(),
+    verbs: [...el.querySelectorAll("[data-awaiting-background] button")].map((b) => (b as HTMLElement).innerText.trim()),
+    // The fence's frontmatter never reaches the reader as prose, and its card is drawn once.
+    raw: /steps:|title:/.test(el.textContent ?? ""),
+    cards: el.querySelectorAll("[data-awaiting-background]").length,
+  }))
+  assert.equal(card.chip, "To do")
+  assert.equal(card.title, "Sign in to npm so the release can publish", "the worker's own heading")
+  assert.equal(card.numbered, true, "the steps are a numbered list")
+  assert.deepEqual(card.steps, [
+    "Run npm login --auth-type=web in a terminal on this machine.",
+    "Approve the browser prompt with the acme-bot account.",
+  ])
+  assert.equal(card.body, "The release is staged; it publishes the moment npm accepts the login.")
+  assert.deepEqual(card.verbs, ["Done"], "the steps' one verb")
+  assert.equal(card.raw, false, "no frontmatter printed at the human")
+  assert.equal(card.cards, 1, "one card for one wait: the fence and the resting card are the same card")
+
+  await watchLeaving(FIRST)
+  await page!.$eval(`${FIRST} [data-steps-done]`, (button) => (button as HTMLButtonElement).click())
+  // Upstream's optimistic exit: the card fades on the click, before the reply lands.
+  await page!.waitForFunction(() => !!(window as unknown as { __left?: unknown }).__left, { timeout: 1_000 })
+  await page!.waitForFunction(() => (window as unknown as { __rpc: RpcLog }).__rpc.calls.some((c) => /\/rpc\/followUp$/.test(c.path)), { timeout: 5_000 })
+  const replies = (await rpcLog()).calls.filter((c) => /\/rpc\/followUp$/.test(c.path)).map((c) => c.path)
+  assert.deepEqual(replies, ["/_frizz/fixture-card/rpc/followUp"], "one reply, to the CARD's project — never the page's")
+  await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
+  assert.equal(await leavingOf(NEIGHBOUR), "false", "its neighbour is untouched")
+  assert.deepEqual(errors, [])
+})
+
+test("a rest on a declared agent terminal draws the resting card, and its snooze parks through the card's project", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  await open("case=resting")
+  await page!.waitForSelector(`${FIRST} [data-awaiting-background] [data-awaiting-snooze]`)
+  const card = await page!.$eval(FIRST, (el) => ({
+    rows: [...el.querySelectorAll("[data-awaiting-background] [data-wait-kind]")].map((row) => row.getAttribute("data-wait-kind")),
+    text: el.querySelector("[data-awaiting-background]")?.textContent ?? "",
+    cards: el.querySelectorAll("[data-awaiting-background]").length,
+  }))
+  assert.equal(card.cards, 1, "the resting card states the fence; the fence draws nothing of its own")
+  assert.deepEqual(card.rows, ["shell"], "the declared terminal has its row")
+  assert.match(card.text, /nub run test/)
+  assert.match(card.text, /the failures so far are all in the auth spec/, "the worker's prose opens the card")
+  await watchLeaving(FIRST)
+  await page!.$eval(`${FIRST} [data-awaiting-snooze] button`, (button) => (button as HTMLButtonElement).click())
+  await page!.waitForFunction(() => !!(window as unknown as { __left?: unknown }).__left, { timeout: 1_000 })
+  await page!.waitForFunction(() => (window as unknown as { __rpc: RpcLog }).__rpc.calls.some((c) => /snoozeAwaitingBackground$/.test(c.path)), { timeout: 5_000 })
+  const snoozes = (await rpcLog()).calls.filter((c) => /snoozeAwaitingBackground$/.test(c.path)).map((c) => c.path)
+  assert.deepEqual(snoozes, ["/_frizz/fixture-card/rpc/snoozeAwaitingBackground"], "the park went to the card's project")
+  await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
+  assert.equal(await leavingOf(NEIGHBOUR), "false")
   assert.deepEqual(errors, [])
 })

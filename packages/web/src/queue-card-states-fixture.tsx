@@ -41,6 +41,13 @@ import "./styles.css"
 //   ?case=perm-prompt-journaled  the same, but an answerable interaction IS journaled: the net stands down.
 //   ?case=replied              a park queued only for its unread reply (queuedForReply): "Replied", and
 //                              Mark as read records it seen (threadSeen), after which the poll drops it.
+//   ?case=steps                the first card's thread is AT REST on an ```awaiting fence handing the human
+//                              `steps:` (upstream fe668a8d): the card draws the drawer's steps card, and its
+//                              Done replies into the CARD's project and takes the card out. The neighbour is
+//                              an ordinary rest.
+//   ?case=resting              the first card's thread rests on an agent terminal it declared (`shells:`), so
+//                              it draws the RESTING card — the wait row and the event-snooze, which parks it
+//                              through the card's project and takes the card out.
 //   ?case=facts                a card whose header facts line carries a context reading (narrow-width check).
 //     &chip=1                  …led by its project, as on a page showing All projects.
 //   ?case=facts-matrix         one card per combination of facts in facts-fixture-cases.ts (a context reading,
@@ -129,6 +136,14 @@ const ASK = {
   }],
 }
 
+// A rest handing the human steps, as the worker contract's own example writes it (WORKER_PROMPT `steps:`).
+const STEPS_TITLE = "Sign in to npm so the release can publish"
+const STEPS = ["Run `npm login --auth-type=web` in a terminal on this machine.", "Approve the browser prompt with the **acme-bot** account."]
+const STEPS_BODY = "The release is staged; it publishes the moment npm accepts the login."
+const STEPS_FENCE = `I can't publish without an npm session on this machine.\n\n\`\`\`awaiting\ntitle: ${STEPS_TITLE}\nsteps:\n${STEPS.map((step) => `  - ${step}`).join("\n")}\n---\n${STEPS_BODY}\n\`\`\``
+// A rest on an agent terminal the worker declared, still running.
+const SHELL_FENCE = "The full suite is running in the background.\n\n```awaiting\nshells: [b1]\nstatus: needs_input\n---\nThe suite takes about ten minutes; the failures so far are all in the auth spec.\n```"
+
 // Long enough to clamp (AllQueuesCard ClampedBody, 188px).
 const LONG = Array.from({ length: 14 }, (_, i) => `Paragraph ${i + 1} of a long handoff: what changed, why, and what is left to check before this can be marked done.`).join("\n\n")
 
@@ -138,6 +153,30 @@ const midHandoff = (id: string) => `A mid-length handoff for ${id}: ${"the chang
 interface Scenario { threads: ThreadViewModel[]; text: (id: string) => string }
 function scenario(): Scenario {
   switch (CASE) {
+    case "steps":
+      return {
+        threads: [
+          thread("rotate-key", "Rotate the signing key without downtime", {
+            awaitingBackground: true,
+            lastFence: { kind: "awaiting", body: STEPS_BODY, hints: [{ kind: "title", value: STEPS_TITLE }, ...STEPS.map((value) => ({ kind: "step" as const, value }))] },
+          }),
+          thread("flaky-ci", "Deflake the auth integration suite"),
+        ],
+        text: (id) => (id === "rotate-key" ? STEPS_FENCE : "Found the race; the fix is in, 50 green runs."),
+      }
+    case "resting":
+      return {
+        threads: [
+          thread("rotate-key", "Rotate the signing key without downtime", {
+            awaitingBackground: true,
+            bgShells: [{ id: "b1", label: "nub run test", state: "running", startedAt: new Date(Date.now() - 4 * 60_000).toISOString() }],
+            watches: [{ id: "shell:rotate-key:b1", kind: "shell", target: "b1", state: "armed", createdAt: now }],
+            lastFence: { kind: "awaiting", body: "The suite takes about ten minutes; the failures so far are all in the auth spec.", hints: [{ kind: "shell", value: "b1" }, { kind: "status", value: "needs_input" }] },
+          }),
+          thread("flaky-ci", "Deflake the auth integration suite"),
+        ],
+        text: (id) => (id === "rotate-key" ? SHELL_FENCE : "Found the race; the fix is in, 50 green runs."),
+      }
     case "registered-done":
       return {
         threads: [thread("rotate-key", "Rotate the signing key without downtime", { lastFence: { kind: "done", body: DONE_BODY, hints: [], registered: true } })],
@@ -271,6 +310,11 @@ window.fetch = async (input, init) => {
   // The reply box's @ typeahead reads every project's queue on an All projects page, which this path
   // reads as; its answer is a list, and `{}` crashed the box.
   if (rpc === "projectsQueues") return json([])
+  // The resting card's event-snooze parks the thread, and the next poll reads it out of the queue.
+  if (rpc === "snoozeAwaitingBackground") {
+    setTimeout(() => dropThread(body.slug ?? ""), 400)
+    return json({})
+  }
   if (rpc === "threadSeen") {
     setTimeout(() => dropThread(body.slug ?? ""), 50)
     return json({})

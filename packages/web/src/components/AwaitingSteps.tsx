@@ -52,11 +52,16 @@ function Step({ md }: { md: string }) {
 
 /** The card's one verb — drawn only while the thread is resting on THESE steps, which is the caller's
  *  test (AwaitingBackgroundCard `stepsLive`). */
-export function StepsDone({ slug, onReplied, onReplyFailed }: {
+export function StepsDone({ slug, onReplied, onReplyFailed, send }: {
   slug: string
   /** The queue's optimistic card exit, as for its Snooze; absent off the queue. */
   onReplied?: () => void
   onReplyFailed?: () => void
+  /** Deliver the reply some other way than the page's eager follow-up — the queue card's, which sends
+   *  into the CARD's project (lib/projectFollowUp.ts): `useEagerFollowUp` addresses the page's project,
+   *  and on All projects that is usually not the card's, so its "Done" would have reached the page
+   *  project's thread of the same slug. Rejects when the send failed. Absent everywhere else. */
+  send?: (message: string) => Promise<void>
 }) {
   const followUp = useEagerFollowUp(slug)
   // Latched on the click and released only by a rollback: between the send and the worker's turn
@@ -64,6 +69,16 @@ export function StepsDone({ slug, onReplied, onReplyFailed }: {
   const [sent, setSent] = useState(false)
   const reply = () => {
     setSent(true)
+    if (send) {
+      // The same order the eager send keeps: the card leaves first, then the network, and a failure puts
+      // both back.
+      onReplied?.()
+      send(STEPS_DONE).catch(() => {
+        setSent(false)
+        onReplyFailed?.()
+      })
+      return
+    }
     const started = followUp.submit(STEPS_DONE, {
       onOptimistic: () => onReplied?.(),
       onRollback: () => {

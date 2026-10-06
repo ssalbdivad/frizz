@@ -246,6 +246,9 @@ export interface HandoffParts {
   prose: string
   /** ```question fences with a body that no registered card draws — drawn read-only. */
   questions: { raw: string; questionKind: QuestionKind; danger: boolean }[]
+  /** Each signal fence's prose and its parsed frontmatter. The HINTS ride along for an ```awaiting fence's
+   *  card, which states its `steps:`, `title:` and waits from them (AwaitingBackgroundCard) — the card
+   *  dropped them until 2026-10-06, so a rest that handed the human steps showed none on the queue. */
   fences: { kind: "done" | "awaiting"; body: string; hints: AwaitingHint[] }[]
 }
 

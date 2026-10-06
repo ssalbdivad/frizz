@@ -25,7 +25,7 @@
 // on afterwards is CORRECT, not a bug — a child's <task-notification> lands as a re-invoking user record
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
-import { Fragment, useEffect, useState, type ReactNode } from "react"
+import { createContext, Fragment, useContext, useEffect, useState, type ReactNode } from "react"
 import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, SquareTerminal, TerminalSquare, X } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadTerminal, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
@@ -39,7 +39,6 @@ import { AGENT_GLYPH_STROKE, CHILD_DISMISS_NOUN, CHILD_DISMISS_TITLE, CHILD_DISM
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer, pushTerminalDrawer, showToast } from "../store.ts"
-import { rpc } from "../api/rpc.ts"
 import { useThreadApi } from "../api/threadApi.tsx"
 import { stopBackgroundShells } from "../lib/dismissChildOp.ts"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
@@ -687,6 +686,15 @@ function GithubIssueWatchRow({ watch }: { watch: ThreadWatchView }) {
 // tool_use id, the runtime's task id, and the label (board.liveWaitHandles). Resolving back to the shell
 // is what gets a readable NAME and the id the output drawer needs; an unresolvable target still renders,
 // naming itself, rather than vanishing.
+/** HOW A ROW OPENS WHAT IT NAMES — a shell's output, your terminal, a sub-agent's transcript. Each is a
+ *  drawer pushed over the PAGE's stack, addressed by the parent thread's slug and read through the page's
+ *  client, which is right wherever the thread IS the page's: the drawer, /full, the rail. A queue card of
+ *  another project is not (on All projects the page's client names some other project, and the same slug
+ *  there is another thread), so the card provides an opener that opens its thread in place first and pushes
+ *  the row's drawer over it only when its project is the one in focus — the card's own terminal rows take
+ *  the same route (AllQueuesCard `openProcess`). The default just pushes. */
+export const WaitRowOpenContext = createContext<(push: () => void) => void>((push) => push())
+
 function resolveShell(thread: Pick<ThreadView, "bgShells">, target: string) {
   return (thread.bgShells ?? []).find((s) => s.id === target || s.taskId === target || s.label === target)
 }
@@ -747,6 +755,7 @@ export function BgShellRow({ shell, slug, now, testId, hint, onDismiss }: {
 }) {
   const elapsed = liveAgeSince(shell.startedAt, now)
   const running = shell.state === "running"
+  const open = useContext(WaitRowOpenContext)
   // Every row with an id opens the drawer — a Codex exec's too. Codex keeps that exec's output inside its
   // own session, and the drawer says so, but its command, its folder and its Stop are all real.
   const openable = Boolean(shell.id)
@@ -757,7 +766,7 @@ export function BgShellRow({ shell, slug, now, testId, hint, onDismiss }: {
       testId={testId ?? shell.id ?? shell.label}
       mark={<Bot size={12} strokeWidth={AGENT_GLYPH_STROKE} className={`${ON_CAP} ${running ? "text-shell" : "text-muted-60"}`} />}
       name={shell.label}
-      onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
+      onOpen={openable ? () => open(() => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt })) : undefined}
       title={openable ? `Open agent terminal — ${state}` : running ? shell.label : `${shell.label} — ${state}`}
       // Where one was declared, what is left of its budget (lib/shellBudget.ts), then its age — the strip's
       // order, so one shell reads one way on neighbouring surfaces (it read `1m · 13m left` here beside the
@@ -778,6 +787,7 @@ export function BgShellRow({ shell, slug, now, testId, hint, onDismiss }: {
 export function TermWaitRow({ terminal, slug, now, hint }: { terminal: ThreadTerminal; slug: string; now: number; hint?: ReactNode }) {
   const prompting = terminal.awaitingInput === true
   const elapsed = liveAgeSince(terminal.startedAt, now)
+  const open = useContext(WaitRowOpenContext)
   return (
     <WaitRow
       testKind="terminal"
@@ -785,7 +795,7 @@ export function TermWaitRow({ terminal, slug, now, hint }: { terminal: ThreadTer
       mark={<SquareTerminal size={12} className={`${ON_CAP} ${prompting ? "text-attention" : "text-shell"}`} />}
       name={terminal.command}
       mono
-      onOpen={() => pushTerminalDrawer(slug, terminal.id, { label: terminal.command })}
+      onOpen={() => open(() => pushTerminalDrawer(slug, terminal.id, { label: terminal.command }))}
       title={`Open your terminal — ${terminal.command}`}
       hint={hint}
       status={prompting ? <span className="text-attention">waiting for input</span> : elapsed || "running"}
@@ -833,6 +843,7 @@ export function liveAgents(thread: Pick<ThreadView, "subAgents">) {
 
 export function AgentRow({ agent, slug, now, onDismiss }: { agent: ThreadView["subAgents"][number]; slug: string; now: number; onDismiss?: () => void }) {
   const elapsed = compactElapsedSince(agent.startedAt, now)
+  const open = useContext(WaitRowOpenContext)
   // The profile without its namespace: `frizz:opus-high` is how it is dispatched, `opus-high` is how the
   // maintainer says it, and the row has no width to spend on a prefix every row would repeat.
   const profile = agent.subagentType?.replace(/^frizz:/, "")
@@ -852,7 +863,7 @@ export function AgentRow({ agent, slug, now, onDismiss }: { agent: ThreadView["s
       mark={stale ? <span aria-hidden className={`inline-block size-3 p-[3px] ${ON_CAP}`}><span className={CHILD_STALE_DOT_CLASS} /></span> : <Spinner tone="border-accent" />}
       // Its handle (`cache-keys`), as on every row that shows a child as itself (groups.ts subAgentName).
       name={subAgentName(agent.label)}
-      onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
+      onOpen={agent.id ? () => open(() => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt })) : undefined}
       title={agent.id ? `Open this sub-agent — ${stale ? CHILD_STALE_TITLE : `working for ${elapsed}`}` : agent.label}
       status={[stale ? "stale" : undefined, profile, elapsed].filter(Boolean).join(" · ")}
       dismiss={railDismiss(onDismiss, agent.state === "running", "AGENT", agent.label)}
@@ -1086,17 +1097,25 @@ export const BG_SNOOZE_EXPLAINER = "Hides card until new activity is detected"
  *  (found 2026-07-29, "reads as if the agent died"): `showsRestingCard` goes false, and the awaiting
  *  FENCE card — suppressed only while this card shows — takes the slot and states the same wait compactly.
  *
- *  There is no card to fade: it took `onSnooze`/`onSnoozeFailed` for the project board's queue card,
- *  which drew this one inline until 2026-09-28. Everything's card draws its own Snooze in its footer
- *  and fades on that, so here the click only re-renders the slot. */
-function AwaitingSnooze({ thread }: { thread: Pick<ThreadView, "id" | "sessionId"> }) {
+ *  In the drawer there is no card to fade, so the click only re-renders the slot. ON THE QUEUE CARD there
+ *  is (upstream TodosView AwaitingBackgroundBanner; the card drew this one inline again from 2026-10-06):
+ *  `onSnoozed` fades it the instant the human parks it and `onSnoozeFailed` puts it back if the server
+ *  declines — the optimistic exit every other dismissal on that card takes.
+ *
+ *  THE THREAD'S OWN PROJECT'S CLIENT (useThreadApi), as the Stop and Ask for update beside it use: `rpc`
+ *  names the address bar's project, and the queue card of another project wraps itself in that project's
+ *  ThreadProjectScope. Absent a scope it IS `rpc`, so the drawer is unchanged. */
+function AwaitingSnooze({ thread, onSnoozed, onSnoozeFailed }: { thread: Pick<ThreadView, "id" | "sessionId">; onSnoozed?: () => void; onSnoozeFailed?: () => void }) {
+  const api = useThreadApi()
   const [pending, setPending] = useState(false)
   const snooze = () => {
     setPending(true)
-    rpc
+    onSnoozed?.()
+    api
       .snoozeAwaitingBackground({ slug: thread.id, sessionId: thread.sessionId ?? "" })
       .then(() => showToast("Snoozed until the background work returns"))
       .catch((error) => {
+        onSnoozeFailed?.()
         showToast(`Couldn’t snooze: ${(error as Error).message.slice(0, 80)}`)
         setPending(false)
       })
@@ -1229,7 +1248,7 @@ function AwaitingAskUpdate({ thread }: { thread: Pick<ThreadView, "id" | "sessio
   )
 }
 
-export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed }: {
+export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed, replySteps, onSnoozed, onSnoozeFailed }: {
   // `id` joins the Pick because the rows OPEN things now: a shell's output drawer and a sub-agent's
   // transcript are both addressed by the parent thread's slug. `lastFence` joined on 2026-08-24: the
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
@@ -1259,6 +1278,12 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
   // it back if the send fails. Only a surface with a card to fade passes it.
   onReplied?: () => void
   onReplyFailed?: () => void
+  /** How the steps' Done is delivered, when not by the page's eager follow-up (StepsDone `send`): the
+   *  queue card sends into its own project. */
+  replySteps?: (message: string) => Promise<void>
+  /** The queue card's optimistic exit for the event-snooze (AwaitingSnooze). */
+  onSnoozed?: () => void
+  onSnoozeFailed?: () => void
 }) {
   // The thread's live work, as the rows and the heading read it. A card with no owning thread has none
   // of it — no rows, no shell-only heading — rather than a branch at every use below.
@@ -1427,7 +1452,7 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
           Retry-before-Sign-in order) was drawn and rejected: at 780px it forced the caption onto two
           lines at widths where it fits one today. Alone, the Stop sits at the band's left edge. */}
       {stepsLive ? (
-        <StepsDone slug={thread.id} onReplied={onReplied} onReplyFailed={onReplyFailed} />
+        <StepsDone slug={thread.id} onReplied={onReplied} onReplyFailed={onReplyFailed} send={replySteps} />
       ) : footer ? (
         <CardActions data-awaiting-snooze>
           {/* Snooze and its caption as ONE flex item, sized to their content. The caption alone has a
@@ -1438,7 +1463,7 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
               76px button in 301px). */}
           {snoozable && (
             <div className="flex min-w-0 flex-1 basis-auto items-center gap-x-2.5">
-              <AwaitingSnooze thread={thread!} />
+              <AwaitingSnooze thread={thread!} onSnoozed={onSnoozed} onSnoozeFailed={onSnoozeFailed} />
             </div>
           )}
           {askable && <AwaitingAskUpdate key={thread!.lastAssistantAt ?? ""} thread={thread!} />}

@@ -19,9 +19,9 @@
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, CheckCheck, ChevronRight, Hourglass, ListTodo, RotateCcw } from "lucide-react"
+import { Check, CheckCheck, ChevronRight, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
-import { awaitingFenceTitle, awaitingSteps, parseParkWake, parseScheduledRunPrompt, questionsOwed, type AccountBackend, type AwaitingHint, type ThreadView } from "@frizz/shared"
+import { parseParkWake, parseScheduledRunPrompt, questionsOwed, type AccountBackend, type AwaitingHint, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { prefetchProjectTranscript } from "../hooks.ts"
@@ -53,6 +53,7 @@ import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { Composer } from "./Composer.tsx"
 import { InteractionStack } from "./InteractionCards.tsx"
 import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAgentsCard.tsx"
+import { AwaitingBackgroundCard, showsRestingCard, WaitRowOpenContext } from "./AwaitingBackgroundCard.tsx"
 import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
@@ -81,10 +82,7 @@ import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, T
 import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
 import { Tooltip } from "./Tooltip.tsx"
-import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, CARD_PRIMARY_ACTION, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
-import { StepsList } from "./AwaitingSteps.tsx"
-import { restingOnSteps } from "./AwaitingBackgroundCard.tsx"
-import { AWAITING_FALLBACK_TITLE, awaitingProseBlock, STEPS_CHIP, STEPS_DONE } from "../lib/awaitingPresentation.ts"
+import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 /**
  * WHOSE CARD THIS IS, on its meta line — in All projects the page's one queue holds every project's
@@ -358,6 +356,9 @@ function CardArticle({
   const answered = useMemo(() => answerProse(answer, parts, registeredDone, thread.questions), [answer, parts, registeredDone, thread.questions])
   // Does the awaiting card list the children, or the ops column under the reply box (QueueChildOps)?
   const drawsSubAgentWait = drawsSubAgentWaitCard(thread, parts?.fences)
+  // Is the thread at rest on its own declared wait, so the RESTING card states it (CardAwaiting)? The
+  // drawer's predicate, unchanged — except where the sub-agent batch card is already stating the wait.
+  const restingShown = showsRestingCard(thread) && !drawsSubAgentWait
   // THIS CARD IS THE NEWEST HANDOFF, and every CURRENT question rides to the bottom of the newest handoff
   // (lib/questionAnchor). One the human typed past is set aside — answerable where it was asked until the
   // worker's next rest withdraws it, unless the worker `keep`s it — so it is not this handoff's ask.
@@ -600,26 +601,39 @@ function CardArticle({
           {parts?.questions.map((question, index) => (
             <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
           ))}
-          {/* A parent resting on its sub-agents states the batch in place of its fence (AwaitingSubAgentsCard). */}
-          {parts?.fences.map((fence, index) => fence.kind === "awaiting" && drawsSubAgentWait
-            ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
-            : <FenceBody
-                key={index}
-                kind={fence.kind}
-                body={fence.body}
-                hints={fence.hints}
-                // The verb only while the thread still rests on THESE steps (restingOnSteps), as in the drawer.
-                stepsDone={fence.kind === "awaiting" && restingOnSteps(thread, awaitingSteps(fence.hints))
-                  ? <QueueStepsDone project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />
-                  : undefined}
-              />)}
+          {/* THE HANDOFF'S SIGNAL FENCES. A ```done is its card. An ```awaiting is the DRAWER'S card for it
+              (AwaitingBackgroundCard, through CardAwaiting): the worker's title and prose, the wait table,
+              and — the reason it is here at all — the `steps:` a rest hands the human, with their Done.
+              Until 2026-10-06 this card drew the fence as plain markdown with its frontmatter parsed off,
+              so a rest that handed the human steps showed no steps and no verb anywhere but the drawer
+              (upstream fe668a8d drew them on its queue card from the start). Three shapes:
+                • a parent resting on its sub-agents states the batch instead (AwaitingSubAgentsCard);
+                • a thread AT REST on its wait draws the RESTING card below, which opens on this very
+                  fence, so the fence itself draws nothing (ChatView skips it the same way, through
+                  Message's `restingCardShown`) — two cards for one wait is the doubling that rule ends;
+                • any other awaiting fence — a wait that is no longer live, a bg-snoozed thread — is the
+                  same card stating the fence, with no verbs of its own (ChatView FenceCard's branch). */}
+          {parts?.fences.map((fence, index) => fence.kind === "done"
+            ? <FenceBody key={index} body={fence.body} />
+            : drawsSubAgentWait
+              ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
+              : restingShown ? null
+              : <CardAwaiting key={index} project={project} thread={thread} fence={{ body: fence.body, hints: fence.hints }} onLeave={onLeave} onSent={onSent} onLanded={onLanded} onReturn={onReturn} />)}
+          {/* THE RESTING CARD (upstream TodosView AwaitingBackgroundBanner), whenever the thread is at rest on
+              its own declared wait — a fence or not, since a rest on agent terminals alone queues with no
+              fence at all. It carries the wait table, the steps and their Done, and the event-snooze, each
+              of which takes this card out the way a reply does. Held until the handoff is read, as the
+              gates below are: it carries buttons, and the full handoff landing above it would move them. */}
+          {restingShown && (handoff.data || handoff.isError) && (
+            <CardAwaiting project={project} thread={thread} onLeave={onLeave} onSent={onSent} onLanded={onLanded} onReturn={onReturn} />
+          )}
           {/* A DONE THE WORKER REGISTERED (`mcp__frizz__done`) rather than fenced — the sign-off the worker
               contract now asks for first — is in no message, so the handoff text above carries no fence
               for it and the card queued a finished thread with no Done card at all. The drawer draws it
               from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
               the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
               Held until the handoff is read, or a fenced done would draw here first and then swap. */}
-          {(handoff.data || handoff.isError) && registeredDone && <FenceBody kind="done" body={registeredDoneBody(thread.lastFence!)} />}
+          {(handoff.data || handoff.isError) && registeredDone && <FenceBody body={registeredDoneBody(thread.lastFence!)} />}
           {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
               with its real buttons, under the prose that led to it. It is the whole reason such a card
               is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
@@ -974,66 +988,71 @@ function Prose({ md }: { md: string }) {
   return <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} />
 }
 
-/** A signal fence, drawn as the transcript's fence card — presentation only; the verbs live in the footer.
+/**
+ * THE DRAWER'S AWAITING CARD ON THE QUEUE CARD (AwaitingBackgroundCard) — the resting card when `fence` is
+ * absent, the card stating a fence the thread is no longer at rest on when it is given — wired to THIS
+ * card's project and exits, because everything it does would otherwise reach the page's:
  *
- *  THE AWAITING FENCE'S FRONTMATTER IS READ HERE TOO, not only its body. This card drew the body alone,
- *  so a fence that is ALL frontmatter — a `title:` and `steps:` handing the human a to-do, whose body is
- *  empty by design — came out as a bare "Awaiting" heading over nothing, while the drawer drew the same
- *  fence as a titled "To do" card with its steps (maintainer 2026-10-06, of exactly that card: "why does
- *  workflow-messaging randomly say awaiting here"). So the heading, chip and glyph follow the drawer's
- *  rule (AwaitingBackgroundCard): steps make it a to-do under the worker's own title, and any other
- *  fence takes its `title:` over the generic heading. The rows and the Snooze stay the drawer's — this
- *  card's header already carries the snooze, and its project is not the page's. */
-function FenceBody({ kind, body, hints = [], stepsDone }: { kind: "done" | "awaiting"; body: string; hints?: readonly AwaitingHint[]; stepsDone?: ReactNode }) {
-  const prose = kind === "awaiting" ? awaitingProseBlock(body) ?? "" : body
-  const html = useMarkdownHtml(prose)
-  const steps = kind === "awaiting" ? awaitingSteps(hints) : []
-  const title = kind === "awaiting" ? awaitingFenceTitle(hints) : null
+ *   • the steps' Done is an ordinary reply, sent into the card's project (lib/projectFollowUp.ts, the
+ *     reply box's own send). The card LEAVES on the click — upstream's optimistic exit (TodosView
+ *     AwaitingBackgroundBanner) — stays gone while the reply is on the wire, and comes back if it fails;
+ *   • the event-snooze takes it out the same way (AwaitingSnooze `onSnoozed`);
+ *   • its Snooze, Stop and Ask for update read the card's client through the ThreadProjectScope here;
+ *   • a row opens its thread in place, and the row's own drawer over it only when the card's project is
+ *     the one in focus (WaitRowOpenContext) — the terminal rows' route (`openProcess` above).
+ */
+function CardAwaiting({ project, thread, fence, onLeave, onSent, onLanded, onReturn }: {
+  project: QueuesProject
+  thread: ThreadView
+  fence?: { body: string; hints: AwaitingHint[] }
+  onLeave: () => void
+  onSent: () => void
+  onLanded: () => void
+  onReturn: () => void
+}) {
+  const queryClient = useQueryClient()
+  const openInPlace = useOpenThreadInPlace()
+  const openRow = useCallback((push: () => void) => {
+    const here = focusedProject(project.slug)
+    openInPlace(project, thread.id, displayTitle(thread))
+    if (here) push()
+  }, [openInPlace, project, thread])
+  const replySteps = useCallback((message: string) => deliverFollowUp(project, thread, message).then(
+    () => {
+      onLanded()
+      void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    },
+    (error: unknown) => {
+      if (!pageUnloading()) showToast(`Reply failed: ${(error instanceof Error ? error.message : "unknown error").slice(0, 80)}`)
+      throw error
+    },
+  ), [onLanded, project, queryClient, thread])
   return (
-    <TranscriptCard
-      icon={kind === "done" ? Check : steps.length > 0 ? ListTodo : Hourglass}
-      chip={steps.length > 0 ? STEPS_CHIP : undefined}
-      label={kind === "done" ? "Done"
-        : steps.length > 0 ? (title ? <span className="[overflow-wrap:anywhere]">{title}</span> : null)
-        : <span className="[overflow-wrap:anywhere]">{title ?? AWAITING_FALLBACK_TITLE}</span>}
-    >
-      {/* null, not a falsy "": an empty body (registeredDoneBody) is a header-only card, not a blank content gap. */}
-      {html ? <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} /> : null}
-      {steps.length > 0 && <StepsList steps={steps} />}
-      {steps.length > 0 && stepsDone}
-    </TranscriptCard>
+    <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+      <WaitRowOpenContext.Provider value={openRow}>
+        <AwaitingBackgroundCard
+          thread={thread}
+          fence={fence}
+          onReplied={onSent}
+          onReplyFailed={onReturn}
+          replySteps={replySteps}
+          onSnoozed={onLeave}
+          onSnoozeFailed={onReturn}
+        />
+      </WaitRowOpenContext.Provider>
+    </ThreadProjectScope>
   )
 }
 
-/** The steps card's Done, delivered into THIS card's project (deliverFollowUp) rather than the page's —
- *  AwaitingSteps' StepsDone sends through the page's own client, which is the wrong project here. Same
- *  message, same latch against a double send, same exit as the reply box. */
-function QueueStepsDone({ project, thread, onSent, onLanded, onFailed }: { project: QueuesProject; thread: ThreadView; onSent: () => void; onLanded: () => void; onFailed: () => void }) {
-  const [sent, setSent] = useState(false)
-  const reply = () => {
-    if (!thread.sessionId || sent) return
-    setSent(true)
-    onSent()
-    deliverFollowUp(project, thread, STEPS_DONE).then(onLanded, (cause) => {
-      if (pageUnloading()) return
-      setSent(false)
-      onFailed()
-      showToast(`Reply failed: ${(cause instanceof Error ? cause.message : "The reply could not be sent.").slice(0, 80)}`)
-    })
-  }
+/** A ```done fence (or a registered done), drawn as the transcript's fence card — presentation only; the
+ *  verb is the header's check. An ```awaiting fence is CardAwaiting's. */
+function FenceBody({ body }: { body: string }) {
+  const html = useMarkdownHtml(body)
   return (
-    <CardActions data-awaiting-steps-reply>
-      <button
-        type="button"
-        data-steps-done
-        disabled={sent}
-        onClick={reply}
-        onMouseDown={(e) => e.preventDefault()}
-        className={`${CARD_PRIMARY_ACTION} disabled:opacity-60`}
-      >
-        {STEPS_DONE}
-      </button>
-    </CardActions>
+    <TranscriptCard icon={Check} label="Done">
+      {/* null, not a falsy "": an empty body (registeredDoneBody) is a header-only card, not a blank content gap. */}
+      {html ? <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} /> : null}
+    </TranscriptCard>
   )
 }
 
