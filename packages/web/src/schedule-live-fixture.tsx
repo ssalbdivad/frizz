@@ -13,7 +13,8 @@ import {
   type InterpretScheduleResult,
   type ScheduleView,
 } from "@frizz/shared"
-import { DispatchForm, NewThreadDialog } from "./components/NewThreadModal.tsx"
+import { DispatchForm, NewThreadDialog, type DispatchDirs } from "./components/NewThreadModal.tsx"
+import { carryDispatchDraft } from "./lib/scheduleDraftState.ts"
 import { Toaster } from "./components/Toaster.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
@@ -31,7 +32,8 @@ import "./styles.css"
 //
 // Fixture verbs, on `window.__sched`: `remount()` unmounts and remounts the box (the incident: a viewport
 // override across the phone breakpoint did that in the real app), `openDialog()` opens the `c` dialog over
-// the page box, `reset()` zeroes the counts. Counts live on the page, so a reload starts them at zero; the
+// the page box, `reaim(dir)` moves the box to another project as the All-projects picker and ⌥↑/⌥↓ do,
+// `reset()` zeroes the counts. Counts live on the page, so a reload starts them at zero; the
 // draft store (sessionStorage) is what survives it, which is the point.
 
 type Counted = "dispatch" | "createLazyThread" | "createSchedule" | "deleteSchedule" | "interpretSchedule"
@@ -48,6 +50,9 @@ interface SchedFixture {
   unknown: string[]
   remount: () => void
   openDialog: () => void
+  /** Re-aim the box at another project the way the All-projects page does (AllQueues: carryDispatchDraft,
+   *  then the box keyed by the new project's dirs). */
+  reaim: (projectDir: string) => void
   reset: () => void
 }
 
@@ -69,6 +74,7 @@ const sched: SchedFixture = {
   unknown: [],
   remount: () => {},
   openDialog: () => {},
+  reaim: () => {},
   reset: () => {
     sched.counts = zero()
     sched.bodies = empty()
@@ -209,11 +215,16 @@ function Fixture() {
     }))
   }
   sched.openDialog = () => setDialog(true)
+  const [dirs, setDirs] = useState<DispatchDirs | undefined>(undefined)
+  sched.reaim = (projectDir) => {
+    carryDispatchDraft(dirs?.projectDir ?? PROJECT_DIR, projectDir)
+    setDirs({ projectDir, homeDir: undefined })
+  }
   return (
     <main className="min-h-screen bg-bg p-6">
       <section className="mx-auto max-w-xl rounded-xl border border-border bg-panel p-5">
         <h1 className="mb-3 text-sm font-medium">New thread</h1>
-        {!hidden && <DispatchForm key={mount} />}
+        {!hidden && <DispatchForm key={mount} dirs={dirs} />}
         <FlashProbe />
       </section>
       {dialog && <NewThreadDialog onClose={() => setDialog(false)} />}

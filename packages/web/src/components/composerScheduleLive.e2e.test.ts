@@ -1109,3 +1109,169 @@ test("24. on a phone a failed model read names the tap, never a key (X7)", { ski
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
+
+// ---- end-to-end round 3: the fix-round-2 findings through the real box ------------------------------------------
+
+/** What the box settled on, as one line a failure message can show. */
+const settledAs = (s: State) => s.open ? `${s.slot} ${JSON.stringify(s.ledge)} unread=${JSON.stringify(marksOf(s, "unread"))} offer=${JSON.stringify(marksOf(s, "offer"))}` : "dark"
+
+test("25. the round-2 break-it words in the real box: a minute, a count, a limiting adjective, a calendar abbreviation, an unlisted qualifier, a zone or a spelled clock is never left in the task", { skip: !baseUrl, timeout: 240_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    // Open edge: each settles as a CUE with its leftover dashed as unread — never an exact reading that
+    // would create the rule with those words left in the run's prompt. One per repro family.
+    const cues: [finding: string, text: string, unread: string][] = [
+      ["hourly-minute-dropped", "every hour at half past check CI", "at half"],
+      ["hourly-minute-dropped", "every hour at :15 and :45 check CI", "and :45"],
+      ["hourly-minute-dropped", "every 30 minutes offset by 10 check CI", "offset by 10"],
+      ["count-before-adverb-dropped", "twice daily, check the queue", "twice daily"],
+      ["abbreviated-calendar-residue", "every weekday at 9am Oct 12-30 triage new issues", "Oct"],
+      ["abbreviated-calendar-residue", "every Monday at 9am Sep–Dec triage new issues", "Sep"],
+      ["abbreviated-calendar-residue", "every day at 9am triage new issues, Mon-Fri only", "Mon-Fri"],
+      ["abbreviated-calendar-residue", "every day at 9am triage new issues for 2 wks", "for 2 wks"],
+      ["unlisted-qualifier-silent-prefix", "every Monday at 9am fortnightly triage new issues", "fortnightly"],
+      ["unlisted-qualifier-silent-prefix", "every Monday at 9am barring outages triage new issues", "barring outages"],
+      ["unlisted-qualifier-silent-prefix", "every Monday at 9am triage new issues. Stop after Christmas.", "Stop after"],
+      ["unlisted-zones", "every Monday at 9am NZT triage new issues", "NZT"],
+      ["unlisted-zones", "every Monday at 9am Kyiv triage new issues", "Kyiv"],
+      ["unlisted-zones", "every Monday at 9am -0500 triage new issues", "-0500"],
+      ["spelled-or-second-clock-dropped", "every weekday at quarter to 5 write the summary", "at quarter"],
+      ["spelled-or-second-clock-dropped", "every day at 9 thirty check the queue", "thirty"],
+      ["spelled-or-second-clock-dropped", "every weekday at 9 and again at 5 check", "and again at 5"],
+      ["spelled-or-second-clock-dropped", "every day at lunch post the menu", "at lunch"],
+    ]
+    const wrong: string[] = []
+    for (const [finding, text, unread] of cues) {
+      const { s } = await settle(page, text)
+      const ok = s.slot === "ledge" && marksOf(s, "unread").includes(unread) && /“/.test(s.ledge ?? "")
+      if (!ok) wrong.push(`${finding}: ${JSON.stringify(text)} settled ${settledAs(s)}`)
+    }
+
+    // Close edge: a count glued to an adverb, a limiting adjective, a zone after the phrase — never offered,
+    // not even for the ~800ms the close edge waits.
+    const neverOffered: [string, string][] = [
+      ["count-before-adverb-dropped", "check the queue twice daily"],
+      ["count-before-adverb-dropped", "back up the db 4x nightly"],
+      ["count-before-adverb-dropped", "check CI half-hourly"],
+      ["alternate-adjective-dropped", "sync with design on alternate Thursdays"],
+      ["alternate-adjective-dropped", "check CI on the first two Mondays at 9am"],
+      ["alternate-adjective-dropped", "deploy on odd Fridays"],
+      ["unlisted-zones", "triage new issues every Monday at 9am NZT"],
+    ]
+    const offered: string[] = []
+    for (const [finding, text] of neverOffered) {
+      const { s, everOpen } = await settle(page, text)
+      if (everOpen || s.open) offered.push(`${finding}: ${JSON.stringify(text)} settled ${settledAs(s)} (ever open: ${everOpen})`)
+    }
+    // Both lists asserted only here, so one run names every text that regressed, not just the first family.
+    assert.deepEqual({ wrong, offered }, { wrong: [], offered: [] }, "each open-edge text settles as a cue with its leftover dashed; no close-edge one is ever offered")
+
+    // An open-edge limiting adjective is read only once the box is told: the glyph puts it in the mode,
+    // where the whole text is read and the adjective is still unread, so Enter asks the model rather
+    // than creating every Monday.
+    const ALT = "alternate Mondays at 9am check CI"
+    const before = await counts(page)
+    const { s: alt } = await settle(page, ALT)
+    assert.equal(alt.open, false, `dark at the open edge: ${settledAs(alt)}`)
+    await page.click(`${PAGE_BOX} [data-composer-schedule]`)
+    assert.ok(await waitFor(async () => (await state(page))?.glyph === "on", 3_000), "the glyph enters the mode")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    await sleep(800)
+    let c = await counts(page)
+    assert.equal(c.createSchedule, before.createSchedule, `nothing created locally over "alternate": ${settledAs((await state(page))!)}`)
+    assert.equal(c.dispatch, before.dispatch, "and nothing dispatched in the mode")
+    assert.ok(c.interpretSchedule > before.interpretSchedule, "the model was asked")
+    await page.keyboard.press("Escape")
+    await sleep(300)
+
+    // Tab on a minute the grammar used to drop goes to the model; with nothing usable back, Enter creates nothing.
+    await settle(page, "every hour at half past check CI")
+    const asked0 = (await counts(page)).interpretSchedule
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule === asked0 + 1, 3_000), "Tab sent the minute to the model")
+    assert.ok(await waitFor(async () => !!(await state(page))?.refusal, 3_000), "the model's 'no' is shown")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    await sleep(500)
+    assert.equal((await counts(page)).createSchedule, before.createSchedule, "no hourly-on-the-hour schedule over 'at half past'")
+    await page.keyboard.press("Escape")
+    await sleep(300)
+
+    // The one the round turned EXACT: a guess landing on a stated hour is the other one — 6 and 18.
+    await settle(page, "every day at 6 and 18 check the backups")
+    let s = (await state(page))!
+    assert.equal(marksOf(s, "unread"), "", `read whole: ${settledAs(s)}`)
+    assert.ok((s.ledge ?? "").startsWith("Every day at 6am and 6pm"), `both clocks: ${s.ledge}`)
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "panel", 3_000))
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === before.createSchedule + 1, 3_000), "created")
+    const body = (await bodies(page, "createSchedule")).at(-1)!
+    assert.equal(body.rrule, "FREQ=DAILY;BYHOUR=6,18;BYMINUTE=0")
+    assert.equal(body.prompt, "check the backups")
+    assert.deepEqual(body.source, { kind: "local", grammar: SCHEDULE_GRAMMAR_VERSION })
+    c = await counts(page)
+    assert.equal(c.dispatch, 0)
+    s = (await state(page))!
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("26. re-aiming the box at another project carries the mode with its text: Enter there creates, never dispatches (carry-drops-mode)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await accept(page)
+    const keys = () => page.evaluate(() => {
+      const raw = sessionStorage.getItem("frizz-drafts:v1")
+      const entries = raw ? (JSON.parse(raw) as { entries: Record<string, { value: string }> }).entries : {}
+      return Object.fromEntries(Object.entries(entries).map(([k, v]) => [k, v.value]))
+    })
+    const OTHER = "/fixture/other-project"
+    await page.evaluate((dir) => window.__sched.reaim(dir), OTHER)
+    await sleep(400)
+    let s = (await state(page))!
+    assert.equal(s.text, PHRASE_TASK, "the text moved")
+    assert.equal(s.glyph, "on", "the re-aimed box is still in the mode")
+    assert.equal(s.send, "schedule", "and Enter still says Create schedule")
+    const modeKeys = Object.entries(await keys()).filter(([k]) => k.startsWith("dispatch-schedule:"))
+    assert.deepEqual(modeKeys.map(([k]) => k.includes(encodeURIComponent(OTHER))), [true], `the mode is filed under the new project alone: ${JSON.stringify(modeKeys)}`)
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 3_000), "Enter created")
+    assert.equal((await counts(page)).dispatch, 0, "Enter never dispatched the text set up as a schedule")
+    // Back to the first project: new text there starts out of the mode (nothing orphaned behind).
+    await page.evaluate(() => window.__sched.reaim("/fixture/schedule-live"))
+    await sleep(400)
+    await focusEnd(page)
+    await typeFast(page, "fix the flaky test")
+    await sleep(600)
+    s = (await state(page))!
+    assert.notEqual(s.glyph, "on", "new text in the first project is out of the mode")
+    assert.equal(s.send, "send")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// OPEN since end-to-end round 2 (§15.3), and still open in round 3: `pausePublishes` refuses a rest or idle
+// whenever the reading ends before the caret's word, which at the open edge is every task word, so the ledge's
+// `Each run` keeps the text of the last word BOUNDARY and drops the last word for good. Pinned as a todo so the
+// suite stays green and the day it is fixed this reports a passing todo.
+test("27. the ledge's Each run reads the whole task once typing stops", { skip: !baseUrl, timeout: 60_000, todo: "open: Each run stops one word short (§15.3, end-to-end round 2)" }, async () => {
+  const { page, errors } = await open()
+  try {
+    await offer(page)
+    await sleep(1_500)
+    const each = await page.evaluate((sel) => {
+      const form = document.querySelector(sel)!
+      return {
+        segment: (form.querySelector("[data-schedule-ledge-each]") as HTMLElement | null)?.innerText.replace(/\s+/g, " ").trim() ?? null,
+        title: form.querySelector("[data-schedule-slot]")?.closest("[title]")?.getAttribute("title") ?? null,
+      }
+    }, PAGE_BOX)
+    assert.equal(each.segment, "· Each run: triage new issues", `the ledge segment: ${JSON.stringify(each)}`)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})

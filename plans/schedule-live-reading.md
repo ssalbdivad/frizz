@@ -1620,6 +1620,22 @@ never shows `1pm`; `10:` is never a cue); 24 the phone's failed read naming the 
 offered while it is still only `Every night `, so 21 pins the settled screen for those and "never offered" for the
 rest. `nub run test:e2e -- <this file>`: **25/25**.
 
+*End-to-end round 3:* cases **25–27**. 25 carries fix round 2's grammar findings into the real box, one or more
+texts per finding: 18 open-edge texts (a minute after `every hour`, a count before an adverb, a calendar
+abbreviation, an unlisted qualifier, a named zone, a spelled or second clock) must settle as a CUE with the
+leftover dashed; 7 close-edge texts (`twice daily`, `4x nightly`, `half-hourly`, `alternate Thursdays`, `the first
+two Mondays`, `odd Fridays`, `… at 9am NZT`) must never open, not even for the close edge's wait; `alternate
+Mondays at 9am` put in the mode by the glyph asks the model on Enter and creates nothing locally; Tab on `every
+hour at half past` asks the model; and `every day at 6 and 18` is read whole and creates `BYHOUR=6,18`. 26 is
+carry-drops-mode: the fixture's `__sched.reaim(dir)` re-aims the box as AllQueues does (`carryDispatchDraft`, then
+the box keyed by the new project's `dirs`); the mode moves with the text, is filed under the new project alone,
+Enter there creates and never dispatches, and new text back in the first project starts out of the mode. Both
+were run red against the pre-fix code first (a copy of the tree with fix round 2's six source files at
+`c1c55bfd`, on its own vite; the fixture's re-aim there is the old prompt-only carry): 25 failed on all 18
+open-edge texts and 5 of the 7 close-edge ones, 26 on "the re-aimed box is still in the mode" (`hint`). 27 is the
+open `Each run` regression below, pinned as a node `todo` so the file stays green and reports it until it is
+fixed (it reads `· Each run: triage new`). `nub run test:e2e -- <this file>`: **27 pass, 1 todo** (28 tests; case 10 is two).
+
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
    - the schedule row and its next lazy run exist;
@@ -1680,6 +1696,29 @@ asserting `SCHEDULE_GRAMMAR_VERSION`), 28/28 in two runs, no page errors:
   word, which at the open edge is every task word. The panel's `Each run` is right. Shown on the fixture with
   `1fec06db`'s `scheduleOffer.ts` alone over `70279b8b` (`triage new`) against `70279b8b` itself (`triage new
   issues`).
+
+*End-to-end round 3, driven* the same way on a TWO-project stack (`--creds --wakers`, throwaway git repos `proj-a`
+launcher and `proj-b` tenant, Tue Oct 6 2026 ~04:08–04:30), grammar 3, no page errors in any phase:
+- **1** 7/7 as before: `source {local, grammar 3}`; the only new board row the pending run (`turn-idle`), no
+  thread that runs; the count flashed; Open showed the drawer; the namer renamed `Triage issues` → `Issue
+  triage` 3.05s after the toast and the pending run followed. **Still open:** the ledge's `Each run` read `·
+  Each run: triage new` 1.5s after the last key (and phase 2's ledge `… the single word ok and nothing`, without
+  `else`).
+- **2–3** 9/9: a real Haiku thread for the offered text and no schedule (then killed and archived); reload +
+  Enter a schedule and no thread; Undo deleted it and its run and restored the draft with the offer.
+- **4** real Sonnet, n=4, one each, typing at 60ms a key: keystroke → cue ledge **566, 453, 10, 1191ms**; Tab →
+  landed **4.50, 2.72, 6.81, 7.35s** (RPC 4.43, 2.69, 6.68, 7.25s). The 1191ms is `apart from Fridays`: the
+  qualifier hold keeps the exact `Every weekday at 9am` (its key hints dropped) from `apart ` until the boundary
+  after `triage`, about 2.5s of typing; Tab pressed inside that window re-reads first (T3) and was driven on
+  the fixture: after `Fridays ` it showed the no-task state, after `tri` it asked the model — neither accepted
+  the held exact reading. Still only with resolve-on-result and only on this box; this run's Sonnet was slower
+  than round 2's (2.36–4.50s).
+- **5** `every Thursday at 3pm` saved locally (grammar 3, stored `BYDAY=TH;BYHOUR=15`); the cue's request went
+  548ms after the last key, RPC 6.66s, landed 7.26s after it, at the stored 3pm (§11's open call).
+- **carry-drops-mode** (`scratch/fix2-carry-stack.ts`, 7/7): Tab, ⌥↓ re-aimed the box at `proj-b` with the mode
+  on; the mode key is under `proj-b` alone; Enter created one schedule through `/_frizz/proj-b/rpc/createSchedule`
+  with 0 dispatches; new text back in `proj-a` starts out of the mode. The picker path was used only for the way
+  back, not with the mode on.
 
 *As built (Step 5), driven* on a disposable stack (`--creds`, a throwaway git project), headless puppeteer with
 touch emulation (`isMobile`, `hasTouch`, every press a `page.tap`), dark, `America/New_York`, Tue Oct 6 2026
