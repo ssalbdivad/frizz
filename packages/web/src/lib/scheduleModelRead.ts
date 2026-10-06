@@ -3,49 +3,46 @@ import {
   SCHEDULE_NOT_FOUND_COPY,
   SCHEDULE_PRESENCE_COPY,
   SCHEDULE_SPACING_COPY,
-  cutPhrase,
-  locatePhrase,
   zonedWall,
   type InterpretScheduleResult,
-  type Span,
 } from "@frizz/shared"
 
-// THE MODEL TIER OF THE LIVE SCHEDULE READING (plans/schedule-live-reading.md §4.2), shared by the drawer's
-// Change when (§11) and the prompt box's schedule mode (§5.7). The local grammar reads most schedules in a
-// millisecond; what it declines — a condition, a vague count, an event offset, a zone, a typo — goes to the
-// server's interpreter (Sonnet, ~3s). That call costs the human's quota and holds the interpreter's
-// per-project `concurrency: 1` queue, so it is spent carefully:
+// THE MODEL READS OF A SCHEDULE (plans/schedule-live-reading.md), shared by the prompt box and the drawer's
+// Change when. The server's interpreter (`interpretSchedule`, schedule-interpreter.ts) decides whether the
+// words ask for a schedule and reads it out of them. Each read costs the human's quota and holds the
+// interpreter's per-project `concurrency: 1` queue, so it is spent carefully:
 //
 // - SINGLE FLIGHT PER READER. At most one request is out. A text that changes while one is out waits as the one
 //   queued follow-up — only the LATEST text, so a burst of edits during a read costs exactly one more read,
-//   and a stale request can sit at most one deep in the server's queue. The stale answer is still cached. The
+//   and a stale request sits at most one deep in the server's queue. The stale answer is still cached. The
 //   prompt box's reader is per DRAFT (`sharedModelReader`), so the `c` dialog and the page box under it, which
-//   show one mode, also share one flight; a drawer's Change when has its own.
+//   edit one draft, share one flight; a drawer's Change when has its own.
 // - A 10m CACHE across every box, keyed `context \0 tz \0 local date \0 text`. The date is in the key because
 //   "tomorrow at 8" read yesterday is not today's reading; `context` names what else the read depended on (a
 //   Change when reads against its schedule's stored rule and condition, so its answers are not the box's).
 //   Only the model's VERDICTS are cached — a reading or a refusal it would give again. A transport failure
-//   or a switched-off interpreter is shown for its text but never cached, so the next Enter really asks.
-// - A BUDGET of 12 automatic reads per session (a mode session in the box, an edit session in the drawer).
-//   After that only an explicit act (Enter) reads; explicit reads are single-flight but never budgeted.
-// - A MODEL READING BELONGS TO ITS PHRASE, not the whole text (`relocateModelReading`): an edit to the task
-//   around it keeps it, re-cut locally with the shared `cutPhrase`; an edit that touches the phrase drops it.
+//   or a switched-off interpreter is kept for its text this session but never cached, so a submit asks again.
+// - A BUDGET of 40 automatic reads per reader — per draft in the box, per edit in the drawer. Past it only an
+//   explicit read (a submit, Enter in the drawer) goes out; explicit reads are single-flight but never
+//   budgeted. `reset` refills it when the draft starts over.
+// - A CALL THAT HANGS is given up after READ_TIMEOUT_MS: its text reads as failed and the queued text goes out.
+//   A verdict that arrives later is still cached.
 //
-// Cancellation is client-side discard only; `interpretSchedule`'s contract is unchanged (§4.2, §16).
+// The text is read as given. Callers send it TRIMMED: the server trims it anyway (`InterpretScheduleInput`),
+// and the answer's offsets index what it read, so a caller maps them onto its own text by adding the
+// whitespace it trimmed off the front (lib/scheduleIntent.ts `phraseSpan`). Cancellation is client-side
+// discard only; `interpretSchedule`'s contract is unchanged.
 
-/** How long a cached model answer stays good (§4.2). */
+/** How long a cached model answer stays good. */
 export const MODEL_CACHE_TTL_MS = 10 * 60_000
 /** The most model answers the cache holds; the oldest go first. */
 export const MODEL_CACHE_MAX = 50
-/** Automatic model reads per session; Enter still reads after this. */
-export const MODEL_READ_BUDGET = 12
+/** Automatic model reads per reader (per draft); a submit still reads after this. */
+export const MODEL_READ_BUDGET = 40
+/** A read that has not answered after this long is a failed read. */
+export const READ_TIMEOUT_MS = 15_000
 
 export type ModelReadOk = Extract<InterpretScheduleResult, { ok: true }>
-
-/** What the human sees when the read itself failed — the request, not the reading (§5.9). */
-export const MODEL_UNREACHABLE_COPY = "Couldn't read that just now. Press Enter to try again."
-/** What the human sees once the automatic reads are spent (§5.9). */
-export const MODEL_BUDGET_COPY = "Press Enter to read it again."
 
 // ---- the cache ------------------------------------------------------------------------------------------
 
@@ -96,27 +93,9 @@ export function isModelVerdict(result: InterpretScheduleResult): boolean {
     || e.startsWith("Couldn't turn that into a schedule") || e.startsWith("What should each run do?")
 }
 
-/** The interpreter's own words for a failed call ("Couldn't read that just now: …") read as the house copy,
- *  with nothing about the transport; any other refusal is the model's copy, verbatim. */
-export function modelRefusalCopy(result: Extract<InterpretScheduleResult, { ok: false }>): string {
-  return /^Couldn't read that just now\b/.test(result.error) ? MODEL_UNREACHABLE_COPY : result.error
-}
-
-/**
- * The model's offsets, moved onto the text the box SENT. The server parses the request with
- * `InterpretScheduleInput`, whose `text` is trimmed, so the interpreter's `phraseStart`/`phraseEnd` index the
- * trimmed text: a prompt that starts with a newline (Shift-Enter first) or a pasted space drew every model mark
- * that many characters late, and cut the wrong words out of Each run ("y post the digest") — fix round 1, X8.
- * The trimmed lead is added back unless the offsets already slice the phrase out of the sent text (a server
- * that does not trim). `phrase` is always `text.slice(start, end)` of what the interpreter read.
- */
-export function alignModelOffsets(sent: string, result: InterpretScheduleResult): InterpretScheduleResult {
-  if (!result.ok) return result
-  const lead = sent.length - sent.trimStart().length
-  if (!lead) return result
-  const slices = (by: number) => sent.slice(result.phraseStart + by, result.phraseEnd + by) === result.phrase
-  if (slices(0) && !slices(lead)) return result
-  return { ...result, phraseStart: result.phraseStart + lead, phraseEnd: result.phraseEnd + lead }
+/** The interpreter's own words for a call that failed on its side ("Couldn't read that just now: …"). */
+export function isFailedRead(result: InterpretScheduleResult): boolean {
+  return !result.ok && /^Couldn't read that just now\b/.test(result.error)
 }
 
 // ---- the reader: single flight, budget ------------------------------------------------------------------
@@ -128,25 +107,26 @@ export type ModelReadView =
   | { status: "reading" }
   /** The model's answer for exactly this text (cached, or this session's non-verdict answer). */
   | { status: "answered"; result: InterpretScheduleResult }
-  /** The request failed; Enter asks again. */
+  /** The request failed or timed out; an explicit read asks again. */
   | { status: "failed"; message: string }
-  /** The automatic reads are spent; only Enter reads. */
+  /** The automatic reads are spent; only an explicit read goes out. */
   | { status: "budget" }
 
 export interface ModelReader {
   /** Ask for a model reading of `text`. A cached answer costs nothing; a text already out is not sent
    *  twice; with a read out, `text` becomes the one queued follow-up. An automatic request past the budget
-   *  is refused (`view` says `budget`); an `explicit` one (Enter) is never budgeted. */
+   *  is refused (`view` says `budget`); an `explicit` one is never budgeted, and asks again after a failure. */
   request(text: string, opts?: { explicit?: boolean }): void
-  /** Drop the queued follow-up: the text no longer needs the model (the grammar reads it now). */
+  /** Drop the queued follow-up: the text no longer needs the model. */
   cancelQueued(): void
   view(text: string): ModelReadView
-  /** The newest answer that landed, for whatever text — what `relocateModelReading` carries forward. */
-  lastAnswer(): { text: string; result: InterpretScheduleResult } | undefined
-  /** Automatic reads spent this session. */
+  /** The newest answer that landed, for whatever text, and a number that grows with every landing — what a
+   *  reading shown while the next one is read (stale-while-revalidate) is taken from. */
+  lastAnswer(): { text: string; result: InterpretScheduleResult; seq: number } | undefined
+  /** Automatic reads spent since the last reset. */
   spent(): number
-  /** A new session: the budget refills and this session's failures are forgotten. A read still out lands
-   *  in the cache as usual. */
+  /** Start over (the draft was cleared): the budget refills, and this session's failures, non-verdict answers
+   *  and last answer are forgotten. A read still out lands in the cache as usual. */
   reset(): void
   subscribe(listener: () => void): () => void
 }
@@ -157,11 +137,24 @@ export interface ModelReaderDeps {
   keyOf: (text: string, nowMs: number) => string
   now?: () => number
   budget?: number
+  timeoutMs?: number
+  /** Tests: the timer the timeout runs on. */
+  timers?: { set: (run: () => void, ms: number) => unknown; clear: (handle: unknown) => void }
 }
 
 export function createModelReader(deps: ModelReaderDeps): ModelReader {
   const now = deps.now ?? Date.now
   const budget = deps.budget ?? MODEL_READ_BUDGET
+  const timeoutMs = deps.timeoutMs ?? READ_TIMEOUT_MS
+  const timers = deps.timers ?? {
+    set: (run: () => void, ms: number) => {
+      const handle = setTimeout(run, ms)
+      // Under node (the tests) a read's give-up timer must not hold the process open; a browser has no unref.
+      ;(handle as { unref?: () => void }).unref?.()
+      return handle
+    },
+    clear: (handle: unknown) => clearTimeout(handle as ReturnType<typeof setTimeout>),
+  }
   const listeners = new Set<() => void>()
   let flight: string | undefined
   let queued: { text: string; explicit: boolean } | undefined
@@ -170,7 +163,8 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
   /** This session's answers that are not cached (non-verdicts), by text; bounded. */
   const answers = new Map<string, InterpretScheduleResult>()
   const failures = new Map<string, string>()
-  let last: { text: string; result: InterpretScheduleResult } | undefined
+  let last: { text: string; result: InterpretScheduleResult; seq: number } | undefined
+  let landings = 0
 
   const notify = () => { for (const l of [...listeners]) l() }
   const cached = (text: string) => cachedModelRead(deps.keyOf(text, now()), now())
@@ -182,6 +176,21 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
     if (refusedForBudget === text) refusedForBudget = undefined
     flight = text
     const key = deps.keyOf(text, now())
+    let done = false
+    const finish = () => {
+      done = true
+      timers.clear(timer)
+      flight = undefined
+      const next = queued
+      queued = undefined
+      if (next && !cached(next.text)) start(next.text, next.explicit)
+      notify()
+    }
+    const timer = timers.set(() => {
+      if (done) return
+      failures.set(text, "timed out")
+      finish()
+    }, timeoutMs)
     let call: Promise<InterpretScheduleResult>
     try {
       call = deps.interpret(text)
@@ -189,25 +198,26 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
       call = Promise.reject(error)
     }
     call.then(
-      (answer) => {
-        const result = alignModelOffsets(text, answer)
+      (result) => {
+        // A verdict is a verdict even after the wait was given up on: cached for the next ask.
         if (isModelVerdict(result)) remember(key, result, now())
-        else {
+        if (done) {
+          if (isModelVerdict(result)) notify()
+          return
+        }
+        if (!isModelVerdict(result)) {
           answers.set(text, result)
           while (answers.size > 20) answers.delete(answers.keys().next().value!)
         }
-        last = { text, result }
+        last = { text, result, seq: ++landings }
+        finish()
       },
       (error: unknown) => {
+        if (done) return
         failures.set(text, error instanceof Error ? error.message : String(error))
+        finish()
       },
-    ).finally(() => {
-      flight = undefined
-      const next = queued
-      queued = undefined
-      if (next && !cached(next.text)) start(next.text, next.explicit)
-      notify()
-    })
+    )
   }
 
   function start(text: string, explicit: boolean): void {
@@ -227,7 +237,7 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
         queued = undefined
         return
       }
-      // A non-verdict answer (a failed call) stays on screen until an explicit act asks again.
+      // A non-verdict answer or a failure stays as it is until an explicit read asks again.
       if (!explicit && (answers.has(text) || failures.has(text))) return
       if (flight !== undefined) {
         queued = { text, explicit: explicit || (queued?.text === text && queued.explicit) }
@@ -260,6 +270,7 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
       refusedForBudget = undefined
       failures.clear()
       answers.clear()
+      last = undefined
       notify()
     },
     subscribe(listener) {
@@ -280,16 +291,15 @@ function readerOver(deps: { current: ModelReaderDeps }): ModelReader {
     keyOf: (text, nowMs) => deps.current.keyOf(text, nowMs),
     ...(first.now ? { now: () => deps.current.now!() } : {}),
     ...(first.budget !== undefined ? { budget: first.budget } : {}),
+    ...(first.timeoutMs !== undefined ? { timeoutMs: first.timeoutMs } : {}),
   })
 }
 
 /**
- * The reader for every box on one draft. The `c` dialog and the page box under it edit ONE draft and show one
- * mode (lib/scheduleDraftState.ts), so they must share one flight and one budget: with a reader each, Tab in
- * the dialog sent its explicit read and the hidden page box's own idle sent the same text again 700ms later —
- * two Sonnet calls per mode entry and per idle edit (fix round 1, X2). With one, the second box's request finds
- * that text already out and sends nothing, and the answer lands in both. The latest box to render supplies
- * `interpret` and `keyOf`.
+ * The reader for every box on one draft. The `c` dialog and the page box under it edit ONE draft, so they share
+ * one flight and one budget: with a reader each, both boxes sent the same text, two model calls for one edit
+ * (fix round 1, X2). With one, the second box's request finds that text already out and sends nothing, and the
+ * answer lands in both. The latest box to render supplies `interpret` and `keyOf`.
  */
 export function sharedModelReader(key: string, deps: ModelReaderDeps): ModelReader {
   let entry = sharedReaders.get(key)
@@ -307,6 +317,24 @@ export function clearSharedModelReaders(): void {
   sharedReaders.clear()
 }
 
+/**
+ * The newest answer known for `text` or before it — what stays on screen while `text` is read
+ * (stale-while-revalidate): the answer for `text` itself when there is one, else the newest that landed for any
+ * earlier text, which is newer than what was shown when the typing outran the read. An answer found for the text
+ * itself (a cache hit, an Undo) outranks every landing up to the moment it stops being the text — even one that
+ * lands for an older text while it is shown. A failed read is no answer, so what was on screen before it stays.
+ * Cleared with the text.
+ */
+export function useNewestAnswer(reader: ModelReader, text: string): { text: string; result: InterpretScheduleResult } | undefined {
+  const newest = useRef<{ text: string; result: InterpretScheduleResult; seq: number } | undefined>(undefined)
+  const view = reader.view(text)
+  const landed = reader.lastAnswer()
+  if (!text) newest.current = undefined
+  else if (view.status === "answered" && !isFailedRead(view.result)) newest.current = { text, result: view.result, seq: landed?.seq ?? 0 }
+  else if (landed && landed.seq > (newest.current?.seq ?? 0) && !isFailedRead(landed.result)) newest.current = landed
+  return newest.current
+}
+
 /** A reader for the component's lifetime — or, with `share`, the one every box on that draft uses — and a
  *  re-render whenever what it knows changes. The latest `interpret` and `keyOf` are always the ones called, so
  *  a reader never reads with a stale schedule. */
@@ -318,64 +346,4 @@ export function useModelReader(deps: ModelReaderDeps, opts: { share?: string } =
   const [, bump] = useReducer((n: number) => n + 1, 0)
   useEffect(() => reader.subscribe(bump), [reader])
   return reader
-}
-
-// ---- a model reading belongs to its phrase ----------------------------------------------------------------
-
-const WORD_CHAR = /[\p{L}\p{N}'’]/u
-
-/**
- * What stands next to a span on one side: the nearest WORD, and the PUNCTUATION between it and the span
- * (whitespace dropped; a run of line breaks kept as one, since a new paragraph is punctuation too). Both are
- * "" at the text's edge. The word is lowercased: a capital is not a change of meaning.
- */
-function neighbour(text: string, span: Span, side: "before" | "after"): { word: string; seam: string } {
-  const m = side === "before"
-    ? /([\p{L}\p{N}'’]+)?([^\p{L}\p{N}'’]*)$/u.exec(text.slice(0, span.start))!
-    : /^([^\p{L}\p{N}'’]*)([\p{L}\p{N}'’]+)?/u.exec(text.slice(span.end))!
-  const [seam, word] = side === "before" ? [m[2] ?? "", m[1] ?? ""] : [m[1] ?? "", m[2] ?? ""]
-  return { word: word.toLowerCase(), seam: seam.replace(/[^\S\n]+/g, "").replace(/\n+/g, "\n") }
-}
-
-/** One side of the phrase is as it was read: the same nearest word, across the same punctuation. With no
- *  word on that side then or now, the punctuation is a sentence's own end (`…holiday.`), or a clause not yet
- *  continued (`…holiday,` before its next word is typed): nothing there reads with the phrase yet. */
-function sameSide(now: { word: string; seam: string }, was: { word: string; seam: string }): boolean {
-  if (!now.word && !was.word) return true
-  return now.word === was.word && now.seam === was.seam
-}
-
-/**
- * Carry a model reading forward to the prose as it is now (§4.2): valid while its phrase is still there —
- * located near where it was (`near`, else where the model found it) — and NOTHING TOUCHES IT. Returns the
- * phrase's new span and the prompt re-cut from the prose with the shared `cutPhrase` — byte-for-byte what the
- * server would save — or undefined when the reading no longer holds.
- *
- * "Touches", exactly (fix round 3, relocate-blind-behind-punctuation): an edit touches the phrase when it
- * changes any character of the phrase, the punctuation between the phrase and the nearest word on either
- * side (whitespace aside), or that nearest word itself — on a side where a word stands now or stood when it
- * was read. Everything past that word is the task's, and an edit there keeps the reading.
- *
- * Why the word ACROSS punctuation counts: the model read the whole text, and a clause runs on past a comma.
- * Typing `, or a weekend` after "every day unless it's a holiday" changes what it means without changing a
- * character of the phrase; so does a new sentence right after it (`Skip weekends too.`), and so does a
- * qualifier before it (`Except weekends, every day …`). Until fix round 3 the word was looked for across
- * whitespace only, so behind a comma both sides read "" whatever was typed there: the reading stood, no second
- * read went out, and the schedule was created without the added clause, with its words left in the task.
- * The check cannot tell a qualifier from a greeting (`Hey, every day …`), and a word typed into the task's
- * FIRST word (`post` → `send`) drops it too: the price of both is one more read, never a wrong schedule.
- */
-export function relocateModelReading(
-  prose: string,
-  read: { text: string; result: ModelReadOk },
-  near?: number,
-): { span: Span; prompt: string } | undefined {
-  const { result } = read
-  const span = locatePhrase(prose, result.phrase, near ?? result.phraseStart)
-  if (!span) return undefined
-  if ((span.start > 0 && WORD_CHAR.test(prose[span.start - 1]!)) || (span.end < prose.length && WORD_CHAR.test(prose[span.end]!))) return undefined
-  const was = { start: result.phraseStart, end: result.phraseEnd }
-  if (!sameSide(neighbour(prose, span, "before"), neighbour(read.text, was, "before"))) return undefined
-  if (!sameSide(neighbour(prose, span, "after"), neighbour(read.text, was, "after"))) return undefined
-  return { span, prompt: cutPhrase(prose, span) }
 }

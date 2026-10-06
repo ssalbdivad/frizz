@@ -1,16 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
-import {
-  SCHEDULE_GRAMMAR_VERSION,
-  SCHEDULE_READING_MOVED,
-  readSchedulePhrase,
-  scheduleRefusalOf,
-  type PhraseReading,
-  type ScheduleRunView,
-  type ScheduleView,
-  type UpdateScheduleInput,
-} from "@frizz/shared"
+import { type ScheduleRunView, type ScheduleView, type UpdateScheduleInput } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { closeDrawersById, pushDrawer, showToast, store } from "../store.ts"
 import { projectSlug } from "../lib/base-path.ts"
@@ -20,9 +11,9 @@ import { invalidateSchedules, proposedByLine, scheduleKeys, scheduleNextLabel } 
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { profileGridDisplayParts } from "../lib/profileGrid.ts"
 import { effortWord } from "../lib/mobileThread.ts"
-import { modelReadKey, useModelReader } from "../lib/scheduleModelRead.ts"
-import { holdsQualifier, publishesNow, readingKey } from "../lib/scheduleWhenField.ts"
-import { SchedulePreview, browserZone, changeWhenView, schedulePreviewModel } from "./SchedulePreview.tsx"
+import { modelReadKey, useModelReader, useNewestAnswer } from "../lib/scheduleModelRead.ts"
+import { classifyEdit, createReadScheduler, type ReadScheduler } from "../lib/scheduleReadScheduler.ts"
+import { SchedulePreview, browserZone, changeWhenView } from "./SchedulePreview.tsx"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -244,21 +235,16 @@ function Echo({ schedule }: { schedule: ScheduleView }) {
 }
 
 /**
- * "Change when", LIVE (plans/schedule-live-reading.md §11). The field means nothing but WHEN, so Enter carries
- * no dispatch risk: it is where the local grammar, its publish policy and the preview prove themselves first.
+ * "Change when", LIVE (plans/schedule-live-reading.md). The field means nothing but WHEN, so it needs no schedule
+ * word to be read: every change is read by the model — at a word's end, or after the typing rests
+ * (lib/scheduleReadScheduler.ts) — against the schedule's stored words, rule and condition, in its own zone.
  *
- * - The words are read by the local grammar (`scope: "field"`, the whole field must be the phrase, one-offs
- *   included) at word boundaries and after 250ms of rest, in the schedule's own zone, and previewed at once
- *   with the parts it assumed dim. A half-typed word never changes what is shown: the last reading holds.
- * - An exact reading saves through `updateSchedule` with `source: local`, which the server re-derives before
- *   writing (§10.1). The stored condition is kept, and says so: `Still checks: … · Drop`.
- * - Words the grammar declines (a condition, a vague count, a typo) go to the model after 600ms of rest —
- *   single flight, the 10m cache and the budget in lib/scheduleModelRead.ts — with the part it IS sure of
- *   shown meanwhile and the rest quoted. A model reading over a local core must agree with it (§4.3).
- * - Ambiguous words, events, presence and spacing get their copy and no Save, and never reach the model.
- * - Enter and Save re-read the words synchronously first: they act only on the reading on screen. If the fresh
- *   read differs (a word typed faster than the rest, a minute rolled over), it is shown instead and nothing
- *   is saved until the next Enter.
+ * - The preview shows the reading of the words on screen. While newer words are being read the last reading
+ *   STAYS, shimmering, and the new one replaces it in place (stale-while-revalidate); with nothing read yet the
+ *   line says it is reading.
+ * - Save is offered only on a reading of EXACTLY the words on screen. Enter saves that reading; on words not read
+ *   yet it reads them now (past the budget) and saves nothing.
+ * - A refusal — the words do not say when, a presence, too frequent, a failed read — is said, with no Save.
  * - Nothing is written until Save; the first Esc puts the words back, the next closes the drawer.
  */
 function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
@@ -271,19 +257,7 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
   // Edited since the words were last put back: a save elsewhere (another tab, a worker's move) only replaces
   // words the human has not touched.
   const dirty = useRef(false)
-  const [published, setPublishedState] = useState<Published | null>(null)
-  const publishedRef = useRef<Published | null>(null)
-  const setPublished = (next: Published | null) => {
-    publishedRef.current = next
-    setPublishedState(next)
-  }
-  const [notice, setNotice] = useState<{ words: string; copy: string } | null>(null)
-  const [stale, setStale] = useState<string | null>(null)
-  const movedOnce = useRef<string | null>(null)
-  const [dropCondition, setDropCondition] = useState(false)
   const [shake, setShake] = useState(0)
-  const restTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
-  useEffect(() => () => clearTimeout(restTimer.current), [])
   useEffect(() => {
     if (!dirty.current) setText(schedule.whenText)
   }, [schedule.whenText])
@@ -293,151 +267,64 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
     // A Change when reads against this schedule's stored rule and condition: its answers are its own.
     keyOf: (words, at) => modelReadKey({ context: `schedule:${schedule.id}`, tz, nowMs: at, text: words }),
   })
+  const readerRef = useRef(reader)
+  readerRef.current = reader
 
   const words = text.trim()
   const changed = words !== schedule.whenText.trim()
+  const live = changed && words !== ""
 
-  /** Read the words now and put that reading on screen — unless this is a word boundary inside a qualifier
-   *  still being typed, which waits for the rest (`holdsQualifier`). */
-  const publish = (value: string, at: "boundary" | "rest" = "rest"): PhraseReading => {
-    clearTimeout(restTimer.current)
-    const w = value.trim()
-    const reading = readSchedulePhrase(w, { nowMs: Date.now(), tz, scope: "field" })
-    if (at === "boundary" && holdsQualifier(publishedRef.current?.reading, w, reading)) {
-      restTimer.current = setTimeout(() => publish(value), CHANGE_WHEN_REST_MS)
-      return reading
-    }
-    setPublished({ words: w, reading })
-    return reading
-  }
+  // When to ask: the box's own policy, with every word that differs from the stored ones wanted.
+  const stored = useRef(schedule.whenText)
+  stored.current = schedule.whenText
+  const scheduler = useRef<ReadScheduler | null>(null)
+  scheduler.current ??= createReadScheduler({
+    request: (value) => readerRef.current.request(value.trim()),
+    cancel: () => readerRef.current.cancelQueued(),
+    wanted: (value) => value.trim() !== "" && value.trim() !== stored.current.trim(),
+  })
+  useEffect(() => () => scheduler.current?.dispose(), [])
 
-  // What the preview describes: the last published reading, held while a word is half-typed.
-  const shown = changed && words && published?.words ? published : null
-  const declined = shown !== null && (shown.reading.kind === "cue" || shown.reading.kind === "none")
-
-  // THE MODEL, after 600ms with no input, for words the grammar declines. The words are read fresh when the
-  // timer fires, so the wait is 600ms from the last keystroke whether or not it ended a word.
-  useEffect(() => {
-    if (!changed || !words) {
-      reader.cancelQueued()
-      return
-    }
-    const t = setTimeout(() => {
-      const current = publishedRef.current?.words === words ? publishedRef.current.reading : publish(words)
-      if (current.kind === "cue" || current.kind === "none") reader.request(words)
-      else reader.cancelQueued()
-    }, CHANGE_WHEN_MODEL_IDLE_MS)
-    return () => clearTimeout(t)
-  }, [words, changed])
-  // Words the grammar reads now no longer need the read queued behind the one that is out.
-  useEffect(() => {
-    if (shown && !declined) reader.cancelQueued()
-  }, [shown?.reading.kind, declined])
-
-  const view = changeWhenView({ shown, reader, tz, nowMs, stale: stale !== null && stale === words })
-  const shimmer = useDelayedTrue(view.kind === "reading", SHIMMER_DELAY_MS)
-  const localSpec = view.kind === "local" ? { title: schedule.title, rrule: view.reading.rrule, dtstart: view.reading.dtstart, tz, assumed: view.reading.assumed } : undefined
-  const localOk = localSpec ? schedulePreviewModel(localSpec, nowMs, viewerTz).ok : false
-  const savable = (view.kind === "local" && localOk) || view.kind === "model"
+  const view = live ? reader.view(words) : ({ status: "none" } as const)
+  const newest = useNewestAnswer(reader, live ? words : "")
+  const preview = live ? changeWhenView({ view, stale: newest && newest.text !== words ? newest.result : undefined }) : ({ kind: "none" } as const)
+  const shimmer = useDelayedTrue(preview.kind === "reading" || (preview.kind === "model" && !preview.fresh), SHIMMER_DELAY_MS)
+  const savable = preview.kind === "model" && preview.fresh
 
   const restore = () => {
-    clearTimeout(restTimer.current)
     dirty.current = false
     setText(schedule.whenText)
-    setPublished(null)
-    setNotice(null)
-    setStale(null)
-    setDropCondition(false)
-    movedOnce.current = null
-    reader.cancelQueued()
-    reader.reset()
+    readerRef.current.cancelQueued()
+    readerRef.current.reset()
   }
 
   const save = useMutation({
-    mutationFn: (job: { words: string; local: boolean; input: UpdateScheduleInput }) => api.updateSchedule(job.input),
-    onSuccess: (_view, job) => {
-      clearTimeout(restTimer.current)
+    mutationFn: (input: UpdateScheduleInput) => api.updateSchedule(input),
+    onSuccess: (_view, input) => {
       dirty.current = false
-      setText(job.input.whenText ?? schedule.whenText)
-      setPublished(null)
-      setNotice(null)
-      setDropCondition(false)
-      movedOnce.current = null
-      reader.reset()
+      setText(input.whenText ?? schedule.whenText)
+      readerRef.current.reset()
       invalidateSchedules(queryClient)
     },
-    onError: (error, job) => {
-      const refusal = scheduleRefusalOf(error)
-      // The server read the words differently at its clock: read them again here and show that. A second
-      // refusal of the same words means the two cannot agree from this page (§10.1).
-      if (refusal === SCHEDULE_READING_MOVED && job.local && movedOnce.current !== job.words) {
-        movedOnce.current = job.words
-        publish(job.words)
-        setNotice({ words: job.words, copy: UPDATED_FOR_TIME })
-        return
-      }
-      if (refusal) {
-        setNotice(null)
-        setStale(job.words)
-        return
-      }
-      showToast(`Could not save: ${(error as Error).message.slice(0, 100)}`)
-    },
+    onError: (error) => showToast(`Could not save: ${(error as Error).message.slice(0, 100)}`),
   })
 
-  /** Enter and Save: act only on what is on screen, read again now. */
+  /** Enter and Save: only a reading of exactly these words is saved. */
   const commit = () => {
-    if (!changed || !words || save.isPending || (stale !== null && stale === words)) return
-    const before = publishedRef.current
-    const fresh = readSchedulePhrase(words, { nowMs: Date.now(), tz, scope: "field" })
-    if (!before || readingKey(before.reading) !== readingKey(fresh)) {
-      setPublished({ words, reading: fresh })
-      if (fresh.kind === "cue" || fresh.kind === "none") reader.request(words, { explicit: true })
-      // Something else was on screen: say why this Enter only showed the new reading. With nothing shown
-      // yet, showing it is answer enough.
-      else if (fresh.kind === "exact" && !fresh.spacing && before) setNotice({ words, copy: before.words === words ? UPDATED_FOR_TIME : UPDATED_TO_TYPED })
+    if (!live || save.isPending) return
+    if (preview.kind === "model" && preview.fresh) {
+      const r = preview.result
+      save.mutate({ id: schedule.id, revision: schedule.revision, whenText: r.whenText, rrule: r.rrule, dtstart: r.dtstart, tz: r.tz, condition: r.condition ?? null })
       return
     }
-    if (before.words !== words) setPublished({ words, reading: fresh })
-    if (fresh.kind === "exact") {
-      if (fresh.spacing || !schedulePreviewModel({ title: schedule.title, rrule: fresh.rrule, dtstart: fresh.dtstart, tz }, Date.now(), viewerTz).ok) return
-      save.mutate({
-        words,
-        local: true,
-        input: {
-          id: schedule.id,
-          revision: schedule.revision,
-          whenText: fresh.phrase.trim(),
-          rrule: fresh.rrule,
-          dtstart: fresh.dtstart,
-          tz,
-          ...(dropCondition && schedule.condition ? { condition: null } : {}),
-          source: { kind: "local", grammar: SCHEDULE_GRAMMAR_VERSION },
-        },
-      })
-      return
-    }
-    if (fresh.kind !== "cue" && fresh.kind !== "none") return
-    const current = changeWhenView({ shown: { words, reading: fresh }, reader, tz, nowMs: Date.now(), stale: false })
-    if (current.kind === "model") {
-      const r = current.result
-      save.mutate({
-        words,
-        local: false,
-        input: { id: schedule.id, revision: schedule.revision, whenText: r.whenText, rrule: r.rrule, dtstart: r.dtstart, tz: r.tz, condition: r.condition ?? null },
-      })
-      return
-    }
-    const status = reader.view(words).status
-    // Still reading, or the model's answer for exactly these words is on screen: nothing new to ask.
-    if (status === "reading" || current.kind === "disagree" || (status === "answered" && current.kind === "copy")) {
+    // Being read: wait for it. Anything else — not asked yet, failed, past the budget — is read now.
+    if (view.status === "reading") {
       setShake((n) => n + 1)
       return
     }
-    reader.request(words, { explicit: true })
+    if (view.status !== "answered") readerRef.current.request(words, { explicit: true })
   }
 
-  const condition = schedule.condition?.trim()
   return (
     <section className="flex flex-col gap-1.5">
       <h3 className={LABEL}>When</h3>
@@ -447,17 +334,9 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
         onChange={(e) => {
           const value = e.target.value
           dirty.current = true
-          setText(value)
-          setNotice(null)
           const native = e.nativeEvent as InputEvent
-          if (publishesNow(native.inputType, value, e.target.selectionStart ?? value.length)) publish(value, "boundary")
-          else {
-            clearTimeout(restTimer.current)
-            restTimer.current = setTimeout(() => publish(value), CHANGE_WHEN_REST_MS)
-          }
-        }}
-        onBlur={() => {
-          if (changed && publishedRef.current?.words !== words) publish(text)
+          scheduler.current!.changed(value, classifyEdit(text, value, e.target.selectionStart ?? value.length, native.inputType))
+          setText(value)
         }}
         onKeyDown={(e) => {
           if (e.key === "Enter" && !e.nativeEvent.isComposing) {
@@ -475,66 +354,35 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
         spellCheck={false}
         className="min-w-0 rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-fg outline-none placeholder:text-muted focus:border-border-strong"
       />
-      {shown && view.kind !== "none" && (
-        // One 20px line rhythm, no gaps: the preview's lines, Still checks and a notice are one paragraph's
-        // worth of lines, and a flex gap between some of them and not others read as two paragraphs.
-        <div data-schedule-when-preview={view.kind} role="status" className="flex flex-col rounded-lg border border-border bg-panel-2 px-3 py-2">
-          {view.kind === "local" && localSpec && <SchedulePreview spec={localSpec} nowMs={nowMs} viewerTz={viewerTz} />}
-          {view.kind === "local" && localOk && condition && (
-            <p data-schedule-when-condition={dropCondition ? "dropped" : "kept"} className="text-[12px] leading-5 text-muted">
-              {dropCondition ? "Won't check: " : "Still checks: "}
-              <span className={dropCondition ? "text-muted-70 line-through decoration-muted-50" : "text-fg/85"}>{condition}</span>
-              {" · "}
-              <button
-                type="button"
-                data-schedule-when-drop
-                onMouseDown={(e) => e.preventDefault()}
-                onClick={() => setDropCondition((d) => !d)}
-                className="rounded-sm text-fg/80 underline decoration-border-strong underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/50 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-              >
-                {dropCondition ? "Keep" : "Drop"}
-              </button>
-            </p>
-          )}
-          {view.kind === "model" && (
-            <SchedulePreview spec={{ title: schedule.title, rrule: view.result.rrule, dtstart: view.result.dtstart, tz: view.result.tz, condition: view.result.condition ?? null }} nowMs={nowMs} viewerTz={viewerTz} />
-          )}
-          {view.kind === "reading" && view.core && (
+      {live && preview.kind !== "none" && (
+        // One 20px line rhythm, no gaps: the preview's lines and a refusal are one paragraph's worth of lines.
+        <div data-schedule-when-preview={preview.kind === "model" && !preview.fresh ? "updating" : preview.kind} role="status" className="flex flex-col rounded-lg border border-border bg-panel-2 px-3 py-2">
+          {preview.kind === "model" && (
             <SchedulePreview
-              spec={{ title: schedule.title, rrule: view.core.rrule, dtstart: view.core.dtstart, tz, assumed: view.core.assumed }}
+              spec={{ title: schedule.title, rrule: preview.result.rrule, dtstart: preview.result.dtstart, tz: preview.result.tz, condition: preview.result.condition ?? null }}
               nowMs={nowMs}
               viewerTz={viewerTz}
-              pending={{ quoted: view.quoted ?? "", shimmer }}
+              updating={!preview.fresh && shimmer}
             />
           )}
-          {view.kind === "reading" && !view.core && (
+          {preview.kind === "reading" && (
             <p data-schedule-when-reading className="text-[13px] leading-5">
-              <span className={shimmer ? "shimmer-text" : "text-muted"}>{view.quoted ? `Reading “${view.quoted}”…` : "Reading when it runs…"}</span>
+              <span className={shimmer ? "shimmer-text" : "text-muted"}>Reading when it runs…</span>
             </p>
           )}
-          {view.kind === "disagree" && (
-            <>
-              <SchedulePreview spec={{ title: schedule.title, rrule: view.result.rrule, dtstart: view.result.dtstart, tz: view.result.tz, condition: view.result.condition ?? null }} nowMs={nowMs} viewerTz={viewerTz} />
-              <p data-schedule-when-disagree className="text-pretty text-[12px] leading-5 text-attention">
-                Those words read two ways: {view.ours}, or {view.theirs}.
-              </p>
-              <p className="text-pretty text-[12px] leading-5 text-muted">Reword the part after “{view.corePhrase}”.</p>
-            </>
-          )}
-          {view.kind === "copy" && <p data-schedule-when-refusal className="text-pretty text-[12px] leading-5 text-fg/85">{view.copy}</p>}
-          {notice && notice.words === words && <p data-schedule-when-notice className="text-[12px] leading-5 text-muted">{notice.copy}</p>}
+          {preview.kind === "copy" && <p data-schedule-when-refusal className="text-pretty text-[12px] leading-5 text-fg/85">{preview.copy}</p>}
           <div className="mt-2 flex items-center justify-end gap-1.5">
             <button type="button" className={BUTTON} onMouseDown={(e) => e.preventDefault()} onClick={restore}>
               Cancel
             </button>
-            {view.kind !== "copy" && (
+            {preview.kind !== "copy" && (
               <button
                 key={shake}
                 type="button"
                 data-schedule-when-save
                 className={`${PRIMARY} ${shake > 0 ? "kbd-shake" : ""}`}
                 disabled={!savable || save.isPending}
-                title={view.kind === "reading" ? "Still reading" : view.kind === "disagree" ? "Reword it first" : "Save (Enter)"}
+                title={savable ? "Save (Enter)" : "Still reading"}
                 onMouseDown={(e) => e.preventDefault()}
                 onClick={commit}
               >
@@ -548,21 +396,9 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
   )
 }
 
-/** A published local reading: the words it read and what it read them as. */
-interface Published {
-  words: string
-  reading: PhraseReading
-}
-
-/** §11: a local reading publishes at a word boundary, or after this long with the caret inside a word. */
-const CHANGE_WHEN_REST_MS = 250
-/** §11: words the grammar declines go to the model after this long with no input. */
-const CHANGE_WHEN_MODEL_IDLE_MS = 600
-/** §5.7: the shimmer waits this long, so a cached or fast answer never flashes it. */
+/** A reading being replaced, or the first one being read, shimmers only after this long, so a fast answer never
+ *  flashes it. */
 const SHIMMER_DELAY_MS = 250
-
-const UPDATED_FOR_TIME = "Updated for the current time. Press Enter to save."
-const UPDATED_TO_TYPED = "Updated to what you typed. Press Enter to save."
 
 /** True once `on` has held for `ms` — a wait long enough to be worth showing motion for. */
 function useDelayedTrue(on: boolean, ms: number): boolean {

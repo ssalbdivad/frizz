@@ -27,8 +27,8 @@ export type ComposerKeyboardEvent = {
 // interrupt and "send now" and "send" are the same act.
 //
 // A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter saves the prompt as a lazy thread instead of
-// starting it (shouldSaveLazyComposerEnter). And a FIFTH there: ⌘/Ctrl-Option-Enter schedules it
-// (shouldScheduleComposerEnter, plans/scheduled-threads.md §3).
+// starting it (shouldSaveLazyComposerEnter). There is no schedule chord: the new-thread box reads its words for
+// a schedule, and Enter creates it when there is one (plans/schedule-live-reading.md).
 function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
     && !event.altKey
@@ -64,45 +64,6 @@ export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent,
 export function shouldSaveLazyComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
   return canSubmit && event.key === "Enter" && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey
     && !event.isComposing && event.keyCode !== 229
-}
-
-/**
- * What the lazy-save chord does in a box that MAY be in schedule mode. In the mode nothing may dispatch or
- * save lazily (plans/schedule-live-reading.md §9 I-2): Enter there creates the schedule on screen, and a
- * lazy thread written from that text would be the one exit that skips the reading entirely. So the chord is
- * CONSUMED — prevented and dropped, never left to the textarea, where ⌘⇧-Enter is not a newline the human
- * wants either — whatever the box holds. Out of the mode it is the ordinary lazy save, on the same gate.
- */
-export function lazyComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean, blocked: boolean): "save" | "consume" | undefined {
-  if (blocked) return shouldSaveLazyComposerEnter(event, true) ? "consume" : undefined
-  return shouldSaveLazyComposerEnter(event, canSubmit) ? "save" : undefined
-}
-
-/**
- * SCHEDULE IT — ⌘/Ctrl-Option-Enter in the new-thread box (Ctrl-Alt-Enter off a Mac): the text is read for
- * WHEN it should run and shown back as a schedule to confirm, instead of being dispatched now
- * (plans/scheduled-threads.md §3). Disjoint from every other Enter: the sends and the lazy save refuse
- * Option outright (isEnter, and the lazy save's `!altKey`), and the Option-Enter newline repair refuses
- * ⌘/Ctrl. No `canSubmit` gate — on an empty box the chord turns schedule mode on, so the caller decides
- * what an empty box means. The same IME guard as every send.
- */
-export function shouldScheduleComposerEnter(event: ComposerKeyboardEvent): boolean {
-  return event.key === "Enter" && event.altKey && (event.metaKey || event.ctrlKey) && !event.shiftKey
-    && !event.isComposing && event.keyCode !== 229
-}
-
-/**
- * TAB ACCEPTS A SCHEDULE OFFER — in the new-thread box, while the ledge under it offers to schedule the text
- * (plans/schedule-live-reading.md §7). Only a bare Tab: Shift-Tab is always native, and so is any Tab with a
- * modifier, a selection (Tab over selected text is the human doing something else with it), an IME
- * composition, or an open `/` or `@` menu, which claims Tab first to accept its row. Whether an offer is on
- * screen is the caller's half (`onTab` returns false when there is none, and Tab moves focus as ever).
- * Disjoint from every Enter by key, and from the menus' Tab by `menuOpen`.
- */
-export function shouldAcceptScheduleTab(event: ComposerKeyboardEvent, context: { menuOpen: boolean; selectionCollapsed: boolean }): boolean {
-  return event.key === "Tab" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
-    && !event.isComposing && event.keyCode !== 229
-    && !context.menuOpen && context.selectionCollapsed
 }
 
 /**

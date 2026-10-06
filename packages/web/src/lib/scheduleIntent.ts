@@ -1,178 +1,199 @@
-// WHAT EVERY KEY DOES, IN EVERY STATE OF THE PROMPT BOX'S SCHEDULE READING (plans/schedule-live-reading.md §7).
+import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY, locatePhrase, type InterpretScheduleResult, type Span } from "@frizz/shared"
+import { isFailedRead, type ModelReadOk, type ModelReadView } from "./scheduleModelRead.ts"
+
+// WHAT THE PROMPT BOX MAKES OF ITS WORDS, AND WHAT ENTER DOES WITH THEM (plans/schedule-live-reading.md). There is
+// one submit — Enter, the send button, the phone's send — and the model decides what it means: a prompt with a
+// schedule word in it is read (lib/scheduleReadScheduler.ts), and if the model says the words ask for the work
+// to REPEAT, Enter creates that schedule instead of starting the thread. Everything here is pure, so the
+// decisions are tested without a DOM (scheduleIntent.test.ts) and ScheduleComposer.tsx only executes them.
 //
-// This table is the single source. The Composer and PromptForm do not decide what Enter means — they ask
-// `keyAction(state, key)` and execute the answer — so the safety properties are properties of one pure
-// function, and `scheduleIntent.test.ts` holds them over every state × every key:
-//
-//   I-1  outside the mode nothing creates a schedule;
-//   I-2  inside the mode nothing dispatches or saves lazily;
-//   I-3  the mode turns on only through an explicit act (Tab on an offer, ⌘⌥↵, the glyph, the ledge's
-//        Schedule) and off only through one (Esc, ⌘⌥↵, the glyph, Cancel, Undo) — no reading, timer or answer.
-//
-// The states (§5): S0 dark, S1–S3 an offer on screen (exact, cue, ambiguous), M1–M5 the mode (ready,
-// reading, disagree, refused, empty) and the instant a create is in flight.
+// The rules:
+//   - A reading is used at submit only for EXACTLY the text being submitted (its trimmed words), never one read
+//     from an earlier text: an edit since the last read is re-read before anything is created. A reading the
+//     cache holds costs nothing to re-use, so nothing relocates an old reading onto new words.
+//   - Without a reading for the text, Enter HOLDS ("Checking for a schedule…") until the answer lands, then
+//     acts on it. Typing during the hold cancels it.
+//   - Nothing is ever dispatched silently in place of a schedule the human may have meant: a read that fails at
+//     submit, or a schedule the box cannot make, stops with a line that says so, and the NEXT Enter starts it.
+//   - The human can say "not a schedule" (× or Esc): the draft keeps that phrase DISMISSED, and Enter starts the
+//     thread, until the model reads a different phrase out of the words.
 
-export type ScheduleUiState =
-  | { name: "S0" }
-  | { name: "S1" }
-  | { name: "S2" }
-  | { name: "S3" }
-  | { name: "M1" }
-  | { name: "M2" }
-  | { name: "M3" }
-  /** Refused or blocked. `changed`: the text changed since the answer on screen, so Enter reads it again. */
-  | { name: "M4"; changed: boolean }
-  | { name: "M5" }
-  | { name: "creating" }
+/** What the model's answer means for the box. */
+export type ScheduleAnswer =
+  /** The words ask for a schedule, and this is it. */
+  | { kind: "schedule"; result: ModelReadOk }
+  /** They do not ask for one: Enter starts the thread. */
+  | { kind: "none" }
+  /** They ask for one the box cannot make — closer than 15m, at the keyboard, nothing left to run. */
+  | { kind: "refused"; copy: string }
+  /** The read itself failed; nothing is known. */
+  | { kind: "failed" }
 
-export type ScheduleStateName = ScheduleUiState["name"]
+/** What is known about one text: an answer, or not yet. */
+export type ScheduleKnown = ScheduleAnswer | { kind: "pending" }
 
-/** Every key or button that reaches the matrix. Buttons are named by the key they stand for. */
-export type ScheduleKey =
-  /** Enter, or a click on Send / Create schedule. */
-  | "enter"
-  /** ⌘/Ctrl-Enter. */
-  | "mod-enter"
-  /** ⌘/Ctrl-Shift-Enter, or the snail. */
-  | "lazy"
-  /** ⌘/Ctrl-Option-Enter, the rail glyph, or the ledge's Schedule button. */
-  | "schedule"
-  | "tab"
-  /** Escape, or the panel's Esc Cancel. */
-  | "esc"
-  /** The ledge's ×. */
-  | "close"
-
-export type ScheduleAction =
-  /** Start the thread now — the caller's ordinary send. */
-  | "dispatch"
-  /** Save it as a lazy thread — the caller's. */
-  | "lazy"
-  /** The key keeps its ordinary meaning (Tab moves focus). */
-  | "native"
-  /** Escape at rest: the box's own blur. */
-  | "blur"
-  /** Into the mode from an offer, reading the text again now (a cue's words then go to the model). */
-  | "accept"
-  /** Into the mode with no offer on screen (the glyph over dark text, or an ambiguous word): read it now. */
-  | "enter-mode"
-  /** Out of the mode. */
-  | "leave"
-  /** Out of the mode, and the edge it was read at is dismissed, in one press. */
-  | "leave-dismiss"
-  /** Put the offer away for this edge of this draft. */
-  | "dismiss"
-  /** Create what is on screen (T3: read again first; a different reading creates nothing). */
-  | "create"
-  /** Read the text again now — locally, then the model if it must. */
-  | "read"
-  /** Nothing to do yet: Create shakes. */
-  | "nudge"
-  /** Consumed; the panel's Esc Cancel flashes, saying how to leave. */
-  | "noop-flash"
-  | "noop"
-
-export const SCHEDULE_KEYS: readonly ScheduleKey[] = ["enter", "mod-enter", "lazy", "schedule", "tab", "esc", "close"]
-
-export const SCHEDULE_STATES: readonly ScheduleUiState[] = [
-  { name: "S0" },
-  { name: "S1" },
-  { name: "S2" },
-  { name: "S3" },
-  { name: "M1" },
-  { name: "M2" },
-  { name: "M3" },
-  { name: "M4", changed: false },
-  { name: "M4", changed: true },
-  { name: "M5" },
-  { name: "creating" },
-]
-
-/** Whether the state is schedule mode (every M state, and a create in flight). */
-export function inMode(state: ScheduleUiState): boolean {
-  return state.name.startsWith("M") || state.name === "creating"
-}
-
-/** The §7 matrix, row by row. */
-export function keyAction(state: ScheduleUiState, key: ScheduleKey): ScheduleAction {
-  switch (state.name) {
-    case "S0":
-      return ({ enter: "dispatch", "mod-enter": "dispatch", lazy: "lazy", schedule: "enter-mode", tab: "native", esc: "blur", close: "noop" } as const)[key]
-    case "S1":
-    case "S2":
-      return ({ enter: "dispatch", "mod-enter": "dispatch", lazy: "lazy", schedule: "accept", tab: "accept", esc: "dismiss", close: "dismiss" } as const)[key]
-    case "S3":
-      // Nothing to accept: an ambiguous word has no reading. The glyph still enters the mode, which shows
-      // the word's copy; Tab moves focus.
-      return ({ enter: "dispatch", "mod-enter": "dispatch", lazy: "lazy", schedule: "enter-mode", tab: "native", esc: "dismiss", close: "dismiss" } as const)[key]
-    case "M1":
-      return ({ enter: "create", "mod-enter": "create", lazy: "noop-flash", schedule: "leave", tab: "native", esc: "leave-dismiss", close: "noop" } as const)[key]
-    case "M2":
-    case "M3":
-      return ({ enter: "nudge", "mod-enter": "nudge", lazy: "noop-flash", schedule: "leave", tab: "native", esc: "leave-dismiss", close: "noop" } as const)[key]
-    case "M4": {
-      const enter = state.changed ? "read" : "nudge"
-      return ({ enter, "mod-enter": enter, lazy: "noop-flash", schedule: "leave", tab: "native", esc: "leave-dismiss", close: "noop" } as const)[key]
-    }
-    case "M5":
-      return ({ enter: "noop", "mod-enter": "noop", lazy: "noop", schedule: "leave", tab: "native", esc: "leave", close: "noop" } as const)[key]
-    case "creating":
-      return ({ enter: "noop", "mod-enter": "noop", lazy: "noop", schedule: "noop", tab: "native", esc: "noop", close: "noop" } as const)[key]
-  }
-}
-
-/** I-5: the send button wears what Enter does — the repeat glyph wherever Enter creates (or would, once the
- *  reading is ready) and never dispatches, the arrow wherever Enter starts the thread. */
-export function sendGlyphOf(state: ScheduleUiState): "send" | "schedule" {
-  return inMode(state) ? "schedule" : "send"
-}
-
-/** The actions that turn the mode on, and those that turn it off (I-3). Nothing else writes `mode.on`
- *  except a successful create and a draft clear, which clear the whole draft, and Undo, which restores the
- *  state before the accept (`draftAfterUndo`). */
-export const MODE_ON_ACTIONS: ReadonlySet<ScheduleAction> = new Set(["accept", "enter-mode"])
-export const MODE_OFF_ACTIONS: ReadonlySet<ScheduleAction> = new Set(["leave", "leave-dismiss"])
-
-/** The mode's record in the draft (lib/scheduleDraftState.ts `ScheduleDraftState`). */
-export type ScheduleDraftRecord = { v: 1; on: boolean; dismissed: { open?: true; close?: true } }
+/** What the box says when a reading leaves nothing for each run to do. */
+export const NO_TASK_COPY = "Say what each run should do, like “every Monday at 9am triage new issues”."
 
 /**
- * What an action does to the draft's mode record — the ONLY writes the keys make to it. Entering the mode
- * explicitly re-arms every edge (§8); leaving with Esc dismisses the edge it was read at; a dismissal sets its
- * edge. Every other action leaves the record exactly as it was, which is I-3 stated as data:
- * `scheduleIntent.test.ts` holds `draftAfter(keyAction(s, k), d).on !== d.on` only for an explicit act.
- */
-export function draftAfter(action: ScheduleAction, prev: ScheduleDraftRecord, edge?: "open" | "close"): ScheduleDraftRecord {
-  switch (action) {
-    case "accept":
-    case "enter-mode":
-      return { v: 1, on: true, dismissed: {} }
-    case "leave":
-      return { ...prev, on: false }
-    case "leave-dismiss":
-      return { ...prev, on: false, dismissed: edge ? { ...prev.dismissed, [edge]: true } : prev.dismissed }
-    case "dismiss":
-      return edge ? { ...prev, dismissed: { ...prev.dismissed, [edge]: true } } : prev
-    default:
-      return prev
-  }
-}
-
-/**
- * The mode record Undo (§5.11, I-13) leaves: exactly the state before the accept — the mode OFF and the
- * dismissals as they were (§1.3.1) — WHATEVER record it finds. The undone words come back first in the box
- * (`mergeIntoDraft`), their offer re-derives from them, and the ledge prints what each key does with them:
- * `↵ Start now`, `⇥ Schedule`. Undo is therefore one of the acts that end the mode (I-3), never one that
- * starts or keeps it.
+ * The model's answer, as the box acts on it. `refuse` vets a reading the box cannot show or save (a rule with no
+ * words for it, nothing left to run) into a refusal with its copy.
  *
- * Fix round 1 (X1) kept a mode found ON, for new text the human set up inside the 8s window, on the premise
- * that the merged text then reads as a compound cue. Fix round 3 (undo-into-mode-recreates-undone) found it
- * reads as the UNDONE schedule whenever the box had no phrase of its own — empty, or plain words the model had
- * refused: the panel came back ready with the rule just undone, and the next Enter created it again, the new
- * words folded into its prompt. A kept mode is a guess at intent over text it was never entered for; the
- * pre-accept state guesses nothing, and its Enter is printed on screen. (The cost, taken knowingly: Tab on
- * the next schedule, then Undo of the last one, ends the new mode too — Tab sets it again.)
+ * The interpreter's "doesn't say when it should run" is NONE, the ordinary answer for most words with a schedule
+ * word in them ("fix the bug from this morning"). So is an interpreter that is switched off (FRIZZ_THREAD_NAMER=0)
+ * or a refusal this box has no words for: the box then behaves as it would with no schedules at all. Only the
+ * refusals of a schedule the human evidently asked for — too frequent, while at the keyboard, no task, a rule
+ * that would not check — are said on screen.
  */
-export function draftAfterUndo(preAccept: ScheduleDraftRecord["dismissed"]): ScheduleDraftRecord {
-  return { v: 1, on: false, dismissed: { ...preAccept } }
+export function classifyResult(result: InterpretScheduleResult, refuse?: (reading: ModelReadOk) => string | undefined): ScheduleAnswer {
+  if (result.ok) {
+    const copy = refuse?.(result)
+    return copy ? { kind: "refused", copy } : { kind: "schedule", result }
+  }
+  if (isFailedRead(result)) return { kind: "failed" }
+  const e = result.error
+  if (e === SCHEDULE_NOT_FOUND_COPY) return { kind: "none" }
+  if (e === SCHEDULE_PRESENCE_COPY || e === SCHEDULE_SPACING_COPY || e.startsWith("Couldn't turn that into a schedule") || e.startsWith("What should each run do?")) {
+    return { kind: "refused", copy: e }
+  }
+  return { kind: "none" }
+}
+
+/** What the reader knows about a text, as the box acts on it. */
+export function knownOf(view: ModelReadView, refuse?: (reading: ModelReadOk) => string | undefined): ScheduleKnown {
+  if (view.status === "answered") return classifyResult(view.result, refuse)
+  if (view.status === "failed") return { kind: "failed" }
+  return { kind: "pending" }
+}
+
+/** The words the model reads for a prose: trimmed, as the server would read them anyway. */
+export const readTextOf = (prose: string): string => prose.trim()
+
+/**
+ * Where a reading's phrase sits in `prose`. A reading OF this prose (`readText` is its trimmed words) maps its
+ * offsets — which index the trimmed text — by the whitespace trimmed off the front: a prompt that opens with a
+ * newline drew every mark one character late until that was added back (fix round 1, X8). A reading of an
+ * earlier text, still on screen while this one is read, is found by its phrase, near where it was.
+ */
+export function phraseSpan(prose: string, readText: string, result: ModelReadOk): Span | undefined {
+  const lead = prose.length - prose.trimStart().length
+  const at = { start: lead + result.phraseStart, end: lead + result.phraseEnd }
+  if (readTextOf(prose) === readText && prose.slice(at.start, at.end) === result.phrase) return at
+  return locatePhrase(prose, result.phrase, at.start)
+}
+
+const normal = (phrase: string) => phrase.trim().replace(/\s+/g, " ").toLowerCase()
+
+/** Whether a reading is the one the draft dismissed: the same phrase, give or take case and spacing. */
+export function isDismissed(result: ModelReadOk, dismissed: string | undefined): boolean {
+  return dismissed !== undefined && normal(result.phrase) === normal(dismissed)
+}
+
+/** A dismissal lifts once the model reads the words again and finds a DIFFERENT phrase, or none at all: "not a
+ *  schedule" was said about those words, and they are gone. A pending or failed read lifts nothing. */
+export function liftsDismissal(known: ScheduleKnown, dismissed: string | undefined): boolean {
+  if (dismissed === undefined) return false
+  if (known.kind === "none") return true
+  return known.kind === "schedule" && !isDismissed(known.result, dismissed)
+}
+
+// ---- submit ---------------------------------------------------------------------------------------------------
+
+export type SubmitAct =
+  /** Start the thread now, exactly as the box always has. */
+  | { act: "dispatch" }
+  /** Create this schedule. */
+  | { act: "create"; result: ModelReadOk }
+  /** Nothing is known for this text yet: hold the send until the answer lands, reading it now. */
+  | { act: "hold" }
+  /** Nothing starts. The line on screen says why, and the next Enter starts the thread. */
+  | { act: "stop"; why: "refused" | "failed" }
+
+/**
+ * What a submit does with the text, given what is known about EXACTLY that text. `at` is the Enter itself, or a
+ * held Enter's answer landing. Null: still nothing known, so a hold keeps holding.
+ *
+ * - No schedule word, a dismissed reading, or no schedule in the words: dispatch.
+ * - A schedule: create it.
+ * - A refusal: at an Enter its line is already on screen, saying Enter starts it now, so it does. Landing on a held
+ *   Enter it stops instead — the human pressed Enter before they could read it.
+ * - A failed read: "Couldn't check for a schedule" stops the first Enter; the next one dispatches. A failure of a
+ *   read made while typing is not that line: Enter holds and reads again.
+ * - Nothing known yet: hold.
+ */
+export function submitAct(a: {
+  trigger: boolean
+  known: ScheduleKnown
+  dismissed: string | undefined
+  /** "Couldn't check for a schedule" is on screen for exactly this text. */
+  failShown: boolean
+  at: "enter" | "landed"
+}): SubmitAct | null {
+  if (!a.trigger) return { act: "dispatch" }
+  const k = a.known
+  switch (k.kind) {
+    case "schedule":
+      return isDismissed(k.result, a.dismissed) ? { act: "dispatch" } : { act: "create", result: k.result }
+    case "none":
+      return { act: "dispatch" }
+    case "refused":
+      return a.at === "enter" ? { act: "dispatch" } : { act: "stop", why: "refused" }
+    case "failed":
+      if (a.at === "landed") return { act: "stop", why: "failed" }
+      return a.failShown ? { act: "dispatch" } : { act: "hold" }
+    case "pending":
+      if (a.at === "landed") return null
+      return a.failShown ? { act: "dispatch" } : { act: "hold" }
+  }
+}
+
+// ---- what the strip under the box shows ------------------------------------------------------------------------
+
+export type StripView =
+  | { kind: "none" }
+  /** A read of this text is out and nothing is on screen: only the faint cue on the schedule words. */
+  | { kind: "pending" }
+  /** The schedule Enter creates: `fresh` for this very text, else the last one read while this one is read
+   *  (stale-while-revalidate), from `readText`. */
+  | { kind: "schedule"; result: ModelReadOk; readText: string; fresh: boolean }
+  /** A schedule the box cannot make, and why. */
+  | { kind: "refused"; copy: string }
+  /** Undo dismissed this reading: the line that says Enter starts it now, with a way to schedule it after all. */
+  | { kind: "undone" }
+
+export type Dismissal = { phrase: string; undone: boolean }
+
+/**
+ * The strip, given what is known about the text, the read out for it, and the newest answer known before it.
+ *
+ * Text with no schedule word shows nothing, whatever was read before: the box looks exactly as it does without
+ * schedules. A schedule read from an earlier text STAYS while this one is read and updates in place when the
+ * answer lands; an answer of no schedule takes it away. A refusal is said only for the text it was given for:
+ * read from an earlier text it is usually a schedule half typed ("every Monday at" has no task yet).
+ */
+export function stripView(a: {
+  trigger: boolean
+  /** The words the model reads for the text on screen (`readTextOf`). */
+  text: string
+  known: ScheduleKnown
+  reading: boolean
+  stale: { text: string; answer: ScheduleAnswer } | undefined
+  dismissed: Dismissal | undefined
+}): StripView {
+  if (!a.trigger) return { kind: "none" }
+  const d = a.dismissed
+  const k = a.known
+  if (k.kind === "schedule") {
+    if (isDismissed(k.result, d?.phrase)) return d!.undone ? { kind: "undone" } : { kind: "none" }
+    return { kind: "schedule", result: k.result, readText: a.text, fresh: true }
+  }
+  if (k.kind === "refused") return { kind: "refused", copy: k.copy }
+  if (k.kind === "none") return { kind: "none" }
+  // Pending or failed: what was read before stays, if it was a schedule.
+  const s = a.stale?.answer
+  if (s?.kind === "schedule") {
+    if (!isDismissed(s.result, d?.phrase)) return { kind: "schedule", result: s.result, readText: a.stale!.text, fresh: false }
+    if (d!.undone) return { kind: "undone" }
+  } else if (d?.undone) return { kind: "undone" }
+  return a.reading ? { kind: "pending" } : { kind: "none" }
 }

@@ -6,9 +6,9 @@ import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
-import { lazyComposerEnter, shouldAcceptScheduleTab, shouldInterruptSubmitComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -19,7 +19,7 @@ import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveM
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
 import { inSkippedCard, whenCardRendered } from "../lib/cardVisibility.ts"
-import type { BoxInputEvent } from "../lib/scheduleOffer.ts"
+import type { BoxInputEvent } from "../lib/scheduleReadScheduler.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -112,30 +112,26 @@ const FILE_QUERY_DEBOUNCE_MS = 60
 const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
 
 /**
- * A run of the PROSE marked behind its own words — the schedule reading's phrase (plans/schedule-live-reading.md
- * §5.1). Painted in the highlight layer behind the textarea, so a mark is zero-layout like every backdrop
- * decoration; its whole look is `[data-composer-mark]` in styles.css, in one place:
+ * A run of the PROSE marked behind its own words — the schedule the box read in them
+ * (plans/schedule-live-reading.md). Painted in the highlight layer behind the textarea, so a mark is zero-layout
+ * like every backdrop decoration; its whole look is `[data-composer-mark]` in styles.css, in one place:
  *
- *   offer     a dotted underline — "this reads as a schedule", nothing accepted yet (never the accent, I-12)
- *   unread    a dashed underline — words the box will not guess at (a condition, a vague count)
- *   reading   unread, with a shimmer behind it — the model is reading those words
- *   accepted  the accent fill — the words that became WHEN, in schedule mode
- *   grow      a run newly covered by an accepted reading (the model's answer took more words), fading in
- *   wash      the accepted fill washing bright and back as the schedule is created
+ *   pending   a faint dotted underline on a schedule word, fading in late, while the model reads the words
+ *   accepted  the accent fill — the words Enter turns into WHEN
+ *   wash      the fill washing bright and back as the schedule is created
  *
  * `key` is the run's identity across renders: a mark that keeps its key keeps its element, so it never replays
- * its entrance — a phrase that extends draws only its new tail, and a tone change (offer → accepted) plays the
- * new tone's own entrance on the same element.
+ * its entrance — a phrase that extends just grows, and a tone change plays the new tone's own entrance.
  */
-export type ComposerMarkTone = "offer" | "unread" | "reading" | "accepted" | "grow" | "wash"
+export type ComposerMarkTone = "pending" | "accepted" | "wash"
 export type ComposerMark = { start: number; end: number; tone: ComposerMarkTone; key?: string }
 
 /**
- * The runs of the prose a schedule reading must never read (plans/schedule-live-reading.md §2.2): what the
- * backdrop paints as something other than prose — fenced code, the staged ⌘I context tokens — plus every
- * `@mention` and `/command` token, resolved or not. A superset of what the backdrop tints is the safe side:
- * an excluded run only ever costs an offer, never a different reading. (Quotes, inline code and a leading
- * `/command` the grammar skips on its own.)
+ * The runs of the prose where a schedule word never makes the box read for a schedule
+ * (`hasScheduleTrigger`): what the backdrop paints as something other than prose — fenced code, the staged ⌘I
+ * context tokens — plus every `@mention` and `/command` token, resolved or not. A superset of what the backdrop
+ * tints is the safe side: an excluded run only ever costs a read. (Quotes, inline code and a leading `/command`
+ * the trigger skips on its own.)
  */
 export function composerExcludeRuns(prose: string, contextTokens: readonly string[] = []): { start: number; end: number }[] {
   const out: { start: number; end: number }[] = []
@@ -260,17 +256,12 @@ export function Composer({
   onInterruptSubmit,
   onPushQueued,
   onSaveLazy,
-  onSchedule,
-  schedule,
-  scheduleTitle,
   marks,
-  onTab,
   onInputEvent,
-  onLazyBlocked,
   onEscape,
   sendGlyph = "send",
   sendTitle,
-  lazyBlocked = false,
+  sendPending = false,
   attachBase,
   phone,
   onUploadingChange,
@@ -361,42 +352,26 @@ export function Composer({
   // snail glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
   // starting one. (A footer text hint did this job until 2026-10-01; the maintainer wanted it gone.)
   onSaveLazy?: () => void
-  // SCHEDULE IT — the new-thread box only, and only beside `onSaveLazy` (plans/scheduled-threads.md §3).
-  // ⌘/Ctrl-Option-Enter, or the repeat glyph left of the snail, asks the caller to read the text for WHEN
-  // it should run instead of starting it now. The caller owns the mode; `schedule` says how the glyph reads:
-  // `hint` lights it because the text reads as a schedule the box is offering, or would but for something
-  // (plans/schedule-live-reading.md §5.2) — Enter still dispatches — and `on` is the mode itself, where
-  // Enter is the caller's schedule step. `scheduleTitle` is the glyph's tooltip when the caller has a better
-  // one than the generic ("Schedule every Monday at 9am (Tab)" while an offer shows).
-  onSchedule?: () => void
-  schedule?: "off" | "hint" | "on"
-  scheduleTitle?: string
-  // Runs of the PROSE marked behind the text (ComposerMark): the schedule phrase the box read, so the human
-  // sees which words are WHEN and that the rest is the prompt, verbatim. Offsets into the prose the box
-  // shows; a mark that no longer fits it draws nothing.
+  // Runs of the PROSE marked behind the text (ComposerMark): the schedule the box read in it, so the human sees
+  // which words are WHEN and that the rest is the prompt, verbatim. Offsets into the prose the box shows; a mark
+  // that no longer fits it draws nothing.
   marks?: readonly ComposerMark[]
-  // A bare Tab, before its native focus move and after an open menu has had it (shouldAcceptScheduleTab).
-  // Return true to claim it: the schedule offer's accept (plans/schedule-live-reading.md §7).
-  onTab?: () => boolean
-  // What the textarea just did — an edit (with its caret, its input type and whether an IME is composing),
-  // the end of a composition, a blur — for a caller whose reading of the text publishes only at word
-  // boundaries (lib/scheduleOffer.ts). Called before the edit's own onChange.
+  // What the textarea just did — an edit (with its caret, its input type and whether an IME is composing), the
+  // end of a composition, a blur — for a caller that reads the words at the end of each one
+  // (lib/scheduleReadScheduler.ts). Called before the edit's own onChange.
   onInputEvent?: (event: BoxInputEvent) => void
-  // ⌘/Ctrl-Shift-Enter arrived while `lazyBlocked`: consumed, and the caller may say why (its Cancel flashes).
-  onLazyBlocked?: () => void
-  // Escape, before the box's own blur. Return true to claim it: the schedule mode leaves itself on the
-  // first Escape and keeps the caret, rather than climbing out of the box with the mode still on.
+  // Escape, before the box's own blur. Return true to claim it: the new-thread box's schedule strip goes away
+  // ("not a schedule") on the first Escape and keeps the caret, rather than the box being left with it on.
   onEscape?: () => boolean
-  // WHAT ENTER DOES, ON THE BUTTON THAT DOES IT (plans/schedule-live-reading.md §9 I-5). `schedule` while the
-  // caller's schedule mode is on: Send wears the repeat glyph and says "Create schedule", because Enter and a
-  // click there create the schedule on screen and start nothing. The glyph and Enter's act never disagree.
+  // WHAT ENTER DOES, ON THE BUTTON THAT DOES IT. `schedule` while the caller has read a schedule in the words:
+  // Send wears the repeat glyph and says "Create schedule", because Enter and a click create it and start
+  // nothing. The glyph and Enter's act never disagree.
   sendGlyph?: "send" | "schedule"
-  // The send button's title, when the caller knows better than the default — a phone in the schedule mode,
-  // which has no Enter to name (plans/schedule-live-reading.md §12).
+  // The send button's title, when the caller knows better than the default — a phone, which has no Enter to name.
   sendTitle?: string
-  // The lazy save is closed (schedule mode, I-2): the snail is disabled with a title saying how to reach it,
-  // and ⌘/Ctrl-Shift-Enter is consumed rather than saving or falling through to the textarea.
-  lazyBlocked?: boolean
+  // The caller is holding the send — checking the words for a schedule, or creating one — while the text stays
+  // live (unlike `busy`): the button spins and says so.
+  sendPending?: boolean
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
@@ -897,9 +872,6 @@ export function Composer({
   const hasContent = value.trim().length > 0
   const interruptChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⏎" : "Ctrl+Enter"), [])
   const lazyChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
-  const scheduleChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⌥⏎" : "Ctrl+Alt+Enter"), [])
-  // The schedule glyph rides only beside the snail (the new-thread box), one 28px slot further left.
-  const scheduleSlot = onSaveLazy !== undefined && onSchedule !== undefined
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
@@ -908,17 +880,13 @@ export function Composer({
   const railAction = leftAction ?? null
   // The lazy-save glyph (new-thread box only) takes the slot beside Send and pushes the rest of the rail
   // one slot left, so the reserve and the left-hand offsets all follow it.
-  const railReserve = scheduleSlot
-    ? railAction ? RAIL_SCHEDULE_RESERVE_WITH_ACTION : RAIL_SCHEDULE_RESERVE_PLAIN
-    : onSaveLazy
-      ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
-      : railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
-  const railActionOffset = scheduleSlot ? RAIL_SCHEDULE_ACTION_OFFSET : onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
-  const paperclipOffset = scheduleSlot
-    ? railAction ? RAIL_SCHEDULE_PAPERCLIP_OFFSET : RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET
-    : onSaveLazy
-      ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
-      : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
+  const railReserve = onSaveLazy
+    ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
+    : railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
+  const railActionOffset = onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
+  const paperclipOffset = onSaveLazy
+    ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
+    : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget
@@ -955,14 +923,6 @@ export function Composer({
         setDismissedFor(prose)
         return
       }
-    }
-    // TAB ACCEPTS A SCHEDULE OFFER (plans/schedule-live-reading.md §7) — after the menus, which claim Tab
-    // first, and only as a bare Tab over a collapsed selection; the caller returns false when no offer is on
-    // screen, and Tab moves focus as ever.
-    if (onTab && shouldAcceptScheduleTab(keyboardEvent, { menuOpen: suggestOpen || mentionOpen, selectionCollapsed: el.selectionStart === el.selectionEnd }) && onTab()) {
-      e.preventDefault()
-      e.stopPropagation()
-      return
     }
     // A staged `@` token deletes as ONE token — the editor convention for a reference the user placed
     // as a unit. Only a bare Backspace with a collapsed caret sitting immediately after a STAGED
@@ -1007,18 +967,10 @@ export function Composer({
       onSubmit()
       return
     }
-    const lazy = onSaveLazy ? lazyComposerEnter(keyboardEvent, canSend, lazyBlocked) : undefined
-    if (lazy) {
+    if (onSaveLazy && shouldSaveLazyComposerEnter(keyboardEvent, canSend)) {
       e.preventDefault()
       e.stopPropagation()
-      if (lazy === "save") onSaveLazy!()
-      else onLazyBlocked?.()
-      return
-    }
-    if (onSchedule && shouldScheduleComposerEnter(keyboardEvent)) {
-      e.preventDefault()
-      e.stopPropagation()
-      if (!busy && !uploading) onSchedule()
+      onSaveLazy()
       return
     }
     // ⌘/Ctrl-Enter — the FORCED send. With a worker mid-turn it preempts what the worker is doing so
@@ -1601,27 +1553,6 @@ export function Composer({
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
-      {/* SCHEDULE IT, left of the snail: the third way out of the new-thread box (plans/scheduled-threads.md
-          §3). Muted at rest like the snail; LIT — the text's own ink, not the accent, which means "wants
-          you" — while the text opens with a recurrence phrase, and pressed (the hover square held) in
-          schedule mode. Never disabled on an empty box: there it turns the mode on, to type into. */}
-      {scheduleSlot && (
-        <button
-          type="button"
-          data-composer-schedule={schedule ?? "off"}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onSchedule}
-          disabled={busy || uploading}
-          aria-pressed={schedule === "on"}
-          title={scheduleTitle ?? (schedule === "on" ? `Schedule mode — Esc to leave (${scheduleChord})` : schedule === "hint" ? `Schedule this? ${scheduleChord}` : `Schedule it, to run on a repeat (${scheduleChord})`)}
-          aria-label={schedule === "on" ? "Leave schedule mode" : "Schedule"}
-          className={`icon-hover-outline absolute bottom-2 ${RAIL_SCHEDULE_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50 ${
-            schedule === "on" ? "bg-panel-2 text-fg" : schedule === "hint" ? "text-fg" : "text-muted"
-          }`}
-        >
-          <Repeat size={15} strokeWidth={2} />
-        </button>
-      )}
       {/* SAVE AS A LAZY THREAD, beside Send so the act is discoverable without its chord. Muted like the
           paperclip: it is the secondary submit, and Send stays the one filled button. */}
       {onSaveLazy && (
@@ -1630,8 +1561,8 @@ export function Composer({
           data-composer-lazy
           onMouseDown={(e) => e.preventDefault()}
           onClick={onSaveLazy}
-          disabled={!hasContent || busy || uploading || lazyBlocked}
-          title={lazyBlocked ? "Leave schedule mode to save it for later" : `Add as lazy thread, without starting an agent (${lazyChord})`}
+          disabled={!hasContent || busy || uploading}
+          title={`Add as lazy thread, without starting an agent (${lazyChord})`}
           aria-label="Add as lazy thread"
           className={`icon-hover-outline absolute bottom-2 ${RAIL_LAZY_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
         >
@@ -1647,9 +1578,11 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title={sendTitle ?? (sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`)}
+        title={sendPending ? "Checking…" : sendTitle ?? (sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`)}
         aria-label={sendGlyph === "schedule" ? "Create schedule" : "Send"}
+        aria-busy={sendPending || undefined}
         data-composer-send={sendGlyph}
+        data-composer-send-pending={sendPending || undefined}
         // Never `transition-all`: it animates box-shadow, which holds the hover edge back (styles.css).
         className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color,opacity,scale] ${
           // Primary actions use neutral contrast; the accent marks focus.
@@ -1658,9 +1591,9 @@ export function Composer({
             : "bg-panel-2 text-muted"
         }`}
       >
-        {busy ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : (
-          // BOTH glyphs, stacked, so the swap is a 120ms cross-fade on the same pixels (§6) rather than one
-          // icon popping for another; same size and stroke, so neither moves the rail's measured rhythm.
+        {busy || sendPending ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : (
+          // BOTH glyphs, stacked, so the swap is a 120ms cross-fade on the same pixels rather than one icon
+          // popping for another; same size and stroke, so neither moves the rail's measured rhythm.
           <span aria-hidden className="grid place-items-center">
             <ArrowUp size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-0" : "opacity-100"}`} />
             <Repeat size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-100" : "opacity-0"}`} />

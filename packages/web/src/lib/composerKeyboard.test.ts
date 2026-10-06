@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canInterruptAndSend, lazyComposerEnter, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldAcceptScheduleTab, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -139,62 +139,14 @@ test("⌘/Ctrl-Shift-Enter saves a lazy thread, and claims no other Enter", () =
   assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
 })
 
-test("⌘/Ctrl-Option-Enter schedules, and claims no other Enter", () => {
-  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, altKey: true })), true)
-  assert.equal(shouldScheduleComposerEnter(key({ ctrlKey: true, altKey: true })), true)
-  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, altKey: true, isComposing: true })), false)
-  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, altKey: true, shiftKey: true })), false)
-  assert.equal(shouldScheduleComposerEnter(key({ altKey: true })), false, "Option-Enter stays a newline")
-  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true })), false, "⌘-Enter stays the forced send")
-  assert.equal(shouldScheduleComposerEnter(key({ metaKey: true, shiftKey: true })), false, "⌘⇧-Enter stays the lazy save")
-  // …and none of the others claim it.
-  assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
-  assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true, altKey: true }), true), false)
-  assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true, altKey: true }), true), false)
-  assert.equal(shouldRestoreOptionEnterNewline(key({ metaKey: true, altKey: true })), false)
-  assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true, altKey: true }), true), false)
-})
-
-test("in schedule mode ⌘/Ctrl-Shift-Enter is consumed, never a lazy save, whatever the box holds", () => {
-  const lazy = key({ metaKey: true, shiftKey: true })
-  // Out of the mode: the ordinary lazy save, on the ordinary gate.
-  assert.equal(lazyComposerEnter(lazy, true, false), "save")
-  assert.equal(lazyComposerEnter(key({ ctrlKey: true, shiftKey: true }), true, false), "save")
-  assert.equal(lazyComposerEnter(lazy, false, false), undefined)
-  // In the mode: consumed with content AND without it, so it never reaches the textarea or the save.
-  assert.equal(lazyComposerEnter(lazy, true, true), "consume")
-  assert.equal(lazyComposerEnter(lazy, false, true), "consume")
-  assert.equal(lazyComposerEnter(key({ ctrlKey: true, shiftKey: true }), true, true), "consume")
-  // The mode claims ONLY that chord: IME confirmations, Shift-Enter newlines and every other Enter pass.
-  assert.equal(lazyComposerEnter(key({ metaKey: true, shiftKey: true, isComposing: true }), true, true), undefined)
-  assert.equal(lazyComposerEnter(key({ metaKey: true, shiftKey: true, keyCode: 229 }), true, true), undefined)
-  assert.equal(lazyComposerEnter(key({ shiftKey: true }), true, true), undefined)
-  assert.equal(lazyComposerEnter(key(), true, true), undefined)
-  assert.equal(lazyComposerEnter(key({ metaKey: true }), true, true), undefined)
-  assert.equal(lazyComposerEnter(key({ metaKey: true, altKey: true }), true, true), undefined)
-  assert.equal(lazyComposerEnter(key({ key: "a", metaKey: true, shiftKey: true }), true, true), undefined)
-})
-
-// plans/schedule-live-reading.md §7: Tab accepts a schedule offer only as a bare Tab, with no menu open, no
-// selection and no composition — and it is disjoint from the menus' Tab, Shift-Tab and the five Enters.
-test("Tab accepts a schedule offer only as a bare Tab, disjoint from the menu Tab and every Enter", () => {
-  const free = { menuOpen: false, selectionCollapsed: true }
-  const tab = (overrides: Partial<ComposerKeyboardEvent> = {}) => key({ key: "Tab", ...overrides })
-  assert.equal(shouldAcceptScheduleTab(tab(), free), true)
-  assert.equal(shouldAcceptScheduleTab(tab({ shiftKey: true }), free), false, "Shift-Tab is always native")
-  assert.equal(shouldAcceptScheduleTab(tab({ altKey: true }), free), false)
-  assert.equal(shouldAcceptScheduleTab(tab({ ctrlKey: true }), free), false)
-  assert.equal(shouldAcceptScheduleTab(tab({ metaKey: true }), free), false)
-  assert.equal(shouldAcceptScheduleTab(tab({ isComposing: true }), free), false, "an IME composition keeps its Tab")
-  assert.equal(shouldAcceptScheduleTab(tab({ keyCode: 229 }), free), false)
-  assert.equal(shouldAcceptScheduleTab(tab(), { menuOpen: true, selectionCollapsed: true }), false, "an open / or @ menu claims Tab first")
-  assert.equal(shouldAcceptScheduleTab(tab(), { menuOpen: false, selectionCollapsed: false }), false, "Tab over a selection is not an accept")
-  // No Enter, of any of the five, is a Tab; and the Tab is none of them.
-  const enters = [key(), key({ metaKey: true }), key({ ctrlKey: true }), key({ metaKey: true, shiftKey: true }), key({ metaKey: true, altKey: true }), key({ shiftKey: true }), key({ altKey: true })]
-  for (const enter of enters) assert.equal(shouldAcceptScheduleTab(enter, free), false, JSON.stringify(enter))
-  assert.equal(shouldSubmitComposerEnter(tab(), true), false)
-  assert.equal(shouldInterruptSubmitComposerEnter(tab({ metaKey: true }), true), false)
-  assert.equal(shouldSaveLazyComposerEnter(tab({ metaKey: true, shiftKey: true }), true), false)
-  assert.equal(shouldScheduleComposerEnter(tab({ metaKey: true, altKey: true })), false)
-  assert.equal(shouldPushQueuedComposerEnter(tab({ metaKey: true }), true), false)
+// There is no schedule chord (plans/schedule-live-reading.md): the new-thread box reads its words for a schedule,
+// and Enter is the one submit. ⌘/Ctrl-Option-Enter is no send, no lazy save and no newline repair.
+test("⌘/Ctrl-Option-Enter claims nothing", () => {
+  for (const chord of [key({ metaKey: true, altKey: true }), key({ ctrlKey: true, altKey: true })]) {
+    assert.equal(shouldSubmitComposerEnter(chord, true), false)
+    assert.equal(shouldInterruptSubmitComposerEnter(chord, true), false)
+    assert.equal(shouldSaveLazyComposerEnter(chord, true), false)
+    assert.equal(shouldRestoreOptionEnterNewline(chord), false)
+    assert.equal(shouldPushQueuedComposerEnter(chord, true), false)
+  }
 })
