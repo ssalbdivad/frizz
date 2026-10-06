@@ -35,7 +35,7 @@ import {
 } from "@frizz/shared"
 import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
-import { isLazyRow } from "./storage.ts"
+import { isHeldRow } from "./storage.ts"
 import { CLAUDE_WORKER_ENV, type AgentBackend, type NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
 import { editedFilesOf } from "./edited-files.ts"
@@ -4967,8 +4967,8 @@ function readThreadTranscriptMessages(
   backendFor?: (kind?: string) => AgentBackend,
 ): TranscriptMessage[] {
   const row = storage.getSession(slug)
-  // A lazy thread has no transcript, and looking for one would scan the log directory on every view.
-  if (isLazyRow(row)) return []
+  // A held thread has no transcript, and looking for one would scan the log directory on every view.
+  if (isHeldRow(row)) return []
   if (row) {
     // Codex threads write a DIFFERENT transcript schema in a DIFFERENT place (~/.codex/sessions,
     // date-sharded, located by the discovered rollout id) — route them through the codex reader+parser

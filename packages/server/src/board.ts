@@ -13,7 +13,7 @@ import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSl
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
-import { isHeadlessRow, isBrokerClaudeRow, isLazyRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
+import { isHeadlessRow, isBrokerClaudeRow, isHeldRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinoffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { deadlineViewOf, rowDeadline } from "./deadline.ts"
@@ -2533,25 +2533,30 @@ function sessionThreadView(
   }
 }
 
-// A LAZY THREAD's reading (SessionRow.lazy_prompt, plans/lazy-threads.md). Everything the row itself decides — title, done,
-// snooze, pin, links, the profile it will start on — comes from sessionThreadView like any thread's;
-// what it would derive from a running agent is replaced, because there has never been one. Without
-// this an untailed row reads as a dispatch still spinning up (Active, forever), and past the discovery
-// grace as a worker that never wrote its transcript (a stall card). A lazy thread is neither: it is waiting
-// on the human, exactly like a bare rest, so it queues unless it is done or snoozed.
+// A HELD THREAD's reading (SessionRow.held_by). Everything the row itself decides — title, done, snooze, pin,
+// links, the profile it will start on — comes from sessionThreadView like any thread's; what it would derive
+// from a running agent is replaced, because there has never been one. Without this an untailed row reads as
+// a dispatch still spinning up (Active, forever), and past the discovery grace as a worker that never wrote
+// its transcript (a stall card).
 //
-// A SCHEDULE'S NEXT RUN (`view.schedule.pending`, plans/scheduled-threads.md §4) is parked rather than
-// queued: it keeps its wake time even once that has passed — the scheduler, not the clock, starts it, and
-// the seconds between its time and the tick that starts it must not drop it into the queue.
-export function lazyThreadView(view: ThreadView, row: SessionRow): ThreadView {
+// BASE NEVER QUEUES IT. With no agent there is nothing in it waiting on the human — upstream's own rule,
+// "with no agent it makes no sense for a thread to ever show up inside the queue" (shared deriveNeedsYou) —
+// so whether a held thread queues is its HOLDER's call. (The lazy thread's rule, queued unless done or
+// snoozed, is still read here until the lazy plugin's threadView takes it.)
+//
+// A SCHEDULE'S NEXT RUN (`view.schedule.pending`, plans/scheduled-threads.md §4) is parked: it keeps its
+// wake time even once that has passed — the scheduler, not the clock, starts it, and the seconds between
+// its time and the tick that starts it must not drop it into Active.
+export function heldThreadView(view: ThreadView, row: SessionRow): ThreadView {
   const pending = view.schedule?.pending === true && !view.archived
   const parkedUntil = pending && SnoozeUntil.safeParse(row.snoozed_until).success ? row.snoozed_until ?? undefined : undefined
   return {
     ...view,
+    held: row.held_by ?? undefined,
     lazyPrompt: row.lazy_prompt ?? "",
     runtime: "turn-idle",
     ...(parkedUntil ? { snoozedUntil: parkedUntil } : {}),
-    needsYou: !pending && !view.archived && view.snoozedUntil === undefined,
+    needsYou: row.held_by === "lazy" && !pending && !view.archived && view.snoozedUntil === undefined,
     awaitingBackground: false,
     crashed: false,
     deliveryInFlight: undefined,
@@ -2980,8 +2985,8 @@ export function createBoard(
       )
       const schedule = row.schedule_id ? deps.scheduleRef?.(row) : undefined
       const scheduled = schedule ? { ...base, schedule } : base
-      if (isLazyRow(row)) {
-        out.push(lazyThreadView(scheduled, row))
+      if (isHeldRow(row)) {
+        out.push(heldThreadView(scheduled, row))
         continue
       }
       const view = scheduled

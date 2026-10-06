@@ -242,8 +242,8 @@ import type { BackendKind } from "./backend/types.ts"
 import { threadProfileOptions, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { adoptionRuntimeBinding, type AdoptionPaneLookup, type ExpectedAdoptionPane } from "./adoption-recovery.ts"
 import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusBook, GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING } from "./awaiting.ts"
-import { isBrokerClaudeRow, isLazyRow, isScheduledLazyRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
-import { createLazyThreadStarter, type LazyStartProfile } from "./lazy-start.ts"
+import { isBrokerClaudeRow, isHeldRow, isScheduleHeldRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
+import { createHeldThreadStarter, type HeldStartProfile } from "./held-start.ts"
 import { scheduleProcedures } from "./schedule-router.ts"
 import { SUBAGENT_STALE_MS, unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
 import { workflowAgentViews } from "./workflow-runs.ts"
@@ -1587,14 +1587,14 @@ export function createRouter(ctx: AppContext) {
     if (unsaved.length > 0) throw new Error(unsavedWorktreeRefusal(unsaved))
   }
 
-  // Starting a lazy thread goes through the project's ONE starter (lazy-start.ts), shared with the
-  // scheduler so its one-launch-at-a-time guard sees every launch — and through the schedule service, so a
-  // schedule's pending next run that the human sends early still opens with its run header and still lands
-  // in the schedule's history (schedules.ts startLazyRow). A hand-built test context carries neither and
-  // gets a starter of its own.
-  const localLazyStarter = createLazyThreadStarter({ dispatcher: ctx.dispatcher, board: ctx.board })
-  const startLazyThreadRow = (row: SessionRow, prompt: string, profile: LazyStartProfile = {}): Promise<{ slug: string; sessionId: string }> =>
-    ctx.startLazyThread ? ctx.startLazyThread(row, prompt, profile) : localLazyStarter.start(row, prompt, profile)
+  // Starting a HELD thread goes through the project's ONE starter (held-start.ts), shared with the
+  // scheduler and the plugins so its one-launch-at-a-time guard sees every launch — and through the
+  // schedule service, so a schedule's pending next run that the human sends early still opens with its run
+  // header and still lands in the schedule's history (schedules.ts startHeldRow). A hand-built test context
+  // carries neither and gets a starter of its own.
+  const localHeldStarter = createHeldThreadStarter({ dispatcher: ctx.dispatcher, board: ctx.board })
+  const startHeldThreadRow = (row: SessionRow, prompt: string, profile: HeldStartProfile = {}): Promise<{ slug: string; sessionId: string }> =>
+    ctx.startHeldThread ? ctx.startHeldThread(row, prompt, profile) : localHeldStarter.start(row, prompt, profile)
 
   function currentOwnedSession(slug: string, sessionId: string) {
     const row = ctx.storage.getSession(slug)
@@ -1707,7 +1707,7 @@ export function createRouter(ctx: AppContext) {
    *  worker to tell: its first prompt will carry the deadline. */
   function noticeDeadline(slug: string, change: Parameters<typeof deadlineNoticeMessage>[0], nowMs: number): void {
     const row = ctx.storage.getSession(slug)
-    if (!row || row.state === "archived" || row.archived === 1 || isLazyRow(row)) return
+    if (!row || row.state === "archived" || row.archived === 1 || isHeldRow(row)) return
     enqueueDeadlineNoticeWake(ctx.storage, {
       slug,
       sessionId: row.session_id,
@@ -2860,7 +2860,7 @@ export function createRouter(ctx: AppContext) {
     createLazyThread: mutation({
       input: CreateLazyThreadInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
-      handler: async ({ input }) => ctx.dispatcher.createLazyThread(input),
+      handler: async ({ input }) => ctx.dispatcher.createHeldThread(input, { holder: "lazy" }),
     }),
 
     // Rewrite a lazy thread's note. Refused once the thread has started: the note was its first message by then.
@@ -2868,7 +2868,7 @@ export function createRouter(ctx: AppContext) {
       input: UpdateLazyPromptInput,
       handler: async ({ input }) => {
         currentOwnedSession(input.slug, input.sessionId)
-        if (!ctx.storage.setLazyPrompt(input.slug, input.sessionId, input.prompt)) throw new Error("This thread has already started")
+        if (!ctx.storage.setHeldPrompt(input.slug, input.sessionId, input.prompt)) throw new Error("This thread has already started")
         ctx.board.refresh()
       },
     }),
@@ -2878,7 +2878,7 @@ export function createRouter(ctx: AppContext) {
     startLazyThread: mutation({
       input: StartLazyThreadInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
-      handler: async ({ input }) => startLazyThreadRow(currentOwnedSession(input.slug, input.sessionId), input.prompt, input),
+      handler: async ({ input }) => startHeldThreadRow(currentOwnedSession(input.slug, input.sessionId), input.prompt, input),
     }),
 
     // SPINOFF a new thread from this one (SpinoffInput). Records the request, then hands it to THIS
@@ -2960,14 +2960,14 @@ export function createRouter(ctx: AppContext) {
         // false for every ordinary send, so the guard still runs first for everything else.
         await promoteExternalSession(input.slug, input.sessionId)
         const row = currentOwnedSession(input.slug, input.sessionId)
-        // A LAZY THREAD HAS NO AGENT TO DELIVER TO: its first message is what starts one, through the dispatch
-        // path (startLazyThreadRow). Every sender lands here — the drawer's prompt box, a snooze carrying a
-        // prompt, another thread's message — so each of them starts the lazy thread rather than resuming a
+        // A HELD THREAD HAS NO AGENT TO DELIVER TO: its first message is what starts one, through the dispatch
+        // path (startHeldThreadRow). Every sender lands here — the drawer's prompt box, a snooze carrying a
+        // prompt, another thread's message — so each of them starts the held thread rather than resuming a
         // session no provider has heard of. A side request is the exception: it asks this thread's worker
         // for an errand, and there is no worker to ask.
-        if (isLazyRow(row)) {
+        if (isHeldRow(row)) {
           if (side) throw new Error("This thread has not started yet; send it a message to start it")
-          await startLazyThreadRow(row, input.message)
+          await startHeldThreadRow(row, input.message)
           return
         }
         if (hasPendingPermissionChange(row)) {
@@ -3821,9 +3821,9 @@ export function createRouter(ctx: AppContext) {
         // Wake now runs it now — there is no "un-parked and waiting" for a run whose start the scheduler
         // owns. A prompt is dropped: the run's own note is what it starts with.
         const row = ctx.storage.getSession(input.slug)
-        if (row && isScheduledLazyRow(row) && thread.schedule?.pending) {
+        if (row && isScheduleHeldRow(row) && thread.schedule?.pending) {
           if (input.until === null) {
-            await startLazyThreadRow(row, row.lazy_prompt ?? "")
+            await startHeldThreadRow(row, row.lazy_prompt ?? "")
             return
           }
           ctx.storage.setSnoozedUntil(input.slug, input.until, null)

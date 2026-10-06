@@ -4018,6 +4018,10 @@ export const ThreadView = z.object({
   // An UNSTARTED thread's note (plans/lazy-threads.md): present ⇒ no agent has ever run for this thread. It
   // rests in the queue like a bare rest, and the first message sent to it starts the agent.
   lazyPrompt: z.string().optional(),
+  // A HELD thread (server SessionRow.held_by): present ⇒ no agent has ever run for it, and it names who holds
+  // it — `schedules` for a schedule's next run, or a Frizz plugin's id (`lazy`). A message sent to it goes to
+  // that holder, and starts it when the holder is gone. Base never queues one; its holder may.
+  held: z.string().optional(),
   // The SCHEDULE this thread is a run of (plans/scheduled-threads.md) — what draws the repeat glyph and
   // its tooltip. `pending` marks the schedule's next run: a lazy row that sits in Snoozed with its wake
   // time until the scheduler starts it, even once that time has passed (isSnoozed). Absent on every other
@@ -5058,18 +5062,21 @@ export const DispatchInput = z.object({
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
 
-// A LAZY THREAD (plans/lazy-threads.md): a thread created WITHOUT starting an agent — a note the human comes back to,
-// marks done, or launches later by sending it a message. `note` is what it says; it prefills the prompt
-// box when the human opens it. The profile is the prompt box's pick at the moment it was written down,
-// and is what the agent starts on unless the human changes it before launching.
-export const CreateLazyThreadInput = z.object({
+// A HELD THREAD (SessionRow.held_by on the server): a thread created WITHOUT starting an agent, held by whoever
+// wrote it down — a schedule's next run, or a Frizz plugin's (the lazy plugin's note to come back to). `prompt`
+// is what it will start with, and what its name is minted from unless a `title` is typed. The profile is the
+// prompt box's pick at the moment it was written down, and is what the agent starts on unless changed then.
+export const CreateHeldThreadInput = z.object({
   prompt: z.string().trim().min(1),
   title: z.string().min(1).optional(),
   model: z.string().optional(),
   backend: Backend.optional(),
   effort: Settings.shape.effort,
 })
-export type CreateLazyThreadInput = z.infer<typeof CreateLazyThreadInput>
+export type CreateHeldThreadInput = z.infer<typeof CreateHeldThreadInput>
+// The lazy thread's create, until the lazy plugin takes it (packages/server/src/plugins).
+export const CreateLazyThreadInput = CreateHeldThreadInput
+export type CreateLazyThreadInput = CreateHeldThreadInput
 export const UpdateLazyPromptInput = z.object({ slug: ThreadSlug, sessionId: z.string().min(1), prompt: z.string() }).strict()
 export type UpdateLazyPromptInput = z.infer<typeof UpdateLazyPromptInput>
 // Start a lazy thread's agent: `prompt` is its opening message (the note, usually edited first). The profile

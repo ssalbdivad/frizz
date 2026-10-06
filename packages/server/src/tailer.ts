@@ -8,7 +8,7 @@ import type { AskQuestion, AwaitingHint, CodexModel, LiveTool, SubAgentDirectory
 import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
-import { isBrokerClaudeRow, isHeadlessRow, isLazyRow } from "./storage.ts"
+import { isBrokerClaudeRow, isHeadlessRow, isHeldRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, mtimeOfNonEmpty, DISCOVERY_GRACE_MS } from "./discover.ts"
 import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail, OpenCall } from "./backend/types.ts"
@@ -5693,11 +5693,11 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Before anything this tick can flush (and the first flush PRUNES every other fold schema's rows):
     // the provisional readings are served from what this read finds. See `provisional`.
     if (tailCache && cacheEntries === null) loadCacheEntries()
-    // A LAZY THREAD is never tailed (SessionRow.lazy thread): its session id names a session no provider has started,
-    // so there is no transcript to read, and a row the tailer never reads is one no wake, nudge or stall
-    // reading can be derived for — every scheduler source keys on this telemetry. The tick after its
+    // A HELD THREAD is never tailed (SessionRow.held_by): its session id names a session no provider has
+    // started, so there is no transcript to read, and a row the tailer never reads is one no wake, nudge or
+    // stall reading can be derived for — every scheduler source keys on this telemetry. The tick after its
     // launch picks it up as a fresh row.
-    const rows = deps.storage.allSessions().filter((row) => !isLazyRow(row))
+    const rows = deps.storage.allSessions().filter((row) => !isHeldRow(row))
     // ARCHIVED ROWS PRIME LAST. Priming is bounded per tick, so on a cold board the registry's order
     // decides who converges first — and a long-lived board is overwhelmingly archive. The maintainer's
     // board on 2026-08-16: 464 rows, 459 of them archived, 5 on the live board. Priming in row order

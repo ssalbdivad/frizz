@@ -12,15 +12,15 @@ import { mountRouter } from "@frizz/rpc/server"
 import { parseScheduledRunPrompt, type BoardSnapshot, type ThreadView } from "@frizz/shared"
 import { createDispatcher } from "./dispatch.ts"
 import { createRouter } from "./router.ts"
-import { createStorage, isLazyRow, isScheduledLazyRow } from "./storage.ts"
+import { createStorage, isHeldRow, isScheduleHeldRow } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
 import { cwdSlug, type Project } from "./project.ts"
-import { lazyThreadView, type BoardManager } from "./board.ts"
+import { heldThreadView, type BoardManager } from "./board.ts"
 import type { AppContext } from "./context.ts"
 import type { Tailer } from "./tailer.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
-import { createLazyThreadStarter } from "./lazy-start.ts"
+import { createHeldThreadStarter } from "./held-start.ts"
 import { createScheduleService, createStartCap, type ScheduleServiceDeps } from "./schedules.ts"
 
 const T = (iso: string) => Date.parse(iso)
@@ -79,7 +79,7 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
     dispatchProfile: () => ({ model: "opus" }),
     preflightAuth: async () => preflight,
   })
-  const starter = createLazyThreadStarter({ dispatcher, board })
+  const starter = createHeldThreadStarter({ dispatcher, board })
   let clock = opts.nowMs ?? MON_8AM
   // The board's reading of a run, by slug — what the overlap check consults. Default: nothing known.
   const readings = new Map<string, { view?: ThreadView; vouched: boolean }>()
@@ -105,7 +105,7 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
     project, storage, board, tailer, dispatcher, claudeBroker,
     getSettings: () => defaultSettings(),
     schedules: service,
-    startLazyThread: (row: never, prompt: string, profile: never) => service.startLazyRow(row, prompt, profile),
+    startHeldThread: (row: never, prompt: string, profile: never) => service.startHeldRow(row, prompt, profile),
     terminalRunner: { closeThread: async () => {}, live: () => false, stopThread: async () => {} },
   } as unknown as AppContext
   return {
@@ -132,7 +132,7 @@ test("a new schedule's next run is a lazy thread snoozed until the occurrence, p
     assert.ok(view.nextRun, "the next run is materialized")
     assert.equal(view.nextRun!.at, new Date(MON_9AM).toISOString())
     const row = h.storage.getSession(view.nextRun!.slug)!
-    assert.equal(isScheduledLazyRow(row), true)
+    assert.equal(isScheduleHeldRow(row), true)
     assert.equal(row.title, "Triage issues")
     assert.equal(row.lazy_prompt, WEEKLY.prompt)
     assert.equal(row.model, "haiku")
@@ -141,7 +141,7 @@ test("a new schedule's next run is a lazy thread snoozed until the occurrence, p
     const ref = h.service.threadRef(row)
     assert.deepEqual(ref, { id: view.id, title: "Triage issues", describe: "every Monday at 9am", pending: true })
     const base = { id: row.slug, title: row.title, status: "active", archived: false, schedule: ref } as unknown as ThreadView
-    const projected = lazyThreadView(base, row)
+    const projected = heldThreadView(base, row)
     assert.equal(projected.snoozedUntil, row.snoozed_until)
     assert.equal(projected.needsYou, false, "a pending run never queues")
   } finally {
@@ -169,7 +169,7 @@ test("at its time the scheduler starts the run with the header, records it, and 
     assert.match(prompt, /`quiet: true`/)
     assert.ok(prompt.includes(WEEKLY.prompt), "the saved prompt follows the header")
     const started = h.storage.getSession(firstSlug)!
-    assert.equal(isLazyRow(started), false)
+    assert.equal(isHeldRow(started), false)
     assert.equal(started.schedule_id, view.id, "the run keeps its schedule")
     const after = h.service.get(view.id)
     assert.equal(after.history.length, 1)
@@ -178,7 +178,7 @@ test("at its time the scheduler starts the run with the header, records it, and 
     assert.equal(after.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString())
     const next = h.storage.getSession(after.schedule.nextRun!.slug)!
     assert.equal(next.title, "Triage issues 2", "a collision takes a number, never another word")
-    assert.equal(isScheduledLazyRow(next), true)
+    assert.equal(isScheduleHeldRow(next), true)
     // The second run's header names the first.
     h.at(NEXT_MON_9AM + 1000)
     await h.tick()
@@ -219,7 +219,7 @@ test("a claim a dead process left behind is settled by what its thread shows", a
       })
     }
     const row = h.storage.getSession(b.nextRun!.slug)!
-    h.storage.upsertSession({ ...row, lazy_prompt: null, snoozed_until: null, exited: 0 })
+    h.storage.upsertSession({ ...row, lazy_prompt: null, held_by: null, snoozed_until: null, exited: 0 })
     h.at(MON_9AM + 60_000)
     await h.tick()
     assert.equal(h.spawned.length, 0, "a settled claim is never retried")

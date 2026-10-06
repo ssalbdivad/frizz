@@ -4,7 +4,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { test } from "node:test"
 import { threadIdentityName } from "@frizz/shared"
-import { createStorage, isScheduledLazyRow, type SessionRow } from "./storage.ts"
+import { createStorage, isScheduleHeldRow, type SessionRow } from "./storage.ts"
 import type { ThreadScheduleRow } from "./schedule-store.ts"
 
 const tmpStorage = () => createStorage(join(mkdtempSync(join(tmpdir(), "frizz-schedule-store-")), "ui.db"), "p")
@@ -22,11 +22,11 @@ const run = (id: string, occurrenceAt: number) => ({
   thread_slug: "triage-issues", session_id: "s1", owner: "me", created_at: 1,
 })
 
-const lazyRow = (slug: string, patch: Partial<SessionRow> = {}): SessionRow => ({
+const heldRow = (slug: string, patch: Partial<SessionRow> = {}): SessionRow => ({
   slug, session_id: `sess-${slug}`, thread_name: threadIdentityName(slug), spawned_at: "2026-10-05T00:00:00.000Z",
   last_read_at: null, unread: 0, exited: 1, archived: 0, rested_at: null, title_auto: 0, title_locked: 1, title: "Triage issues",
   state: "open", snoozed_until: "2026-10-05T09:00:00.000Z", snooze_prompt: null, meta: null, seen_at: null, transcript_id: null,
-  lazy_prompt: "triage new issues", schedule_id: "sch_aaaaaaaaaaaa", ...patch,
+  lazy_prompt: "triage new issues", held_by: "schedules", schedule_id: "sch_aaaaaaaaaaaa", ...patch,
 })
 
 test("claiming one occurrence twice records exactly one run", () => {
@@ -84,26 +84,27 @@ test("settling, summary and pruning", () => {
   assert.equal(storage.listScheduleRuns("sch_aaaaaaaaaaaa", 10).length, 0, "the history goes with the schedule")
 })
 
-test("the dispatch upsert that starts a schedule's lazy run never clears schedule_id", () => {
+test("the dispatch upsert that starts a schedule's held run never clears schedule_id", () => {
   const storage = tmpStorage()
-  storage.upsertSession(lazyRow("triage-issues"))
-  assert.equal(isScheduledLazyRow(storage.getSession("triage-issues")), true)
-  // What dispatch writes when it starts the lazy row: the same slug and session, no note, no snooze, and
-  // no schedule_id field at all.
-  const { schedule_id: _drop, ...started } = lazyRow("triage-issues", { lazy_prompt: null, snoozed_until: null, exited: 0 })
+  storage.upsertSession(heldRow("triage-issues"))
+  assert.equal(isScheduleHeldRow(storage.getSession("triage-issues")), true)
+  // What dispatch writes when it starts the held row: the same slug and session, no prompt, no snooze, and
+  // neither a holder nor a schedule_id field at all.
+  const { schedule_id: _drop, held_by: _holder, ...started } = heldRow("triage-issues", { lazy_prompt: null, snoozed_until: null, exited: 0 })
   storage.upsertSession(started)
   const row = storage.getSession("triage-issues")!
   assert.equal(row.schedule_id, "sch_aaaaaaaaaaaa")
   assert.equal(row.lazy_prompt, null)
+  assert.equal(row.held_by, null)
   assert.equal(row.snoozed_until, null)
-  assert.equal(isScheduledLazyRow(row), false, "a started run is no longer the pending next run")
+  assert.equal(isScheduleHeldRow(row), false, "a started run is no longer the pending next run")
 })
 
 test("snooze expiry leaves a schedule's pending next run alone, and clears every other promptless snooze", () => {
   const storage = tmpStorage()
-  storage.upsertSession(lazyRow("triage-issues"))
-  storage.upsertSession(lazyRow("plain-note", { schedule_id: null }))
-  storage.upsertSession(lazyRow("started-run", { lazy_prompt: null }))
+  storage.upsertSession(heldRow("triage-issues"))
+  storage.upsertSession(heldRow("plain-note", { schedule_id: null, held_by: "lazy" }))
+  storage.upsertSession(heldRow("started-run", { lazy_prompt: null, held_by: null }))
   storage.clearExpiredSnoozes("2026-10-06T00:00:00.000Z")
   assert.equal(storage.getSession("triage-issues")!.snoozed_until, "2026-10-05T09:00:00.000Z")
   assert.equal(storage.getSession("plain-note")!.snoozed_until, null)

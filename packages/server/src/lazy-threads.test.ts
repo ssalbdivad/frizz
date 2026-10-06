@@ -11,10 +11,10 @@ import { join } from "node:path"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { createDispatcher } from "./dispatch.ts"
 import { createRouter } from "./router.ts"
-import { createStorage, isLazyRow } from "./storage.ts"
+import { createStorage, isHeldRow } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
 import { cwdSlug, type Project } from "./project.ts"
-import { lazyThreadView, type BoardManager } from "./board.ts"
+import { heldThreadView, type BoardManager } from "./board.ts"
 import type { AppContext } from "./context.ts"
 import type { Tailer } from "./tailer.ts"
 import type { ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
@@ -66,7 +66,8 @@ test("writing a lazy thread down spawns nothing and leaves a row that is plainly
     const { slug, sessionId } = await h.router.createLazyThread.handler({ input: { prompt: "Look into the flaky resume test", title: "Flaky resume" } })
     assert.deepEqual(h.spawned, [], "no agent is started for a lazy thread")
     const row = h.storage.getSession(slug)!
-    assert.equal(isLazyRow(row), true)
+    assert.equal(isHeldRow(row), true)
+    assert.equal(row.held_by, "lazy")
     assert.equal(row.lazy_prompt, "Look into the flaky resume test")
     assert.equal(row.session_id, sessionId)
     assert.equal(row.title, "Flaky resume")
@@ -87,7 +88,9 @@ test("the first message starts the agent on the SAME slug and session id, and th
     assert.match(h.spawned[0].prompt, /Fix the cache key in resolver\.ts/)
     assert.deepEqual(h.followUps, [], "a lazy thread's first message is a dispatch, never a resume")
     const row = h.storage.getSession(slug)!
-    assert.equal(isLazyRow(row), false)
+    assert.equal(isHeldRow(row), false)
+    assert.equal(row.held_by, null)
+    assert.equal(row.lazy_prompt, null)
     assert.equal(row.claude_runtime, "broker")
     assert.equal(row.exited, 0)
     assert.equal(row.title, "Cache key", "the lazy thread's name carries over")
@@ -144,14 +147,15 @@ test("a lazy thread queues unless it is done or snoozed, and never reads as runn
     unread: false, archived: false, subAgents: [], bgShells: [], watches: [], pendingQuestion: false, questions: [],
     needsYou: false, awaitingBackground: false, crashed: true, kind: "session",
   } as unknown as ThreadView
-  const row = { lazy_prompt: "note", spawned_at: "2026-10-01T00:00:00.000Z" } as Parameters<typeof lazyThreadView>[1]
-  const open = lazyThreadView(base, row)
+  const row = { lazy_prompt: "note", held_by: "lazy", spawned_at: "2026-10-01T00:00:00.000Z" } as Parameters<typeof heldThreadView>[1]
+  const open = heldThreadView(base, row)
   assert.equal(open.needsYou, true)
   assert.equal(open.runtime, "turn-idle")
   assert.equal(open.crashed, false)
   assert.equal(open.lazyPrompt, "note")
-  assert.equal(lazyThreadView({ ...base, archived: true }, row).needsYou, false)
-  assert.equal(lazyThreadView({ ...base, snoozedUntil: "2099-01-01T00:00:00.000Z" }, row).needsYou, false)
+  assert.equal(open.held, "lazy")
+  assert.equal(heldThreadView({ ...base, archived: true }, row).needsYou, false)
+  assert.equal(heldThreadView({ ...base, snoozedUntil: "2099-01-01T00:00:00.000Z" }, row).needsYou, false)
 })
 
 test("a database from the build that named the column `todo` keeps its lazy threads", () => {
@@ -172,7 +176,8 @@ test("a database from the build that named the column `todo` keeps its lazy thre
     raw.close()
     const reopened = createStorage(file, "p")
     assert.equal(reopened.getSession("renew")?.lazy_prompt, "Renew the domain")
-    assert.equal(isLazyRow(reopened.getSession("renew")), true)
+    assert.equal(isHeldRow(reopened.getSession("renew")), true)
+    assert.equal(reopened.getSession("renew")?.held_by, "lazy")
     reopened.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
 })

@@ -6,7 +6,7 @@ import {
   AdoptSessionInput,
   AdoptThreadInput,
   DISPATCH_TASK_BANNER_MARKER,
-  CreateLazyThreadInput,
+  CreateHeldThreadInput,
   DispatchInput,
   THREAD_SLUG_MAX_CHARS,
   ThreadSlug,
@@ -20,7 +20,7 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { PERM_DIR_ENV, permRequestDir, workDirOf, type Project } from "./project.ts"
 import type { SessionRow, Storage } from "./storage.ts"
-import { isLazyRow } from "./storage.ts"
+import { isHeldRow } from "./storage.ts"
 import type { BoardManager } from "./board.ts"
 import type { AgentBackend, BackendKind, BuiltCommand, FrizzMcp } from "./backend/types.ts"
 import { workerMcpServers, type WorkerMcpServers } from "./backend/project-mcp-servers.ts"
@@ -801,25 +801,27 @@ export interface Dispatcher {
   // only — a fork of any other backend's session is refused, never approximated. Server-only, for the
   // same reason as `nameSource`: what a thread starts from is not a caller's to choose over the RPC.
   //
-  // `opts.lazy` STARTS AN UNSTARTED THREAD (SessionRow.lazy thread, plans/lazy-threads.md): the dispatch runs on that
-  // row's own slug, session id and title instead of minting new ones, so everything already hung on the
-  // row — its place in the queue, a pin, links, a name the human typed — carries over, and the upsert
-  // that writes the live row clears the note. Server-only, like `fork`: the caller is startLazyThread.
-  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string; fork?: { sessionId: string }; lazy?: SessionRow }): Promise<{ slug: string; sessionId: string }>
+  // `opts.onto` STARTS A HELD THREAD (SessionRow.held_by): the dispatch runs on that row's own slug, session
+  // id and title instead of minting new ones, so everything already hung on the row — its place, a pin,
+  // links, a name the human typed — carries over, and the upsert that writes the live row clears the hold.
+  // Server-only, like `fork`: the caller is held-start.ts.
+  dispatch(input: DispatchInput, opts?: { backend?: BackendKind; nameSource?: string; fork?: { sessionId: string }; onto?: SessionRow }): Promise<{ slug: string; sessionId: string }>
   // Cold-adopt an EXISTING thread frizz didn't originate (e.g. a repo with a pre-existing .frizz
   // board): spawn a fresh worker pointed at the thread file. Frizz's contract makes this sound —
   // the doc, not the conversation, is the durable context; the worker reads it and continues.
   adopt(slug: string, message?: string): Promise<{ slug: string; sessionId: string }>
-  // Write down a LAZY THREAD: a thread row with a name and a session id but no agent (SessionRow.lazy_prompt). Nothing
-  // is spawned and no provider is contacted; `dispatch` with `opts.lazy` starts it later.
+  // Write down a HELD THREAD for `opts.holder`: a thread row with a name and a session id but no agent
+  // (SessionRow.held_by). Nothing is spawned and no provider is contacted; `dispatch` with `opts.onto`
+  // starts it later. The prompt rides `lazy_prompt` too — the run's own prompt for a schedule, and for any
+  // holder the column an older server generation reads as "unstarted" (SessionRow.lazy_prompt).
   //
   // `opts.scheduleRun` writes a SCHEDULE's next run (plans/scheduled-threads.md §4): the row carries the
   // schedule's id and is snoozed until the occurrence in the SAME write, so no reader ever sees one half
-  // — a lazy row with no schedule queues, and one with no instant would read as due. Its title is used
+  // — a held row with no instant would read as due. Its title is used
   // exactly as given (the schedule numbers a collision, `Triage issues 2`, rather than taking the namer's
   // significant-word fallback, which reads like a different task) and is locked, and nothing is minted.
-  // Server-only, like `dispatch`'s `lazy`: the caller is schedules.ts.
-  createLazyThread(input: CreateLazyThreadInput, opts?: { scheduleRun?: { scheduleId: string; snoozedUntil: string | null; title: string } }): { slug: string; sessionId: string }
+  // Server-only, like `dispatch`'s `onto`: the callers are schedules.ts and a plugin's `threads.create`.
+  createHeldThread(input: CreateHeldThreadInput, opts: { holder: string; scheduleRun?: { scheduleId: string; snoozedUntil: string | null; title: string } }): { slug: string; sessionId: string }
   // Take over an EXTERNAL session — one of the human's own `claude`/`codex` terminals, listed in the
   // rail's External band. Distinct from `adopt` above, which cold-starts a fresh worker on a thread
   // FILE: this one binds frizz to a conversation that already exists and continues it.
@@ -1000,28 +1002,28 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // held to the project's uniqueness rule here.
       // So is its length: a caller's name too long to type as a handle is dropped, and the thread is minted
       // a name like any other — a spawn_thread title is where `@spinoffFeatureScopeAndUi` came from.
-      const lazy = opts?.lazy
-      if (lazy && !isLazyRow(lazy)) throw new Error("that thread has already started")
+      const onto = opts?.onto
+      if (onto && !isHeldRow(onto)) throw new Error("that thread has already started")
       const callerTitle = input.title?.trim() && !threadNameProblem(input.title.trim()) ? input.title.trim() : undefined
       const nameSource = opts?.nameSource?.trim() || input.prompt
-      // A lazy thread keeps the name it was given when it was created, minted or typed; it is not named again.
-      const title = lazy?.title?.trim() || (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, nameSource, input.slug) : callerTitle) ||
+      // A held thread keeps the name it was given when it was created, minted or typed; it is not named again.
+      const title = onto?.title?.trim() || (callerTitle && deps.threadNamer ? deps.threadNamer.distinct(callerTitle, nameSource, input.slug) : callerTitle) ||
         fallbackTitle(nameSource)
       const mintName = (slug: string, sessionId: string) => {
-        if (!callerTitle && !lazy) void deps.threadNamer?.mint(slug, sessionId, nameSource)
+        if (!callerTitle && !onto) void deps.threadNamer?.mint(slug, sessionId, nameSource)
       }
       const base = input.slug ?? slugify(title)
-      const slug = lazy ? lazy.slug : resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
-      // The title flags a lazy thread already has: a name the human typed stays locked against the worker's rename.
-      const titleFlags = lazy
-        ? { title_auto: lazy.title_auto, title_locked: lazy.title_locked }
+      const slug = onto ? onto.slug : resolveSlug(frizzDir, base, (s) => deps.storage.getSession(s) !== undefined)
+      // The title flags a held thread already has: a name the human typed stays locked against the worker's rename.
+      const titleFlags = onto
+        ? { title_auto: onto.title_auto, title_locked: onto.title_locked }
         : undefined
       // Codex TUI does not reliably emit either a native title or Frizz's requested hidden marker.
       // Keep the already bounded, deterministic dispatch title as the durable automatic fallback.
       // Unlike the full composed prompt, fallbackTitle is capped and topic-oriented; a later valid
       // provider/Frizz signal may still replace it through the title_auto CAS.
       const registryTitle = title
-      const sessionId = lazy ? lazy.session_id : randomUUID()
+      const sessionId = onto ? onto.session_id : randomUUID()
       const permissionMode = workerDispatchPermission(kind, settings)
       // Resolve the profile ONCE for this session. It feeds both the CLI argv and the persisted row,
       // so the thread UI describes what this dispatch actually launched with rather than whatever the
@@ -1263,10 +1265,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       throw new Error(`unsupported backend for dispatch: ${String(kind)}`)
     },
 
-    createLazyThread(input, opts) {
-      input = CreateLazyThreadInput.parse(input)
+    createHeldThread(input, opts) {
+      input = CreateHeldThreadInput.parse(input)
       const kind: BackendKind = input.backend ?? "claude"
-      const scheduled = opts?.scheduleRun
+      const scheduled = opts.scheduleRun
       // A typed name is the human's, so it is locked; otherwise the note is chopped like a prompt and the
       // row is minted a real name, exactly as a dispatch would be. A schedule's run takes its title as given.
       const typed = scheduled ? scheduled.title.trim() || undefined
@@ -1302,6 +1304,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
         effort: kind === "acp" ? null : effort ?? null,
         permission_mode: null,
         lazy_prompt: input.prompt,
+        held_by: opts.holder,
         ...(scheduled ? { snoozed_until: scheduled.snoozedUntil, schedule_id: scheduled.scheduleId } : {}),
       })
       deps.storage.setBackend(slug, kind)

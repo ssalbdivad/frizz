@@ -36,11 +36,11 @@ import type { AwakeClock } from "./awake-clock.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
 import type { Dispatcher } from "./dispatch.ts"
 import { homeWorkspaceSlug, isHomeWorkspace } from "./home-workspace.ts"
-import type { LazyStartProfile, LazyThreadStarter } from "./lazy-start.ts"
+import type { HeldStartProfile, HeldThreadStarter } from "./held-start.ts"
 import type { Project } from "./project.ts"
 import { findByPath } from "./project-registry.ts"
 import type { ThreadScheduleRow, ThreadScheduleRunRow } from "./schedule-store.ts"
-import { isLazyRow, isScheduledLazyRow, type SessionRow, type Storage } from "./storage.ts"
+import { isHeldRow, isScheduleHeldRow, SCHEDULES_HOLDER, type SessionRow, type Storage } from "./storage.ts"
 import { threadNameProblem } from "./thread-names.ts"
 
 // ---- SCHEDULED THREADS: THE SERVER HALF ------------------------------------------------------------------
@@ -48,14 +48,15 @@ import { threadNameProblem } from "./thread-names.ts"
 // or the interpreter's model call (schedule-interpreter.ts):
 //
 //   · create / validate / echo, the per-project cap, update, pause / resume / Turn on, delete, Run now;
-//   · the materialized next run — ONE lazy thread per active schedule, snoozed until its occurrence, so
+//   · the materialized next run — ONE held thread per active schedule (held by `schedules`, SessionRow.held_by),
+//     snoozed until its occurrence, so
 //     the upcoming run sits in the Snoozed band where the human already looks and every per-occurrence act
 //     (skip = Mark as done, move = snooze, run now = send, edit = its note) is one they already know (§4);
 //   · the scheduler pass, `evalDue` (§6): reconcile the human's acts on the next run, claim an occurrence
 //     synchronously with the revision guard, launch it OFF the tick, settle a dead process's claims, cap
 //     lateness, skip on overlap, pause on back-pressure / failures / a stuck run, resume on review;
-//   · every start of a schedule's lazy row, whoever makes it — so a run the HUMAN sends early still opens
-//     with the run header and still lands in the history (`startLazyRow`).
+//   · every start of a held row, whoever makes it — so a schedule's run the HUMAN sends early still opens
+//     with the run header and still lands in the history (`startHeldRow`).
 
 /** The owner stamped on a `starting` claim. ONE per process: the global lease means one Frizz process
  *  per machine, so a claim whose owner is not this value was cut off by a process that is gone. */
@@ -96,8 +97,8 @@ export const MACHINE_START_CAP = createStartCap(2)
 export interface ScheduleServiceDeps {
   project: Project
   storage: Storage
-  dispatcher: Pick<Dispatcher, "createLazyThread">
-  starter: LazyThreadStarter
+  dispatcher: Pick<Dispatcher, "createHeldThread">
+  starter: HeldThreadStarter
   board?: { refresh(): unknown }
   /** The project's open thread already carrying `name` (thread-names.ts) — what numbers a run's title. */
   nameHolder?: (name: string, exceptSlug?: string) => unknown
@@ -139,8 +140,8 @@ export interface ScheduleService {
   remove(id: string): void
   /** The worker's `schedule` tool. */
   own(input: OwnScheduleInput): OwnScheduleResult
-  /** Start a lazy row, whoever asks: a schedule's next run gets its header and its history line. */
-  startLazyRow(row: SessionRow, prompt: string, profile?: LazyStartProfile): Promise<{ slug: string; sessionId: string }>
+  /** Start a held row, whoever asks: a schedule's next run gets its header and its history line. */
+  startHeldRow(row: SessionRow, prompt: string, profile?: HeldStartProfile): Promise<{ slug: string; sessionId: string }>
   /** `done` with `quiet: true` — refuses on a thread that is not a run of a schedule. */
   quietDone(slug: string, body: string): void
   /** The scheduler pass (scheduler.ts runTick). Synchronous: launches run off the tick. */
@@ -266,12 +267,12 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     return sch
   }
 
-  /** The schedule's pending next run, when it still is one: a lazy row of THIS schedule that is not
+  /** The schedule's pending next run, when it still is one: a held row of THIS schedule that is not
    *  starting and not filed under Done. */
   function pendingRow(sch: ThreadScheduleRow): SessionRow | undefined {
     if (!sch.next_slug) return undefined
     const row = storage.getSession(sch.next_slug)
-    if (!row || !isScheduledLazyRow(row) || row.schedule_id !== sch.id) return undefined
+    if (!row || !isScheduleHeldRow(row) || row.schedule_id !== sch.id) return undefined
     if (row.state === "archived" || row.archived === 1) return undefined
     return row
   }
@@ -285,7 +286,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
 
   /**
    * Point the schedule at its next occurrence: the first one after max(now, every occurrence it has
-   * consumed). The pending lazy row is REUSED when there is one (a skip, a failed start, a rule change),
+   * consumed). The pending held row is REUSED when there is one (a skip, a failed start, a rule change),
    * re-snoozed to the new instant; otherwise a fresh one is written. A rule with no next occurrence ends.
    *
    * `at` points it at one occurrence the caller already chose instead — the overdue catch-up in evalOne,
@@ -318,16 +319,16 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
         // occurrence that just went, so the next one starts from the schedule's prompt again. When nothing
         // was consumed — an edit re-pointing the same pending run at a new rule — the note is still for
         // this run and stays (§6 "Edits": "keeping a per-run prompt edit the human made").
-        if (consumed !== undefined && reuse.lazy_prompt !== sch.prompt) storage.setLazyPrompt(slug, reuse.session_id, sch.prompt)
+        if (consumed !== undefined && reuse.lazy_prompt !== sch.prompt) storage.setHeldPrompt(slug, reuse.session_id, sch.prompt)
       } else {
-        const made = deps.dispatcher.createLazyThread(
+        const made = deps.dispatcher.createHeldThread(
           {
             prompt: sch.prompt,
             ...(sch.model ? { model: sch.model } : {}),
             ...(sch.effort ? { effort: sch.effort as CreateScheduleInput["effort"] } : {}),
             backend: sch.backend === "codex" || sch.backend === "acp" ? sch.backend : "claude",
           },
-          { scheduleRun: { scheduleId: sch.id, snoozedUntil: iso(next), title: numberedTitle(sch.title) } },
+          { holder: SCHEDULES_HOLDER, scheduleRun: { scheduleId: sch.id, snoozedUntil: iso(next), title: numberedTitle(sch.title) } },
         )
         slug = made.slug
         created = true
@@ -368,7 +369,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     for (const run of storage.listScheduleRuns(sch.id, 60)) {
       if (run.state !== "started" || !run.thread_slug) continue
       const row = storage.getSession(run.thread_slug)
-      if (row && row.session_id === run.session_id && !isLazyRow(row) && row.state !== "archived" && row.archived !== 1) n++
+      if (row && row.session_id === run.session_id && !isHeldRow(row) && row.state !== "archived" && row.archived !== 1) n++
     }
     return n
   }
@@ -442,7 +443,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
   }
 
   /** A human start of the pending next run (send, Wake now, Run now): this occurrence, run now. */
-  async function humanStart(sch: ThreadScheduleRow, row: SessionRow, prompt: string, profile: LazyStartProfile = {}): Promise<{ slug: string; sessionId: string }> {
+  async function humanStart(sch: ThreadScheduleRow, row: SessionRow, prompt: string, profile: HeldStartProfile = {}): Promise<{ slug: string; sessionId: string }> {
     if (starter.isStarting(row.slug)) throw new Error("This run is already starting")
     const occurrenceAt = sch.next_occurrence_at ?? now()
     const nowMs = now()
@@ -461,7 +462,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     try {
       started = await starter.start(row, text, profile)
     } catch (error) {
-      // A failed launch leaves the lazy thread untouched (plans/lazy-threads.md), and the occurrence with
+      // A failed launch leaves the held row untouched (held-start.ts), and the occurrence with
       // it: the claim goes, so the scheduler can still start this run at its time.
       storage.dropScheduleRunClaim(runId)
       throw error
@@ -476,14 +477,14 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
    *  consumes no occurrence. */
   async function manualRun(sch: ThreadScheduleRow): Promise<{ slug: string; sessionId: string }> {
     const nowMs = now()
-    const made = deps.dispatcher.createLazyThread(
+    const made = deps.dispatcher.createHeldThread(
       {
         prompt: sch.prompt,
         ...(sch.model ? { model: sch.model } : {}),
         ...(sch.effort ? { effort: sch.effort as CreateScheduleInput["effort"] } : {}),
         backend: sch.backend === "codex" || sch.backend === "acp" ? sch.backend : "claude",
       },
-      { scheduleRun: { scheduleId: sch.id, snoozedUntil: null, title: numberedTitle(sch.title) } },
+      { holder: SCHEDULES_HOLDER, scheduleRun: { scheduleId: sch.id, snoozedUntil: null, title: numberedTitle(sch.title) } },
     )
     const row = storage.getSession(made.slug)
     if (!row) throw new Error("Frizz could not write this run down")
@@ -508,19 +509,19 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
   // ---- the scheduler pass ----------------------------------------------------------------------------
 
   /** A claim left `starting` by a process that is gone (the global lease means a different owner is a
-   *  dead one). Its thread tells what happened: no longer lazy means the start got through. */
+   *  dead one). Its thread tells what happened: no longer held means the start got through. */
   function settleOrphanClaims(): void {
     for (const run of storage.startingScheduleRuns()) {
       if (run.owner === owner) continue
       const row = run.thread_slug ? storage.getSession(run.thread_slug) : undefined
-      const started = row !== undefined && row.session_id === run.session_id && !isLazyRow(row)
+      const started = row !== undefined && row.session_id === run.session_id && !isHeldRow(row)
       storage.settleScheduleRun(run.id, started
         ? { state: "started", startedAt: run.created_at }
         : { state: "failed", reason: "Frizz stopped" })
-      // A hard kill can land after the daemon took the prompt but before the row stopped being lazy, so
+      // A hard kill can land after the daemon took the prompt but before the row stopped being held, so
       // that session id may have a live worker behind it. Never hand it to the next occurrence: drop the
-      // lazy row and let the pass write the next run down under a fresh session id.
-      if (!started && row && row.session_id === run.session_id && isLazyRow(row)) storage.forgetSession(row.slug)
+      // held row and let the pass write the next run down under a fresh session id.
+      if (!started && row && row.session_id === run.session_id && isHeldRow(row)) storage.forgetSession(row.slug)
       log(`schedule ${run.schedule_id}: settled a claim from a stopped process as ${started ? "started" : "failed"}`)
     }
   }
@@ -563,8 +564,8 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       materialize(id, nowMs, occurrenceAt)
       return
     }
-    if (!isLazyRow(row)) {
-      // Started by some path that did not come through startLazyRow (it always does today); write the
+    if (!isHeldRow(row)) {
+      // Started by some path that did not come through startHeldRow (it always does today); write the
       // history line it would have.
       if (!existing) record(sch, occurrenceAt, "started", "started by you", { thread_slug: row.slug, session_id: row.session_id, started_at: nowMs })
       materialize(id, nowMs, occurrenceAt)
@@ -580,7 +581,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       materialize(id, nowMs, occurrenceAt)
       return
     }
-    // DUE? The lazy row's own instant is the truth — the human may have snoozed it elsewhere. A row with
+    // DUE? The held row's own instant is the truth — the human may have snoozed it elsewhere. A row with
     // NO instant lost it to something that was not a move: archiving clears a snooze (storage setState),
     // so a Mark as done the human then Undid, before this pass reconciled the skip, hands the run back
     // bare. That is not "run now" (Wake now starts the run itself, router setThreadSnooze): its
@@ -912,7 +913,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     const pending = pendingRow(after)
     if (pending && !starter.isStarting(pending.slug)) {
       // The human's per-run edit to the next run's note is kept; an untouched note follows the prompt.
-      if (pending.lazy_prompt === before.prompt && spec.prompt !== before.prompt) storage.setLazyPrompt(pending.slug, pending.session_id, spec.prompt)
+      if (pending.lazy_prompt === before.prompt && spec.prompt !== before.prompt) storage.setHeldPrompt(pending.slug, pending.session_id, spec.prompt)
       if (spec.title !== before.title) storage.setTitle(pending.slug, numberedTitle(spec.title))
       if (spec.backend !== before.backend) storage.setBackend(pending.slug, spec.backend)
       if ((spec.model !== before.model || spec.effort !== before.effort) && spec.model && spec.effort) storage.setProfile(pending.slug, spec.model, spec.effort)
@@ -1035,7 +1036,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       if (!row.schedule_id) return undefined
       const ref = refsById().get(row.schedule_id)
       if (!ref) return undefined
-      return { id: row.schedule_id, title: ref.title, describe: ref.describe, pending: isLazyRow(row) && ref.nextSlug === row.slug }
+      return { id: row.schedule_id, title: ref.title, describe: ref.describe, pending: isHeldRow(row) && ref.nextSlug === row.slug }
     },
     defaultZone: viewerZone,
     reportClientZone(tz) {
@@ -1089,11 +1090,11 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       refresh()
     },
     own,
-    async startLazyRow(row, prompt, profile) {
+    async startHeldRow(row, prompt, profile) {
       const sch = row.schedule_id ? storage.getSchedule(row.schedule_id) : undefined
-      // Only the schedule's PENDING next run is a scheduled run; any other lazy row (one left behind by a
-      // deleted schedule) starts like the plain lazy thread it is.
-      if (!sch || sch.next_slug !== row.slug || !isLazyRow(row)) return starter.start(row, prompt, profile)
+      // Only the schedule's PENDING next run is a scheduled run; any other held row (a plugin's, or one left
+      // behind by a deleted schedule) starts plainly on its prompt.
+      if (!sch || sch.next_slug !== row.slug || !isHeldRow(row)) return starter.start(row, prompt, profile)
       return humanStart(sch, row, prompt, profile)
     },
     quietDone(slug, body) {

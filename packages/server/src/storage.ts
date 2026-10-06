@@ -283,29 +283,48 @@ export interface SessionRow {
   // until it has landed. The uuid is the one the opening prompt was SENT under, which the CLI echoes onto
   // the record; minted at dispatch, so no copied record can carry it. NULL on every other row.
   fork_anchor?: string | null
-  // A LAZY THREAD: a thread the human created to come back to, with no agent behind it yet. Non-NULL means
-  // UNSTARTED, and the value is the note (possibly empty). The row is otherwise an ordinary thread — it
-  // queues, snoozes, is marked done and renamed like any other — but its session id names a session no
-  // provider has ever heard of, so nothing may tail, resume, nudge or wake it (isLazyRow). The first
-  // message sent to it starts the agent through the dispatch path, on this same slug and session id,
-  // and that dispatch's upsert writes NULL here (plans/lazy-threads.md).
+  // The OPENING PROMPT of a held row (held_by, below) — and, on a database from before held rows existed,
+  // the column that meant "unstarted" on its own: a lazy thread's note (plans/lazy-threads.md, 2026-10-01).
+  // Two readers remain, and nothing else may read it as a state:
+  //   · base's own holder, a schedule's next run (`held_by = 'schedules'`): the run's prompt, which the
+  //     human may edit for this run alone (plans/scheduled-threads.md §4);
+  //   · the DOWNGRADE path. Every held row carries a non-NULL value here (`""` at least), because an OLDER
+  //     server generation — which the stable-artifact model keeps and can roll back to — knows only this
+  //     column, and reads it as a lazy thread rather than as a started thread with no transcript. A held
+  //     row a plugin wrote keeps its creation-time note here for that reason alone; the plugin's own
+  //     database is the truth for it (plugins/api.ts `legacyNote` is the one-time import).
+  // Every dispatch upsert writes NULL here and to held_by together: the write that records the live session
+  // is the one that ends the held state. Never dropped or emptied by a migration.
   lazy_prompt?: string | null
-  // The SCHEDULE this thread is a run of (plans/scheduled-threads.md): set on the lazy row a schedule
+  // A HELD THREAD: a thread written down with no agent behind it yet, held by whoever wrote it — base's
+  // `schedules` (a schedule's next run) or a Frizz plugin's id (`lazy`). Non-NULL means UNSTARTED. The row is
+  // otherwise an ordinary thread — it snoozes, is marked done, renamed, pinned and linked like any other —
+  // but its session id names a session no provider has ever heard of, so nothing may tail, resume, nudge or
+  // wake it (isHeldRow). Base never QUEUES a held row: whether it does is its holder's call (a plugin's
+  // `threadView`), which is upstream's rule — "with no agent it makes no sense for a thread to ever show up
+  // inside the queue" — kept by default. A message sent to it goes to its holder (`onSend`), and with no
+  // live holder starts it on that message, so removing a plugin never strands one. Starting it dispatches on
+  // this same slug and session id (dispatch.ts `onto`), and that dispatch's upsert writes NULL here.
+  held_by?: string | null
+  // The SCHEDULE this thread is a run of (plans/scheduled-threads.md): set on the held row a schedule
   // materializes as its next run, and kept when that row starts — the dispatch upsert never writes it —
-  // so every run carries its schedule for life. A lazy row WITH this is a schedule's pending next run:
+  // so every run carries its schedule for life. A row held by `schedules` is a schedule's pending next run:
   // the board parks it in Snoozed with its wake time even once that time has passed, and the scheduler
   // (schedules.ts), not snooze expiry, decides when it starts.
   schedule_id?: string | null
 }
 
-/** A schedule's pending next run: an unstarted thread a schedule materialized (SessionRow.schedule_id). */
-export function isScheduledLazyRow(row: Pick<SessionRow, "lazy_prompt" | "schedule_id"> | undefined | null): boolean {
-  return isLazyRow(row) && typeof row?.schedule_id === "string" && row.schedule_id.length > 0
+/** Base's own holder: a schedule's next run (schedules.ts). A plugin may not take the id (BASE_HOLDERS). */
+export const SCHEDULES_HOLDER = "schedules"
+
+/** A schedule's pending next run: an unstarted thread a schedule materialized and holds (SessionRow.held_by). */
+export function isScheduleHeldRow(row: Pick<SessionRow, "held_by" | "schedule_id"> | undefined | null): boolean {
+  return row?.held_by === SCHEDULES_HOLDER && typeof row.schedule_id === "string" && row.schedule_id.length > 0
 }
 
-/** An unstarted thread (SessionRow.lazy_prompt): no agent has ever run for it. */
-export function isLazyRow(row: Pick<SessionRow, "lazy_prompt"> | undefined | null): boolean {
-  return row?.lazy_prompt !== null && row?.lazy_prompt !== undefined
+/** An unstarted thread (SessionRow.held_by): no agent has ever run for it. */
+export function isHeldRow(row: Pick<SessionRow, "held_by"> | undefined | null): boolean {
+  return typeof row?.held_by === "string" && row.held_by.length > 0
 }
 
 /**
@@ -1147,8 +1166,9 @@ export interface Storage extends ScheduleStore {
   /** Record a forked thread's anchor (SessionRow.fork_anchor). Guarded on the session id, so a slug
    *  re-dispatched since cannot inherit another session's anchor. */
   setForkAnchor(slug: string, sessionId: string, anchor: string): boolean
-  /** Rewrite an unstarted thread's note. False when the row is not (or no longer) a lazy thread. */
-  setLazyPrompt(slug: string, sessionId: string, note: string): boolean
+  /** Rewrite a held thread's opening prompt (SessionRow.lazy_prompt). False when the row is not (or no
+   *  longer) held — it started, and the prompt was its first message. */
+  setHeldPrompt(slug: string, sessionId: string, prompt: string): boolean
   /** Set (or move) this thread's deadline — a new GENERATION: `deadline_set_at` restamped, the stage
    *  ledger cleared, so the check-ins start over against the new budget. */
   setDeadline(slug: string, input: { deadlineAt: string; setAt: string; setBy: "human" | "worker" }): boolean
@@ -1746,6 +1766,8 @@ export function ensureStorageSchema(db: Database): void {
     "lazy_prompt TEXT",
     // 2026-10-05: the schedule a thread is a run of (SessionRow.schedule_id).
     "schedule_id TEXT",
+    // 2026-10-06: who holds an unstarted thread (SessionRow.held_by).
+    "held_by TEXT",
     // 2026-10-06: the thread's time limit (SessionRow.deadline_*; plans/time-limits.md).
     "deadline_at TEXT", "deadline_set_at TEXT", "deadline_set_by TEXT", "deadline_stage TEXT",
   ]) {
@@ -1763,6 +1785,18 @@ export function ensureStorageSchema(db: Database): void {
   } catch {
     // no `todo` column: this file never ran that build
   }
+  // HELD ROWS (SessionRow.held_by, 2026-10-06) replaced `lazy_prompt` as the meaning of "unstarted". Two
+  // statements, both idempotent, both run on every open — so they also repair a database an OLDER server
+  // generation wrote to after a rollback, which knows only `lazy_prompt`:
+  //   · a row with a prompt and no holder is unstarted: a schedule's next run (it has `schedule_id`) is held
+  //     by `schedules`, any other by the `lazy` plugin, which imports its note from this column. Nothing is
+  //     copied out or cleared — the note stays where it was, and a lazy row with no plugin to read it still
+  //     starts on its next message;
+  //   · a held row with no prompt was STARTED by an older server, whose dispatch upsert cleared the one
+  //     column it knew. It is an ordinary thread now, and must not read as unstarted.
+  db.exec(`UPDATE session SET held_by = CASE WHEN schedule_id IS NOT NULL AND schedule_id <> '' THEN '${SCHEDULES_HOLDER}' ELSE 'lazy' END
+    WHERE lazy_prompt IS NOT NULL AND held_by IS NULL`)
+  db.exec("UPDATE session SET held_by = NULL WHERE held_by IS NOT NULL AND lazy_prompt IS NULL")
   // Same stack, other tables. `pr_watch.kind` (2026-09-14): an issue watcher is a row in the PR
   // watcher's table, and every live file predates the column.
   for (const [table, column] of [
@@ -1950,8 +1984,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     return cachedBySlug.get(slug) ?? selOne.get(slug)
   }
   const upsertStmt = scope.prepare(`
-    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision, lazy_prompt, schedule_id)
-    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision, @lazy_prompt, @schedule_id)
+    INSERT INTO session (project_id, slug, session_id, thread_name, spawned_at, last_read_at, unread, exited, title_auto, title_locked, title, state, snoozed_until, snooze_prompt, meta, seen_at, transcript_id, model, effort, profile_pending_model, profile_pending_effort, profile_revision, profile_handoff, permission_mode, permission_pending, control_error, runtime_generation, runtime_control, runtime_control_revision, lazy_prompt, held_by, schedule_id)
+    VALUES (@project_id, @slug, @session_id, @thread_name, @spawned_at, @last_read_at, @unread, @exited, @title_auto, @title_locked, @title, @state, @snoozed_until, @snooze_prompt, @meta, @seen_at, @transcript_id, @model, @effort, @profile_pending_model, @profile_pending_effort, @profile_revision, @profile_handoff, @permission_mode, @permission_pending, @control_error, @runtime_generation, @runtime_control, @runtime_control_revision, @lazy_prompt, @held_by, @schedule_id)
     ON CONFLICT(project_id, slug) DO UPDATE SET
       session_id = excluded.session_id,
       thread_name  = excluded.thread_name,
@@ -2003,9 +2037,11 @@ export function createStorage(source: string | Database, projectId: string): Sto
       deadline_set_at = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_set_at ELSE NULL END,
       deadline_set_by = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_set_by ELSE NULL END,
       deadline_stage = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_stage ELSE NULL END,
-      -- The note an UNSTARTED thread carries (SessionRow.lazy_prompt). Every dispatch writes NULL here, so the
-      -- upsert that starts a lazy thread's agent is the same write that makes it an ordinary thread.
+      -- An UNSTARTED thread's holder and opening prompt (SessionRow.held_by, lazy_prompt). Every dispatch writes
+      -- NULL to both, so the upsert that starts a held thread's agent is the same write that makes it an
+      -- ordinary thread.
       lazy_prompt = excluded.lazy_prompt,
+      held_by = excluded.held_by,
       -- \`schedule_id\` is deliberately ABSENT from this list: the INSERT carries it (a schedule's lazy
       -- next run is born with it), and no later write over the slug — the dispatch that starts that run,
       -- a re-dispatch, an adopt — may clear which schedule the thread belongs to.
@@ -2662,13 +2698,13 @@ export function createStorage(source: string | Database, projectId: string): Sto
   // Only a PROMPTLESS snooze expires here. One that carries a prompt still owes the thread a bump, and
   // the scheduler — not the board — clears it once that wake reaches a terminal state. Erasing it on
   // elapse (the board refreshes far more often than the waker ticks) would drop the follow-up entirely.
-  // A SCHEDULE'S PENDING NEXT RUN (a lazy row with schedule_id) does not expire here either: its instant
-  // is when the schedule fires it, and clearing it would drop the row into the queue in the seconds
-  // before the scheduler's tick starts it (isScheduledLazyRow).
+  // A SCHEDULE'S PENDING NEXT RUN (a row held by `schedules`) does not expire here either: its instant
+  // is when the schedule fires it, and clearing it would drop the row into Active in the seconds
+  // before the scheduler's tick starts it (isScheduleHeldRow).
   const clearExpiredSnoozesStmt = scope.prepare(`
     UPDATE session SET snoozed_until = NULL
     WHERE project_id = @project_id AND snoozed_until IS NOT NULL AND snoozed_until <= ? AND snooze_prompt IS NULL
-      AND NOT (schedule_id IS NOT NULL AND lazy_prompt IS NOT NULL)
+      AND (held_by IS NULL OR held_by <> '${SCHEDULES_HOLDER}')
   `)
   // Both human-title writers LOCK as they write: the text, the "not a guess" flag, and the lock move in
   // one statement, so no concurrent tail tick can land a backend auto-title between them.
@@ -2827,7 +2863,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     "UPDATE session SET deadline_stage = ? WHERE project_id = @project_id AND slug = ? AND deadline_set_at = ?",
   )
   const forkAnchorStmt = scope.prepare("UPDATE session SET fork_anchor = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
-  const lazyPromptStmt = scope.prepare("UPDATE session SET lazy_prompt = ? WHERE project_id = @project_id AND slug = ? AND session_id = ? AND lazy_prompt IS NOT NULL")
+  const heldPromptStmt = scope.prepare("UPDATE session SET lazy_prompt = ? WHERE project_id = @project_id AND slug = ? AND session_id = ? AND held_by IS NOT NULL")
   const acpAgentStmt = scope.prepare("UPDATE session SET acp_agent = ? WHERE project_id = @project_id AND slug = ?")
   // Stamps profile_set_at alongside model/effort: the OPERATOR's set-time. Both backends' setThreadProfile
   // paths write through here, and the stamp is what marks the pair as CHOSEN rather than observed — the
@@ -2996,6 +3032,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     acp_agent: row.acp_agent ?? null,
     fork_anchor: row.fork_anchor ?? null,
     lazy_prompt: row.lazy_prompt ?? null,
+    held_by: row.held_by ?? null,
     schedule_id: row.schedule_id ?? null,
   })
 
@@ -3549,7 +3586,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setCodexRuntime: (slug, runtime) => void codexRuntimeStmt.run(runtime, slug),
     setClaudeRuntime: (slug, runtime) => void claudeRuntimeStmt.run(runtime, slug),
     setForkAnchor: (slug, sessionId, anchor) => forkAnchorStmt.run(anchor, slug, sessionId).changes === 1,
-    setLazyPrompt: (slug, sessionId, note) => lazyPromptStmt.run(note, slug, sessionId).changes === 1,
+    setHeldPrompt: (slug, sessionId, prompt) => heldPromptStmt.run(prompt, slug, sessionId).changes === 1,
     setDeadline: (slug, input) => setDeadlineStmt.run(input.deadlineAt, input.setAt, input.setBy, slug).changes === 1,
     clearDeadline: (slug) => clearDeadlineStmt.run(slug).changes === 1,
     markDeadlineStage: (slug, setAt, stage) => markDeadlineStageStmt.run(stage, slug, setAt).changes === 1,

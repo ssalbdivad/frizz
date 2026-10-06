@@ -21,13 +21,13 @@ import { readQuota } from "./quota.ts"
 import { refreshClaudeQuotaInBackground } from "./backend/claude-quota.ts"
 import { z } from "zod"
 import { createBoard, telemetryVouched, type BoardManager } from "./board.ts"
-import { createLazyThreadStarter } from "./lazy-start.ts"
+import { createHeldThreadStarter } from "./held-start.ts"
 import { createScheduleService, type ScheduleService } from "./schedules.ts"
 import { createScheduleInterpreter, SCHEDULE_INTERPRETER_MODEL, type ScheduleInterpreter } from "./schedule-interpreter.ts"
 import { readMachineConfig, writeMachineConfig } from "./machine-config.ts"
 import { processAwakeClock } from "./awake-clock.ts"
 import type { SessionRow } from "./storage.ts"
-import type { LazyStartProfile } from "./lazy-start.ts"
+import type { HeldStartProfile } from "./held-start.ts"
 import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
@@ -300,10 +300,10 @@ export interface AppContext {
   schedules?: ScheduleService
   // The one-shot model call that reads a schedule out of plain words (schedule-interpreter.ts).
   scheduleInterpreter?: ScheduleInterpreter
-  // Start a lazy thread, whoever asks — the router's send / startLazyThread / followUp and the
-  // scheduler alike (lazy-start.ts). A schedule's pending next run gets its run header and its history
-  // line on this path. Absent (a hand-built test context) ⇒ the router starts lazy rows itself.
-  startLazyThread?: (row: SessionRow, prompt: string, profile?: LazyStartProfile) => Promise<{ slug: string; sessionId: string }>
+  // Start a held thread, whoever asks — the router's send / followUp, a plugin's `threads.start` and the
+  // scheduler alike (held-start.ts). A schedule's pending next run gets its run header and its history
+  // line on this path. Absent (a hand-built test context) ⇒ the router starts held rows itself.
+  startHeldThread?: (row: SessionRow, prompt: string, profile?: HeldStartProfile) => Promise<{ slug: string; sessionId: string }>
   // Exact only for Frizz's provisioned runtime. An explicit/PATH override is unknown and leaves the
   // shared Codex cache ungated; see backend/codex-models.ts.
   codexVersion?: string
@@ -1146,14 +1146,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
   })
 
-  // SCHEDULED THREADS (plans/scheduled-threads.md). One lazy-thread starter per project, shared by the
-  // router and the scheduler so its one-launch-at-a-time guard sees every launch.
-  const lazyStarter = createLazyThreadStarter({ dispatcher, board })
+  // SCHEDULED THREADS (plans/scheduled-threads.md). One held-thread starter per project, shared by the
+  // router, the plugins and the scheduler so its one-launch-at-a-time guard sees every launch.
+  const heldStarter = createHeldThreadStarter({ dispatcher, board })
   schedules = createScheduleService({
     project,
     storage,
     dispatcher,
-    starter: lazyStarter,
+    starter: heldStarter,
     board,
     nameHolder: (name, exceptSlug) => threadNamer.holder(name, exceptSlug),
     // The overlap check's reading: the BOARD's view of the previous run (deriveRuntime turns a dead
@@ -1382,7 +1382,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     terminalRunner,
     schedules: scheduleService,
     scheduleInterpreter,
-    startLazyThread: (row, prompt, profile) => scheduleService.startLazyRow(row, prompt, profile),
+    startHeldThread: (row, prompt, profile) => scheduleService.startHeldRow(row, prompt, profile),
     codexVersion: opts.codexVersion,
   }
   startThreadRetention(appContext, contextUnsubscribers)
