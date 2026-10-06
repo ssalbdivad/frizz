@@ -235,7 +235,7 @@ test("a pre-2026-09-29 command thread, with no parent, is nobody's terminal", ()
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "frizz-term-")))
   const storage = createStorage(join(dir, "ui.db"), "p")
   // The old top-level shape: no parent, no folder. The schema migration also archives it.
-  storage.db.prepare("INSERT INTO command_thread (project_id, slug, command, created_at, started_at) VALUES ('p', 'term-legacy', 'npm run dev', 1, 1)").run()
+  storage.db.prepare("INSERT INTO thread_terminal (project_id, slug, command, created_at, started_at) VALUES ('p', 'term-legacy', 'npm run dev', 1, 1)").run()
   const { runner } = harness({ storage, dir })
   assert.equal(runner.has("term-legacy"), false)
   assert.equal(runner.attach("term-legacy"), null)

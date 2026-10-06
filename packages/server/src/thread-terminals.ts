@@ -2,7 +2,7 @@ import { randomBytes } from "node:crypto"
 import { basename } from "node:path"
 import type { IPty, IPtyForkOptions } from "node-pty"
 import type { ThreadTerminal } from "@frizz/shared"
-import type { CommandThreadRow, Storage } from "./storage.ts"
+import type { ThreadTerminalRow, Storage } from "./storage.ts"
 import type { TerminalAttachment } from "./terminal.ts"
 import { launchEnvironment } from "./backend/worker-env.ts"
 
@@ -19,9 +19,9 @@ import { launchEnvironment } from "./backend/worker-env.ts"
 // only top-level thread kind; terminals hang off a thread), for two reasons Colin raised upstream: a
 // standalone terminal ran in the project root and so ignored which worktree an agent was actually in —
 // Frizz deliberately leaves the worktree choice to the agent, so the terminal has to follow it — and
-// every terminal was one more row in a sidebar whose whole value is density. The table is still called
-// `command_thread` (renaming a table buys nothing and costs a migration); `parent_slug` is what makes a
-// row a thread's terminal, and a row without one is a pre-2026-09-29 command thread, archived at boot.
+// every terminal was one more row in a sidebar whose whole value is density. The table, `thread_terminal`,
+// was named `command_thread` until 2026-10-06 (storage.ts renameCommandThreadTable); `parent_slug` is what
+// makes a row a thread's terminal, and a row without one is a pre-2026-09-29 command thread, archived at boot.
 //
 // The pty rides the hardened /term/<id> transport (terminal.ts): ONE process per terminal, a bounded
 // replay so a tab that opens late (or reloads) sees the screen so far, and a subscriber set so two tabs
@@ -190,8 +190,8 @@ export function startFailureScreen(what: "load" | "spawn", cause: unknown): stri
 
 export interface TerminalRunnerDeps {
   storage: Pick<Storage,
-    "insertCommandThread" | "listCommandThreads" | "restartCommandThread" | "recordCommandExit" |
-    "interruptRunningCommandThreads" | "dropCommandThread" | "archiveThreadTerminals" | "dropThreadTerminals">
+    "insertThreadTerminal" | "listThreadTerminals" | "restartThreadTerminal" | "recordTerminalExit" |
+    "interruptRunningTerminals" | "dropThreadTerminal" | "archiveThreadTerminals" | "dropThreadTerminals">
   /** The board's overlay refresh — every state change is a change to a thread's row. */
   onChange: () => void
   env?: NodeJS.ProcessEnv
@@ -275,14 +275,14 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
   let shuttingDown = false
 
   // Whatever was running when the last server went away went with it.
-  deps.storage.interruptRunningCommandThreads(now())
+  deps.storage.interruptRunningTerminals(now())
 
   // A thread's terminals only: a row with no parent is a pre-2026-09-29 command thread (see the header),
   // which nothing addresses any more.
-  function rows(): Map<string, CommandThreadRow & { parent_slug: string }> {
-    const out = new Map<string, CommandThreadRow & { parent_slug: string }>()
-    for (const row of deps.storage.listCommandThreads()) {
-      if (row.parent_slug) out.set(row.slug, row as CommandThreadRow & { parent_slug: string })
+  function rows(): Map<string, ThreadTerminalRow & { parent_slug: string }> {
+    const out = new Map<string, ThreadTerminalRow & { parent_slug: string }>()
+    for (const row of deps.storage.listThreadTerminals()) {
+      if (row.parent_slug) out.set(row.slug, row as ThreadTerminalRow & { parent_slug: string })
     }
     return out
   }
@@ -312,7 +312,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
     run.exited = true
     run.exitCode = START_FAILED_EXIT
     runs.set(id, run)
-    deps.storage.recordCommandExit(id, { exitedAtMs: now(), exitCode: START_FAILED_EXIT, stopped: false })
+    deps.storage.recordTerminalExit(id, { exitedAtMs: now(), exitCode: START_FAILED_EXIT, stopped: false })
     settle()
   }
 
@@ -358,7 +358,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
       clearTimeout(run.promptTimer)
       // A run replaced by restart() has already been swapped out of the map; its outcome is history.
       if (runs.get(id) === run && !shuttingDown) {
-        deps.storage.recordCommandExit(id, { exitedAtMs: now(), exitCode, stopped: run.stopRequested })
+        deps.storage.recordTerminalExit(id, { exitedAtMs: now(), exitCode, stopped: run.stopRequested })
         deps.onChange()
       }
       for (const listener of run.exitListeners) { try { listener(exitCode) } catch { /* ignore */ } }
@@ -435,7 +435,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
     await run.exitedPromise
   }
 
-  function view(row: CommandThreadRow): ThreadTerminal {
+  function view(row: ThreadTerminalRow): ThreadTerminal {
     const run = runs.get(row.slug)
     const running = run !== undefined && !run.exited && row.exited_at === null
     // The flag is kept exact by watchForPrompt — set only after the quiet window, cleared synchronously by
@@ -463,7 +463,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
     await Promise.all(mine.map((row) => stopRun(runs.get(row.slug))))
   }
 
-  function requireRow(id: string): CommandThreadRow & { parent_slug: string } {
+  function requireRow(id: string): ThreadTerminalRow & { parent_slug: string } {
     const row = rows().get(id)
     if (!row) throw new Error(`no terminal ${id}`)
     if (!row.cwd) throw new Error(`terminal ${id} has no folder to run in`)
@@ -474,7 +474,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
     async start({ parent, command, cwd }) {
       const id = `term-${randomBytes(6).toString("hex")}`
       const line = command?.trim() || undefined
-      deps.storage.insertCommandThread({ slug: id, parentSlug: parent, command: line ?? shellLabel(env), cwd, shell: line === undefined, createdAtMs: now() })
+      deps.storage.insertThreadTerminal({ slug: id, parentSlug: parent, command: line ?? shellLabel(env), cwd, shell: line === undefined, createdAtMs: now() })
       try {
         await spawn(id, { command: line, cwd })
       } finally {
@@ -489,7 +489,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
       // run's row, and its viewers close on the old terminal while the browser remounts the new one.
       runs.delete(id)
       await stopRun(previous)
-      deps.storage.restartCommandThread(id, now())
+      deps.storage.restartThreadTerminal(id, now())
       try {
         await spawn(id, { command: row.shell === 1 ? undefined : row.command, cwd: row.cwd! })
       } finally {
@@ -502,7 +502,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
       runs.delete(id) // before the stop, for the same reason as restart
       await stopRun(previous)
       const screen = followUpScreen(previous && { command: row.command, buffer: previous.buffer, echoed: previous.echoed, interactive: previous.interactive }, command)
-      deps.storage.restartCommandThread(id, now(), command)
+      deps.storage.restartThreadTerminal(id, now(), command)
       try {
         await spawn(id, { command, cwd: row.cwd! }, screen)
       } finally {
@@ -515,7 +515,7 @@ export function createTerminalRunner(deps: TerminalRunnerDeps): TerminalRunner {
     async remove(id) {
       const run = runs.get(id)
       runs.delete(id)
-      deps.storage.dropCommandThread(id)
+      deps.storage.dropThreadTerminal(id)
       deps.onChange()
       await stopRun(run)
     },

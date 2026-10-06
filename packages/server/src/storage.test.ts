@@ -1239,9 +1239,9 @@ test("queued_at: a pre-clock unified file gains the column, and the stamp surviv
   const path = join(dir, "ui.db")
   // Every live install's file predates the column; the ALTER in ensureStorageSchema must add it back.
   const preClock = new Database(path)
-  // Both tables carry it — `session` and `command_thread` — and both must come back.
+  // Only `session` carries it now: the terminal table's copy was dropped with the 2026-10-06 rename.
   const stripped = STORAGE_SCHEMA.replace(/^\s*queued_at\s+TEXT,\n/gm, "")
-  assert.equal((STORAGE_SCHEMA.match(/^\s*queued_at\s+TEXT,$/gm) ?? []).length, 2, "the strip finds both column lines (keep this regex with the DDL)")
+  assert.equal((STORAGE_SCHEMA.match(/^\s*queued_at\s+TEXT,$/gm) ?? []).length, 1, "the strip finds the column line (keep this regex with the DDL)")
   preClock.exec(stripped)
   preClock.close()
 
@@ -1259,9 +1259,6 @@ test("queued_at: a pre-clock unified file gains the column, and the stamp surviv
     assert.equal(s.getSession("queued")?.queued_at, at)
     s.setQueuedAt("queued", null)
     assert.equal(s.getSession("queued")?.queued_at, null)
-    // The terminal table keeps its column (a pre-2026-09-29 command thread wrote it); nothing sets it now.
-    s.insertCommandThread({ slug: "term-1", parentSlug: "queued", command: "npm publish", cwd: dir, shell: false, createdAtMs: Date.parse(at) })
-    assert.equal(s.listCommandThreads().find((c) => c.slug === "term-1")?.queued_at, null)
   } finally {
     s.close()
     rmSync(dir, { recursive: true, force: true })
@@ -1270,8 +1267,9 @@ test("queued_at: a pre-clock unified file gains the column, and the stamp surviv
 
 // THREAD TERMINALS (2026-09-29): a terminal belongs to a thread. The table the top-level command threads
 // lived in gains the parent, the folder and the shell flag, and every row from before — a command thread
-// with no parent to show it under — is filed away rather than left open with nowhere to appear.
-test("command_thread: a pre-terminal file gains the parent, folder and shell columns, and its old rows are archived", () => {
+// with no parent to show it under — is filed away rather than left open with nowhere to appear. Since
+// 2026-10-06 the same boot also renames that table to `thread_terminal` and drops its `queued_at`.
+test("thread_terminal: a pre-terminal command_thread file is renamed, gains the parent, folder and shell columns, and its old rows are archived", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-storage-terminals-"))
   const path = join(dir, "ui.db")
   const old = new Database(path)
@@ -1298,31 +1296,120 @@ test("command_thread: a pre-terminal file gains the parent, folder and shell col
 
   let s = createStorage(path, "p")
   try {
-    const legacy = s.listCommandThreads()
+    assert.deepEqual(tableNames(s.db).filter((t) => t.includes("terminal") || t.includes("command")), ["thread_terminal"], "renamed, not copied")
+    assert.equal(columnNames(s.db, "thread_terminal").includes("queued_at"), false, "the dead stamp is gone")
+    const legacy = s.listThreadTerminals()
     assert.deepEqual(legacy.map((r) => [r.slug, r.state, r.parent_slug ?? null, r.cwd ?? null, r.shell]), [
       ["term-done", "archived", null, null, 0],
       ["term-old", "archived", null, null, 0],
     ], "kept for the record, filed away, and the new columns read as absent")
 
-    s.insertCommandThread({ slug: "term-new", parentSlug: "fix-auth", command: "zsh", cwd: dir, shell: true, createdAtMs: 5 })
-    s.insertCommandThread({ slug: "term-other", parentSlug: "other", command: "make", cwd: dir, shell: false, createdAtMs: 6 })
+    s.insertThreadTerminal({ slug: "term-new", parentSlug: "fix-auth", command: "zsh", cwd: dir, shell: true, createdAtMs: 5 })
+    s.insertThreadTerminal({ slug: "term-other", parentSlug: "other", command: "make", cwd: dir, shell: false, createdAtMs: 6 })
     // A reopen does not re-archive a terminal that has a parent: the migration is for parentless rows only.
     s.close()
     s = createStorage(path, "p")
-    const fresh = s.listCommandThreads().find((r) => r.slug === "term-new")
+    const fresh = s.listThreadTerminals().find((r) => r.slug === "term-new")
     assert.deepEqual([fresh?.state, fresh?.parent_slug, fresh?.cwd, fresh?.shell], ["open", "fix-auth", dir, 1])
     // A follow-up line makes a shell terminal a command one; a plain restart keeps it a shell.
-    s.restartCommandThread("term-new", 7)
-    assert.equal(s.listCommandThreads().find((r) => r.slug === "term-new")?.shell, 1)
-    s.restartCommandThread("term-new", 8, "npm test")
-    const followed = s.listCommandThreads().find((r) => r.slug === "term-new")
+    s.restartThreadTerminal("term-new", 7)
+    assert.equal(s.listThreadTerminals().find((r) => r.slug === "term-new")?.shell, 1)
+    s.restartThreadTerminal("term-new", 8, "npm test")
+    const followed = s.listThreadTerminals().find((r) => r.slug === "term-new")
     assert.deepEqual([followed?.command, followed?.shell, followed?.runs], ["npm test", 0, 3])
 
     assert.equal(s.archiveThreadTerminals("fix-auth"), 1)
     assert.equal(s.archiveThreadTerminals("fix-auth"), 0, "idempotent")
-    assert.equal(s.listCommandThreads().find((r) => r.slug === "term-other")?.state, "open", "another thread's terminal is untouched")
+    assert.equal(s.listThreadTerminals().find((r) => r.slug === "term-other")?.state, "open", "another thread's terminal is untouched")
     assert.equal(s.dropThreadTerminals("fix-auth"), 1)
-    assert.deepEqual(s.listCommandThreads().map((r) => r.slug).sort(), ["term-done", "term-old", "term-other"])
+    assert.deepEqual(s.listThreadTerminals().map((r) => r.slug).sort(), ["term-done", "term-old", "term-other"])
+  } finally {
+    s.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+const tableNames = (db: Database) =>
+  db.prepare<[], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all().map((r) => r.name)
+const columnNames = (db: Database, table: string) =>
+  db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((r) => r.name)
+
+// The shape the maintainer's real file has: `command_thread` as it shipped on 2026-09-23 (no `state`),
+// every later column added by ALTER on top, and a run that was live. Renamed in place, every row and
+// every value survives — the run's outcome included — and a second boot changes nothing.
+test("thread_terminal: the day-one command_thread table keeps every row and value through the rename, twice", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-rename-"))
+  const path = join(dir, "ui.db")
+  const old = new Database(path)
+  old.exec(`
+    CREATE TABLE command_thread (
+      project_id  TEXT NOT NULL,
+      slug        TEXT NOT NULL,
+      command     TEXT NOT NULL,
+      created_at  INTEGER NOT NULL,
+      started_at  INTEGER NOT NULL,
+      runs        INTEGER NOT NULL DEFAULT 1,
+      exited_at   INTEGER,
+      exit_code   INTEGER,
+      stopped     INTEGER NOT NULL DEFAULT 0,
+      PRIMARY KEY (project_id, slug)
+    );
+    ALTER TABLE command_thread ADD COLUMN state TEXT NOT NULL DEFAULT 'open';
+    ALTER TABLE command_thread ADD COLUMN queued_at TEXT;
+    ALTER TABLE command_thread ADD COLUMN parent_slug TEXT;
+    ALTER TABLE command_thread ADD COLUMN cwd TEXT;
+    ALTER TABLE command_thread ADD COLUMN shell INTEGER NOT NULL DEFAULT 0;
+    INSERT INTO command_thread (project_id, slug, command, created_at, started_at, runs, exited_at, exit_code, stopped, queued_at)
+      VALUES ('p', 'term-legacy', 'npm run dev', 1, 1, 2, 9, 130, 1, '2026-09-24T12:00:00.000Z');
+    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, shell, created_at, started_at, runs, exited_at, exit_code)
+      VALUES ('p', 'term-a', 'fix-auth', 'npm test', '/w/fix-auth', 0, 10, 12, 3, 20, 1);
+    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, shell, created_at, started_at)
+      VALUES ('q', 'term-b', 'other', 'zsh', '/w/other', 1, 30, 30);
+  `)
+  old.close()
+  const all = (db: Database) => db.prepare("SELECT * FROM thread_terminal ORDER BY project_id, slug").all()
+  const expected = [
+    { project_id: "p", slug: "term-a", command: "npm test", created_at: 10, started_at: 12, runs: 3, exited_at: 20, exit_code: 1, stopped: 0, state: "open", parent_slug: "fix-auth", cwd: "/w/fix-auth", shell: 0 },
+    { project_id: "p", slug: "term-legacy", command: "npm run dev", created_at: 1, started_at: 1, runs: 2, exited_at: 9, exit_code: 130, stopped: 1, state: "archived", parent_slug: null, cwd: null, shell: 0 },
+    { project_id: "q", slug: "term-b", command: "zsh", created_at: 30, started_at: 30, runs: 1, exited_at: null, exit_code: null, stopped: 0, state: "open", parent_slug: "other", cwd: "/w/other", shell: 1 },
+  ]
+  for (let boot = 0; boot < 2; boot++) {
+    const s = createStorage(path, "p")
+    try {
+      assert.deepEqual(all(s.db).map((r) => ({ ...(r as object) })), expected, `boot ${boot + 1}`)
+      assert.equal(tableNames(s.db).includes("command_thread"), false)
+    } finally {
+      s.close()
+    }
+  }
+  rmSync(dir, { recursive: true, force: true })
+})
+
+// A build from before the rename, run after it, finds no `command_thread` and makes an empty one beside
+// `thread_terminal`; a terminal it opens lands there. The next boot folds it back in and drops the old
+// table, and a slug already in `thread_terminal` keeps the newer build's row.
+test("thread_terminal: rows an older build wrote into a fresh command_thread are folded back in", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-storage-merge-"))
+  const path = join(dir, "ui.db")
+  let s = createStorage(path, "p")
+  s.insertThreadTerminal({ slug: "term-new", parentSlug: "t", command: "make", cwd: dir, shell: false, createdAtMs: 1 })
+  s.close()
+  const older = new Database(path)
+  older.exec(`
+    CREATE TABLE command_thread (
+      project_id TEXT NOT NULL, slug TEXT NOT NULL, command TEXT NOT NULL, created_at INTEGER NOT NULL,
+      started_at INTEGER NOT NULL, runs INTEGER NOT NULL DEFAULT 1, exited_at INTEGER, exit_code INTEGER,
+      stopped INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL DEFAULT 'open', queued_at TEXT,
+      parent_slug TEXT, cwd TEXT, shell INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (project_id, slug)
+    );
+    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, created_at, started_at) VALUES ('p', 'term-older', 't', 'ls', '/w', 2, 2);
+    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, created_at, started_at) VALUES ('p', 'term-new', 't', 'clobber', '/w', 3, 3);
+  `)
+  older.close()
+  s = createStorage(path, "p")
+  try {
+    assert.deepEqual(s.listThreadTerminals().map((r) => [r.slug, r.command]), [["term-new", "make"], ["term-older", "ls"]])
+    assert.equal(tableNames(s.db).includes("command_thread"), false)
   } finally {
     s.close()
     rmSync(dir, { recursive: true, force: true })

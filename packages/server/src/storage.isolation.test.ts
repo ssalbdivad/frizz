@@ -81,7 +81,7 @@ function seed(storage: Storage): void {
     sentAtMs: 1,
   })
   storage.reserveAdoptionClaim({ slug: "gamma-thread", attemptToken: UUID, sessionId: `adopt-${storage.projectId}`, reservedAtMs: 1, leaseExpiresAtMs: 2 })
-  storage.insertCommandThread({ slug: "term-alpha", parentSlug: "alpha-thread", command: `echo ${storage.projectId}`, cwd: `/work/${storage.projectId}`, shell: false, createdAtMs: 1 })
+  storage.insertThreadTerminal({ slug: "term-alpha", parentSlug: "alpha-thread", command: `echo ${storage.projectId}`, cwd: `/work/${storage.projectId}`, shell: false, createdAtMs: 1 })
   storage.insertSchedule(schedule())
   storage.insertScheduleRun(run("run_a", 500))
   storage.insertScheduleRun(run("run_b", 600, "skipped"))

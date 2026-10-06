@@ -552,10 +552,10 @@ export interface PrWatchRow {
   cursor: string | null
 }
 
-/** A thread terminal's definition and its latest run (thread-terminals.ts). The table and the type keep the
- *  name the feature shipped under, terminal COMMAND THREADS (2026-09-23); `parent_slug` is what makes a
- *  row a thread's terminal, and a row without one predates 2026-09-29 and is archived at boot. */
-export interface CommandThreadRow {
+/** A thread terminal's definition and its latest run (thread-terminals.ts), a row of `thread_terminal`.
+ *  `parent_slug` is what makes a row a thread's terminal; a row without one is a top-level terminal
+ *  COMMAND THREAD from before 2026-09-29, the shape the feature shipped as, and is archived at boot. */
+export interface ThreadTerminalRow {
   slug: string
   /** The thread the terminal belongs to. NULL only on a pre-2026-09-29 top-level command thread. */
   parent_slug?: string | null
@@ -573,9 +573,6 @@ export interface CommandThreadRow {
   stopped: number
   /** 'archived' once its thread is marked done (it leaves the thread's strip); a restart reopens it. */
   state: "open" | "archived"
-  /** The queue clock's stamp from when a command thread queued on its own. Unused since 2026-09-29: a
-   *  terminal waiting at a prompt queues its THREAD, whose `session.queued_at` keeps the place. */
-  queued_at?: string | null
 }
 
 /** A SPINOFF: a new thread the human asked for from `parent_slug` — see the table. */
@@ -950,16 +947,16 @@ export interface Storage extends ScheduleStore {
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
   dropThreadLink(slug: string, id: string): boolean
-  insertCommandThread(row: { slug: string; parentSlug: string; command: string; cwd: string; shell: boolean; createdAtMs: number }): void
-  listCommandThreads(): CommandThreadRow[]
+  insertThreadTerminal(row: { slug: string; parentSlug: string; command: string; cwd: string; shell: boolean; createdAtMs: number }): void
+  listThreadTerminals(): ThreadTerminalRow[]
   /** A new run of the terminal: bumps `runs`, clears the previous outcome and reopens it. `command`
    *  replaces its command (a follow-up line, which also makes a shell terminal a command one); absent,
    *  it reruns what it ran. */
-  restartCommandThread(slug: string, startedAtMs: number, command?: string): void
-  recordCommandExit(slug: string, exit: { exitedAtMs: number; exitCode: number | null; stopped: boolean }): void
+  restartThreadTerminal(slug: string, startedAtMs: number, command?: string): void
+  recordTerminalExit(slug: string, exit: { exitedAtMs: number; exitCode: number | null; stopped: boolean }): void
   /** Boot: every run with no recorded exit died with the previous server. */
-  interruptRunningCommandThreads(exitedAtMs: number): void
-  dropCommandThread(slug: string): boolean
+  interruptRunningTerminals(exitedAtMs: number): void
+  dropThreadTerminal(slug: string): boolean
   /** Its thread was marked done: file every one of its terminals away. Returns how many changed. */
   archiveThreadTerminals(parentSlug: string): number
   /** Its thread was forgotten: drop every one of its terminals. Returns how many went. */
@@ -1644,13 +1641,14 @@ export const STORAGE_SCHEMA = `
       PRIMARY KEY (project_id, thread_slug, shell_id)
     );
     -- A THREAD'S TERMINAL (thread-terminals.ts): a pty the control plane owns, opened on a thread and run
-    -- in the folder its agent works in. Named for what it shipped as on 2026-09-23 — a top-level TERMINAL
-    -- COMMAND thread from the prompt box's Terminal tab — and re-parented onto threads on 2026-09-29
-    -- (parent_slug, cwd, shell, all in the ALTER list below). Only the DEFINITION and the last run's
+    -- in the folder its agent works in. It shipped on 2026-09-23 as a top-level TERMINAL COMMAND thread
+    -- from the prompt box's Terminal tab, in a table named command_thread; it was re-parented onto
+    -- threads on 2026-09-29 (parent_slug, cwd, shell, all in the ALTER list below) and the table renamed
+    -- to what it holds on 2026-10-06 (renameCommandThreadTable). Only the DEFINITION and the last run's
     -- outcome are durable — the pty is a child of the server and dies with it, so a row whose run never
     -- recorded an exit is one a restart interrupted, and boot says so rather than showing a process that
     -- is not there. RUNS counts starts, so a restart is a new terminal to the browser.
-    CREATE TABLE IF NOT EXISTS command_thread (
+    CREATE TABLE IF NOT EXISTS thread_terminal (
       project_id  TEXT NOT NULL,
       slug        TEXT NOT NULL,
       command     TEXT NOT NULL,
@@ -1664,8 +1662,6 @@ export const STORAGE_SCHEMA = `
       stopped     INTEGER NOT NULL DEFAULT 0,
       -- 'archived' once its thread is marked done (it leaves the thread's terminals strip).
       state       TEXT NOT NULL DEFAULT 'open',
-      -- A command thread's own queue stamp, from before 2026-09-29; unused since. Also in the ALTER list.
-      queued_at   TEXT,
       -- The thread the terminal belongs to, the folder it runs in, and 1 for an interactive shell. NULL
       -- parent ⇒ a pre-2026-09-29 command thread. Also in the ALTER list below.
       parent_slug TEXT,
@@ -1736,11 +1732,12 @@ export const STORAGE_SCHEMA = `
 export const STORAGE_TABLES = [
   "session", "settings", "tombstone", "adoption_claim", "adoption_retired_attempt", "retired_op",
   "thread_timer", "pr_watch", "thread_watch", "thread_question", "thread_done", "subagent_steer", "thread_link",
-  "command_thread", "shell_budget", "thread_spinoff", "thread_schedule", "thread_schedule_run",
+  "thread_terminal", "shell_budget", "thread_spinoff", "thread_schedule", "thread_schedule_run",
 ] as const
 
 /** Idempotent; run by every createStorage and by frizz-db.ts before an import. */
 export function ensureStorageSchema(db: Database): void {
+  renameCommandThreadTable(db)
   db.exec(STORAGE_SCHEMA)
   // Columns added AFTER the 2026-08-27 unification. CREATE TABLE IF NOT EXISTS cannot add a column to
   // a file that already exists, and every live install predates any column below — so each rides one
@@ -1805,17 +1802,15 @@ export function ensureStorageSchema(db: Database): void {
     // so a wake that then failed every attempt left the answer reading delivered and nothing re-offered
     // it. The column names the carrying wake, so `delivered` can wait for that wake to land.
     ["thread_question", "delivery_id TEXT"],
-    // `command_thread.state` (2026-09-23): a finished command queues like a rested thread and is
-    // marked done the same way; the table shipped the same day without it.
-    ["command_thread", "state TEXT NOT NULL DEFAULT 'open'"],
-    // `command_thread.queued_at` (2026-09-24): the queue clock's stamp, as on `session` — a run at a
-    // prompt stays queued across a restart, and the boot's interrupted exit must not re-date it.
-    ["command_thread", "queued_at TEXT"],
-    // `command_thread.parent_slug` / `cwd` / `shell` (2026-09-29): a terminal belongs to a thread and
+    // `thread_terminal.state` (2026-09-23, on `command_thread`): a finished command queued like a rested
+    // thread and was marked done the same way; the table shipped the same day without it. (The table's
+    // `queued_at` (2026-09-24) went with the command thread itself; renameCommandThreadTable drops it.)
+    ["thread_terminal", "state TEXT NOT NULL DEFAULT 'open'"],
+    // `thread_terminal.parent_slug` / `cwd` / `shell` (2026-09-29): a terminal belongs to a thread and
     // runs in that thread's working folder, rather than being a top-level thread in the project root.
-    ["command_thread", "parent_slug TEXT"],
-    ["command_thread", "cwd TEXT"],
-    ["command_thread", "shell INTEGER NOT NULL DEFAULT 0"],
+    ["thread_terminal", "parent_slug TEXT"],
+    ["thread_terminal", "cwd TEXT"],
+    ["thread_terminal", "shell INTEGER NOT NULL DEFAULT 0"],
     // `thread_spinoff.child_project_id` (2026-09-30): a spinoff can start its thread in another project.
     // The row stays filed under the parent's project; this names the child's when it is not that one.
     ["thread_spinoff", "child_project_id TEXT"],
@@ -1860,7 +1855,9 @@ export function ensureStorageSchema(db: Database): void {
   // only honest move is to file every such row away — it has nowhere to render now — and keep it, since
   // it is the record of a command someone ran. Idempotent: it matches nothing once they are archived,
   // and every row written since carries a parent.
-  db.exec("UPDATE command_thread SET state = 'archived' WHERE parent_slug IS NULL AND state <> 'archived'")
+  mergeLeftoverCommandThreads(db)
+  db.exec("UPDATE thread_terminal SET state = 'archived' WHERE parent_slug IS NULL AND state <> 'archived'")
+  dropColumnIfPresent(db, "thread_terminal", "queued_at")
   // THE 2026-09-30 SPINOFF-CHILD SWEEP. Until then forgetting a thread left the spinoff edge naming it as
   // a CHILD (forgetOwnedRow now drops it), and that edge would be inherited by the next thread dispatched
   // under the freed slug. Drop any such edge a forget already left behind: a stamped child with no
@@ -1872,6 +1869,55 @@ export function ensureStorageSchema(db: Database): void {
         AND session.slug = thread_spinoff.child_slug
     )
   `)
+}
+
+// THE 2026-10-06 RENAME: `command_thread` → `thread_terminal`. The table was named for the shape the
+// feature shipped as on 2026-09-23 — a top-level terminal COMMAND THREAD — and has held only a thread's
+// terminals since 2026-09-29, so every reader had to be told the name was wrong. It never shipped
+// upstream, so the only files that carry the old name are the fork's own; the maintainer's real file has
+// one (9 rows on 2026-10-06, 8 of them archived parentless command threads), so this is a migration
+// rather than a fresh table, and it keeps every row: `ALTER TABLE … RENAME TO` moves the table, its rows
+// and its primary key as they are. Runs BEFORE the schema's CREATE TABLE IF NOT EXISTS, which would
+// otherwise make an empty `thread_terminal` beside the old one. Idempotent: once renamed, the old name
+// is gone and this no-ops. Like the column drops in legacy-project-db.ts it reshapes a table an older
+// server could hold prepared statements on; the singleton launcher, which refuses a second server, is
+// what keeps that from happening.
+function renameCommandThreadTable(db: Database): void {
+  if (!hasTable(db, "command_thread") || hasTable(db, "thread_terminal")) return
+  db.exec("ALTER TABLE command_thread RENAME TO thread_terminal")
+}
+
+// A file can carry BOTH names: a build from before the rename, run after it (a downgrade, or an older
+// pinned artifact), finds no `command_thread` and creates an empty one beside `thread_terminal`, and any
+// terminal it opens lands there. Fold those rows into `thread_terminal` — a slug already present there
+// wins, since it is the same terminal seen by the newer build — and drop the old table, so the old name
+// cannot linger to confuse the next reader. Only the columns both tables have are copied (the older
+// table has `queued_at`, which is dropped below).
+function mergeLeftoverCommandThreads(db: Database): void {
+  if (!hasTable(db, "command_thread")) return
+  const target = new Set(tableColumns(db, "thread_terminal"))
+  const shared = tableColumns(db, "command_thread").filter((column) => target.has(column)).join(", ")
+  db.transaction(() => {
+    db.exec(`INSERT OR IGNORE INTO thread_terminal (${shared}) SELECT ${shared} FROM command_thread`)
+    db.exec("DROP TABLE command_thread")
+  })()
+}
+
+/** DROP COLUMN, a no-op when the column is already gone (or never existed). Dropped rather than left
+ *  declared for the reason legacy-project-db.ts gives: a column no writer reaches is one the next reader
+ *  has to work out is dead. `thread_terminal.queued_at` was a command thread's own queue stamp; since
+ *  2026-09-29 a terminal waiting at a prompt queues its THREAD, whose `session.queued_at` keeps the place. */
+function dropColumnIfPresent(db: Database, table: string, column: string): void {
+  if (!tableColumns(db, table).includes(column)) return
+  db.exec(`ALTER TABLE ${table} DROP COLUMN ${column}`)
+}
+
+function hasTable(db: Database, name: string): boolean {
+  return db.prepare<[string], { name: string }>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined
+}
+
+function tableColumns(db: Database, table: string): string[] {
+  return db.prepare<[], { name: string }>(`PRAGMA table_info(${table})`).all().map((column) => column.name)
 }
 
 /**
@@ -2525,31 +2571,31 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   const dropThreadLinkStmt = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ? AND id = ?")
   const delThreadLinks = scope.prepare("DELETE FROM thread_link WHERE project_id = @project_id AND thread_slug = ?")
-  const insertCommandThreadStmt = scope.prepare<{ slug: string; parentSlug: string; command: string; cwd: string; shell: number; createdAtMs: number }>(`
-    INSERT INTO command_thread (project_id, slug, parent_slug, command, cwd, shell, created_at, started_at)
+  const insertThreadTerminalStmt = scope.prepare<{ slug: string; parentSlug: string; command: string; cwd: string; shell: number; createdAtMs: number }>(`
+    INSERT INTO thread_terminal (project_id, slug, parent_slug, command, cwd, shell, created_at, started_at)
     VALUES (@project_id, @slug, @parentSlug, @command, @cwd, @shell, @createdAtMs, @createdAtMs)
   `)
-  const listCommandThreadsStmt = scope.prepare<[], CommandThreadRow>(
-    "SELECT slug, parent_slug, command, cwd, shell, created_at, started_at, runs, exited_at, exit_code, stopped, state, queued_at FROM command_thread WHERE project_id = @project_id ORDER BY created_at, slug",
+  const listThreadTerminalsStmt = scope.prepare<[], ThreadTerminalRow>(
+    "SELECT slug, parent_slug, command, cwd, shell, created_at, started_at, runs, exited_at, exit_code, stopped, state FROM thread_terminal WHERE project_id = @project_id ORDER BY created_at, slug",
   )
   // A follow-up line makes a shell terminal a command one: the shell ended, and the line is what runs now.
-  const restartCommandThreadStmt = scope.prepare<{ command: string | null; startedAtMs: number; slug: string }>(`
-    UPDATE command_thread SET command = COALESCE(@command, command), shell = CASE WHEN @command IS NULL THEN shell ELSE 0 END,
+  const restartThreadTerminalStmt = scope.prepare<{ command: string | null; startedAtMs: number; slug: string }>(`
+    UPDATE thread_terminal SET command = COALESCE(@command, command), shell = CASE WHEN @command IS NULL THEN shell ELSE 0 END,
       started_at = @startedAtMs, runs = runs + 1, exited_at = NULL, exit_code = NULL, stopped = 0, state = 'open'
     WHERE project_id = @project_id AND slug = @slug
   `)
-  const recordCommandExitStmt = scope.prepare(`
-    UPDATE command_thread SET exited_at = ?, exit_code = ?, stopped = ?
+  const recordTerminalExitStmt = scope.prepare(`
+    UPDATE thread_terminal SET exited_at = ?, exit_code = ?, stopped = ?
     WHERE project_id = @project_id AND slug = ?
   `)
-  const interruptCommandThreadsStmt = scope.prepare(
-    "UPDATE command_thread SET exited_at = ? WHERE project_id = @project_id AND exited_at IS NULL",
+  const interruptTerminalsStmt = scope.prepare(
+    "UPDATE thread_terminal SET exited_at = ? WHERE project_id = @project_id AND exited_at IS NULL",
   )
-  const dropCommandThreadStmt = scope.prepare("DELETE FROM command_thread WHERE project_id = @project_id AND slug = ?")
+  const dropThreadTerminalStmt = scope.prepare("DELETE FROM thread_terminal WHERE project_id = @project_id AND slug = ?")
   const archiveThreadTerminalsStmt = scope.prepare(
-    "UPDATE command_thread SET state = 'archived' WHERE project_id = @project_id AND parent_slug = ? AND state <> 'archived'",
+    "UPDATE thread_terminal SET state = 'archived' WHERE project_id = @project_id AND parent_slug = ? AND state <> 'archived'",
   )
-  const dropThreadTerminalsStmt = scope.prepare("DELETE FROM command_thread WHERE project_id = @project_id AND parent_slug = ?")
+  const dropThreadTerminalsStmt = scope.prepare("DELETE FROM thread_terminal WHERE project_id = @project_id AND parent_slug = ?")
   const armThreadWatchStmt = scope.prepare(`
     INSERT INTO thread_watch (project_id, id, thread_slug, kind, target, state, created_at, expires_at, settled_at)
     VALUES (@project_id, @id, @slug, @kind, @target, 'armed', @createdAtMs, @expiresAtMs, NULL)
@@ -3462,12 +3508,12 @@ export function createStorage(source: string | Database, projectId: string): Sto
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),
     dropThreadLink: (slug, id) => dropThreadLinkStmt.run(slug, id).changes === 1,
-    insertCommandThread: (row) => void insertCommandThreadStmt.run({ ...row, shell: row.shell ? 1 : 0 }),
-    listCommandThreads: () => listCommandThreadsStmt.all(),
-    restartCommandThread: (slug, startedAtMs, command) => void restartCommandThreadStmt.run({ command: command ?? null, startedAtMs, slug }),
-    recordCommandExit: (slug, exit) => void recordCommandExitStmt.run(exit.exitedAtMs, exit.exitCode, exit.stopped ? 1 : 0, slug),
-    interruptRunningCommandThreads: (exitedAtMs) => void interruptCommandThreadsStmt.run(exitedAtMs),
-    dropCommandThread: (slug) => dropCommandThreadStmt.run(slug).changes === 1,
+    insertThreadTerminal: (row) => void insertThreadTerminalStmt.run({ ...row, shell: row.shell ? 1 : 0 }),
+    listThreadTerminals: () => listThreadTerminalsStmt.all(),
+    restartThreadTerminal: (slug, startedAtMs, command) => void restartThreadTerminalStmt.run({ command: command ?? null, startedAtMs, slug }),
+    recordTerminalExit: (slug, exit) => void recordTerminalExitStmt.run(exit.exitedAtMs, exit.exitCode, exit.stopped ? 1 : 0, slug),
+    interruptRunningTerminals: (exitedAtMs) => void interruptTerminalsStmt.run(exitedAtMs),
+    dropThreadTerminal: (slug) => dropThreadTerminalStmt.run(slug).changes === 1,
     archiveThreadTerminals: (parentSlug) => archiveThreadTerminalsStmt.run(parentSlug).changes,
     dropThreadTerminals: (parentSlug) => dropThreadTerminalsStmt.run(parentSlug).changes,
     // IDEMPOTENT BY (thread, kind, target), which is what the partial unique index enforces. A worker
