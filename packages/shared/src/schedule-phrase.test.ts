@@ -4,6 +4,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import {
+  BROAD_QUALIFIERS,
   CASES,
   FIELD_CASES,
   NY,
@@ -360,11 +361,16 @@ test("quotes, backticks, fences, a leading /command and excluded runs are never 
 })
 
 test("mid-text phrases stay dark in the box and are read in the mode", () => {
-  for (const text of ["the job that runs every Monday at 9am is broken, fix it", "see the doc.\n\nevery Monday at 9am triage new issues", "list every Friday release from the changelog"]) {
+  for (const text of ["see the doc.\n\nevery Monday at 9am triage new issues", "list every Friday release from the changelog"]) {
     assert.equal(isScheduleOffer(read(text, "edges")), false, text)
     const r = read(text, "anywhere")
     assert.ok(r.kind === "exact" && r.edge === "inside", text)
   }
+  // A phrase a statement is ABOUT (fix round 1): dark in the box, and in the mode the model reads it, with no
+  // core — "every Monday, Friday is off-limits" showed why a list before "is" is not a rule to keep.
+  const about = read("the job that runs every Monday at 9am is broken, fix it", "anywhere")
+  assert.ok(about.kind === "cue" && about.edge === "inside" && !about.core, summarizeReading("…", about))
+  assert.equal(isScheduleOffer(read("the job that runs every Monday at 9am is broken, fix it", "edges")), false)
 })
 
 test("found by the model (the agreement experiment): words that bound or move a phrase, read as such", () => {
@@ -661,4 +667,289 @@ test("scheduleWindows: the opening and closing sentences, 240 characters at most
   for (const w of scheduleWindows(long, [])) assert.ok(w.end - w.start <= 240)
   assert.deepEqual(scheduleWindows("   ", []), [])
   assert.deepEqual(scheduleWindows("one sentence", []), [{ start: 0, end: 12 }])
+})
+
+// ---- the break-it battery (fix round 1, 2026-10-06) --------------------------------------------------------------
+// An adversarial pass over the grammar (/tmp/live-grammar-break-1, nub scripts over the real readSchedulePhrase)
+// found readings that were EXACT and wrong — the one failure the grammar exists to rule out — and offers on
+// text that is not a request for a schedule. Each finding is pinned here as the property it broke, in both
+// scopes the prompt box reads with.
+
+const BOTH: Scope[] = ["edges", "anywhere"]
+const hourOf = (r: PhraseReading) => (r.kind === "exact" ? /BYHOUR=([\d,]+)/.exec(r.rrule)?.[1] : undefined)
+
+test("break: a clock said at night is not read in the afternoon, and never silently", () => {
+  for (const tod of ["every night", "nightly", "each night", "every evening", "every day", "every weekday"]) {
+    for (const clock of ["at 1", "at 2", "at 3", "at 4", "at 5", "at 12", "at 12:30", "at 1:30", "at 2 at night"]) {
+      const text = `${tod} ${clock} back up the db`
+      for (const scope of BOTH) {
+        const r = read(text, scope)
+        if (r.kind !== "exact") continue
+        const night = /night|evening/.test(text)
+        const hours = hourOf(r)!.split(",").map(Number)
+        const guessed = r.assumed.some((a) => a.part === "meridiem")
+        // A night or an evening is never read as the afternoon (noon to 5pm) unless the guess is SAID. "every
+        // evening at 5" is 5pm: an evening can start there; a night's 5 is 5am.
+        if (night) assert.ok(guessed || hours.every((h) => h < 12 || h >= 17), `${scope}: ${text} → ${summarizeReading(text, r)}`)
+      }
+    }
+  }
+  const at = (text: string, scope: Scope = "edges") => {
+    const r = read(text, scope)
+    assert.ok(r.kind === "exact", `${text}: ${summarizeReading(text, r)}`)
+    return r
+  }
+  assert.match(at("every night at 2 back up the db").rrule, /;BYHOUR=2;BYMINUTE=0$/)
+  assert.match(at("nightly at 1 back up the db").rrule, /;BYHOUR=1;BYMINUTE=0$/)
+  assert.match(at("every night at 12 back up the db").rrule, /;BYHOUR=0;BYMINUTE=0$/)
+  assert.match(at("every night at 12:30 back up the db").rrule, /;BYHOUR=0;BYMINUTE=30$/)
+  assert.match(at("every night at 10 and 2 back up").rrule, /;BYHOUR=2,22;BYMINUTE=0$/)
+  assert.match(at("every day at 2 at night back up the db").rrule, /;BYHOUR=2;BYMINUTE=0$/)
+  assert.match(at("back up the db every night at 2").rrule, /;BYHOUR=2;BYMINUTE=0$/)
+  assert.match(at("every night at 11 back up the db").rrule, /;BYHOUR=23;BYMINUTE=0$/)
+  assert.match(at("every evening at 6 summarize the day").rrule, /;BYHOUR=18;BYMINUTE=0$/)
+  assert.match(at("every morning at 8 check CI").rrule, /;BYHOUR=8;BYMINUTE=0$/)
+  // A night that runs past midnight belongs to the NEXT day: Monday night at 2 is Tuesday at 2am to most and
+  // Monday at 2am to some. The grammar does not guess which.
+  for (const text of ["Monday nights at 2 back up the db", "every Friday night at 1 deploy", "every Sunday evening at 12 rotate the logs"]) {
+    for (const scope of BOTH) assert.notEqual(read(text, scope).kind, "exact", `${scope}: ${text}`)
+  }
+  // "tonight at 2" is the coming night's 2am, tomorrow's date.
+  const tonight = at("tonight at 2 back up the db", "anywhere")
+  assert.equal(tonight.dtstart, "2026-10-06T02:00")
+})
+
+test("break: an ordinal before a unit is not a day of the month", () => {
+  for (const text of ["every 2nd week review billing", "every 2nd hour check CI", "every 2nd year renew the certs", "every 2nd weekend clean up", "every 3rd month review billing"]) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(!(r.kind === "exact" && /BYMONTHDAY/.test(r.rrule)), `${scope}: ${text} → ${summarizeReading(text, r)}`)
+      assert.notEqual(r.kind, "exact", `${scope}: ${text} → ${summarizeReading(text, r)}`)
+    }
+  }
+})
+
+test("break: 'and a half' and 'or so' are part of the interval, never the task", () => {
+  for (const text of ["every hour and a half check CI", "every day and a half check CI", "every week and a half check CI", "every hour and a quarter check CI", "every hour or so check CI"]) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.equal(r.kind, "cue", `${scope}: ${text} → ${summarizeReading(text, r)}`)
+    }
+  }
+})
+
+test("break: a named zone is a cue, wherever it is spelled", () => {
+  for (const zone of ["Berlin time", "London time", "in London", "(London)", "Tokyo time", "Paris time", "Sydney time", "India time", "SF time", "Europe/Berlin", "America/Los_Angeles", "+0200", "Z", "(UTC)", "UTC+2", "my time"]) {
+    const text = `every Monday at 9am ${zone} triage new issues`
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(r.kind === "cue" && r.why === "zone", `${scope}: ${text} → ${summarizeReading(text, r)}`)
+    }
+  }
+  // At the end of the task too, where it is not touching the phrase.
+  for (const text of ["every Monday at 9am triage new issues, Europe/Berlin", "every Monday at 9am triage new issues (Berlin time)"]) {
+    for (const scope of BOTH) assert.notEqual(read(text, scope).kind, "exact", `${scope}: ${text}`)
+  }
+})
+
+test("break: no silent prefix for the qualifiers the property test did not list", () => {
+  const phrases = ["every day at 9am", "every Monday at 9am", "every weekday at 9am", "every 2 hours", "nightly", "every morning"]
+  const task = "triage new issues"
+  const failures: string[] = []
+  for (const ph of phrases) {
+    for (const q of BROAD_QUALIFIERS) {
+      const variants = [`${ph} ${q} ${task}`, `${ph}, ${q}, ${task}`, `${task} ${ph} ${q}`, `${q}, ${ph} ${task}`, `${task}, ${ph}, ${q}`]
+      for (const text of variants) {
+        const at = text.indexOf(q)
+        for (const scope of BOTH) {
+          const r = read(text, scope)
+          if (leftOutside(r, { start: at, end: at + q.length })) failures.push(`${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+        }
+      }
+      // The phrase alone in the field, qualified after.
+      const field = `${ph} ${q}`
+      const r = read(field, "field")
+      if (leftOutside(r, { start: ph.length + 1, end: field.length })) failures.push(`field: ${JSON.stringify(field)} → ${summarizeReading(field, r)}`)
+    }
+  }
+  // And right after every positive the box offers.
+  for (const { text, span } of positives()) {
+    for (const q of BROAD_QUALIFIERS) {
+      const inserted = `${text.slice(0, span.end)} ${q}${text.slice(span.end)}`
+      for (const scope of BOTH) {
+        const r = read(inserted, scope)
+        if (leftOutside(r, { start: span.end + 1, end: span.end + 1 + q.length })) failures.push(`${scope}: ${JSON.stringify(inserted)} → ${summarizeReading(inserted, r)}`)
+      }
+    }
+  }
+  assert.deepEqual(failures.slice(0, 40), [], `${failures.length} silent prefixes`)
+})
+
+test("break: a day the human excluded never joins the list", () => {
+  for (const [text, scopes] of [
+    ["every Monday, Friday is off-limits, triage new issues", BOTH],
+    ["on Mondays, Fridays are frozen, triage new issues", BOTH],
+    ["never on Fridays, every Monday at 9am triage new issues", ["anywhere"]],
+    ["not on Fridays, every Monday at 9am triage new issues", ["anywhere"]],
+    ["every Monday at 9am, Wednesdays too", BOTH],
+    ["every Monday at 9am, not Fridays, triage new issues", BOTH],
+  ] as const) {
+    for (const scope of scopes) {
+      const r = read(text, scope)
+      assert.ok(!(r.kind === "exact" && /FR|WE/.test(r.rrule)), `${scope}: ${text} → ${summarizeReading(text, r)}`)
+      assert.notEqual(r.kind, "exact", `${scope}: ${text} → ${summarizeReading(text, r)}`)
+    }
+  }
+})
+
+test("break: a clock the grammar cannot parse is never replaced by an assumed 9am", () => {
+  for (const text of [
+    "every Monday at 9p triage new issues",
+    "every day at 1430 check the queue",
+    "every weekday at 0900 triage",
+    "every Monday at 9h30 triage",
+    "every Monday at 14h triage",
+    "every Monday at about 9 triage",
+    "every Monday 9 triage",
+    "every Monday at ９am triage",
+    "every Monday at nine triage",
+  ]) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.notEqual(r.kind, "exact", `${scope}: ${text} → ${summarizeReading(text, r)}`)
+    }
+  }
+})
+
+test("break: a weekday or month abbreviation's dot does not end the sentence", () => {
+  for (const [text, rrule] of [
+    ["every Wed. at 3 review billing", "FREQ=WEEKLY;BYDAY=WE;BYHOUR=15;BYMINUTE=0"],
+    ["every Thurs. at 3pm review billing", "FREQ=WEEKLY;BYDAY=TH;BYHOUR=15;BYMINUTE=0"],
+    ["every Mon. at 4:30pm triage new issues", "FREQ=WEEKLY;BYDAY=MO;BYHOUR=16;BYMINUTE=30"],
+    ["every Sat. at 10am clean up branches", "FREQ=WEEKLY;BYDAY=SA;BYHOUR=10;BYMINUTE=0"],
+    ["every Fri. 5pm write the changelog", "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17;BYMINUTE=0"],
+    ["every Tues. and Thurs. at 4pm triage", "FREQ=WEEKLY;BYDAY=TU,TH;BYHOUR=16;BYMINUTE=0"],
+    ["every Jan. 15 at 9am renew the certs", "FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0"],
+  ] as const) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(r.kind === "exact" && r.rrule === rrule, `${scope}: ${text} → ${summarizeReading(text, r)}`)
+      assert.equal(isScheduleOffer(read(text, "edges")), true, text)
+    }
+  }
+  const wed = read("every Wed. at 3 review billing", "edges")
+  assert.ok(wed.kind === "exact")
+  assert.equal(cutPhrase("every Wed. at 3 review billing", wed.span), "review billing", "the saved prompt keeps no stray dot")
+})
+
+test("break: a clock schedule is not an event", () => {
+  for (const text of [
+    "every midnight rotate the logs",
+    "every noon post the lunch menu",
+    "every M/W/F at 9am triage",
+    "every Tu/Th at 3 sync",
+    "every twenty-four hours check CI",
+    "every sixty minutes check CI",
+    "every wkday at 9 triage",
+    "every odd week on Monday triage",
+    "every New Year's Day at 9am renew certs",
+    "every lunchtime check the queue",
+  ]) {
+    assert.notEqual(read(text, "anywhere").kind, "event", text)
+  }
+  // Still events: a set of things, not a calendar.
+  for (const text of ["each PR needs a changelog entry", "every file in src needs a header", "every time the build fails, fix it"]) {
+    assert.equal(read(text, "anywhere").kind, "event", text)
+  }
+})
+
+test("break: a recurrence that opens a bug report or an explanation is not offered", () => {
+  for (const text of [
+    "Every night the backup job fails with ENOSPC, fix it",
+    "Every day at 3am the cron job OOMs — find out why",
+    "Every hour the memory climbs by 100MB, find the leak",
+    "Every Monday our CI is slow because of cache eviction, look into it",
+    "Every 15 minutes the health check flaps, find out why",
+    "Weekly, we get a spike of 500s on the billing endpoint; look at the logs",
+    "Every Monday at 9am is when the digest goes out, add that to the docs",
+  ]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+  }
+  // An imperative after the phrase is still a request.
+  for (const text of ["every Monday at 9am triage new issues", "Every weekday at 9, post a standup summary", "every night clean up stale branches"]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), true, text)
+  }
+})
+
+test("break: a negation or a statement at the close edge is not a schedule to create", () => {
+  for (const text of [
+    "don't deploy on Fridays",
+    "never merge on Fridays",
+    "no deploys on Fridays",
+    "we don't release on weekends",
+    "stop pinging me every morning",
+    "don't email me daily",
+    "turn off the digest that goes out every Monday",
+    "the bot should not post every Monday at 9am",
+    "Never: every Monday at 9am",
+    "the digest email is sent every Monday at 9am",
+    "the meeting is every Monday at 9am",
+    "I'm out Fridays",
+    "she's off Mondays",
+    "the office is closed on weekends",
+    "set the dependabot interval to weekly",
+  ]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+  }
+  for (const text of ["triage new issues every Monday at 9am", "run the e2e suite against staging nightly", "check that the build is green every morning"]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), true, text)
+  }
+})
+
+test("break: code, paths and identifiers are not prose", () => {
+  for (const text of [
+    "see packages/web/src/daily",
+    "set FREQ=DAILY",
+    "set interval=weekly",
+    "the env var REPORT_WEEKLY should be daily",
+    "rename variable everyday to everyDay",
+    "fix this config\n    schedule: every Monday at 9am",
+    "the label should read: every Monday at 9am",
+  ]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+  }
+})
+
+test("break: a single 'on the Nth' at the close edge is a date, not a monthly rule", () => {
+  for (const text of ["ship the release on the 15th", "merge the release branch on the 1st", "post the changelog on the 15th"]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+  }
+  assert.equal(isScheduleOffer(read("review billing on the 1st and 15th", "edges")), true)
+  assert.equal(isScheduleOffer(read("on the 15th review billing", "edges")), true)
+})
+
+test("break: readingsConsistent holds an assumed day and time to the core's frequency", () => {
+  const week = read("every week unless it's a holiday post the digest", "edges")
+  assert.ok(week.kind === "cue" && week.core, summarizeReading("every week unless it's a holiday post the digest", week))
+  const base = { rrule: week.core.rrule, dtstart: week.core.dtstart, tz: NY, assumed: week.core.assumed }
+  // "every week" says once a week: an hourly, a daily or a twice-weekly reading is not it.
+  for (const rrule of ["FREQ=HOURLY;BYMINUTE=0", "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", "FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=9;BYMINUTE=0"]) {
+    assert.equal(readingsConsistent(base, { rrule, dtstart: "2026-10-06T09:00", tz: NY }, SPEC_NOW), false, rrule)
+  }
+  // Any one day of the week at any time is: the day and the time were assumed.
+  assert.equal(readingsConsistent(base, { rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=15;BYMINUTE=0", dtstart: "2026-10-06T15:00", tz: NY }, SPEC_NOW), true)
+  assert.equal(readingsConsistent(base, { rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", tz: NY }, SPEC_NOW), true)
+  // Every other week only removes runs.
+  assert.equal(readingsConsistent(base, { rrule: "FREQ=WEEKLY;INTERVAL=2;BYDAY=WE;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-07T09:00", tz: NY }, SPEC_NOW), true)
+  // An assumed time alone still means one run on each of the core's days.
+  const monday = read("every Monday unless it's a holiday post the digest", "edges")
+  assert.ok(monday.kind === "cue" && monday.core)
+  const mondayBase = { rrule: monday.core.rrule, dtstart: monday.core.dtstart, tz: NY, assumed: monday.core.assumed }
+  assert.equal(readingsConsistent(mondayBase, { rrule: "FREQ=HOURLY;BYDAY=MO;BYMINUTE=0", dtstart: "2026-10-12T00:00", tz: NY }, SPEC_NOW), false)
+  // A monthly core with an assumed day: one run a month.
+  const month = read("every month unless it's a holiday post the digest", "edges")
+  assert.ok(month.kind === "cue" && month.core)
+  const monthBase = { rrule: month.core.rrule, dtstart: month.core.dtstart, tz: NY, assumed: month.core.assumed }
+  assert.equal(readingsConsistent(monthBase, { rrule: "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-15T09:00", tz: NY }, SPEC_NOW), true)
+  assert.equal(readingsConsistent(monthBase, { rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", tz: NY }, SPEC_NOW), false)
 })

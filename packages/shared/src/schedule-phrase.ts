@@ -44,8 +44,10 @@ import {
 import { THREAD_HANDLE_MAX_CHARS, threadHandle } from "./thread-handle.ts"
 
 /** Bumped whenever a phrase could read differently. A local reading carries it to the server, which
- *  refuses a skew rather than re-reading with a different grammar (§1.3.4, §10.1). */
-export const SCHEDULE_GRAMMAR_VERSION = 1
+ *  refuses a skew rather than re-reading with a different grammar (§1.3.4, §10.1).
+ *  2 — fix round 1 (2026-10-06): a night's clock, an ordinal's unit, zones, the broad qualifiers, the edge
+ *  guards; "every night at 2" read 2pm under 1 and 2am under 2. */
+export const SCHEDULE_GRAMMAR_VERSION = 2
 
 export type Span = { start: number; end: number }
 export type Edge = "open" | "close" | "inside" | "field"
@@ -129,9 +131,10 @@ const numOf = (s: string): number => (/^\d/.test(s) ? parseInt(s, 10) : NUM_WORD
 
 const WD_NAME = "(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)"
 const WD_ABBR = "(?:tues|tue|weds|wed|thurs|thur|thu|mon|fri|sat|sun)"
-/** A weekday, singular or plural, full or abbreviated — never a possessive ("Monday's"). */
-const WD = `(?:${WD_NAME}s?|${WD_ABBR})(?![\\w'’])`
-const WD_ONE = `(?:${WD_NAME}|${WD_ABBR})(?![\\w'’])`
+/** A weekday, singular or plural, full or abbreviated — never a possessive ("Monday's"). An abbreviation
+ *  takes its own dot ("every Wed. at 3"), which is not the sentence's (`sentenceEnd`). */
+const WD = `(?:${WD_NAME}s?|${WD_ABBR}\\.?)(?![\\w'’])`
+const WD_ONE = `(?:${WD_NAME}|${WD_ABBR}\\.?)(?![\\w'’])`
 const WD_PLURAL = `${WD_NAME}s(?![\\w'’])`
 const LIST_SEP = "(?:\\s*,\\s*(?:and\\s+|&\\s*)?|\\s+and\\s+|\\s*&\\s*|\\s*/\\s*)"
 const WD_LIST = `${WD}(?:${LIST_SEP}(?:(?:every|each|on)\\s+)?${WD})*`
@@ -170,7 +173,7 @@ const CLOCK_STRICT = `(?:\\d{1,2}(?::\\d{2})?\\s*${MERIDIEM}|\\d{1,2}:\\d{2}(?![
 const CLOCK_BARE = "\\d{1,2}(?![\\d:%/]|[.,]\\d|\\s*(?:%|percent|minutes?|mins?|hours?|hrs?|days?|weeks?|months?|years?|times|x|st|nd|rd|th)(?![\\w])|[a-z])"
 const CLOCK_ANY = `(?:${CLOCK_STRICT}|${CLOCK_BARE})`
 const CLOCK_SEP = "\\s*(?:,\\s*and|,|and|&)\\s*(?:at\\s+)?"
-const CLOCK_TAIL = "(?:\\s*o['’]clock)?(?:\\s+in\\s+the\\s+(?:morning|afternoon|evening)|\\s+at\\s+night)?"
+const CLOCK_TAIL = "(?:\\s*o['’]clock)?(?:\\s+in\\s+the\\s+(?:morning|afternoon|evening)s?(?![\\w'’])|\\s+at\\s+night(?![\\w'’]))?"
 const TOD_HOURS: Record<string, number> = { morning: 9, afternoon: 14, evening: 18, night: 21, "first thing": 9, "end of day": 17 }
 
 // The edge gate (§2.1): recurrence words only, so a one-shot or a deadline never even lights the glyph.
@@ -212,19 +215,71 @@ const STRONG_EVENT = new RegExp(
 )
 const EVENT_OFFSET = /\b(?:the\s+)?(?:day|morning|evening|night|week|hour)\s+(?:after|before)\s+(?:each|every|a|an|the|any)\s+[a-z]+/
 /** "each PR", "every file": a set of things, not a calendar. */
-const CALENDARISH = `(?:time|times|day|days|night|nights|morning|mornings|afternoon|afternoons|evening|evenings|week|weeks|weekday|weekdays|week\\s+day|weekend|weekends|weeknight|weeknights|month|months|year|years|hour|hours|minute|minutes|min|mins|hr|hrs|quarter|quarters|fortnight|other|single|business|working|work|workday|workdays|half|couple|few|several|so|now|payday|sprint|sprints|iteration|cycle|${ORD}|${WD}|${MONTH}|${NUM}|\\d)`
+const CALENDARISH = `(?:noon|midnight|midday|lunch\\w*|dinner\\w*|breakfast\\w*|new|odd|even|alternate|alternating|wk\\w*|m|t|w|r|f|th|tu|mo|we|fr|sa|su|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:-[a-z]+)?|eleven|twelve|thirteen|fourteen|sixteen|seventeen|eighteen|nineteen|hundred|time|times|day|days|night|nights|morning|mornings|afternoon|afternoons|evening|evenings|week|weeks|weekday|weekdays|week\\s+day|weekend|weekends|weeknight|weeknights|month|months|year|years|hour|hours|minute|minutes|min|mins|hr|hrs|quarter|quarters|fortnight|other|single|business|working|work|workday|workdays|half|couple|few|several|so|now|payday|sprint|sprints|iteration|cycle|${ORD}|${WD}|${MONTH}|${NUM}|\\d)`
 const EVENT_NOUN = new RegExp(`\\b(?:every|each)\\s+(?!${CALENDARISH}(?![\\w]))[a-z][a-z'’-]*`)
 const PRESENCE = /\b(?:while|when(?:ever)?|as\s+long\s+as)\s+i(?:['’]m|\s+am)\b[^.,;!?\n\u0001]*/
 /** A word ABOUT a schedule, earlier in the close-edge phrase's sentence (§1.3.7). */
 const ABOUT = /\b(?:cron\w*|jobs?|workflows?|actions?|pipelines?|runs?|ran|running|fires?|fired|firing|triggers?|triggered|triggering|schedul\w*|recurring|periodic\w*)\b/
 const DEADLINE_BEFORE = /\b(?:until|by|before|after|since|than|from|for)\s+(?:\S+\s+)?$/
 const DEADLINE_OPENS = /^(?:until|till|by|before|after|since|than|from|for)\b/
+/** A single "on the 15th" — the close edge's one-off date. */
+const LONE_MONTH_DAY = /^on\s+the\s+\d{1,2}(?:st|nd|rd|th)$/
+/** A prohibition anywhere in the close-edge phrase's sentence. */
+const NEGATION = /\b(?:don['’]?t|do\s+not|doesn['’]?t|does\s+not|never|no|not|stop|stopping|turn\s+off|disable|shouldn['’]?t|should\s+not|won['’]?t|can['’]?t|cannot|avoid|quit)\b/
+/** A statement right before a close-edge phrase: a verb of being (with at most a participle), "to", ":" or
+ *  "=" — the words describe a schedule, or name a setting, rather than ask for one. */
+const STATEMENT_BEFORE = /(?:\b(?:is|are|was|were|be|been|being|am)|['’](?:s|re|m))\s+(?:(?:\w{2,}ed|taken|given|written|driven|chosen|frozen|broken|hidden|gotten|proven|sent|run|held|due|closed|open|out|off|away|done|set|built|shut|kept|made|paid)(?:\s+(?:up|out|off|down))?\s+)?$|\bto\s+$|[:=]\s*$/
+/** After an open-edge phrase, where the imperative would be: a subject or a verb of being. "we" asks for
+ *  something when a modal follows ("we should …"). */
+const DECLARATIVE_AFTER = /^[\s,;:—–-]*(?:the(?!\s+(?:next|following|coming|rest|first|last)\b)|our|my|its|their|his|her|it|it['’]s|there|this(?!\s+(?:week|month|year|quarter|fall|spring|summer|winter|morning|afternoon|evening)\b)|that|these|those|is|are|was|were|isn['’]t|aren['’]t|has|have|had|keeps?|someone|somebody|nobody|everyone|everybody|people|users|customers|we(?!\s+(?:should|need|must|want|could|can|will|['’]ll|have\s+to|gotta)\b))(?![\w'’])/
+
+// ---- what touches a phrase and changes it (fix round 1, 2026-10-06) ----------------------------------------
+// An adversarial pass found the words right after a phrase read as the TASK's first words while the phrase was
+// offered exact: "every weekday at 9am apart from Fridays triage new issues" ran on Fridays, "every Monday at
+// 9am Berlin time" fired at 3pm Berlin, "every hour and a half" ran hourly. A task starts with a verb; the
+// words below cannot start one, so right after a phrase they are part of WHEN, and the grammar does not read
+// them: the reading is a cue and the model reads it in the mode.
+
+/** A word of the calendar: a weekday, a class of days, a month, a quarter, a holiday. */
+const CAL_WORD = `(?:${WD}|weekends?|week\\s?days?|workdays?|business\\s+days?|january|february|march|april|june|july|august|september|october|november|december|q[1-4]|holidays?)(?![\\w'’])`
+const ZONE_ABBR = "pt|pst|pdt|et|est|edt|ct|cst|cdt|mt|mst|mdt|utc|gmt|cet|cest|bst|ist|jst|kst|aest|aedt|acst|awst|nzst|nzdt|wet|west|eet|eest|msk|hst|akst|akdt|sgt|hkt|z|zulu"
+const IANA_ZONE = "(?:africa|america|antarctica|arctic|asia|atlantic|australia|europe|indian|pacific|etc)/[a-z_+-]+(?:/[a-z_+-]+)?"
+const ZONE_OFFSET = "(?:utc|gmt)?\\s*[+−]\\s*\\d{1,2}(?::?\\d{2})?(?!\\d)|(?:utc|gmt)\\s*-\\s*\\d{1,2}(?::?\\d{2})?(?!\\d)"
+const ZONE_PLACE = "london|berlin|paris|madrid|lisbon|dublin|amsterdam|stockholm|zurich|munich|tokyo|seoul|beijing|shanghai|singapore|sydney|melbourne|auckland|india|japan|china|germany|france|uk|europe|nyc|ny|new\\s+york|sf|la|san\\s+francisco|los\\s+angeles|seattle|chicago|denver|toronto|vancouver|bangalore|mumbai|delhi|dubai|hong\\s+kong|pacific|eastern|central|mountain|atlantic|hawaii|alaska"
+/** A zone right after a phrase: an abbreviation, an IANA name, an offset, a place, or any "<words> time". */
+const ZONE_AFTER = new RegExp(`^[\\s,;:(\\[—–-]*(?:in\\s+)?(?:${IANA_ZONE}|${ZONE_OFFSET}|(?:${ZONE_ABBR})(?:\\s+time)?(?![\\w'’/])|(?:${ZONE_PLACE})(?![\\w'’/])|(?:[a-z.]+\\s+){1,2}time(?![\\w'’]))`)
+/** A zone anywhere: the spellings that cannot be anything else. */
+const ZONE_ANYWHERE = new RegExp(`\\b(?:${IANA_ZONE})|\\b(?:utc|gmt)\\s*[+−-]\\s*\\d|\\b(?:${ZONE_PLACE}|my|local|server)\\s+time(?![\\w'’])`)
+/** "every hour and a half", "every hour or so": the interval is not the one the core says. */
+const APPROX_AFTER = /^\s*(?:(and\s+(?:a|one)\s+(?:half|quarter)|and\s+change|plus\s+\w+)|((?:or|and)\s+so|or\s+(?:two|three|more)|-?ish))(?![\w'’])/
+/** A word that cannot start an imperative, right after a phrase: an exclusion, a preposition, a negation, a
+ *  count, a second frequency, a calendar word. "save" and "bar" are verbs too, so only before a day. */
+const QUALIFIER_AFTER = new RegExp(
+  `^[\\s,;:—–(\\[-]*(apart\\s+from|aside\\s+from|besides|save(?:\\s+for)?(?=\\s+(?:on\\s+)?(?:the\\s+)?${CAL_WORD})|bar(?:ring)?(?=\\s+(?:on\\s+)?(?:the\\s+)?${CAL_WORD})|` +
+    `minus|without|w/o|excl\\.?|omitting|no|not|never|nor|in\\s+case|in|within|over|throughout|around|these|the\\s+(?:next|following|coming|rest)|this|next|` +
+    `first\\s+(?:run|one|time|occurrence)s?|once|as|max(?:imum)?|at\\s+(?:most|least|max)|up\\s+to|stopping|stop(?=\\s+(?:on|at|after|by|in)\\b)|` +
+    `on\\s+(?:odd|even|alternate|alternating|non-?\\w+)|every|each|x\\s?\\d+|\\d+\\s?x|${CAL_WORD})(?![\\w'’])`,
+)
+/** A statement or a negation right after a phrase — "every Monday, Friday is off-limits", "every Monday at
+ *  9am is when the digest goes out": the words before are not a rule to run, and a list before "is" may
+ *  hold the very day the human excluded, so the reading keeps no core. */
+const STATEMENT_AFTER = /^[\s,;:—–-]*(is|are|isn['’]t|aren['’]t|was|were|['’]s|['’]re|off|too|also|excluded|included|frozen|blocked|closed|out|free)(?![\w'’])/
+/** A clock the grammar could not parse, right after a phrase: "at 9p", "at 1430", "at 9h30", "at about 9",
+ *  "9", "at ９am", "at nine". The phrase alone would read 9am, assumed, and save the clock as the task. */
+const CLOCK_AFTER = /^[\s,]*(?:(?:at|@|around|about|approx\.?|approximately|~|circa|roughly|by)\s*)*(?:[\d０-９][\w:.０-９]*|(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve)(?![\w'’]))/
+/** Calendar words anywhere in the read region, outside the phrase: never eaten, never ignored. A weekday by
+ *  its full name (a possessive is the task's: "prepare Monday's notes"), a class of days in the plural, a
+ *  month by its full name ("may" and "march" are verbs), a quarter, a season after its preposition. */
+const CALENDAR_RESIDUAL = new RegExp(
+  `\\b(?:${WD_NAME}s?|weekends|weekdays|workdays|business\\s+days|january|february|april|june|july|august|september|october|november|december|q[1-4]|(?:in|this|over|during|through)\\s+(?:the\\s+)?(?:summer|winter|spring|fall|autumn))(?![\\w'’])`,
+)
 
 const TOUCH_AFTER = /^[\s,;:—–(-]*(unless|except|excluding|only(?:\s+(?:if|when|on|during|after|before))?|if|when|whenever|for|until|till|thru|through|starting|beginning|from|after|before|but(?:\s+not)?|skip|skipping|ending|between|during|while|provided|assuming|as\s+long\s+as|this\s+(?:week|month|year|quarter)|next\s+(?:week|month|year)|today|tonight|tomorrow)(?![\w'’])/
-const TOUCH_BEFORE_WORD = /(?:^|[^\w'’])(until|till|by|before|after|since|from|for|unless|except|if|when|only|stop|stopping|quit)\s+$/
-/** A deadline or anchor two words before: "have it done by Friday every week", "after standup every day". */
-const TOUCH_BEFORE_PAIR = /(?:^|[^\w'’])((?:until|till|by|before|after|since|from)\s+[^\s,;:.!?\u0001]+)\s+$/
-const CLAUSE_QUALIFIER = /^\s*(unless|except|excluding|only|if|when|whenever|until|till|for|starting|beginning|after|before|but|while|provided|assuming)(?![\w'’])/
+const TOUCH_BEFORE_WORD = /(?:^|[^\w'’])(until|till|by|before|after|since|from|for|unless|except|excluding|excl\.?|omitting|besides|minus|without|w\/o|save|bar|barring|if|when|only|stop|stopping|quit|never|not|no|nor|don['’]?t|doesn['’]?t)\s+$/
+/** A deadline or anchor two words before: "have it done by Friday every week", "after standup every day" —
+ *  or a first run named before its date: "nightly first run on Oct 20" (the adverb unread, the date taken). */
+const TOUCH_BEFORE_PAIR = /(?:^|[^\w'’])((?:until|till|by|before|after|since|from)\s+[^\s,;:.!?\u0001]+|first\s+(?:run|one|time|occurrence)s?)\s+$/
+const CLAUSE_QUALIFIER = /^[\s(\[]*(on\s+(?:odd|even|alternate|alternating|non-?\w+)|\d+\s?x|unless|except|excluding|only|if|when|whenever|until|till|for|starting|beginning|after|before|but|while|provided|assuming|apart|aside|besides|save|minus|without|w\/o|excl|omitting|bar|barring|no|not|never|nor|in|within|over|throughout|through|thru|during|around|this|these|next|the\s+(?:next|following|coming|rest)|first|once|as|max|maximum|at\s+most|up\s+to|stopping|stop|every|each|x\d|\d)(?![\w'’])/
 /** A second day's own clock, so the compound's unread words are the whole second rule. */
 const CONJ_CLOCK = `(?:\\s+(?:at|@)\\s*${CLOCK_ANY}|\\s+${CLOCK_STRICT})?`
 const CONJOINED = new RegExp(
@@ -232,9 +287,9 @@ const CONJOINED = new RegExp(
     // "every Mon at 8pm, Tue at 9pm": a second day with its own clock, joined by a comma alone.
     `|^\\s*,\\s*(?:(?:every|each|on)\\s+)?${WD}\\s+(?:at|@)\\s*(?:${CLOCK_ANY}|noon|midnight)`,
 )
-const OBJECT_BEFORE = /(?:^|[^\w'’])(?:the|a|an|this|that|our|my|your|their|its|his|her|skip|skipping|except|excluding|during|over|through|all|both|no|most|some)\s+$/
+const OBJECT_BEFORE = /(?:^|[^\w'’])(?:the|a|an|this|that|our|my|your|their|its|his|her|skip|skipping|except|excluding|excl\.?|omitting|save|bar|barring|without|w\/o|minus|besides|not|never|during|over|through|all|both|no|most|some)\s+$/
 
-const CONDITION_WORDS = new Set(["unless", "except", "excluding", "only", "if", "when", "whenever", "but", "skip", "skipping", "during", "while", "provided", "assuming"])
+const CONDITION_WORDS = new Set(["unless", "except", "excluding", "only", "if", "when", "whenever", "but", "skip", "skipping", "during", "while", "provided", "assuming", "apart", "aside", "besides", "save", "bar", "barring", "minus", "without", "w/o", "excl", "excl.", "omitting", "no", "not", "never", "nor", "once", "as", "in case", "don't", "dont", "don’t", "doesn't", "doesnt", "doesn’t"])
 const OFFSET_WORDS = new Set(["after", "before"])
 
 // ---- text preparation ----------------------------------------------------------------------------------------
@@ -303,12 +358,19 @@ export function scheduleEdgeGates(text: string, exclude: readonly Span[] = []): 
   return { open: openGate, close: close === open ? openGate : GATE.test(p.masked.slice(close.start, close.end)) }
 }
 
-/** A sentence ends at ". ", "! ", "? " or a newline — but not at the dot of "a.m." or "p.m.". */
+/** An abbreviation whose dot is its own: a weekday's or a month's ("every Wed. at 3", "every Jan. 15"), or
+ *  a qualifier's ("excl. weekends" ended the closing window at "excl.", which left "weekends" a sentence). */
+const ABBR_BEFORE_DOT = /(?:^|[^a-z])(?:mon|tue|tues|wed|weds|thu|thur|thurs|fri|sat|sun|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec|excl|incl|approx|vs)$/
+
+/** A sentence ends at ". ", "! ", "? " or a newline — but not at the dot of "a.m." or "p.m.", nor at an
+ *  abbreviation's: "every Wed. at 3" ended its window at "Wed", so the clock never attached and the box
+ *  offered Wednesday at an assumed 9am, saving ". at 3 review billing" as the task. */
 function sentenceEnd(m: string, i: number): boolean {
   const c = m[i]
   if (c !== "." && c !== "!" && c !== "?") return false
   if (!(i + 1 >= m.length || isSpace(m[i + 1]))) return false
-  return !(c === "." && /[ap]\.m$/.test(m.slice(Math.max(0, i - 3), i)))
+  if (c !== ".") return true
+  return !/[ap]\.m$/.test(m.slice(Math.max(0, i - 3), i)) && !ABBR_BEFORE_DOT.test(m.slice(Math.max(0, i - 6), i))
 }
 
 function windowsOf(m: string): Span[] {
@@ -357,8 +419,9 @@ interface YMD {
 interface Clock {
   h: number
   mi: number
-  /** "at 3" read with the work-hours rule: the hour it did not take, and where the number is. */
-  guess?: { other: number; span: Span }
+  /** "at 3" read with the work-hours rule: the hour it did not take, where the number is, and the number
+   *  as typed (1–12), so a time of day found later can settle it (`settleClock`). */
+  guess?: { other: number; span: Span; bare: number }
 }
 
 /** The part of a phrase that says how often. `type` sorts out what the reading will be. */
@@ -415,8 +478,46 @@ interface Ctx {
   oneShots: boolean
 }
 
-// Bare-clock meridiem: 7–11 morning, 12 noon, 1–6 afternoon — the work-hours rule, SAID to be a guess.
-function parseClock(raw: string, at: number, hint?: "am" | "pm"): Clock | undefined {
+/** The part of the day a bare clock was said in ("every night at 2", "at 2 in the morning"). */
+type DayPart = "morning" | "afternoon" | "evening" | "night"
+
+/** The part of the day a time-of-day word names. EOD is an afternoon clock (5pm). */
+function partOf(word: string | undefined): DayPart | undefined {
+  if (!word) return undefined
+  if (/morning|first thing/.test(word)) return "morning"
+  if (/afternoon|end of day/.test(word)) return "afternoon"
+  if (/evening/.test(word)) return "evening"
+  if (/night/.test(word)) return "night"
+  return undefined
+}
+
+/**
+ * A bare 1–12 (`bare`) in a part of the day. Where the part settles it the clock is SURE: morning 1–11 is am,
+ * afternoon 12–6 pm, evening 5–11 pm, night 7–11 pm, 12 midnight and 1–5 am ("every night at 2" is 2am —
+ * it was read as 2pm, unmarked, because every part but the morning meant "pm"). Where the words contradict
+ * themselves ("every evening at 3", "every night at 6", "every morning at 12") it keeps the reading nearer
+ * the part and SAYS it is a guess, so the box dims it and offers the other. With no part: the work-hours
+ * rule, 7–11 morning, 12 noon, 1–6 afternoon, always a guess.
+ */
+function settleClock(bare: number, mi: number, part: DayPart | undefined, span: Span): Clock {
+  const am = bare % 12, pm = (bare % 12) + 12
+  const sure = (h: number): Clock => ({ h, mi })
+  const guess = (h: number, other: number): Clock => ({ h, mi, guess: { other, span, bare } })
+  switch (part) {
+    case "morning":
+      return bare === 12 ? guess(0, 12) : sure(am)
+    case "afternoon":
+      return bare === 12 || bare <= 6 ? sure(pm) : guess(pm, am)
+    case "evening":
+      return bare >= 5 && bare <= 11 ? sure(pm) : bare === 12 ? guess(0, 12) : guess(pm, am)
+    case "night":
+      return bare >= 7 && bare <= 11 ? sure(pm) : bare === 12 ? sure(0) : bare <= 5 ? sure(am) : guess(pm, am)
+    default:
+      return bare === 12 ? guess(12, 0) : bare >= 7 ? guess(am, pm) : guess(pm, am)
+  }
+}
+
+function parseClock(raw: string, at: number, part?: DayPart): Clock | undefined {
   const t = raw.trim()
   if (/^(?:noon|midday)$/.test(t)) return { h: 12, mi: 0 }
   if (t === "midnight") return { h: 0, mi: 0 }
@@ -431,30 +532,19 @@ function parseClock(raw: string, at: number, hint?: "am" | "pm"): Clock | undefi
   }
   if (h > 23) return undefined
   if (h === 0 || h >= 13 || /^0\d/.test(m[1]!)) return { h, mi }
-  if (hint === "am") return { h: h % 12, mi }
-  if (hint === "pm") return { h: (h % 12) + 12, mi }
-  const span = { start: at, end: at + m[1]!.length + (m[2] ? m[2].length + 1 : 0) }
-  if (h === 12) return { h: 12, mi, guess: { other: 0, span } }
-  if (h >= 7) return { h, mi, guess: { other: h + 12, span } }
-  return { h: h + 12, mi, guess: { other: h, span } }
+  return settleClock(h, mi, part, { start: at, end: at + m[1]!.length + (m[2] ? m[2].length + 1 : 0) })
 }
 
 /** Each clock in a clock list, with its offset. */
-function clocksIn(text: string, offset: number, hint?: "am" | "pm"): Clock[] | undefined {
+function clocksIn(text: string, offset: number, part?: DayPart): Clock[] | undefined {
   const out: Clock[] = []
   const re = new RegExp(CLOCK_ANY, "g")
   for (const m of text.matchAll(re)) {
-    const c = parseClock(m[0], offset + m.index!, hint)
+    const c = parseClock(m[0], offset + m.index!, part)
     if (!c) return undefined
     out.push(c)
   }
   return out.length ? out : undefined
-}
-
-function hintOf(word: string | undefined): "am" | "pm" | undefined {
-  if (!word) return undefined
-  if (/morning|first thing/.test(word)) return "am"
-  return "pm"
 }
 
 // ---- date helpers ----------------------------------------------------------------------------------------------
@@ -707,10 +797,11 @@ const MODS: ModDef[] = [
 ]
 
 function clockMod(text: string, at: number, core: Core): Mod[] | undefined {
-  const tail = /\s+in\s+the\s+(morning|afternoon|evening)$|\s+at\s+night$/.exec(text)
-  const hint = tail ? (tail[1] === "morning" ? "am" : "pm") : hintOf(core.tod?.key)
+  const tail = /\s+in\s+the\s+(morning|afternoon|evening)s?$|\s+at\s+night$/.exec(text)
+  // "at 2 at night" is the night's 2am: the tail names the part (it read as "pm" once).
+  const part = tail ? ((tail[1] as DayPart | undefined) ?? "night") : partOf(core.tod?.key)
   const body = tail ? text.slice(0, tail.index) : text
-  const clocks = clocksIn(body.replace(/o['’]clock/g, (s) => " ".repeat(s.length)), at, hint)
+  const clocks = clocksIn(body.replace(/o['’]clock/g, (s) => " ".repeat(s.length)), at, part)
   return clocks ? [{ k: "clock", clocks, start: at, end: at + text.length }] : undefined
 }
 
@@ -883,9 +974,10 @@ const CORES: CoreDef[] = [
       return yearlyCore(mo, d)
     },
   },
-  // twice a week · three times a day · a few times a month · regularly · every payday · each sprint
+  // twice a week · three times a day · a few times a month · regularly · every payday · each sprint · every
+  // 2nd week (every other week to some; "every 2nd" alone read as the 2nd of the month, the week dropped)
   {
-    re: G(`\\b(?:twice|thrice|(?:${NUM}|a\\s+few|a\\s+couple(?:\\s+of)?|several|multiple|many)\\s+times)\\s+(?:a|an|per|each|every)\\s+(?:day|week|month|hour|year|quarter)${END}|\\b(?:regularly|periodically|every\\s+so\\s+often|from\\s+time\\s+to\\s+time|occasionally|every\\s+now\\s+and\\s+then)${END}|\\b(?:at\\s+the\\s+(?:start|beginning|end)\\s+of\\s+)?(?:every|each)\\s+(?:payday|pay\\s+day|sprint|iteration|cycle)${END}`),
+    re: G(`\\b(?:every|each)\\s+${DAY_ORD}\\s+(?:minute|min|hour|hr|day|night|morning|afternoon|evening|week|weekend|fortnight|month|quarter|year)s?${END}|\\b(?:twice|thrice|(?:${NUM}|a\\s+few|a\\s+couple(?:\\s+of)?|several|multiple|many)\\s+times)\\s+(?:a|an|per|each|every)\\s+(?:day|week|month|hour|year|quarter)${END}|\\b(?:regularly|periodically|every\\s+so\\s+often|from\\s+time\\s+to\\s+time|occasionally|every\\s+now\\s+and\\s+then)${END}|\\b(?:at\\s+the\\s+(?:start|beginning|end)\\s+of\\s+)?(?:every|each)\\s+(?:payday|pay\\s+day|sprint|iteration|cycle)${END}`),
     build: () => ({ type: "vague" }),
   },
   // ---- one-offs: read only in the mode and in "Change when" ----
@@ -1144,9 +1236,12 @@ function assembleRule(core: Core, mods: Mod[], ctx: Ctx): Built | undefined {
   const assumed: Assumed[] = []
   const tod = core.tod ?? (mod("tod") ? { key: mod("tod")!.key, word: mod("tod")!.word } : undefined)
   if (core.tod && mod("tod")) return unsupported(mod("tod"))
-  const hint = hintOf(tod?.key)
+  const part = partOf(tod?.key)
   const clockMod = mod("clock")
-  const clocks = clockMod?.clocks.map((c) => (c.guess && hint ? { h: hint === "am" ? c.h % 12 : (c.h % 12) + 12, mi: c.mi } : c))
+  // A clock read before its time of day was found ("every day in the evening at 6") is settled by it now.
+  const clocks = clockMod?.clocks.map((c) => (c.guess && part ? settleClock(c.guess.bare, c.mi, part, c.guess.span) : c))
+  /** A night or an evening that runs past midnight: "at 2" on it is the NEXT calendar day's 2am. */
+  const pastMidnight = (part === "night" || part === "evening") && !!clocks?.some((c) => c.h < 6)
 
   // One-offs.
   if (core.type === "once") {
@@ -1160,6 +1255,8 @@ function assembleRule(core: Core, mods: Mod[], ctx: Ctx): Built | undefined {
       if (clocks.length !== 1) return unsupported(clockMod)
       ;({ h, mi } = clocks[0]!)
       pushGuesses(assumed, clocks)
+      // "tonight at 2" is the coming night's 2am — tomorrow's date.
+      if (pastMidnight) return { type: "pending", check: () => finalize({ freq: "DAILY", interval: 1, byMinute: [mi], once: { date: addDays(o.date, 1), h, mi } }, assumed, ctx, core) }
     } else if (tod) {
       h = TOD_HOURS[tod.key]!
       mi = 0
@@ -1237,6 +1334,9 @@ function assembleRule(core: Core, mods: Mod[], ctx: Ctx): Built | undefined {
     }
   } else {
     if (window || minute || startClock) return unsupported(window ?? minute ?? startClock)
+    // "Monday night at 2" is Tuesday at 2am to most and Monday at 2am to some: a rule that names its days
+    // does not guess which. (A daily rule has no day to get wrong.)
+    if (pastMidnight && r.freq !== "DAILY") return { type: "cue", why: "vague", unread: { start: clockMod!.start, end: clockMod!.end } }
     if (clocks) {
       const hours = sortedUnique(clocks.map((c) => c.h)), minutes = sortedUnique(clocks.map((c) => c.mi))
       // Two clocks must cross-multiply: 9am and 5pm is BYHOUR=9,17; 9:30am and 5pm is two rules.
@@ -1409,7 +1509,8 @@ function readEdges(p: Prep, ctx: Ctx): PhraseReading {
       // A phrase that is also the whole text counts as the open edge (§2.3), where the end of the text is
       // not a clause boundary for an adverb: "Daily" alone is a word being typed, not a schedule.
       if (first.endOnly) return { kind: "none" }
-      return judge(p, ctx, first, openCands, open, "open")
+      if (codeAt(p, first)) return { kind: "none" }
+      return openGuards(p, judge(p, ctx, first, openCands, open, "open"))
     }
     const other = edgeOther(p, open)
     if (other) return other
@@ -1418,6 +1519,7 @@ function readEdges(p: Prep, ctx: Ctx): PhraseReading {
     const cands = close === open && openCands ? openCands : findCandidates(p, close, ctx)
     const last = cands[cands.length - 1]
     if (last && last.end >= close.end && !(close === open && atOpen(p, open, last.start))) {
+      if (codeAt(p, last)) return { kind: "none" }
       const reading = judge(p, ctx, last, cands, close, "close")
       return reading.kind === "exact" ? closeGuards(p, close, reading) : reading
     }
@@ -1448,14 +1550,50 @@ function edgeOther(p: Prep, w: Span): PhraseReading | undefined {
 /** The close-edge guards (§2.3): a deadline word just before, or a sentence about a schedule. */
 function closeGuards(p: Prep, w: Span, r: Extract<PhraseReading, { kind: "exact" }>): PhraseReading {
   const before = p.masked.slice(w.start, r.span.start)
+  const phrase = p.masked.slice(r.span.start, r.span.end)
   // The idiom is the word before the phrase — or the phrase's own first word, when the grammar took
   // "from Friday" or "until Friday" in as a start or a bound: "ship the fix by Friday every week".
-  if (DEADLINE_BEFORE.test(before) || DEADLINE_OPENS.test(p.masked.slice(r.span.start, r.span.end))) return { ...r, veto: "deadline" }
+  if (DEADLINE_BEFORE.test(before) || DEADLINE_OPENS.test(phrase)) return { ...r, veto: "deadline" }
+  // One date at the end is a deadline, not a month's day: "ship the release on the 15th" (a list, "on the
+  // 1st and 15th", is a rule, family G).
+  if (LONE_MONTH_DAY.test(phrase)) return { ...r, veto: "deadline" }
   // The sentence's first word is exempt: "run the e2e suite nightly" is an imperative, "a script I will
   // run each morning" is about one.
   const sentence = before.replace(/^\s*[^\s]+/, "")
   if (ABOUT.test(sentence)) return { ...r, veto: "about" }
+  // A prohibition ("don't deploy on Fridays", "stop pinging me every morning") or a statement of fact ("the
+  // meeting is every Monday at 9am", "I'm out Fridays", "set the interval to weekly", "the label should
+  // read: every Monday") ends in a schedule's words and asks for none. Here the first word counts: it is
+  // often the negation itself.
+  if (NEGATION.test(before) || STATEMENT_BEFORE.test(before)) return { ...r, veto: "about" }
   return r
+}
+
+/** §2.3 at the OPEN edge (fix round 1): where the task's imperative would be, a subject or a verb of being —
+ *  "Every night the backup job fails with ENOSPC, fix it", "Every Monday our CI is slow", "Weekly, we get a
+ *  spike of 500s", "Every Monday at 9am is when the digest goes out". The sentence REPORTS a schedule; it
+ *  does not ask for one. An exact reading keeps its veto (the glyph may still hint); a cue or an ambiguous
+ *  word says nothing. */
+function openGuards(p: Prep, r: PhraseReading): PhraseReading {
+  if (r.kind !== "exact" && r.kind !== "cue" && r.kind !== "ambiguous") return r
+  // Where the words after the phrase it is sure of begin: a cue's core, else its unread words when they
+  // follow the phrase, else the end of the whole span.
+  // A zone's words are WHEN ("every Monday at 9am my time"): look past them.
+  const at = r.kind === "cue"
+    ? r.why === "zone" ? r.unread.end : r.core ? Math.min(r.core.span.end, r.unread.start) : r.unread.start > r.span.start ? r.unread.start : r.span.end
+    : r.span.end
+  if (!DECLARATIVE_AFTER.test(p.masked.slice(at))) return r
+  return r.kind === "exact" ? { ...r, veto: "about" } : { kind: "none" }
+}
+
+/** A phrase that is part of code, not prose: a path or an assignment ("packages/web/src/daily",
+ *  "FREQ=DAILY"), an identifier ("everyDay"), or an indented line ("    schedule: every Monday at 9am"). */
+function codeAt(p: Prep, c: Span): boolean {
+  if (/[/=_.\\@#$:-]$/.test(p.text.slice(Math.max(0, c.start - 1), c.start)) && c.start > 0 && !isSpace(p.text[c.start - 1])) return true
+  if (/[/=_(\[]/.test(p.text[c.end] ?? "") && /[\w]/.test(p.text[c.end + 1] ?? "")) return true
+  if (/\p{Ll}\p{Lu}/u.test(p.text.slice(c.start, c.end))) return true
+  const lineStart = p.text.lastIndexOf("\n", c.start - 1) + 1
+  return lineStart > 0 && /^(?: {2,}|\t)/.test(p.text.slice(lineStart, c.start))
 }
 
 function readAnywhere(p: Prep, ctx: Ctx): PhraseReading {
@@ -1560,9 +1698,11 @@ function judge(p: Prep, ctx: Ctx, c: Candidate, cands: Candidate[], region: Span
   const event = firstOutside(STRONG_EVENT, m, 0)
   if (event) return asCue(event, "condition")
   const touch = touching(p, region, span)
-  if (touch) return asCue(touch.unread, touch.why)
+  if (touch) return asCue(touch.unread, touch.why, !touch.noCore)
   const condition = firstOutside(STRONG_CONDITION, m, 0)
   if (condition) return asCue(trimSpan(p, clauseOf(p, condition)), "condition")
+  const zone = firstOutside(ZONE_ANYWHERE, m, 0)
+  if (zone) return asCue(zone, "zone")
   const second = cands.find((k) => k !== c && outside(k))
   if (second) return asCue({ start: second.start, end: second.end }, "compound")
   const residual = firstOutside(RESIDUAL, sub, region.start)
@@ -1570,6 +1710,8 @@ function judge(p: Prep, ctx: Ctx, c: Candidate, cands: Candidate[], region: Span
   if (residual) return HALF_HOUR.test(m.slice(residual.start, residual.end)) ? asCue(residual, "unsupported", false) : asCue(residual, "leftover")
   const bound = firstOutside(BOUND_ANYWHERE, m, 0)
   if (bound) return asCue(bound, "leftover")
+  const calendar = firstOutside(CALENDAR_RESIDUAL, sub, region.start)
+  if (calendar) return asCue(calendar, "leftover")
   if (!exact) return { kind: "none" }
   return {
     kind: "exact",
@@ -1615,10 +1757,25 @@ function clauseOf(p: Prep, hit: Span): Span {
   return { start: hit.start, end }
 }
 
-/** A qualifier-shaped word right against the phrase that the phrase did not absorb (§3.1). */
-function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWhy } | undefined {
+/** A qualifier-shaped word right against the phrase that the phrase did not absorb (§3.1). `noCore`: the
+ *  words before it may not be a rule at all ("every Monday, Friday is off-limits"), so no core is shown. */
+function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWhy; noCore?: true } | undefined {
   const m = p.masked
   const after = m.slice(span.end, region.end)
+  /** The words a match after the phrase covers, without the separators it began with. */
+  const hit = (mm: RegExpExecArray, why: CueWhy, opts: { clause?: boolean; noCore?: true } = {}) => {
+    const lead = /^[\s,;:—–(\[-]*/.exec(mm[0])![0].length
+    const s = { start: span.end + lead, end: span.end + mm[0].length }
+    return { unread: trimSpan(p, opts.clause ? clauseOf(p, s) : s), why, ...(opts.noCore ? { noCore: true as const } : {}) }
+  }
+  const zone = ZONE_AFTER.exec(after)
+  if (zone) return hit(zone, "zone")
+  const approx = APPROX_AFTER.exec(after)
+  if (approx) return hit(approx, approx[1] ? "unsupported" : "vague")
+  const clock = CLOCK_AFTER.exec(after)
+  if (clock) return hit(clock, "leftover")
+  const statement = STATEMENT_AFTER.exec(after)
+  if (statement) return hit(statement, "condition", { clause: true, noCore: true })
   const a = TOUCH_AFTER.exec(after)
   if (a) {
     const word = a[1]!.split(/\s+/)[0]!
@@ -1627,6 +1784,8 @@ function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWh
   }
   const conj = CONJOINED.exec(after)
   if (conj) return { unread: trimSpan(p, { start: span.end, end: span.end + conj[0].length }), why: "compound" }
+  const q = QUALIFIER_AFTER.exec(after)
+  if (q) return hit(q, whyOf(q[1]!.replace(/\s+/g, " ")), { clause: true })
   const before = m.slice(region.start, span.start)
   const w = TOUCH_BEFORE_WORD.exec(before) ?? TOUCH_BEFORE_PAIR.exec(before)
   if (w) {
@@ -1652,6 +1811,12 @@ function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWh
     if (q) {
       const at = region.start + cut + 1 + q[0].length - q[1]!.length
       return { unread: trimSpan(p, { start: at, end: region.start + trimmed.length }), why: whyOf(q[1]!) }
+    }
+    // A clause of the calendar or a zone, whatever word opens it: "Sundays off, every day at 9am …",
+    // "Berlin time, every Monday at 9am …".
+    const zoneBefore = ZONE_AFTER.test(clause) || ZONE_ANYWHERE.test(clause)
+    if (zoneBefore || new RegExp(`\\b${CAL_WORD}`).test(clause)) {
+      return { unread: trimSpan(p, { start: region.start + cut + 1, end: region.start + trimmed.length }), why: zoneBefore ? "zone" : "leftover" }
     }
   }
   return undefined
@@ -1787,16 +1952,51 @@ export function readingsConsistent(
   const timeAssumed = core.assumed.some((a) => a.part === "time")
   const meridiemAssumed = core.assumed.some((a) => a.part === "meridiem")
   const dayAssumed = core.assumed.some((a) => a.part === "day")
+  const clockOf = (ms: number) => {
+    const w = zonedWall(ms, tz)
+    return `${meridiemAssumed ? w.h % 12 : w.h}:${w.mi}`
+  }
+  if (dayAssumed) {
+    // "every week" / "every month" assumed the day (and maybe the time), but not HOW OFTEN: one run in each
+    // period the core runs in. It returned true outright when the time was assumed too, so an hourly answer
+    // over "every week" passed (fix round 1). Each of their runs falls in its own week (or month), the
+    // periods a multiple of the core's interval apart — a condition skips periods, it never adds a run to
+    // one — and at a clock the core runs at, unless that was assumed as well.
+    const freq = /FREQ=(\w+)/.exec(core.rrule)?.[1]
+    const interval = Number(/INTERVAL=(\d+)/.exec(core.rrule)?.[1] ?? 1)
+    const periodOf = (ms: number): number => {
+      const w = zonedWall(ms, tz)
+      if (freq === "MONTHLY") return w.y * 12 + (w.mo - 1)
+      // Weeks counted from a Monday, the week's first day here as in the core's BYDAY.
+      const day = Math.floor(Date.UTC(w.y, w.mo - 1, w.d) / DAY_MS)
+      return Math.floor((day + 3) / 7)
+    }
+    if (freq !== "WEEKLY" && freq !== "MONTHLY") return false
+    const periods = theirs.map(periodOf)
+    for (let i = 1; i < periods.length; i++) {
+      const gap = periods[i]! - periods[i - 1]!
+      if (gap <= 0 || gap % interval !== 0) return false
+    }
+    if (timeAssumed) return true
+    const clocks = new Set(ours.map(clockOf))
+    return theirs.every((ms) => clocks.has(clockOf(ms)))
+  }
+  // Each of their runs is one of ours, counted: an assumed time compares dates (one run on each of the
+  // core's days — "every Monday" is not "hourly on Mondays"), an assumed meridiem the clock on 12 hours.
   const key = (ms: number) => {
     const w = zonedWall(ms, tz)
     const date = `${w.y}-${w.mo}-${w.d}`
-    const clock = `${meridiemAssumed ? w.h % 12 : w.h}:${w.mi}`
-    if (dayAssumed) return timeAssumed ? "any" : clock
-    return timeAssumed ? date : `${date} ${clock}`
+    return timeAssumed ? date : `${date} ${clockOf(ms)}`
   }
-  const allowed = new Set(ours.map(key))
-  if (dayAssumed && timeAssumed) return true
-  return theirs.every((ms) => allowed.has(key(ms)))
+  const allowed = new Map<string, number>()
+  for (const ms of ours) allowed.set(key(ms), (allowed.get(key(ms)) ?? 0) + 1)
+  for (const ms of theirs) {
+    const k = key(ms)
+    const left = allowed.get(k) ?? 0
+    if (left <= 0) return false
+    allowed.set(k, left - 1)
+  }
+  return true
 }
 
 function sortedUnique(list: number[]): number[] {

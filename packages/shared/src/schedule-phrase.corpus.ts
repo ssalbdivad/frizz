@@ -268,6 +268,28 @@ export const STRONG_QUALIFIERS = [
  *  qualify the schedule when they touch its phrase. */
 export const TOUCH_QUALIFIERS = ["if the build is green", "when CI is red", "while I'm working", "before standup", "after the deploy"]
 
+/** Qualifiers found by the break-it battery (fix round 1, 2026-10-06) that the two lists above missed: each
+ *  changes WHEN a schedule runs, and each was read as the task's first words while the phrase before it was
+ *  offered exact. Tried in the five placements the battery used (after the phrase, comma-joined after it,
+ *  ending the text, a clause before it, comma-joined at the end), in the box and in the mode. */
+export const BROAD_QUALIFIERS = [
+  // exclusions the strong list does not spell
+  "apart from Fridays", "aside from Fridays", "besides Fridays", "save Sundays", "save for Sundays", "excl. weekends", "w/o weekends",
+  "without weekends", "minus weekends", "bar Sundays", "omitting Sundays", "no Sundays", "Sundays off", "not Fridays", "never on Fridays",
+  "Fridays excluded", "weekdays only",
+  // a season, a month or a part of the calendar
+  "in October", "in December", "in Q4", "this fall", "over the summer", "in odd weeks", "on even weeks", "on odd weeks",
+  "every other week", "this month", "this quarter", "this year", "through Q4", "during the freeze",
+  // conditions and counts said another way
+  "once the migration lands", "in case the queue backs up", "as needed", "max 3 times", "at most 3 times", "x3", "(3x)",
+  "3 times max", "no more than 3 times",
+  // starts and stops said another way
+  "first run next week", "first run on Oct 20", "next 4 weeks", "the next 4 weeks", "over the next 4 weeks", "stopping Oct 30",
+  "no earlier than Oct 20",
+  // zones
+  "Berlin time", "London time", "Tokyo time", "in London", "Europe/Berlin", "America/Los_Angeles", "my time", "+0200",
+]
+
 // ---- the pinned cases ------------------------------------------------------------------------------------------
 
 export type CaseSource =
@@ -416,7 +438,7 @@ export const CASES: PinnedCase[] = [
   { text: "add a 'remind me tomorrow at 9' option to the snooze menu", source: "probe", edges: "none", anywhere: "exact inside «tomorrow at 9» FREQ=DAILY;COUNT=1;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 meridiem:9am/9pm" },
   { text: "bump the timeout from 5 minutes to 10 minutes", source: "probe", edges: "none" },
   { text: "the build has been failing every day this week, find out why", source: "probe", edges: "none", anywhere: "cue inside leftover «this week» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00" },
-  { text: "refactor the scheduler so every Monday at 9am isn't parsed as UTC", source: "probe", edges: "none", anywhere: "exact inside «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
+  { text: "refactor the scheduler so every Monday at 9am isn't parsed as UTC", source: "probe", edges: "none", anywhere: "cue inside condition «isn't parsed as UTC»", note: "A statement right after the phrase (fix round 1): the words are ABOUT the phrase, so the mode asks the model rather than read a rule." },
   { text: "look at the hourly metrics and tell me if anything is off", source: "probe", edges: "none" },
   { text: "on Friday we shipped a regression; bisect it", source: "probe", edges: "none" },
   { text: "every PR needs a changelog entry; add a CI check for that", source: "probe", edges: "event «every PR»" },
@@ -540,7 +562,7 @@ export const CASES: PinnedCase[] = [
   { text: "fix the parser for `every Monday at 9am`", source: "escape", edges: "none" },
   { text: "fix this:\n```\nevery Monday at 9am\n```", source: "escape", edges: "none" },
   { text: "/review every Monday at 9am", source: "escape", edges: "exact open «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
-  { text: "the job that runs every Monday at 9am is broken, fix it", source: "escape", edges: "none", anywhere: "exact inside «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
+  { text: "the job that runs every Monday at 9am is broken, fix it", source: "escape", edges: "none", anywhere: "cue inside condition «is broken»", note: "A statement right after the phrase (fix round 1): the mode asks the model rather than read a rule." },
   { text: "why is “every Monday at 9am” read as UTC", source: "escape", edges: "none" },
   { text: "\"every Monday at 9am", source: "escape", edges: "none" },
   { text: "see the doc.\n\nevery Monday at 9am triage new issues", source: "escape", edges: "none", anywhere: "exact inside «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },

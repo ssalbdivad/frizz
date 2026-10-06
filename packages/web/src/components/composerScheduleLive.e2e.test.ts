@@ -1,5 +1,6 @@
 import assert from "node:assert/strict"
 import test, { after, before } from "node:test"
+import { SCHEDULE_GRAMMAR_VERSION } from "@frizz/shared"
 
 // THE LIVE SCHEDULE READING in the real prompt box (plans/schedule-live-reading.md §15.2): the box reads its
 // own words for WHEN as they are typed, offers a schedule under a dotted underline and a ledge, and only an
@@ -289,7 +290,7 @@ test("3. Tab accepts with no model call, the send glyph swaps, and Enter creates
     assert.equal(body.rrule, "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0")
     assert.equal(body.prompt, "triage new issues")
     assert.equal(body.whenText, "every Monday at 9am")
-    assert.deepEqual(body.source, { kind: "local", grammar: 1 })
+    assert.deepEqual(body.source, { kind: "local", grammar: SCHEDULE_GRAMMAR_VERSION })
     assert.equal(body.titleAuto, true)
     assert.equal(body.title, "Triage issues")
     assert.equal(body.tz, NY)
