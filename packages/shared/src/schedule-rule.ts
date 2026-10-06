@@ -656,18 +656,45 @@ function formatterFor(tz: string): Intl.DateTimeFormat {
   return f
 }
 
+const WALL_TEXT = /^(\d{1,2})\/(\d{1,2})\/(\d{4}),? (\d{1,2}):(\d{2})$/
+
 /** The wall clock `tz` shows at `ms`, to the minute. */
 export function zonedWall(ms: number, tz: string): Wall {
-  const parts = formatterFor(tz).formatToParts(new Date(ms))
+  const f = formatterFor(tz)
+  // `format` is twice as fast as `formatToParts`, and this runs a few times per occurrence an engine
+  // walk visits — the live reading walks rules on keystrokes. An engine that prints another shape
+  // falls through to the parts.
+  const m = WALL_TEXT.exec(f.format(new Date(ms)))
+  if (m) {
+    const h = parseInt(m[4]!, 10)
+    return { y: parseInt(m[3]!, 10), mo: parseInt(m[1]!, 10), d: parseInt(m[2]!, 10), h: h === 24 ? 0 : h, mi: parseInt(m[5]!, 10) }
+  }
+  const parts = f.formatToParts(new Date(ms))
   const get = (type: string) => parseInt(parts.find((p) => p.type === type)?.value ?? "0", 10)
   const h = get("hour")
   return { y: get("year"), mo: get("month"), d: get("day"), h: h === 24 ? 0 : h, mi: get("minute") }
 }
 
+/** Offsets by zone and quarter-hour of UTC. Every offset in use since 1970 is a whole number of quarter
+ *  hours and changes at a local whole or half hour, so a transition always falls ON a quarter-hour
+ *  boundary and the offset is constant inside one. */
+const offsetCache = new Map<string, Map<number, number>>()
+const QUARTER_HOUR_MS = 900_000
+
 function offsetAt(ms: number, tz: string): number {
+  const bucket = Math.floor(ms / QUARTER_HOUR_MS)
+  let zone = offsetCache.get(tz)
+  const hit = ms >= 0 ? zone?.get(bucket) : undefined
+  if (hit !== undefined) return hit
   const w = zonedWall(ms, tz)
   const floored = ms - (((ms % 60_000) + 60_000) % 60_000)
-  return Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi) - floored
+  const offset = Date.UTC(w.y, w.mo - 1, w.d, w.h, w.mi) - floored
+  if (ms >= 0) {
+    if (!zone) offsetCache.set(tz, (zone = new Map()))
+    if (zone.size >= 50_000) zone.clear()
+    zone.set(bucket, offset)
+  }
+  return offset
 }
 
 /** The instant `tz`'s clock reads `wall`. A wall time that does not exist (the spring-forward gap) is
@@ -678,6 +705,8 @@ export function wallToInstant(wall: Wall, tz: string): number {
   // The two offsets in play near this wall time: the one before any transition and the one after.
   const before = offsetAt(naive - 14 * 3_600_000, tz)
   const after = offsetAt(naive + 14 * 3_600_000, tz)
+  // One offset across the 28 hours around it: no transition, so the wall time exists exactly once.
+  if (before === after) return naive - before
   const candidates = [...new Set([before, after])].map((off) => naive - off).sort((a, b) => a - b)
   for (const ms of candidates) {
     const got = zonedWall(ms, tz)
@@ -687,14 +716,21 @@ export function wallToInstant(wall: Wall, tz: string): number {
   return naive - before
 }
 
+const validZones = new Map<string, boolean>()
 export function isValidTimeZone(tz: string): boolean {
   if (!tz || !/^[A-Za-z0-9_+\-/]+$/.test(tz)) return false
-  try {
-    new Intl.DateTimeFormat("en-US", { timeZone: tz })
-    return true
-  } catch {
-    return false
+  // Building a formatter is the slow part of compiling a rule; the live reading compiles on keystrokes.
+  let ok = validZones.get(tz)
+  if (ok === undefined) {
+    try {
+      new Intl.DateTimeFormat("en-US", { timeZone: tz })
+      ok = true
+    } catch {
+      ok = false
+    }
+    if (validZones.size < 256) validZones.set(tz, ok)
   }
+  return ok
 }
 
 /** `YYYY-MM-DDTHH:MM` for the wall clock `tz` shows at `ms` — a schedule's default start. */
