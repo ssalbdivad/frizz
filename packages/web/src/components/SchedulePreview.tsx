@@ -17,7 +17,7 @@ import { spanUntil } from "../lib/activityTime.ts"
 
 /** Below this the first run is close enough to be worth the warning tone (§5.3). The spec names
  *  `text-warning`; the theme has no such token, and `attention` is its amber warning hue. */
-const SOON_MS = 15 * 60_000
+export const SOON_MS = 15 * 60_000
 
 export interface SchedulePreviewSpec {
   title: string
@@ -150,6 +150,26 @@ export function schedulePreviewModel(spec: SchedulePreviewSpec, nowMs: number, v
   }
 }
 
+/** The rule's words, the ASSUMED ones dim with their reason in the tooltip (§3.4) — the preview's echo, and the
+ *  prompt box's ledge and panel (ScheduleComposer.tsx). `capital` upper-cases the first letter, for a line
+ *  that leads with the rule ("Every Monday at 9am · next …"). */
+export function PreviewDescribe({ segments, capital = false }: { segments: readonly PreviewSegment[]; capital?: boolean }) {
+  return (
+    <>
+      {segments.map((seg, i) => {
+        const text = capital && i === 0 ? capitalize(seg.text) : seg.text
+        return seg.assumed ? (
+          <span key={i} data-assumed title={seg.tip} className="text-fg/45 transition-colors">
+            {text}
+          </span>
+        ) : (
+          <span key={i} className="transition-colors">{text}</span>
+        )
+      })}
+    </>
+  )
+}
+
 /** The browser's IANA zone — what the preview names a schedule's zone against. */
 export function browserZone(): string {
   try {
@@ -187,15 +207,7 @@ export function SchedulePreview({
       <p data-schedule-preview-echo className="text-pretty text-[13px] leading-5 text-fg">
         {spec.title.trim()}
         {" · "}
-        {model.describe.map((seg, i) =>
-          seg.assumed ? (
-            <span key={i} data-assumed title={seg.tip} className="text-fg/45 transition-colors">
-              {seg.text}
-            </span>
-          ) : (
-            <span key={i} className="transition-colors">{seg.text}</span>
-          ),
-        )}
+        <PreviewDescribe segments={model.describe} />
         {model.zone}
         {pending ? (
           <>

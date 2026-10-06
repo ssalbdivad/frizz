@@ -5,7 +5,7 @@ import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput
 import { rpc } from "../api/rpc.ts"
 import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
-import { Composer } from "./Composer.tsx"
+import { Composer, composerExcludeRuns } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
 import { EditorLine } from "./EditorLine.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
@@ -20,7 +20,7 @@ import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
 import { focusedEscapeClaim, handleDialogEscape, registerEscapeClaim } from "../lib/selectOverlay.ts"
-import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { draftKey, draftStore, mergeIntoDraft, useDraft, useProjectDir } from "../lib/drafts.ts"
 import { clearDispatchDraft } from "../lib/scheduleDraftState.ts"
 import type { ComposerContextItem } from "../lib/composerContext.ts"
 import { outgoingMessage } from "../lib/editorContext.ts"
@@ -29,7 +29,8 @@ import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
-import { useScheduleMode } from "./ScheduleComposer.tsx"
+import { useLiveSchedule } from "./ScheduleComposer.tsx"
+import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
@@ -200,8 +201,9 @@ function PromptForm({
 
   function submitLazy() {
     // Nothing saves lazily in schedule mode (plans/schedule-live-reading.md §9 I-2): the snail is disabled
-    // and ⌘⇧↵ consumed there (Composer `lazyBlocked`), and this is the gate behind both, like `submit`'s.
-    if (schedule.on) return
+    // and ⌘⇧↵ consumed there (Composer `lazyBlocked`); the key matrix says the same (lib/scheduleIntent.ts),
+    // and this gate stands behind both, like `submit`'s.
+    if (schedule.key("lazy") !== "lazy" || schedule.on) return
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: CreateLazyThreadInput = {
       // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
@@ -239,43 +241,74 @@ function PromptForm({
     dispatch.mutate(input)
   }
 
-  // SCHEDULE MODE (plans/scheduled-threads.md §3, ScheduleComposer.tsx): the same text, read for WHEN it
-  // should run and saved as a schedule on this box's project and profile, instead of started now. The text
-  // it reads is the prompt as a lazy save would write it — the chips, never the editor block — because a
-  // schedule's prompt is sent hours or weeks later, like a lazy thread's.
-  const schedule = useScheduleMode({
+  // THE LIVE SCHEDULE READING (plans/schedule-live-reading.md, ScheduleComposer.tsx): the box reads its own words
+  // for WHEN as they are typed — a dotted underline and a ledge under the box when a phrase at an edge reads
+  // as a schedule — and Tab, the glyph or ⌘⌥↵ turn on SCHEDULE MODE, where Enter creates the schedule on screen
+  // instead of starting the thread. It reads the PROSE the box shows (what every span indexes), never the code,
+  // chips, mentions or commands in it; what it would save is the prompt as a lazy save writes it — the chips,
+  // never the editor block — because a schedule's prompt is sent hours or weeks later, like a lazy thread's.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const { prose: promptProse, attachments: promptAttachments } = useMemo(() => splitComposerValue(prompt), [prompt])
+  const scheduleExclude = useMemo(() => composerExcludeRuns(promptProse, contextTokens), [promptProse, contextTokens])
+  const schedule = useLiveSchedule({
     // The mode is part of the draft, under its sibling key: it survives a remount and a reload, and the
     // page box and the `c` dialog over it — one draft — agree on it (§9 I-4).
     draftKey: draftKey.dispatchSchedule(projectDir),
-    text: prompt.trim() ? outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim() : "",
-    prose: prompt,
+    prose: promptProse,
+    exclude: scheduleExclude,
+    promptOf: (cut) => {
+      const value = joinComposerValue(cut, promptAttachments.map((a) => a.path))
+      return value.trim() ? outgoingMessage(expandedPrompt(value), stagedItems(promptKey), projectDir, false).trim() : ""
+    },
     profile: resolved
       ? { model: resolved.model, backend: resolved.backend, effort: (resolved.effort || undefined) as CreateScheduleInput["effort"] }
       : undefined,
     blocked: savingSettings || !!parseAccountAlias(prompt),
-    onCreated: () => {
-      takeContextItems(promptKey)
+    onCreated: (submittedProse) => {
+      // The draft became the schedule: the prompt, its chips, its pick and its mode leave the box in one
+      // commit. Words typed after Enter (during the mark's wash) stay; Undo puts the rest back exactly.
+      const { prose: now, attachments } = splitComposerValue(draftStore.get(promptKey))
+      const after = now === submittedProse ? "" : now.startsWith(submittedProse) ? now.slice(submittedProse.length).trimStart() : now
+      const taken = joinComposerValue(submittedProse, attachments.map((a) => a.path))
+      const items = takeContextItems(promptKey)
+      const pickRaw = draftStore.get(pickKey)
       clearDispatchDraft(projectDir)
+      if (after.trim()) draftStore.set(promptKey, after)
       onDispatched?.()
+      return () => {
+        mergeIntoDraft(promptKey, taken)
+        restoreContextItems(promptKey, items)
+        if (pickRaw && !draftStore.get(pickKey)) draftStore.set(pickKey, pickRaw)
+      }
+    },
+    focus: () => {
+      // This box, or — once the `c` dialog that created it has closed — the page's box on the same draft.
+      requestAnimationFrame(() => {
+        const el = rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")
+          ?? document.querySelector<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')
+        if (!el) return
+        el.focus({ preventScroll: true })
+        el.setSelectionRange(el.value.length, el.value.length)
+      })
     },
   })
 
-  // ESCAPE IN THE `c` DIALOG LEAVES THE MODE FIRST (plans/schedule-live-reading.md §7). Radix closes a dialog
+  // ESCAPE IN THE `c` DIALOG IS THE SCHEDULE'S FIRST (plans/schedule-live-reading.md §7). Radix closes a dialog
   // on Escape at the document's capture phase, before the box below ever sees the key, so the box's own
   // `onEscape` never ran there: one Escape threw away the dialog with the mode on. This claim is asked first
-  // (lib/selectOverlay.ts) and takes the key only while the mode is on AND focus is inside THIS box — the
-  // page box under the dialog shares the draft, and its mode, but not the key. The next Escape closes the
-  // dialog as before. On the page itself there is no dialog and `onEscape` is the whole story.
-  const rootRef = useRef<HTMLDivElement>(null)
-  const leaveScheduleRef = useRef(schedule.escape)
-  leaveScheduleRef.current = schedule.escape
-  useEffect(() => registerEscapeClaim(focusedEscapeClaim(() => rootRef.current, () => leaveScheduleRef.current())), [])
+  // (lib/selectOverlay.ts) and takes the key only while the schedule has something to undo with it (an offer
+  // to dismiss, the mode to leave) AND focus is inside THIS box — the page box under the dialog shares the
+  // draft, and its mode, but not the key. The next Escape closes the dialog as before. On the page itself
+  // there is no dialog and `onEscape` is the whole story.
+  const escapeScheduleRef = useRef(schedule.onEscape)
+  escapeScheduleRef.current = schedule.onEscape
+  useEffect(() => registerEscapeClaim(focusedEscapeClaim(() => rootRef.current, () => escapeScheduleRef.current())), [])
 
   function submit() {
-    if (schedule.on) {
-      schedule.submit()
-      return
-    }
+    // WHAT ENTER MEANS is the schedule's key matrix (lib/scheduleIntent.ts): in the mode it creates (or reads,
+    // or waits) and never dispatches (I-2); with an offer on screen it still starts the thread, as the ledge's
+    // `↵ Start now` says. ⌘↵ reaches here too, and is Enter in every state (§7).
+    if (schedule.key("enter") !== "dispatch" || schedule.on) return
     if (!prompt.trim() || !resolved || savingSettings) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
@@ -406,10 +439,14 @@ function PromptForm({
         onSaveLazy={submitLazy}
         onSchedule={schedule.toggle}
         schedule={schedule.glyph}
-        highlight={schedule.highlight}
-        onEscape={schedule.escape}
-        sendGlyph={schedule.on ? "schedule" : "send"}
-        lazyBlocked={schedule.on}
+        scheduleTitle={schedule.glyphTitle}
+        marks={schedule.marks}
+        onTab={schedule.onTab}
+        onInputEvent={schedule.onInputEvent}
+        onLazyBlocked={() => void schedule.key("lazy")}
+        onEscape={schedule.onEscape}
+        sendGlyph={schedule.sendGlyph}
+        lazyBlocked={schedule.lazyBlocked}
         contextTokens={contextTokens}
         contextSources={contextSources}
         header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
@@ -425,7 +462,17 @@ function PromptForm({
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
-      {schedule.panel}
+      {/* THE ONE SLOT under the box: the ledge, or the panel it grows into (ScheduleComposer.tsx). Pulled up
+          by the column's own gap so it hangs from the box's bottom edge; its row opens from 0fr, so the
+          list below slides 28px rather than jumping, and folds the same way. Always mounted: the live
+          region in it must exist before the line it announces. */}
+      <div
+        data-schedule-slot-wrap
+        className={`-mt-3 grid transition-[grid-template-rows] duration-[140ms] ease-out motion-reduce:transition-none ${schedule.slotOpen ? "grid-rows-[1fr] delay-[60ms]" : "grid-rows-[0fr]"}`}
+      >
+        <div className="min-h-0 overflow-hidden">{schedule.slot}</div>
+        <span className="sr-only" role="status" aria-live="polite">{schedule.announcement}</span>
+      </div>
       {dispatch.isError && (
         <span className="px-0.5 text-[11px] text-danger truncate">{(dispatch.error as Error).message}</span>
       )}

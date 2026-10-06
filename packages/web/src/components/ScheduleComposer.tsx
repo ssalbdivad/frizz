@@ -1,279 +1,1109 @@
-import { useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Loader2, Repeat } from "lucide-react"
-import type { CreateScheduleInput, InterpretScheduleResult, ScheduleView } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
-import { pushScheduleDrawer, showToast } from "../store.ts"
-import { startsWithRecurrence } from "../lib/scheduleHint.ts"
+import { Repeat, X } from "lucide-react"
+import {
+  SCHEDULE_GRAMMAR_VERSION,
+  SCHEDULE_PRESENCE_COPY,
+  SCHEDULE_READING_MOVED,
+  SCHEDULE_SPACING_COPY,
+  compileSchedule,
+  cutPhrase,
+  describeSchedule,
+  isScheduleOffer,
+  provisionalScheduleTitle,
+  readingsConsistent,
+  scheduleRefusalOf,
+  type CreateScheduleInput,
+  type PhraseReading,
+  type ScheduleView,
+  type Span,
+} from "@frizz/shared"
+import { projectRpc, rpc } from "../api/rpc.ts"
+import { flashScheduleCount, pushScheduleDrawer, showToast } from "../store.ts"
 import { invalidateSchedules } from "../lib/schedules.ts"
-import { useScheduleDraftState } from "../lib/scheduleDraftState.ts"
+import { useScheduleDraftState, writeScheduleDraftState } from "../lib/scheduleDraftState.ts"
+import { MODEL_IDLE_MS, dismissalEdge, useScheduleOffer, type BoxInputEvent, type Dismissed, type Published } from "../lib/scheduleOffer.ts"
+import { draftAfter, keyAction, sendGlyphOf, type ScheduleKey, type ScheduleUiState } from "../lib/scheduleIntent.ts"
+import {
+  MODEL_BUDGET_COPY,
+  MODEL_UNREACHABLE_COPY,
+  isModelVerdict,
+  modelReadKey,
+  modelRefusalCopy,
+  relocateModelReading,
+  useModelReader,
+  type ModelReadOk,
+  type ModelReader,
+} from "../lib/scheduleModelRead.ts"
+import { useNowMs } from "../lib/liveClock.ts"
+import { spanUntil } from "../lib/activityTime.ts"
+import { PreviewDescribe, SOON_MS, browserZone, schedulePreviewModel, type PreviewSegment } from "./SchedulePreview.tsx"
+import type { ComposerMark } from "./Composer.tsx"
 
-// THE PROMPT BOX'S SCHEDULE MODE (plans/scheduled-threads.md §3). The new-thread box has three ways out:
-// Enter starts the thread now, the snail writes it down for later, and this — the repeat glyph left of the
-// snail, or ⌘/Ctrl-Option-Enter — reads the text for WHEN it should run and shows it back as a schedule to
-// confirm. The server's interpreter finds the schedule phrase in the text ("every Monday at 9am") and
-// returns the rule it will fire, the echo built from that rule, and the prompt with the phrase cut out,
-// verbatim — never a model's rewrite of it. The box marks the phrase behind its own words so the human
-// sees which words became WHEN and that the rest is what will be sent.
+// THE PROMPT BOX'S LIVE SCHEDULE READING (plans/schedule-live-reading.md — the spec; §0 is the feature on one
+// screen). The new-thread box reads its own words for WHEN, as they are typed, with the local grammar
+// (`readSchedulePhrase`) and the box's publish policy (lib/scheduleOffer.ts):
 //
-// A READING BELONGS TO THE TEXT IT READ. Edit the text and the echo below it no longer describes it, so it
-// goes, and Enter reads the text again; Create schedule only ever saves the reading on screen.
+//   every Monday at 9am triage new issues          ← a dotted underline under the phrase (an OFFER)
+//   └ ↻ Every Monday at 9am · next Mon Oct 12, in 6d    ⇥ Schedule  ↵ Start now  ×   ← the LEDGE
+//
+// Nothing about Enter changes while an offer shows: it starts the thread, and the ledge says so. Tab (or the
+// glyph, ⌘⌥↵, the ledge's Schedule) ACCEPTS: the underline floods into the accent, the ledge grows into the
+// PANEL in the same pixels, the send button's arrow becomes the repeat glyph, and Enter creates the schedule.
+// Esc or × puts an offer away for that edge of the draft (§8), and it stays away through refinements.
+//
+// What the grammar declines — a condition, a vague count, an event offset, a zone, a typo — the model reads
+// (lib/scheduleModelRead.ts), and ONLY in the mode: never while an offer is merely showing (§4.2).
+//
+// THE SAFETY STORY is in three places, each with its tests:
+//   - lib/scheduleIntent.ts `keyAction` — every key in every state; this file and PromptForm only execute
+//     what it returns (I-1 nothing creates outside the mode, I-2 nothing dispatches or saves lazily in it,
+//     I-3 only an explicit act sets the mode);
+//   - lib/scheduleDraftState.ts — the mode is part of the draft (I-4);
+//   - T3 here (`commit`): Enter re-reads the text NOW and creates only what is on screen (I-6, I-7), and the
+//     server re-derives a local reading with the same grammar before it writes anything (§10.1).
 
-/** What the box passes in: the text to read (the prompt as it would be sent), the profile to snapshot,
- *  and what to do once the schedule exists (clear the draft, close a phone sheet). */
-export interface ScheduleModeInput {
-  /** The key the mode is kept under (`draftKey.dispatchSchedule`, lib/scheduleDraftState.ts): a sibling of
-   *  the prompt's own, so the mode lives and dies with the draft and every box on it reads one value. */
+/** What the box hands in. */
+export interface LiveScheduleInput {
+  /** The mode's key (`draftKey.dispatchSchedule`, lib/scheduleDraftState.ts): a sibling of the prompt's own,
+   *  so the mode lives and dies with the draft and every box on it reads one value. */
   draftKey: string
-  /** The prompt as it would be sent — chips serialized, user commands expanded — or "" when empty. */
-  text: string
-  /** The prose the box shows, for marking the phrase. */
+  /** The prose the box SHOWS (no attachment lines) — what every span indexes. */
   prose: string
+  /** Runs never read: code, staged context tokens, mentions, commands (Composer `composerExcludeRuns`). */
+  exclude: readonly Span[]
+  /** The prompt a schedule would save for a CUT prose — chips serialized, user commands expanded,
+   *  attachments rejoined — exactly as a lazy save writes it. "" when nothing is left. */
+  promptOf: (cutProse: string) => string
   /** The model/effort the box would dispatch on. Undefined while the profile is loading. */
   profile: { model: string; backend: CreateScheduleInput["backend"]; effort: CreateScheduleInput["effort"] } | undefined
   /** Whether the box may act at all (a settings write in flight, an account alias typed). */
   blocked: boolean
-  onCreated: () => void
+  /** The draft became a schedule: take it out of the box (`submittedProse` is what was read; anything typed
+   *  after it stays). Returns how to put it back, for Undo. */
+  onCreated: (submittedProse: string) => () => void
+  /** Focus the box (this one, or the page's when this one is gone), caret at the end. */
+  focus: () => void
 }
 
-export interface ScheduleMode {
+/** What the caller still has to do for a key, after this hook did the schedule's half. */
+export type ScheduleKeyOutcome = "dispatch" | "lazy" | "native" | "blur" | "handled"
+
+export interface LiveSchedule {
   on: boolean
-  /** How the box's schedule glyph reads. */
+  state: ScheduleUiState
+  /** How the rail glyph reads (§5.2). */
   glyph: "off" | "hint" | "on"
-  /** The phrase's span in the prose, while the reading on screen is the text's. */
-  highlight: { start: number; end: number } | undefined
-  /** The glyph and ⌘⌥⏎: into the mode (reading the text at once if there is any), or out of it. */
+  /** The glyph's tooltip while an offer shows ("Schedule every Monday at 9am (Tab)"); else the Composer's. */
+  glyphTitle: string | undefined
+  marks: ComposerMark[]
+  /** The ledge under the box (S1–S3), or null. */
+  ledge: ReactNode | null
+  /** The panel (the mode), or null. The ledge and the panel are ONE element in one slot, so the ledge grows
+   *  into the panel; `slot` is whichever is showing, kept a moment while it folds away. */
+  panel: ReactNode | null
+  slot: ReactNode | null
+  slotOpen: boolean
+  /** A polite live-region line, once per offer appearance (§5.3). */
+  announcement: string
+  sendGlyph: "send" | "schedule"
+  lazyBlocked: boolean
+  /** Ask the §7 matrix what a key does here, and do the schedule's half of it. */
+  key: (k: ScheduleKey) => ScheduleKeyOutcome
+  onTab: () => boolean
+  onEscape: () => boolean
   toggle: () => void
-  /** Enter in the mode: read the text, or — when the reading on screen is the text's — create it. */
-  submit: () => void
-  /** Escape: leave the mode. True when it was on. */
-  escape: () => boolean
-  panel: React.ReactNode
+  onInputEvent: (e: BoxInputEvent) => void
 }
 
-type Reading = { text: string; result: InterpretScheduleResult }
+// ---- copy (§5) --------------------------------------------------------------------------------------------------
 
-// THE MODE IS PART OF THE DRAFT (lib/scheduleDraftState.ts, plans/schedule-live-reading.md §9 I-4). The box
-// is remounted by things the human never sees — a layout pass across the phone breakpoint, a viewport change —
-// and its draft comes back while plain component state would not: the text stayed, the panel vanished, and
-// the next Enter STARTED a thread from text that was being set up as a schedule (seen in a headless run,
-// 2026-10-05, where a screenshot's viewport override did exactly this and dispatched a real worker). So the
-// mode is read from the draft store, beside the prompt: it survives a remount and a same-tab reload, the
-// page box and the `c` dialog over it agree, and it is cleared in the same commit as the prompt.
-//
-// The READING is only a cache of what the server said about some text. It is kept in memory for the tab, so
-// a remount does not cost a second read, but never in the draft: a reload in the mode reads the text again.
-const readings = new Map<string, Reading>()
+const NOTHING_TO_DO = "Say what it should do as well, like “every Monday at 9am triage new issues”."
+const NO_TASK_LINE = "Say what each run should do."
+const EMPTY_COPY = "Type what to do and when it runs, like “every weekday at 9am triage new issues”."
+const EVENT_COPY = "Schedules run on the clock. Try “every hour, check whether the build failed”."
+const STALE_COPY = "Frizz has updated since this page loaded. Reload the page to create this schedule."
+const UPDATED_FOR_TIME = "Updated for the current time. Press Enter to create."
+const UPDATED_TO_TYPED = "Updated to what you typed. Press Enter to create."
 
-export function useScheduleMode({ draftKey, text, prose, profile, blocked, onCreated }: ScheduleModeInput): ScheduleMode {
+// ---- timing (§6) --------------------------------------------------------------------------------------------------
+
+/** A model wait shows its shimmer only after this long, so a cached or fast answer never flashes it. */
+const SHIMMER_DELAY_MS = 250
+/** Create reads "Creating…" only once the request has taken this long. */
+const CREATING_LABEL_MS = 150
+/** The accent mark's wash, bright and back, before the box clears. */
+const WASH_MS = 220
+/** How long a ledge or panel that went away stays mounted while its slot folds. */
+const SLOT_LINGER_MS = 160
+/** The created toast's life: the Undo window. */
+const UNDO_WINDOW_MS = 8_000
+
+/** The dismissals as they were before the mode was entered, per draft — what Undo restores (§1.3.1). Kept for
+ *  the tab only: a reload in the mode loses it, and Undo then re-arms every edge, which is the safe side. */
+const beforeAccept = new Map<string, Dismissed>()
+
+type Exact = Extract<PhraseReading, { kind: "exact" }>
+type Cue = Extract<PhraseReading, { kind: "cue" }>
+type CueCore = NonNullable<Cue["core"]>
+
+/** What the panel shows for the text in the mode. */
+export type ModeView =
+  | { kind: "empty" }
+  /** M1, read locally. */
+  | { kind: "local"; reading: Exact; prompt: string; title: string }
+  /** M1, the model's reading, relocated onto the prose as it is now. `text` is the text the model READ, which
+   *  its offsets index (a reading carried over a task-only edit read an older text). */
+  | { kind: "model"; result: ModelReadOk; text: string; span: Span; prompt: string; core?: Span }
+  /** M2: the model is reading (or about to, after the idle). */
+  | { kind: "reading"; core?: CueCore; quoted?: string; span?: Span; unread?: Span; edited: boolean; prompt?: string }
+  /** M3: the model's reading is not a faithful reading of the grammar's core. */
+  | { kind: "disagree"; result: ModelReadOk; span: Span; core: Span; ours: string; theirs: string; corePhrase: string; prompt: string }
+  /** M4: refused or blocked. `rereads`: Enter reads the text again (it changed, or the read itself failed). A
+   *  local reading with no task left keeps its `reading` on screen above the copy. */
+  | { kind: "copy"; copy: string; rereads: boolean; mark?: Span; reading?: Exact }
+
+/** Words the model reads: a cue with a task left once its phrase is cut, or text the grammar reads as no
+ *  schedule at all. Never an exact reading, an event, a presence, an ambiguous word or a spacing violation
+ *  (I-8). */
+export function needsModel(p: Published, promptOf: (cut: string) => string): boolean {
+  const r = p.reading
+  if (!p.prose.trim()) return false
+  if (r.kind === "none") return true
+  return r.kind === "cue" && promptOf(cutPhrase(p.prose, r.span)) !== ""
+}
+
+function describeRule(rrule: string, dtstart: string, tz: string): string {
+  const c = compileSchedule({ rrule, dtstart, tz })
+  return c.ok ? describeSchedule(c.value) : rrule
+}
+
+const capitalize = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s)
+const firstLine = (s: string) => s.split("\n")[0] ?? ""
+
+/** The panel's view of the text (pure, given the reader's state). */
+export function modeViewOf(a: {
+  prose: string
+  shown: Published | null
+  reader: Pick<ModelReader, "view" | "lastAnswer">
+  tz: string
+  nowMs: number
+  promptOf: (cut: string) => string
+  stale: string | null
+  near: number | undefined
+  hadModel: boolean
+}): ModeView {
+  const { prose, shown } = a
+  if (!prose.trim()) return { kind: "empty" }
+  if (a.stale !== null && a.stale === prose) return { kind: "copy", copy: STALE_COPY, rereads: false }
+  if (!shown) return { kind: "reading", edited: false }
+  const r = shown.reading
+  // The words on screen were read before a half-typed word: Enter reads them again (§7, M4).
+  const changed = shown.read !== prose
+  if (r.kind === "exact") {
+    if (r.spacing) return { kind: "copy", copy: SCHEDULE_SPACING_COPY, rereads: changed, mark: r.span }
+    const preview = schedulePreviewModel({ title: "", rrule: r.rrule, dtstart: r.dtstart, tz: a.tz, assumed: r.assumed }, a.nowMs, a.tz)
+    if (!preview.ok) return { kind: "copy", copy: preview.error, rereads: changed, mark: r.span }
+    const prompt = a.promptOf(cutPhrase(prose, r.span))
+    if (!prompt) return { kind: "copy", copy: NO_TASK_LINE, rereads: changed, reading: r }
+    return { kind: "local", reading: r, prompt, title: provisionalScheduleTitle(prompt) }
+  }
+  if (r.kind === "ambiguous") return { kind: "copy", copy: r.copy, rereads: changed, mark: r.span }
+  if (r.kind === "presence") return { kind: "copy", copy: SCHEDULE_PRESENCE_COPY, rereads: changed }
+  if (r.kind === "event") return { kind: "copy", copy: EVENT_COPY, rereads: changed }
+  if (r.kind === "cue" && !a.promptOf(cutPhrase(prose, r.span))) return { kind: "copy", copy: NOTHING_TO_DO, rereads: changed }
+
+  // A cue, or no schedule the grammar can see: the model's. Its answer for these exact words, or the last
+  // answer still standing over an edit to the task alone (§4.2: a model reading belongs to its phrase).
+  const mv = a.reader.view(prose)
+  let answer: { result: ModelReadOk; text: string; span: Span; prompt: string } | undefined
+  if (mv.status === "answered" && mv.result.ok) {
+    // The answer for exactly these words: its own offsets, clamped to them.
+    const span = { start: Math.min(mv.result.phraseStart, prose.length), end: Math.min(mv.result.phraseEnd, prose.length) }
+    answer = { result: mv.result, text: prose, span, prompt: a.promptOf(cutPhrase(prose, span)) }
+  } else if (mv.status === "none") {
+    const last = a.reader.lastAnswer()
+    if (last?.result.ok) {
+      const at = relocateModelReading(prose, { text: last.text, result: last.result }, a.near)
+      if (at) answer = { result: last.result, text: last.text, span: at.span, prompt: a.promptOf(at.prompt) }
+    }
+  }
+  const core = r.kind === "cue" ? r.core : undefined
+  if (answer) {
+    if (!answer.prompt) return { kind: "copy", copy: NOTHING_TO_DO, rereads: changed }
+    // A model reading over a local core must be a faithful reading of it (§4.3, I-10).
+    if (core && !readingsConsistent({ ...core, tz: a.tz }, { rrule: answer.result.rrule, dtstart: answer.result.dtstart, tz: answer.result.tz, span: answer.span }, a.nowMs)) {
+      return {
+        kind: "disagree",
+        result: answer.result,
+        span: answer.span,
+        core: core.span,
+        ours: describeRule(core.rrule, core.dtstart, a.tz),
+        theirs: describeRule(answer.result.rrule, answer.result.dtstart, answer.result.tz),
+        corePhrase: prose.slice(core.span.start, core.span.end),
+        prompt: answer.prompt,
+      }
+    }
+    return { kind: "model", result: answer.result, text: answer.text, span: answer.span, prompt: answer.prompt, ...(core ? { core: core.span } : {}) }
+  }
+  if (mv.status === "failed") return { kind: "copy", copy: MODEL_UNREACHABLE_COPY, rereads: true }
+  if (mv.status === "budget") return { kind: "copy", copy: MODEL_BUDGET_COPY, rereads: true }
+  if (mv.status === "answered" && !mv.result.ok) return { kind: "copy", copy: modelRefusalCopy(mv.result), rereads: changed || !isModelVerdict(mv.result) }
+  return {
+    kind: "reading",
+    edited: a.hadModel,
+    ...(core ? { core } : {}),
+    ...(r.kind === "cue" ? { quoted: prose.slice(r.unread.start, r.unread.end), span: r.span, unread: r.unread, prompt: a.promptOf(cutPhrase(prose, r.span)) } : {}),
+  }
+}
+
+/** The §5 state the keys read. */
+export function uiStateOf(on: boolean, creating: boolean, offer: Published | null, view: ModeView | null): ScheduleUiState {
+  if (!on) {
+    const r = offer?.reading
+    if (!r) return { name: "S0" }
+    return { name: r.kind === "exact" ? "S1" : r.kind === "cue" ? "S2" : r.kind === "ambiguous" ? "S3" : "S0" }
+  }
+  if (creating) return { name: "creating" }
+  switch (view?.kind) {
+    case undefined:
+    case "empty":
+      return { name: "M5" }
+    case "local":
+    case "model":
+      return { name: "M1" }
+    case "reading":
+      return { name: "M2" }
+    case "disagree":
+      return { name: "M3" }
+    case "copy":
+      return { name: "M4", changed: view.rereads }
+  }
+}
+
+/** What Enter in M1 does with the text as it reads NOW (T3, §10.1): create the reading on screen when the fresh
+ *  read is that same reading (span, rule, start — I-7), show the fresh one instead when it differs, or read
+ *  again. A model reading is created only while it still stands over the text (its phrase untouched). */
+export type T3Decision =
+  | { act: "create-local"; reading: Exact; prompt: string }
+  | { act: "create-model"; result: ModelReadOk; prompt: string }
+  | { act: "show"; notice: string }
+  | { act: "reread" }
+export function t3(a: { view: ModeView | null; shownRead: string | undefined; fresh: Published; promptOf: (cut: string) => string }): T3Decision {
+  const { view, fresh } = a
+  const r = fresh.reading
+  if (r.kind === "exact" && !r.spacing) {
+    const onScreen = view?.kind === "local" ? view.reading : undefined
+    if (!onScreen || onScreen.span.start !== r.span.start || onScreen.span.end !== r.span.end || onScreen.rrule !== r.rrule || onScreen.dtstart !== r.dtstart) {
+      // Unchanged words that read differently now are the clock's doing (a minute rolled over, a midnight
+      // passed); otherwise an edit not yet published caused it.
+      return { act: "show", notice: a.shownRead === fresh.prose ? UPDATED_FOR_TIME : UPDATED_TO_TYPED }
+    }
+    const prompt = a.promptOf(cutPhrase(fresh.prose, r.span))
+    return prompt ? { act: "create-local", reading: r, prompt } : { act: "reread" }
+  }
+  if (view?.kind === "model" && (r.kind === "cue" || r.kind === "none")) {
+    const at = relocateModelReading(fresh.prose, { text: view.text, result: view.result }, view.span.start)
+    const prompt = at ? a.promptOf(at.prompt) : ""
+    if (at && prompt) return { act: "create-model", result: view.result, prompt }
+  }
+  return { act: "reread" }
+}
+
+/** The glyph lights (`hint`, the text's own ink) with no offer on screen when the text still reads as a
+ *  schedule the box will not offer (§5.2): a dismissed edge, a spacing violation, a close-edge cue, a vetoed
+ *  close edge. */
+function hintsWithoutOffer(last: Published | null, dismissed: Dismissed): boolean {
+  const r = last?.reading
+  if (!r) return false
+  if (isScheduleOffer(r)) {
+    const edge = dismissalEdge(r)
+    return (edge === "open" && !!dismissed.open) || (edge === "close" && !!dismissed.close)
+  }
+  if (r.kind === "exact") return (r.edge === "open" || r.edge === "close") && !r.once && (!!r.spacing || !!r.veto)
+  return r.kind === "cue" && r.edge === "close"
+}
+
+/** The offer's dotted underline, cut where it grew, so a phrase that extends draws only its new tail. */
+type OfferCuts = { start: number; end: number; cuts: number[] }
+function nextCuts(prev: OfferCuts | null, span: Span): OfferCuts {
+  if (prev && prev.start === span.start) {
+    if (span.end > prev.end) return { start: span.start, end: span.end, cuts: [...prev.cuts, prev.end] }
+    return { start: span.start, end: span.end, cuts: prev.cuts.filter((c) => c < span.end) }
+  }
+  return { start: span.start, end: span.end, cuts: [] }
+}
+
+export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
+  const { draftKey, prose, exclude, promptOf, profile, blocked } = input
   const queryClient = useQueryClient()
   const [mode, setMode] = useScheduleDraftState(draftKey)
   const on = mode.on
-  const [reading, setReadingState] = useState<Reading | null>(() => readings.get(draftKey) ?? null)
-  const setReading = (next: Reading | null) => {
-    if (next) readings.set(draftKey, next)
-    else readings.delete(draftKey)
-    setReadingState(next)
-  }
-  const setOn = (next: boolean) => {
-    setMode((prev) => ({ ...prev, on: next }))
-    if (!next) setReading(null)
-  }
-  // The mode can go off from ANOTHER box on the key (the `c` dialog created the schedule and cleared the
-  // draft under the page box). A reading held from before must not come back with the next mode-on and let
-  // Enter create from it before the text is read again, so it goes whenever the mode is off — during render,
-  // React's pattern for state derived from a prop, never an effect a stale frame could act before.
-  if (!on && reading) {
-    readings.delete(draftKey)
-    setReadingState(null)
-  }
-  const interpret = useMutation({
-    mutationFn: (read: string) => rpc.interpretSchedule({ text: read, tz: browserZone() }),
-    onSuccess: (result, read) => setReading({ text: read, result }),
-    onError: (error, read) => setReading({ text: read, result: { ok: false, error: `Couldn't read that: ${(error as Error).message.slice(0, 120)}` } }),
+  const tz = browserZone()
+  const nowMs = useNowMs()
+  const offer = useScheduleOffer({ prose, exclude, mode: on, dismissed: mode.dismissed, tz })
+  const reader = useModelReader({
+    interpret: (text) => rpc.interpretSchedule({ text, tz }),
+    keyOf: (text, at) => modelReadKey({ tz, nowMs: at, text }),
   })
-  const create = useMutation({
-    mutationFn: (input: CreateScheduleInput) => rpc.createSchedule(input),
-    onSuccess: (view: ScheduleView) => {
-      setOn(false)
-      setReading(null)
-      onCreated()
-      invalidateSchedules(queryClient)
-      showToast(`${view.title} scheduled`, {
-        ...(view.nextLine ? { detail: view.nextLine } : {}),
-        action: { label: "Open", run: () => pushScheduleDrawer(view.id, view.projectId) },
-      })
-    },
-    onError: (error) => showToast(`Could not create the schedule: ${(error as Error).message.slice(0, 100)}`),
+  const [notice, setNotice] = useState<{ prose: string; copy: string } | null>(null)
+  const [stale, setStale] = useState<string | null>(null)
+  const movedOnce = useRef<string | null>(null)
+  const [shake, setShake] = useState(0)
+  const [flash, setFlash] = useState(0)
+  const [committing, setCommitting] = useState(false)
+  const hadModel = useRef(false)
+  const modelNear = useRef<number | undefined>(undefined)
+  const latest = useRef(input)
+  latest.current = input
+
+  // A dismissed edge that re-armed (its phrase deleted) is written back to the draft — the dismissal, never
+  // the mode (I-3).
+  const effective = offer.dismissed
+  useEffect(() => {
+    if (!!effective.open === !!mode.dismissed.open && !!effective.close === !!mode.dismissed.close) return
+    setMode((m) => ({ ...m, dismissed: { ...(m.dismissed.open && effective.open ? { open: true as const } : {}), ...(m.dismissed.close && effective.close ? { close: true as const } : {}) } }))
+  }, [effective.open, effective.close, mode.dismissed.open, mode.dismissed.close])
+
+  /** The last model answer, still standing over the text as it is now (a task-only edit keeps it). */
+  const standingAnswer = (text: string) => {
+    const last = reader.lastAnswer()
+    return last?.result.ok ? relocateModelReading(text, { text: last.text, result: last.result }, modelNear.current) : undefined
+  }
+
+  // THE MODEL, in the mode only, after MODEL_IDLE_MS with no input, for words the grammar declines (§4.2 rule
+  // 2). The words are read fresh when the timer fires; an answer that still stands over a task-only edit is
+  // not asked again.
+  useEffect(() => {
+    if (!on || !prose.trim() || blocked) {
+      reader.cancelQueued()
+      return
+    }
+    const t = setTimeout(() => {
+      const fresh = offer.readNow(true)
+      if (needsModel(fresh, latest.current.promptOf) && !standingAnswer(fresh.prose)) reader.request(fresh.prose)
+      else reader.cancelQueued()
+    }, MODEL_IDLE_MS)
+    return () => clearTimeout(t)
+  }, [prose, on, blocked])
+
+  const view = on
+    ? modeViewOf({ prose, shown: offer.shown, reader, tz, nowMs, promptOf, stale, near: modelNear.current, hadModel: hadModel.current })
+    : null
+  useEffect(() => {
+    if (!view) {
+      hadModel.current = false
+      return
+    }
+    if (view.kind === "model" || view.kind === "disagree") {
+      hadModel.current = true
+      modelNear.current = view.span.start
+    } else if (view.kind !== "reading") hadModel.current = false
   })
 
-  const current = reading && reading.text === text ? reading : null
-  const read = () => {
-    if (!text || blocked || interpret.isPending) return
-    interpret.mutate(text)
+  // ---- create (T3, §10.1) -------------------------------------------------------------------------------------
+
+  type CreateJob = { input: CreateScheduleInput; prose: string; local: boolean; startedAt: number; dismissed: Dismissed }
+  const create = useMutation({
+    mutationFn: (job: CreateJob) => rpc.createSchedule(job.input),
+    onSuccess: (created: ScheduleView, job) => {
+      setCommitting(true)
+      // The mark washes bright and back first (§5.11), then the box clears and the panel folds as the text
+      // leaves — the words read as having become the schedule.
+      setTimeout(() => {
+        setCommitting(false)
+        movedOnce.current = null
+        setNotice(null)
+        const restore = latest.current.onCreated(job.prose)
+        invalidateSchedules(queryClient)
+        flashScheduleCount(created.projectId)
+        showToast(`${created.title} scheduled`, {
+          detail: toastDetail(created, Date.now()),
+          actions: [
+            { label: "Undo", run: () => undo(created, restore, job.dismissed) },
+            { label: "Open", run: () => pushScheduleDrawer(created.id, created.projectId) },
+          ],
+          duration: UNDO_WINDOW_MS,
+        })
+      }, Math.max(0, WASH_MS - (Date.now() - job.startedAt)))
+    },
+    onError: (error, job) => {
+      const refusal = scheduleRefusalOf(error)
+      // The server read the phrase differently at its clock (a minute rolled over, a midnight passed): read it
+      // again here and show that. A second refusal of the same words means the two cannot agree from this
+      // page, and so does a grammar version skew: the page has to reload (§10.1, §1.3.4).
+      if (refusal === SCHEDULE_READING_MOVED && job.local && movedOnce.current !== job.prose) {
+        movedOnce.current = job.prose
+        offer.force()
+        setNotice({ prose: job.prose, copy: UPDATED_FOR_TIME })
+        return
+      }
+      if (refusal) {
+        setNotice(null)
+        setStale(job.prose)
+        return
+      }
+      showToast(`Could not create the schedule: ${(error as Error).message.slice(0, 100)}`)
+    },
+  })
+  const creating = create.isPending || committing
+  const creatingLabel = useDelayedTrue(create.isPending, CREATING_LABEL_MS)
+
+  /** Undo (§5.11, I-13): delete the schedule, then put back exactly what the accept took — the text merged
+   *  with anything typed since, the chips, the pick, the mode off and the dismissals as they were. The offer
+   *  re-derives from the text, so `⇥ Schedule  ↵ Start now` is back on screen. */
+  const undo = (created: ScheduleView, restore: () => void, dismissed: Dismissed) => {
+    void projectRpc(created.projectId).deleteSchedule({ id: created.id }).then(
+      () => {
+        invalidateSchedules(queryClient, created.id)
+        restore()
+        writeScheduleDraftState(draftKey, { v: 1, on: false, dismissed })
+        latest.current.focus()
+      },
+      (error: unknown) => showToast(`Could not undo: ${(error as Error).message.slice(0, 100)}`),
+    )
   }
-  const confirm = () => {
-    if (!current?.result.ok || !profile || blocked || create.isPending) return
-    const r = current.result
-    if (!r.prompt.trim()) return
-    create.mutate({
-      title: r.title,
-      prompt: r.prompt,
-      whenText: r.whenText,
-      rrule: r.rrule,
-      dtstart: r.dtstart,
-      tz: r.tz,
-      ...(r.condition ? { condition: r.condition } : {}),
-      // The box's own pick, snapshotted: changing the default later never moves an existing schedule.
+
+  /** Enter in M1 (T3): read the text again NOW, and create only if that is what the panel shows. */
+  const commit = () => {
+    if (blocked || !profile || creating) return
+    const fresh = offer.readNow(true)
+    const decision = t3({ view, shownRead: offer.shown?.read, fresh, promptOf })
+    const base = { prose: fresh.prose, startedAt: Date.now(), dismissed: beforeAccept.get(draftKey) ?? {} }
+    const pick = {
       model: profile.model,
       ...(profile.backend ? { backend: profile.backend } : {}),
       ...(profile.effort ? { effort: profile.effort } : {}),
-    })
-  }
-  const leave = () => {
-    setOn(false)
-    setReading(null)
+    }
+    switch (decision.act) {
+      case "show":
+        // Something else is on screen than what the text reads now: show the fresh reading and create
+        // nothing (I-7). The next Enter creates it.
+        offer.force(fresh)
+        setNotice({ prose: fresh.prose, copy: decision.notice })
+        return
+      case "create-local": {
+        const r = decision.reading
+        create.mutate({
+          ...base,
+          local: true,
+          input: {
+            title: provisionalScheduleTitle(decision.prompt),
+            titleAuto: true,
+            prompt: decision.prompt,
+            whenText: r.phrase.trim(),
+            rrule: r.rrule,
+            dtstart: r.dtstart,
+            tz,
+            source: { kind: "local", grammar: SCHEDULE_GRAMMAR_VERSION },
+            ...pick,
+          },
+        })
+        return
+      }
+      case "create-model": {
+        const m = decision.result
+        create.mutate({
+          ...base,
+          local: false,
+          input: {
+            title: m.title,
+            prompt: decision.prompt,
+            whenText: m.whenText,
+            rrule: m.rrule,
+            dtstart: m.dtstart,
+            tz: m.tz,
+            ...(m.condition ? { condition: m.condition } : {}),
+            ...pick,
+          },
+        })
+        return
+      }
+      case "reread":
+        reread(fresh)
+    }
   }
 
-  const highlight = (() => {
-    if (!on || !current?.result.ok) return undefined
-    const at = prose.indexOf(current.result.phrase)
-    return at >= 0 && current.result.phrase ? { start: at, end: at + current.result.phrase.length } : undefined
-  })()
+  /** Read the text again now and put it on screen; the model reads what the grammar declines (an explicit
+   *  read: never budgeted). */
+  const reread = (fresh = offer.readNow(true)) => {
+    offer.force(fresh)
+    setStale(null)
+    if (!blocked && needsModel(fresh, promptOf) && !standingAnswer(fresh.prose)) reader.request(fresh.prose, { explicit: true })
+  }
 
-  const panel = on ? (
-    <ScheduleEchoPanel
-      pending={interpret.isPending}
-      creating={create.isPending}
-      reading={current?.result}
-      stale={reading !== null && current === null}
-      empty={!text}
-      onCreate={confirm}
-      onLeave={leave}
+  // ---- the explicit acts ------------------------------------------------------------------------------------
+
+  const enterMode = () => {
+    beforeAccept.set(draftKey, mode.dismissed)
+    reader.reset()
+    hadModel.current = false
+    movedOnce.current = null
+    setNotice(null)
+    setStale(null)
+    // Entering explicitly re-arms every edge (§8); Undo puts them back as they were.
+    setMode((m) => draftAfter("enter-mode", m))
+    // Read now, in the mode's scope: a cue or dark text goes to the model at once (§4.2 rule 1).
+    const fresh = offer.readNow(true)
+    if (!blocked && needsModel(fresh, promptOf)) reader.request(fresh.prose, { explicit: true })
+  }
+
+  /** The edge "not a schedule" applies to: the offer at an edge, else the mode's own reading at one. */
+  const edgeToDismiss = () => {
+    const edges = offer.readNow(false).reading
+    return isScheduleOffer(edges) ? dismissalEdge(edges) : dismissalEdge(offer.shown?.reading)
+  }
+  const leave = (dismiss: boolean) => {
+    const edge = dismiss ? edgeToDismiss() : undefined
+    reader.cancelQueued()
+    setNotice(null)
+    setMode((m) => draftAfter(dismiss ? "leave-dismiss" : "leave", m, edge))
+  }
+  const shownOffer = !on ? offer.shown : null
+  const dismiss = () => {
+    const edge = dismissalEdge(shownOffer?.reading)
+    if (edge) setMode((m) => draftAfter("dismiss", m, edge))
+  }
+
+  const state = uiStateOf(on, creating, shownOffer, view)
+  const key = (k: ScheduleKey): ScheduleKeyOutcome => {
+    const action = keyAction(state, k)
+    switch (action) {
+      case "dispatch":
+      case "lazy":
+      case "native":
+      case "blur":
+        return action
+      case "accept":
+      case "enter-mode":
+        enterMode()
+        return "handled"
+      case "leave":
+        leave(false)
+        return "handled"
+      case "leave-dismiss":
+        leave(true)
+        return "handled"
+      case "dismiss":
+        dismiss()
+        return "handled"
+      case "create":
+        commit()
+        return "handled"
+      case "read":
+        reread()
+        return "handled"
+      case "nudge":
+        setShake((n) => n + 1)
+        return "handled"
+      case "noop-flash":
+        setFlash((n) => n + 1)
+        return "handled"
+      case "noop":
+        return "handled"
+    }
+  }
+
+  // ---- what the box draws -------------------------------------------------------------------------------------
+
+  const cutsRef = useRef<OfferCuts | null>(null)
+  const marks: ComposerMark[] = []
+  if (shownOffer) {
+    const r = shownOffer.reading
+    const dotted = r.kind === "exact" ? r.span : r.kind === "cue" ? r.core?.span : undefined
+    if (dotted) {
+      const cuts = nextCuts(cutsRef.current, dotted)
+      cutsRef.current = cuts
+      const edges = [cuts.start, ...cuts.cuts, cuts.end]
+      for (let i = 0; i + 1 < edges.length; i++) marks.push({ start: edges[i]!, end: edges[i + 1]!, tone: "offer", key: `m:${edges[i]}` })
+    } else cutsRef.current = null
+    if (r.kind === "cue") marks.push(r.core ? { start: r.unread.start, end: r.unread.end, tone: "unread", key: `u:${r.unread.start}` } : { start: r.span.start, end: r.span.end, tone: "unread", key: `u:${r.span.start}` })
+    if (r.kind === "ambiguous") marks.push({ start: r.span.start, end: r.span.end, tone: "unread", key: `u:${r.span.start}` })
+  } else {
+    cutsRef.current = null
+  }
+  if (view) {
+    const fill = creating ? "wash" : "accepted"
+    if (view.kind === "local") marks.push({ ...view.reading.span, tone: fill, key: `m:${view.reading.span.start}` })
+    if (view.kind === "model") {
+      const core = view.core
+      if (core) {
+        marks.push({ ...core, tone: fill, key: `m:${core.start}` })
+        if (view.span.start < core.start) marks.push({ start: view.span.start, end: core.start, tone: creating ? "wash" : "grow", key: `g:${view.span.start}` })
+        if (view.span.end > core.end) marks.push({ start: core.end, end: view.span.end, tone: creating ? "wash" : "grow", key: `g:${core.end}` })
+      } else marks.push({ ...view.span, tone: creating ? "wash" : "grow", key: `g:${view.span.start}` })
+    }
+    if (view.kind === "reading") {
+      if (view.core) marks.push({ ...view.core.span, tone: "accepted", key: `m:${view.core.span.start}` })
+      if (view.unread) marks.push({ ...view.unread, tone: "reading", key: `u:${view.unread.start}` })
+    }
+    if (view.kind === "disagree") {
+      marks.push({ ...view.core, tone: "accepted", key: `m:${view.core.start}` })
+      if (view.span.end > view.core.end) marks.push({ start: view.core.end, end: view.span.end, tone: "unread", key: `u:${view.core.end}` })
+    }
+    if (view.kind === "copy" && view.mark) marks.push({ ...view.mark, tone: "unread", key: `u:${view.mark.start}` })
+    if (view.kind === "copy" && view.reading) marks.push({ ...view.reading.span, tone: "accepted", key: `m:${view.reading.span.start}` })
+  }
+
+  const glyph: LiveSchedule["glyph"] = on ? "on" : shownOffer || hintsWithoutOffer(offer.last, effective) ? "hint" : "off"
+  let glyphTitle: string | undefined
+  if (shownOffer?.reading.kind === "exact") glyphTitle = `Schedule ${describeRule(shownOffer.reading.rrule, shownOffer.reading.dtstart, tz)} (Tab)`
+  else if (shownOffer?.reading.kind === "cue") glyphTitle = "Schedule this (Tab)"
+
+  // One polite line per offer APPEARANCE, never per refinement (§5.3).
+  const [announcement, setAnnouncement] = useState("")
+  const offerShowing = shownOffer !== null
+  useEffect(() => {
+    if (!offerShowing || !shownOffer) return
+    const r = shownOffer.reading
+    const words = r.kind === "exact" ? describeRule(r.rrule, r.dtstart, tz) : r.kind === "cue" ? `“${r.phrase}”` : ""
+    setAnnouncement(r.kind === "ambiguous" ? r.copy : `Schedule suggestion: ${words}. Press Tab to schedule it.`)
+  }, [offerShowing])
+
+  const ledge = shownOffer ? (
+    <ScheduleSlot
+      form="ledge"
+      line={<LedgeLine shown={shownOffer} prose={prose} nowMs={nowMs} tz={tz} promptOf={promptOf} onSchedule={() => key("schedule")} onClose={() => key("close")} />}
+      title={ledgeTitle(shownOffer, prose, promptOf)}
     />
   ) : null
+  const panel = view ? (
+    <ScheduleSlot
+      form="panel"
+      {...panelParts({
+        view,
+        state,
+        nowMs,
+        tz,
+        notice: notice && notice.prose === prose ? notice.copy : undefined,
+        shake,
+        flash,
+        creatingLabel,
+        onCancel: () => key("esc"),
+        onCreate: () => key("enter"),
+      })}
+    />
+  ) : null
+  const current = ledge ?? panel
+  const slot = useLinger(current, SLOT_LINGER_MS)
 
   return {
     on,
-    glyph: on ? "on" : startsWithRecurrence(prose) ? "hint" : "off",
-    highlight,
-    toggle: () => {
-      if (on) {
-        leave()
-        return
-      }
-      setOn(true)
-      read()
-    },
-    submit: () => (current?.result.ok && current.result.prompt.trim() ? confirm() : read()),
-    escape: () => {
-      if (!on) return false
-      leave()
-      return true
-    },
+    state,
+    glyph,
+    glyphTitle,
+    marks,
+    ledge,
     panel,
+    slot,
+    slotOpen: current !== null,
+    announcement,
+    sendGlyph: sendGlyphOf(state),
+    lazyBlocked: on,
+    key,
+    onTab: () => key("tab") === "handled",
+    onEscape: () => key("esc") === "handled",
+    toggle: () => void key("schedule"),
+    onInputEvent: offer.onInput,
   }
 }
 
-function browserZone(): string | undefined {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || undefined
-  } catch {
-    return undefined
-  }
+function toastDetail(view: ScheduleView, nowMs: number): string | undefined {
+  const describe = capitalize(view.describe)
+  const first = view.upcoming[0]
+  if (!first) return describe
+  const span = spanUntil(first, nowMs)
+  if (Date.parse(first) - nowMs < SOON_MS) return span ? `${describe} · first run in ${span}` : describe
+  const day = view.nextLine.replace(/^Next: /, "").split(" · ")[0]
+  return `${describe} · next ${day}${span ? `, in ${span}` : ""}`
 }
 
-const NOTHING_TO_DO = "Say what it should do as well, like “every Monday at 9am triage new issues”."
+function ledgeTitle(shown: Published, prose: string, promptOf: (cut: string) => string): string | undefined {
+  const r = shown.reading
+  if (r.kind !== "exact" && r.kind !== "cue") return undefined
+  const each = firstLine(promptOf(cutPhrase(prose, r.span)))
+  return each ? `Each run: ${each}` : undefined
+}
+
+/** A value that went away, kept for `ms` so what showed it can fold rather than vanish. */
+function useLinger<T>(value: T | null, ms: number): T | null {
+  const kept = useRef<T | null>(value)
+  const [, bump] = useState(0)
+  if (value !== null) kept.current = value
+  const gone = value === null
+  useEffect(() => {
+    if (!gone) return
+    const t = setTimeout(() => {
+      kept.current = null
+      bump((n) => n + 1)
+    }, ms)
+    return () => clearTimeout(t)
+  }, [gone, ms])
+  return value ?? kept.current
+}
+
+/** True once `on` has held for `ms` — a wait long enough to be worth showing motion for. */
+function useDelayedTrue(on: boolean, ms: number): boolean {
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    if (!on) {
+      setLate(false)
+      return
+    }
+    const t = setTimeout(() => setLate(true), ms)
+    return () => clearTimeout(t)
+  }, [on, ms])
+  return on && late
+}
+
+// ---- the slot: one element, a ledge that grows into the panel ---------------------------------------------------
+
+/** The mode's glyph, on its line's cap band (the house lift: the box's bottom on the baseline, then half the
+ *  box less half the cap height — `cap` resolves against the line's own font). */
+function SlotGlyph() {
+  return (
+    <span aria-hidden className="flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)] text-muted">
+      <Repeat size={12} strokeWidth={2} />
+    </span>
+  )
+}
+
+const KBD = "font-sans text-[11px] text-muted-70"
 
 /**
- * The echo under the box: what the server will fire, in its own words — "Triage issues · every Monday at
- * 9am", then "Next: Mon Oct 12 · Mon Oct 19 · Mon Oct 26" — with Create schedule beside Esc. A refusal is
- * the server's copy, verbatim; it already says what to type instead.
+ * The hanging slot under the box (§5.1): inset 10px a side and pulled up under the box's bottom edge, with no
+ * top border of its own — the box's bottom border is its top — so it reads as a tab hanging off the box, not a
+ * new card. As the LEDGE it is one 28px line that never wraps; as the PANEL the same first line stays put and
+ * the rows open beneath it (grid rows 0fr → 1fr), so the list below slides rather than jumps.
  */
-function ScheduleEchoPanel({
-  pending,
-  creating,
-  reading,
-  stale,
-  empty,
-  onCreate,
-  onLeave,
-}: {
-  pending: boolean
-  creating: boolean
-  reading: InterpretScheduleResult | undefined
-  stale: boolean
-  empty: boolean
-  onCreate: () => void
-  onLeave: () => void
-}) {
-  const esc = <kbd className="font-sans text-[11px] text-muted-70">Esc</kbd>
-  const ok = reading?.ok && reading.prompt.trim() ? reading : undefined
-  // A reading that will not make a schedule: its copy says what to type instead, and Create would only be a
-  // dead button beside it, so the footer keeps Cancel alone.
-  const refused = !pending && !ok && !!reading && !stale
-  let body: React.ReactNode
-  if (pending) {
-    body = (
-      <p className="flex items-center gap-1.5 text-[12px] leading-5 text-muted">
-        <Loader2 size={12} className="animate-spin" aria-hidden />
-        Reading when it runs…
-      </p>
-    )
-  } else if (ok) {
-    body = (
-      <>
-        <p data-schedule-echo className="text-[13px] leading-5 text-fg">{ok.preview.echo}</p>
-        {ok.preview.nextLine && <p data-schedule-next className="text-[12px] leading-5 text-muted">{ok.preview.nextLine}</p>}
-      </>
-    )
-  } else if (refused) {
-    body = <p data-schedule-refusal className="text-[12px] leading-5 text-fg/85">{reading.ok ? NOTHING_TO_DO : reading.error}</p>
-  } else {
-    // The mode is on and nothing on screen describes the text yet: say what Enter does here.
-    body = (
-      <p className="text-[12px] leading-5 text-muted">
-        {empty ? "Type what to do and when it runs, like “every weekday at 9am triage new issues”." : stale ? "Edited. Press Enter to read it again." : "Press Enter to read when it runs."}
-      </p>
-    )
-  }
+function ScheduleSlot({ form, line, body, title, footer }: { form: "ledge" | "panel"; line: ReactNode; body?: ReactNode; title?: string; footer?: ReactNode }) {
   return (
-    <div data-schedule-panel role="status" className="rounded-lg border border-border bg-panel-2 px-3 py-2.5">
-      <div className="flex items-baseline gap-2">
-        {/* The mode's own glyph, on the first line's cap band — the same lift every glyph beside a line of
-            text gets here (QuietToggles in ProjectList.tsx): its box's bottom on the first line's baseline,
-            then lifted by half the box less half the cap height. `cap` reads the glyph span's own font, so
-            the span takes the first line's size (13px for the echo, 12px for every other line). Measured
-            (visual-review cap-band probe, sans, dsf 2): 0.03px off the band beside the echo, the refusal
-            and the empty-box hint alike. */}
-        <span aria-hidden className={`flex shrink-0 self-baseline translate-y-[calc(6.5px_-_0.5cap)] text-muted ${ok && !pending ? "text-[13px]" : "text-[12px]"}`}>
-          <Repeat size={13} />
-        </span>
-        <div className="min-w-0 flex-1">{body}</div>
+    <div
+      data-schedule-slot={form}
+      title={title}
+      className={`sched-ledge-in @container mx-2.5 rounded-b-lg border border-t-0 border-border transition-colors duration-[160ms] motion-reduce:transition-none ${form === "ledge" ? "bg-panel-2/60" : "bg-panel-2"}`}
+    >
+      <div data-schedule-line className="flex min-w-0 items-baseline gap-2 px-2.5 py-1 text-[12px] leading-5 text-muted">
+        <SlotGlyph />
+        {line}
       </div>
-      <div className="mt-2 flex items-center justify-end gap-3">
-        <button
-          type="button"
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onLeave}
-          // Baseline, not centre: the 11px key and the 12px word box-centred sat 0.28px apart; now 0.
-          className="flex items-baseline gap-1.5 rounded-md px-1 text-[12px] text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-        >
-          {esc}
-          <span>Cancel</span>
-        </button>
-        {!refused && <button
-          type="button"
-          data-schedule-create
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onCreate}
-          disabled={!ok || creating || pending}
-          title={`Create schedule (Enter)`}
-          className="rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-40"
-        >
-          {creating ? "Creating…" : "Create schedule"}
-        </button>}
+      <div className={`grid transition-[grid-template-rows] duration-[160ms] ease-out motion-reduce:transition-none ${form === "panel" ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+        <div className="min-h-0 overflow-hidden">
+          {form === "panel" && (
+            <div data-schedule-panel className="flex flex-col pb-2 pl-[30px] pr-2.5">
+              {body}
+              {footer}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
+}
+
+/** The offer's line (S1–S3): the reading, then `⇥ Schedule  ↵ Start now  ×`, which never truncate. */
+function LedgeLine({ shown, prose, nowMs, tz, promptOf, onSchedule, onClose }: {
+  shown: Published
+  prose: string
+  nowMs: number
+  tz: string
+  promptOf: (cut: string) => string
+  onSchedule: () => void
+  onClose: () => void
+}) {
+  const r = shown.reading
+  let reading: ReactNode = null
+  let each = ""
+  if (r.kind === "exact") {
+    const model = schedulePreviewModel({ title: "", rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
+    each = firstLine(promptOf(cutPhrase(prose, r.span)))
+    if (model.ok) {
+      const span = model.firstAt ? spanUntil(model.firstAt, nowMs) : null
+      const soon = model.firstAt !== undefined && Date.parse(model.firstAt) - nowMs < SOON_MS
+      reading = (
+        <>
+          <PreviewDescribe segments={model.describe} capital />
+          {model.zone}
+          {model.next[0] && <>{` · next ${model.next[0]}`}</>}
+          {/* Narrowing order (§5.3): Each run goes first, then this, then the reading ellipsizes. */}
+          {span && <span data-schedule-ledge-span className={`hidden @min-[400px]:inline ${soon ? "text-attention" : ""}`}>{`, in ${span}`}</span>}
+        </>
+      )
+    }
+  } else if (r.kind === "cue") {
+    each = firstLine(promptOf(cutPhrase(prose, r.span)))
+    const quoted = prose.slice(r.unread.start, r.unread.end)
+    if (r.core) {
+      const model = schedulePreviewModel({ title: "", rrule: r.core.rrule, dtstart: r.core.dtstart, tz, assumed: r.core.assumed }, nowMs, tz)
+      reading = model.ok ? (
+        <>
+          <PreviewDescribe segments={model.describe} capital />
+          {model.zone}
+          {", "}
+          <span className="text-muted-70">{`“${quoted}”`}</span>
+        </>
+      ) : null
+    }
+    reading ??= (
+      <>
+        {"Looks like a schedule: "}
+        <span className="text-muted-70">{`“${prose.slice(r.span.start, r.span.end)}”`}</span>
+      </>
+    )
+  } else if (r.kind === "ambiguous") {
+    reading = r.copy
+  }
+  return (
+    <>
+      <span data-schedule-ledge-reading className="min-w-0 flex-1 truncate">
+        {reading}
+        {each && (
+          <span data-schedule-ledge-each className="hidden @min-[560px]:inline">
+            {" · "}
+            <span className="text-muted-70">Each run:</span> {each}
+          </span>
+        )}
+      </span>
+      <span className="ml-auto flex shrink-0 items-baseline gap-3">
+        {r.kind !== "ambiguous" && (
+          <button
+            type="button"
+            data-schedule-accept
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={onSchedule}
+            className="flex items-baseline gap-1 rounded-sm text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+          >
+            <kbd className={KBD}>⇥</kbd>
+            <span>Schedule</span>
+          </button>
+        )}
+        <span data-schedule-start-now className="flex items-baseline gap-1">
+          <kbd className={KBD}>↵</kbd>
+          <span>Start now</span>
+        </span>
+        <button
+          type="button"
+          data-schedule-dismiss
+          aria-label="Not a schedule"
+          title="Not a schedule (Esc)"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onClose}
+          className="-mr-1 flex size-5 items-center justify-center self-center rounded-sm text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+        >
+          <X size={12} strokeWidth={2} />
+        </button>
+      </span>
+    </>
+  )
+}
+
+/** The rule's echo with dim guesses: `{title} · {rule}{zone}{ · condition · N runs a day}`. */
+function EchoLine({ title, segments, zone, tail }: { title?: string; segments: readonly PreviewSegment[]; zone: string; tail: readonly string[] }) {
+  return (
+    <span data-schedule-echo className="min-w-0 flex-1 text-pretty text-[13px] text-fg">
+      {title ? `${title} · ` : null}
+      <PreviewDescribe segments={segments} capital={!title} />
+      {zone}
+      {tail.map((t) => ` · ${t}`).join("")}
+    </span>
+  )
+}
+
+/** The panel's next line: `Next: Mon Oct 12, in 6d · Mon Oct 19 · Mon Oct 26`, the span warning-toned under 15m. */
+function NextLine({ next, firstAt, nowMs }: { next: readonly string[]; firstAt?: string; nowMs: number }) {
+  if (next.length === 0) return null
+  const span = firstAt ? spanUntil(firstAt, nowMs) : null
+  const soon = firstAt !== undefined && Date.parse(firstAt) - nowMs < SOON_MS
+  return (
+    <p data-schedule-next className="truncate text-[12px] leading-5 text-muted">
+      {"Next: "}
+      {next[0]}
+      {span && (
+        <>
+          {", "}
+          <span data-soon={soon || undefined} className={soon ? "text-attention" : undefined}>in {span}</span>
+        </>
+      )}
+      {next.slice(1).map((n) => ` · ${n}`).join("")}
+    </p>
+  )
+}
+
+function EachRunLine({ prompt }: { prompt: string }) {
+  const each = firstLine(prompt)
+  if (!each) return null
+  return (
+    <p data-schedule-each className="truncate text-[12px] leading-5 text-muted">
+      <span className="text-muted-70">Each run:</span> {each}
+    </p>
+  )
+}
+
+function panelParts(a: {
+  view: ModeView
+  state: ScheduleUiState
+  nowMs: number
+  tz: string
+  notice: string | undefined
+  shake: number
+  flash: number
+  creatingLabel: boolean
+  onCancel: () => void
+  onCreate: () => void
+}): { line: ReactNode; body: ReactNode; footer: ReactNode } {
+  const { view, nowMs, tz } = a
+  let line: ReactNode = null
+  let body: ReactNode = null
+  let create: "enabled" | "disabled" | "hidden" = "hidden"
+  let createTitle = "Create schedule (Enter)"
+  switch (view.kind) {
+    case "empty":
+      line = <span data-schedule-copy className="min-w-0 flex-1 text-pretty">{EMPTY_COPY}</span>
+      break
+    case "local": {
+      const r = view.reading
+      const model = schedulePreviewModel({ title: view.title, rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
+      if (model.ok) {
+        line = <EchoLine title={view.title} segments={model.describe} zone={model.zone} tail={model.tail} />
+        body = (
+          <>
+            <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />
+            {model.meridiem && <p data-schedule-meridiem className="text-pretty text-[12px] leading-5 text-muted">{model.meridiem}</p>}
+            <EachRunLine prompt={view.prompt} />
+          </>
+        )
+        create = "enabled"
+      }
+      break
+    }
+    case "model": {
+      const m = view.result
+      const model = schedulePreviewModel({ title: m.title, rrule: m.rrule, dtstart: m.dtstart, tz: m.tz, condition: m.condition ?? null }, nowMs, tz)
+      if (model.ok) {
+        line = <span className="overlay-in min-w-0 flex-1"><EchoLine title={m.title} segments={model.describe} zone={model.zone} tail={model.tail} /></span>
+        body = (
+          <>
+            <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />
+            <EachRunLine prompt={view.prompt} />
+          </>
+        )
+        create = "enabled"
+      } else line = <span data-schedule-copy className="min-w-0 flex-1 text-pretty text-fg/85">{model.error}</span>
+      break
+    }
+    case "reading": {
+      create = "disabled"
+      createTitle = "Still reading"
+      const core = view.core
+      const coreModel = core ? schedulePreviewModel({ title: "", rrule: core.rrule, dtstart: core.dtstart, tz, assumed: core.assumed }, nowMs, tz) : undefined
+      line = <ReadingLine view={view} coreSegments={coreModel?.ok ? coreModel.describe : undefined} />
+      body = (
+        <>
+          {coreModel?.ok && !view.edited && <NextLine next={coreModel.next} firstAt={coreModel.firstAt} nowMs={nowMs} />}
+          {view.prompt && <EachRunLine prompt={view.prompt} />}
+        </>
+      )
+      break
+    }
+    case "disagree": {
+      const m = view.result
+      const model = schedulePreviewModel({ title: m.title, rrule: m.rrule, dtstart: m.dtstart, tz: m.tz, condition: m.condition ?? null }, nowMs, tz)
+      line = model.ok ? <EchoLine title={m.title} segments={model.describe} zone={model.zone} tail={model.tail} /> : null
+      body = (
+        <>
+          {model.ok && <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />}
+          <p data-schedule-disagree className="text-pretty text-[12px] leading-5 text-attention">
+            Those words read two ways: {view.ours}, or {view.theirs}.
+          </p>
+          <p className="text-pretty text-[12px] leading-5 text-muted">Reword the part after “{view.corePhrase}”.</p>
+        </>
+      )
+      create = "disabled"
+      createTitle = "Reword it first"
+      break
+    }
+    case "copy": {
+      if (view.reading) {
+        // A reading with nothing left to run: the reading stays on screen, the line says what is missing,
+        // and Create waits (§5.6).
+        const r = view.reading
+        const model = schedulePreviewModel({ title: "", rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
+        line = model.ok ? <EchoLine segments={model.describe} zone={model.zone} tail={model.tail} /> : null
+        body = (
+          <>
+            {model.ok && <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />}
+            <p key={a.shake} data-schedule-refusal className={`text-pretty text-[12px] leading-5 text-fg/85 ${a.shake ? "kbd-shake" : ""}`}>{view.copy}</p>
+          </>
+        )
+        create = "disabled"
+        createTitle = "Say what each run should do first"
+      } else {
+        line = <span key={a.shake} data-schedule-refusal className={`min-w-0 flex-1 text-pretty text-fg/85 ${a.shake ? "kbd-shake" : ""}`}>{view.copy}</span>
+      }
+      break
+    }
+  }
+  const footer = (
+    <>
+      {a.notice && <p data-schedule-notice className="text-pretty text-[12px] leading-5 text-muted">{a.notice}</p>}
+      <div className="mt-2 flex items-center justify-end gap-3">
+        <button
+          key={`cancel:${a.flash}`}
+          type="button"
+          data-schedule-cancel
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={a.onCancel}
+          // Baseline, not centre: the 11px key and the 12px word box-centred sat 0.28px apart; now 0.
+          className={`flex items-baseline gap-1.5 rounded-md px-1 text-[12px] text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${a.flash ? "kbd-row-flash" : ""}`}
+        >
+          <kbd className={KBD}>Esc</kbd>
+          <span>Cancel</span>
+        </button>
+        {create !== "hidden" && (
+          <button
+            key={`create:${a.shake}`}
+            type="button"
+            data-schedule-create
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={a.onCreate}
+            disabled={create === "disabled" || a.state.name === "creating"}
+            title={createTitle}
+            className={`pop-in rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-40 ${a.shake ? "kbd-shake" : ""}`}
+          >
+            {a.creatingLabel ? "Creating…" : "Create schedule"}
+          </button>
+        )}
+      </div>
+    </>
+  )
+  // The first line keeps the ledge's own 12px row; the echo inside it is 13px, on the same baseline.
+  return { line: line ?? <span className="min-w-0 flex-1" />, body, footer }
+}
+
+/** M2's line (§5.7): the part the grammar IS sure of, then the words the model is reading, quoted — muted,
+ *  shimmering once the wait is long enough to see. */
+function ReadingLine({ view, coreSegments }: { view: Extract<ModeView, { kind: "reading" }>; coreSegments?: readonly PreviewSegment[] }) {
+  const shimmer = useDelayedTrue(true, SHIMMER_DELAY_MS)
+  const tone = shimmer ? "shimmer-text" : "text-muted-70"
+  if (view.edited) return <span data-schedule-reading className={`min-w-0 flex-1 truncate ${tone}`}>Edited. Reading it again…</span>
+  if (coreSegments && view.quoted !== undefined) {
+    return (
+      <span data-schedule-reading className="min-w-0 flex-1 truncate text-[13px] text-fg">
+        <PreviewDescribe segments={coreSegments} capital />
+        {", reading “"}
+        <span className={tone}>{view.quoted}</span>
+        {"”…"}
+      </span>
+    )
+  }
+  if (view.quoted !== undefined) {
+    return (
+      <span data-schedule-reading className="min-w-0 flex-1 truncate">
+        {"Reading “"}
+        <span className={tone}>{view.quoted}</span>
+        {"”…"}
+      </span>
+    )
+  }
+  return <span data-schedule-reading className={`min-w-0 flex-1 truncate ${tone}`}>Reading when it runs…</span>
 }

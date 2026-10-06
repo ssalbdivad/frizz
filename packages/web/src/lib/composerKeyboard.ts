@@ -92,6 +92,20 @@ export function shouldScheduleComposerEnter(event: ComposerKeyboardEvent): boole
 }
 
 /**
+ * TAB ACCEPTS A SCHEDULE OFFER — in the new-thread box, while the ledge under it offers to schedule the text
+ * (plans/schedule-live-reading.md §7). Only a bare Tab: Shift-Tab is always native, and so is any Tab with a
+ * modifier, a selection (Tab over selected text is the human doing something else with it), an IME
+ * composition, or an open `/` or `@` menu, which claims Tab first to accept its row. Whether an offer is on
+ * screen is the caller's half (`onTab` returns false when there is none, and Tab moves focus as ever).
+ * Disjoint from every Enter by key, and from the menus' Tab by `menuOpen`.
+ */
+export function shouldAcceptScheduleTab(event: ComposerKeyboardEvent, context: { menuOpen: boolean; selectionCollapsed: boolean }): boolean {
+  return event.key === "Tab" && !event.shiftKey && !event.altKey && !event.ctrlKey && !event.metaKey
+    && !event.isComposing && event.keyCode !== 229
+    && !context.menuOpen && context.selectionCollapsed
+}
+
+/**
  * THE FORCED CHORD ON AN EMPTY BOX — ⌘/Ctrl-Enter with nothing typed. There is no message to send, so
  * the chord means "send the one already waiting": it pushes the thread's queued follow-up through now,
  * the same act as the ↑ on the queued bubble. The caller decides whether anything is queued.

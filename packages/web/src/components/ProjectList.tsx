@@ -948,6 +948,9 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
     ...QUIET_BANDS.map((band) => ({ band, count: quietCount(quiet, band), noun: band === "schedules" && quietCount(quiet, band) === 1 ? "schedule" : band })),
   ]
   const shown = entries.filter((entry) => entry.count > 0)
+  // A schedule just created from the prompt box for THIS project: its count flashes once (store.ts
+  // flashScheduleCount, plans/schedule-live-reading.md §5.11).
+  const scheduleFlash = useSnapshot(store).scheduleFlash
   if (shown.length === 0) return null
   return (
     <span data-xq-quiet-toggles className="flex shrink-0 items-center gap-2">
@@ -984,6 +987,7 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
             // of its 24-unit box (SquareCheck, ExternalLink, BandLabel's SnoozeMark, Bot), so the box centre
             // is the ink centre for each.
             data-xq-quiet-attention={attention || undefined}
+            data-sched-flash={band === "schedules" && scheduleFlash?.projectId === project.id ? "" : undefined}
             className={`relative -mx-1 flex h-[19px] shrink-0 items-baseline gap-[3px] rounded px-1 text-[10.5px] leading-[19px] outline-none transition-colors hover:bg-hover-strong focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
               attention ? "text-attention-soft hover:text-attention" : `hover:text-fg/80 ${isOpen ? "text-muted-80" : "text-muted-50"}`
             }`}

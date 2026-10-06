@@ -146,6 +146,10 @@ export const store = proxy({
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
   toast: null as { id: number; text: string; detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; actions?: readonly ToastAction[] } | null,
+  // A schedule was just created from the prompt box: the project row whose schedules count should flash once
+  // (ProjectList QuietToggles, plans/schedule-live-reading.md §5.11), so the eye travels from where it was
+  // made to where it lives. `seq` replays the flash for a second create; it clears itself (flashScheduleCount).
+  scheduleFlash: null as { projectId: string; seq: number } | null,
   // The open image LIGHTBOX — one ```lightbox gallery's pictures and which of them is on screen. Here
   // rather than in the gallery's own state because the gallery is a transcript row: the virtualizer
   // unmounts it once it scrolls out of the window, and a worker still writing below a gallery the
@@ -207,6 +211,17 @@ export function showToast(text: string, opts?: { detail?: string; spinner?: bool
   const { action, actions, ...rest } = opts ?? {}
   const verbs = [...(action ? [action] : []), ...(actions ?? [])].slice(0, MAX_TOAST_ACTIONS)
   store.toast = { id: ++toastSeq, text, ...rest, ...(verbs.length ? { actions: verbs } : {}) }
+}
+
+let scheduleFlashSeq = 0
+/** Flash a project's schedules count once (§5.11). The flag lives long enough for the count the create just
+ *  changed to arrive with the projects poll, then goes, so a later re-render never replays it. */
+export function flashScheduleCount(projectId: string): void {
+  const seq = ++scheduleFlashSeq
+  store.scheduleFlash = { projectId, seq }
+  setTimeout(() => {
+    if (store.scheduleFlash?.seq === seq) store.scheduleFlash = null
+  }, 2_500)
 }
 
 export function openLightbox(images: LightboxImage[], index: number): void {

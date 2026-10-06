@@ -6,7 +6,7 @@ import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
-import { lazyComposerEnter, shouldInterruptSubmitComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { lazyComposerEnter, shouldAcceptScheduleTab, shouldInterruptSubmitComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
@@ -19,6 +19,7 @@ import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveM
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
 import { inSkippedCard, whenCardRendered } from "../lib/cardVisibility.ts"
+import type { BoxInputEvent } from "../lib/scheduleOffer.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -109,6 +110,62 @@ const FILE_QUERY_DEBOUNCE_MS = 60
 // over the colour beside it — every pill's edge was drawn in --color-inset (#090b10 in dark, nearly
 // the box's own fill) and never showed. Measured on the computed box-shadow, 2026-10-01.
 const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
+
+/**
+ * A run of the PROSE marked behind its own words — the schedule reading's phrase (plans/schedule-live-reading.md
+ * §5.1). Painted in the highlight layer behind the textarea, so a mark is zero-layout like every backdrop
+ * decoration; its whole look is `[data-composer-mark]` in styles.css, in one place:
+ *
+ *   offer     a dotted underline — "this reads as a schedule", nothing accepted yet (never the accent, I-12)
+ *   unread    a dashed underline — words the box will not guess at (a condition, a vague count)
+ *   reading   unread, with a shimmer behind it — the model is reading those words
+ *   accepted  the accent fill — the words that became WHEN, in schedule mode
+ *   grow      a run newly covered by an accepted reading (the model's answer took more words), fading in
+ *   wash      the accepted fill washing bright and back as the schedule is created
+ *
+ * `key` is the run's identity across renders: a mark that keeps its key keeps its element, so it never replays
+ * its entrance — a phrase that extends draws only its new tail, and a tone change (offer → accepted) plays the
+ * new tone's own entrance on the same element.
+ */
+export type ComposerMarkTone = "offer" | "unread" | "reading" | "accepted" | "grow" | "wash"
+export type ComposerMark = { start: number; end: number; tone: ComposerMarkTone; key?: string }
+
+/**
+ * The runs of the prose a schedule reading must never read (plans/schedule-live-reading.md §2.2): what the
+ * backdrop paints as something other than prose — fenced code, the staged ⌘I context tokens — plus every
+ * `@mention` and `/command` token, resolved or not. A superset of what the backdrop tints is the safe side:
+ * an excluded run only ever costs an offer, never a different reading. (Quotes, inline code and a leading
+ * `/command` the grammar skips on its own.)
+ */
+export function composerExcludeRuns(prose: string, contextTokens: readonly string[] = []): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = []
+  for (const run of scanInputFences(prose) ?? []) if (run.kind !== "prose") out.push({ start: run.start, end: run.end })
+  let at = 0
+  for (const run of splitProseByTokens(prose, contextTokens)) {
+    if (run.token) out.push({ start: at, end: at + run.text.length })
+    at += run.text.length
+  }
+  for (const m of prose.matchAll(/(^|[\s(])([@/][^\s]+)/g)) {
+    const start = m.index + m[1]!.length
+    out.push({ start, end: start + m[2]!.length })
+  }
+  return out
+}
+
+/** The marks that fit the prose, in order, overlaps clipped — a mark over words that are gone draws nothing. */
+export function fittedMarks(marks: readonly ComposerMark[] | undefined, length: number): ComposerMark[] {
+  if (!marks?.length) return []
+  const out: ComposerMark[] = []
+  let at = 0
+  for (const m of [...marks].sort((a, b) => a.start - b.start)) {
+    const start = Math.max(m.start, at)
+    const end = Math.min(m.end, length)
+    if (end <= start) continue
+    out.push({ ...m, start, end })
+    at = end
+  }
+  return out
+}
 
 // THE PHONE LAYOUTS (below the 700px breakpoint; the caller decides, with useIsMobile). Same draft,
 // same attachment intake, same keyboard rules, same send — only the shell around the textarea differs.
@@ -205,7 +262,11 @@ export function Composer({
   onSaveLazy,
   onSchedule,
   schedule,
-  highlight,
+  scheduleTitle,
+  marks,
+  onTab,
+  onInputEvent,
+  onLazyBlocked,
   onEscape,
   sendGlyph = "send",
   lazyBlocked = false,
@@ -302,14 +363,26 @@ export function Composer({
   // SCHEDULE IT — the new-thread box only, and only beside `onSaveLazy` (plans/scheduled-threads.md §3).
   // ⌘/Ctrl-Option-Enter, or the repeat glyph left of the snail, asks the caller to read the text for WHEN
   // it should run instead of starting it now. The caller owns the mode; `schedule` says how the glyph reads:
-  // `hint` lights it because the text opens with a recurrence phrase (lib/scheduleHint.ts) — Enter still
-  // dispatches — and `on` is the mode itself, where Enter is the caller's schedule step.
+  // `hint` lights it because the text reads as a schedule the box is offering, or would but for something
+  // (plans/schedule-live-reading.md §5.2) — Enter still dispatches — and `on` is the mode itself, where
+  // Enter is the caller's schedule step. `scheduleTitle` is the glyph's tooltip when the caller has a better
+  // one than the generic ("Schedule every Monday at 9am (Tab)" while an offer shows).
   onSchedule?: () => void
   schedule?: "off" | "hint" | "on"
-  // A span of the PROSE to mark behind the text — the schedule phrase the server found in it, so the
-  // human sees which words became WHEN and that the rest is the prompt, verbatim. Offsets into the prose
-  // the box shows; a span that no longer fits it (the text was edited) draws nothing.
-  highlight?: { start: number; end: number }
+  scheduleTitle?: string
+  // Runs of the PROSE marked behind the text (ComposerMark): the schedule phrase the box read, so the human
+  // sees which words are WHEN and that the rest is the prompt, verbatim. Offsets into the prose the box
+  // shows; a mark that no longer fits it draws nothing.
+  marks?: readonly ComposerMark[]
+  // A bare Tab, before its native focus move and after an open menu has had it (shouldAcceptScheduleTab).
+  // Return true to claim it: the schedule offer's accept (plans/schedule-live-reading.md §7).
+  onTab?: () => boolean
+  // What the textarea just did — an edit (with its caret, its input type and whether an IME is composing),
+  // the end of a composition, a blur — for a caller whose reading of the text publishes only at word
+  // boundaries (lib/scheduleOffer.ts). Called before the edit's own onChange.
+  onInputEvent?: (event: BoxInputEvent) => void
+  // ⌘/Ctrl-Shift-Enter arrived while `lazyBlocked`: consumed, and the caller may say why (its Cancel flashes).
+  onLazyBlocked?: () => void
   // Escape, before the box's own blur. Return true to claim it: the schedule mode leaves itself on the
   // first Escape and keeps the caret, rather than climbing out of the box with the mode still on.
   onEscape?: () => boolean
@@ -617,11 +690,10 @@ export function Composer({
     return paintsText || hasToken ? { segments: out, paintsText } : null
   }, [prose, stagedTokens, allMentions, slashItems, opensAt])
   const backdropSegments = backdrop?.segments
-  // The schedule phrase, marked behind its own words (the `highlight` prop). Only while the span still
-  // fits the prose: an edit makes the caller's reading stale, and a mark over the wrong words is worse
-  // than none.
-  const highlightRun = highlight && highlight.start >= 0 && highlight.end > highlight.start && highlight.end <= prose.length ? highlight : undefined
-  const mirrored = backdropSegments !== undefined || highlightRun !== undefined
+  // The schedule phrase, marked behind its own words (the `marks` prop) — only the marks that still fit the
+  // prose: a mark over the wrong words is worse than none.
+  const markRuns = useMemo(() => fittedMarks(marks, prose.length), [marks, prose.length])
+  const mirrored = backdropSegments !== undefined || markRuns.length > 0
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
   // content; the backdrop must pan with it or the pills detach from their tokens).
@@ -880,6 +952,14 @@ export function Composer({
         return
       }
     }
+    // TAB ACCEPTS A SCHEDULE OFFER (plans/schedule-live-reading.md §7) — after the menus, which claim Tab
+    // first, and only as a bare Tab over a collapsed selection; the caller returns false when no offer is on
+    // screen, and Tab moves focus as ever.
+    if (onTab && shouldAcceptScheduleTab(keyboardEvent, { menuOpen: suggestOpen || mentionOpen, selectionCollapsed: el.selectionStart === el.selectionEnd }) && onTab()) {
+      e.preventDefault()
+      e.stopPropagation()
+      return
+    }
     // A staged `@` token deletes as ONE token — the editor convention for a reference the user placed
     // as a unit. Only a bare Backspace with a collapsed caret sitting immediately after a STAGED
     // token (a hand-typed `@thing` is ordinary text); a selection, a modifier, or any other position
@@ -928,6 +1008,7 @@ export function Composer({
       e.preventDefault()
       e.stopPropagation()
       if (lazy === "save") onSaveLazy!()
+      else onLazyBlocked?.()
       return
     }
     if (onSchedule && shouldScheduleComposerEnter(keyboardEvent)) {
@@ -1364,17 +1445,19 @@ export function Composer({
           any drift between them detaches every pill from its token. */}
       {header}
       <div className="relative">
-        {highlightRun && (
+        {markRuns.length > 0 && (
           <div
             ref={highlightRef}
             aria-hidden
             data-composer-highlight-backdrop
             className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed text-transparent`}
           >
-            {prose.slice(0, highlightRun.start)}
-            {/* Zero-layout like the context pill: the side pad is bought back by the negative margin. */}
-            <mark data-composer-highlight className="rounded-[3px] bg-accent/15 py-px -mx-px px-px text-transparent">{prose.slice(highlightRun.start, highlightRun.end)}</mark>
-            {prose.slice(highlightRun.end)}
+            {markRuns.map((m, i) => (
+              // Zero-layout like the context pill: every tone's side pad is bought back by its negative
+              // margin, and its vertical pad never moves an inline box (styles.css `[data-composer-mark]`).
+              <MarkRun key={m.key ?? `${m.tone}:${m.start}`} prose={prose} mark={m} from={i === 0 ? 0 : markRuns[i - 1]!.end} />
+            ))}
+            {prose.slice(markRuns[markRuns.length - 1]!.end)}
             {prose.endsWith("\n") && " "}
           </div>
         )}
@@ -1409,11 +1492,19 @@ export function Composer({
           autoFocus={autoFocus}
           disabled={busy}
           onChange={(e) => {
+            if (onInputEvent) {
+              const native = e.nativeEvent as InputEvent
+              onInputEvent({ type: "edit", prose: e.target.value, caret: e.target.selectionStart, inputType: native.inputType, composing: native.isComposing === true })
+            }
             setProse(e.target.value)
             trackCaret(e.target)
           }}
+          onCompositionEnd={onInputEvent ? (e) => onInputEvent({ type: "compositionend", prose: e.currentTarget.value, caret: e.currentTarget.selectionStart }) : undefined}
           onSelect={mentionCandidates || slashSuggest || fileMentions ? (e) => trackCaret(e.currentTarget) : undefined}
-          onBlur={mentionCandidates || slashSuggest || fileMentions ? () => setCaret(null) : undefined}
+          onBlur={mentionCandidates || slashSuggest || fileMentions || onInputEvent ? () => {
+            setCaret(null)
+            onInputEvent?.({ type: "blur" })
+          } : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste
@@ -1518,7 +1609,7 @@ export function Composer({
           onClick={onSchedule}
           disabled={busy || uploading}
           aria-pressed={schedule === "on"}
-          title={schedule === "on" ? `Schedule mode — Esc to leave (${scheduleChord})` : schedule === "hint" ? `Schedule this? ${scheduleChord}` : `Schedule it, to run on a repeat (${scheduleChord})`}
+          title={scheduleTitle ?? (schedule === "on" ? `Schedule mode — Esc to leave (${scheduleChord})` : schedule === "hint" ? `Schedule this? ${scheduleChord}` : `Schedule it, to run on a repeat (${scheduleChord})`)}
           aria-label={schedule === "on" ? "Leave schedule mode" : "Schedule"}
           className={`icon-hover-outline absolute bottom-2 ${RAIL_SCHEDULE_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50 ${
             schedule === "on" ? "bg-panel-2 text-fg" : schedule === "hint" ? "text-fg" : "text-muted"
@@ -1563,9 +1654,26 @@ export function Composer({
             : "bg-panel-2 text-muted"
         }`}
       >
-        {busy ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : sendGlyph === "schedule" ? <Repeat size={14} strokeWidth={2.5} /> : <ArrowUp size={14} strokeWidth={2.5} />}
+        {busy ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : (
+          // BOTH glyphs, stacked, so the swap is a 120ms cross-fade on the same pixels (§6) rather than one
+          // icon popping for another; same size and stroke, so neither moves the rail's measured rhythm.
+          <span aria-hidden className="grid place-items-center">
+            <ArrowUp size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-0" : "opacity-100"}`} />
+            <Repeat size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-100" : "opacity-0"}`} />
+          </span>
+        )}
       </button>
     </div>
+  )
+}
+
+/** One marked run and the plain text before it. A component so each mark keeps its element by key. */
+function MarkRun({ prose, mark, from }: { prose: string; mark: ComposerMark; from: number }) {
+  return (
+    <>
+      {prose.slice(from, mark.start)}
+      <mark data-composer-highlight data-composer-mark={mark.tone}>{prose.slice(mark.start, mark.end)}</mark>
+    </>
   )
 }
 

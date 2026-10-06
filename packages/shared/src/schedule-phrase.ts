@@ -291,6 +291,18 @@ export function scheduleWindows(text: string, exclude: readonly Span[]): Span[] 
   return windowsOf(prepare(text, exclude).masked)
 }
 
+/** Whether each edge window holds a gate word (§2.1) — what re-arms a dismissed edge (§8): an edge whose
+ *  window holds no recurrence word at a publish point has had its phrase deleted, so the human's "not a
+ *  schedule" no longer has anything to apply to. The same windows and the same gate the edge read uses. */
+export function scheduleEdgeGates(text: string, exclude: readonly Span[] = []): { open: boolean; close: boolean } {
+  const p = prepare(text, exclude)
+  const windows = windowsOf(p.masked)
+  if (windows.length === 0) return { open: false, close: false }
+  const open = windows[0]!, close = windows[windows.length - 1]!
+  const openGate = GATE.test(p.masked.slice(open.start, open.end))
+  return { open: openGate, close: close === open ? openGate : GATE.test(p.masked.slice(close.start, close.end)) }
+}
+
 /** A sentence ends at ". ", "! ", "? " or a newline — but not at the dot of "a.m." or "p.m.". */
 function sentenceEnd(m: string, i: number): boolean {
   const c = m[i]

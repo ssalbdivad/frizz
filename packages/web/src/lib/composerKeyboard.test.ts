@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canInterruptAndSend, lazyComposerEnter, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, lazyComposerEnter, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldAcceptScheduleTab, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -173,4 +173,28 @@ test("in schedule mode ⌘/Ctrl-Shift-Enter is consumed, never a lazy save, what
   assert.equal(lazyComposerEnter(key({ metaKey: true }), true, true), undefined)
   assert.equal(lazyComposerEnter(key({ metaKey: true, altKey: true }), true, true), undefined)
   assert.equal(lazyComposerEnter(key({ key: "a", metaKey: true, shiftKey: true }), true, true), undefined)
+})
+
+// plans/schedule-live-reading.md §7: Tab accepts a schedule offer only as a bare Tab, with no menu open, no
+// selection and no composition — and it is disjoint from the menus' Tab, Shift-Tab and the five Enters.
+test("Tab accepts a schedule offer only as a bare Tab, disjoint from the menu Tab and every Enter", () => {
+  const free = { menuOpen: false, selectionCollapsed: true }
+  const tab = (overrides: Partial<ComposerKeyboardEvent> = {}) => key({ key: "Tab", ...overrides })
+  assert.equal(shouldAcceptScheduleTab(tab(), free), true)
+  assert.equal(shouldAcceptScheduleTab(tab({ shiftKey: true }), free), false, "Shift-Tab is always native")
+  assert.equal(shouldAcceptScheduleTab(tab({ altKey: true }), free), false)
+  assert.equal(shouldAcceptScheduleTab(tab({ ctrlKey: true }), free), false)
+  assert.equal(shouldAcceptScheduleTab(tab({ metaKey: true }), free), false)
+  assert.equal(shouldAcceptScheduleTab(tab({ isComposing: true }), free), false, "an IME composition keeps its Tab")
+  assert.equal(shouldAcceptScheduleTab(tab({ keyCode: 229 }), free), false)
+  assert.equal(shouldAcceptScheduleTab(tab(), { menuOpen: true, selectionCollapsed: true }), false, "an open / or @ menu claims Tab first")
+  assert.equal(shouldAcceptScheduleTab(tab(), { menuOpen: false, selectionCollapsed: false }), false, "Tab over a selection is not an accept")
+  // No Enter, of any of the five, is a Tab; and the Tab is none of them.
+  const enters = [key(), key({ metaKey: true }), key({ ctrlKey: true }), key({ metaKey: true, shiftKey: true }), key({ metaKey: true, altKey: true }), key({ shiftKey: true }), key({ altKey: true })]
+  for (const enter of enters) assert.equal(shouldAcceptScheduleTab(enter, free), false, JSON.stringify(enter))
+  assert.equal(shouldSubmitComposerEnter(tab(), true), false)
+  assert.equal(shouldInterruptSubmitComposerEnter(tab({ metaKey: true }), true), false)
+  assert.equal(shouldSaveLazyComposerEnter(tab({ metaKey: true, shiftKey: true }), true), false)
+  assert.equal(shouldScheduleComposerEnter(tab({ metaKey: true, altKey: true })), false)
+  assert.equal(shouldPushQueuedComposerEnter(tab({ metaKey: true }), true), false)
 })
