@@ -223,6 +223,8 @@ test("a picture opens in Frizz's viewer: fit, actual size, its card's gallery, a
     await page.waitForFunction(() => document.querySelector("[data-drawer-layer] pre.hljs")?.textContent?.includes("listening on http://127.0.0.1:4321"))
     assert.deepEqual(await drawers(page), [{ kind: "file", path: "/fixture/run.log", closing: false }])
     await settled()
+    // On a desktop the reader's footer offers the way out to the machine's own opener.
+    assert.ok(await page.$("[data-drawer-layer] [data-file-reader-footer] button[aria-label='Open']"), "the desktop reader offers Open")
     await shot(page, "reader-log-dark.png")
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[data-drawer-layer]"))
@@ -256,6 +258,16 @@ test("a picture opens in Frizz's viewer: fit, actual size, its card's gallery, a
     // 390 wide, less the 24px inset each side: width binds.
     assert.ok(Math.abs(phone.width - 342) < 1, `phone width ${phone.width}`)
     await shot(page, "viewer-fit-phone.png")
+    await page.keyboard.press("Escape")
+    await closed(page)
+
+    // ── On a phone a file opens in the reader with no Open: that would launch it on the computer ──
+    await page.click('button[data-local-path="/fixture/run.log"]')
+    await page.waitForFunction(() => document.querySelector("[data-drawer-layer] pre.hljs")?.textContent?.includes("listening on http://127.0.0.1:4321"))
+    assert.equal(await page.$("[data-drawer-layer] [data-file-reader-footer]"), null, "no footer on a phone")
+    assert.equal(await page.$("[data-drawer-layer] button[aria-label='Open']"), null, "no Open anywhere in the phone's reader")
+    assert.deepEqual(await opened(page), [], "and nothing reached the opener")
+    await shot(page, "reader-log-phone.png")
 
     assert.deepEqual(errors, [])
   } finally {

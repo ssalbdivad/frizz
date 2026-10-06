@@ -12,6 +12,7 @@ import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { MarkdownScopeContext, useMarkdownHtml, type MarkdownScope } from "../lib/useMarkdown.ts"
 import { splitFrontmatter } from "../lib/frontmatter.ts"
 import { isLocalMarkdownFile, localFileDir } from "../lib/markdownTargets.ts"
+import { useIsMobile } from "../lib/mobile.ts"
 import { CodeBody } from "./CodeBody.tsx"
 import { useLightboxIslands } from "./Lightbox.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -107,10 +108,11 @@ export function SourceView({ path, raw, ref }: { path: string; raw: string; ref?
   )
 }
 
-export function TruncatedNote() {
+// `openable` is false where there is no Open to point at (the reader on a phone, below).
+export function TruncatedNote({ openable = true }: { openable?: boolean }) {
   return (
     <p className="mt-4 border-t border-border/60 pt-3 text-[12px] text-muted">
-      This file is too long to render in full — everything above the cut is shown. Open it to read the rest.
+      This file is too long to render in full — everything above the cut is shown.{openable ? " Open it to read the rest." : ""}
     </p>
   )
 }
@@ -131,6 +133,12 @@ export function FileReaderDrawer({ scope, ...props }: ReaderProps & { scope?: Ma
 
 function FileReader({ id, path, title, depth, widthDepth }: ReaderProps) {
   const scope = useContext(MarkdownScopeContext)
+  // ON A PHONE THERE IS NO OPEN (upstream db0e7568, "the reader's Open footer is not shown on the phone").
+  // Its Open launches the file on the machine Frizz runs on — the desktop opener, or the External app —
+  // which from a phone is somewhere else entirely: the tap did nothing anyone holding the phone could
+  // see. The phone routes every file here for exactly that reason (lib/local-file-links.ts openLocalPath),
+  // so the reader is the end of the line there, and a button that leads off it is a dead end.
+  const phone = useIsMobile()
   const project = scope?.projectId
   // The same read (and key) as the /full split viewer, and LIVE the same way: the server watches the
   // file while this drawer is open and the socket invalidates the query on each save; the poll covers
@@ -185,30 +193,37 @@ function FileReader({ id, path, title, depth, widthDepth }: ReaderProps) {
               <div className="text-[13px] text-muted">Loading…</div>
             ) : body.error ? (
               // The gate's own words — "outside Frizz's trusted roots", "is not a text file" — say more
-              // than a generic failure would, and the footer still offers the desktop opener.
+              // than a generic failure would, and (off a phone) the footer still offers the desktop opener.
               <div className="text-[13px] text-danger-90">Couldn’t read this file: {(body.error as Error).message}</div>
             ) : markdown && html ? (
               <>
                 {front && <Frontmatter source={front} />}
                 <div ref={ref} className="md-body" dangerouslySetInnerHTML={inner} />
                 {galleries}
-                {body.data?.truncated && <TruncatedNote />}
+                {body.data?.truncated && <TruncatedNote openable={!phone} />}
               </>
             ) : !markdown && raw ? (
               <>
                 <SourceView path={resolved} raw={raw} />
-                {body.data?.truncated && <TruncatedNote />}
+                {body.data?.truncated && <TruncatedNote openable={!phone} />}
               </>
             ) : (
               <div className="text-[13px] text-muted">This file is empty.</div>
             )}
           </div>
-          <div
-            className="shrink-0 flex items-center justify-end gap-1.5 border-t border-border/60 bg-panel px-5 pt-3"
-            style={FOOTER_STYLE}
-          >
-            <OpenAction path={resolved} project={project} />
-          </div>
+          {/* The safe-area pad the footer carried stays when the footer goes, so on a phone the last line
+              still clears the home indicator. */}
+          {phone ? (
+            <div aria-hidden className="shrink-0" style={{ height: "env(safe-area-inset-bottom)" }} />
+          ) : (
+            <div
+              data-file-reader-footer
+              className="shrink-0 flex items-center justify-end gap-1.5 border-t border-border/60 bg-panel px-5 pt-3"
+              style={FOOTER_STYLE}
+            >
+              <OpenAction path={resolved} project={project} />
+            </div>
+          )}
         </>
       )}
     </Sheet>
