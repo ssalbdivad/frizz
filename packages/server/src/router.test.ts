@@ -542,7 +542,7 @@ test("setOwnThreadTitle RPC: a duplicate is refused NAMING its holder, a distinc
   const dupe = await call("Focus Mode")
   assert.equal(dupe.accepted, false)
   assert.equal(dupe.lockedByHuman, false)
-  assert.match(dupe.refusal ?? "", /already named "Focus mode" \(thread holder\)/)
+  assert.match(dupe.refusal ?? "", /already named "Focus mode" \(@focus-mode\)/)
   assert.match(dupe.refusal ?? "", /different one- or two-word subject/)
   assert.equal(h.storage.getSession("worker")?.title_worker_renamed, 0, "a refusal does not spend the rename")
 
@@ -2422,6 +2422,50 @@ test("a repeat of a deliveryId already delivered is a no-op even after the ledge
   await h.router.followUp.handler({ input })
   assert.equal(calls.length, 1, "the worker got the message once")
   h.storage.close()
+})
+
+// `spawn_thread` asks for the new thread's `@handle` (maintainer 2026-10-06: "threads should refer to other
+// threads using the standard @ syntax"), so the dispatch holds its answer until the mint has named the
+// thread. The board's own dispatch does not ask and is never held; a thread nothing names gets no handle.
+test("dispatch with awaitHandle answers with the minted @handle; without it, at once and with none", async () => {
+  const h = harness()
+  try {
+    let answer!: (name: string) => void
+    let asked = 0
+    const namer = createThreadNamer({
+      storage: h.storage,
+      complete: () => { asked++; return new Promise<string>((resolve) => { answer = resolve }) },
+    })
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = namer
+    ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async (input: { prompt: string }) => {
+      const slug = `child-${asked}`
+      h.storage.upsertSession({ ...row(slug), title: input.prompt, title_auto: 1, title_locked: 0 })
+      void namer.mint(slug, `sid-${slug}`, input.prompt)
+      return { slug, sessionId: `sid-${slug}` }
+    }
+
+    assert.deepEqual(await h.router.dispatch.handler({ input: { prompt: "from the board", model: "opus", effort: "high" } }), { slug: "child-0", sessionId: "sid-child-0" })
+    await new Promise((r) => setImmediate(r))
+    answer("Board pick")
+
+    let settled = false
+    const spawned = h.router.dispatch.handler({ input: { prompt: "fix the cache keys", model: "opus", effort: "high", awaitHandle: true } })
+    void spawned.then(() => { settled = true })
+    await new Promise((r) => setTimeout(r, 50))
+    assert.equal(settled, false, "held until the thread has a name")
+    answer("Cache keys")
+    assert.deepEqual(await spawned, { slug: "child-1", sessionId: "sid-child-1", handle: "cache-keys" })
+
+    // No model wired: nothing will name the thread, so there is no wait and no handle.
+    ;(h.ctx as { threadNamer?: unknown }).threadNamer = createThreadNamer({ storage: h.storage })
+    ;(h.ctx.dispatcher as { dispatch: unknown }).dispatch = async () => {
+      h.storage.upsertSession({ ...row("unnamed"), title: "a placeholder chop…", title_auto: 1, title_locked: 0 })
+      return { slug: "unnamed", sessionId: "sid-unnamed" }
+    }
+    assert.deepEqual(await h.router.dispatch.handler({ input: { prompt: "x", model: "opus", effort: "high", awaitHandle: true } }), { slug: "unnamed", sessionId: "sid-unnamed" })
+  } finally {
+    rmSync(h.dir, { recursive: true, force: true })
+  }
 })
 
 // A SPINOFF is fulfilled by the parent's own `spawn_thread` naming the request: the dispatch writes the

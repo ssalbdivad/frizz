@@ -43,10 +43,11 @@ import { readFileSync, readdirSync } from "node:fs"
 import { dirname, isAbsolute, join, relative } from "node:path"
 
 const PROTOCOL_FALLBACK = "2025-06-18"
-// Comfortably above a codex dispatch's bounded rollout-discovery wait (~15s) so a legitimate slow
-// dispatch is never aborted client-side (which would make the worker think it failed and retry,
-// double-spawning). The server completes regardless; this is only the client's patience.
-const DISPATCH_TIMEOUT_MS = 30_000
+// Comfortably above a codex dispatch's bounded rollout-discovery wait (~15s) PLUS the server's bounded
+// wait for a spawned thread's name (router.ts SPAWNED_NAME_WAIT_MS, 10s), so a legitimate slow dispatch
+// is never aborted client-side (which would make the worker think it failed and retry, double-spawning).
+// The server completes regardless; this is only the client's patience.
+const DISPATCH_TIMEOUT_MS = 45_000
 
 const SPAWN_THREAD = {
   name: "spawn_thread",
@@ -57,8 +58,8 @@ const SPAWN_THREAD = {
     "Spawn a brand-new, separate top-level frizz thread — its own board card, session, and scratchpad, " +
     "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the HUMAN on the board via " +
     "its own final message, and its results NEVER come back to you, the caller. It is NOT an in-session " +
-    "sub-agent. It returns only the new thread's slug and a ready-to-paste markdown link " +
-    "`[title](/thread/<slug>)` that opens the thread in the frizz drawer — put that link in your handoff. " +
+    "sub-agent. It returns the new thread's `@handle` — name it by that in your handoff, where the board " +
+    "links it, exactly as you would name any other thread. " +
     "USE IT ONLY for a distinct, self-contained effort that belongs on the board in its own right and whose " +
     "output you do NOT need to read. Do NOT use it for a helper whose result you must COLLECT and fold into " +
     "your own work — a self-review, a verification pass, a research prong, a critic, any collect-back helper: " +
@@ -106,7 +107,7 @@ const SPAWN_THREAD = {
         enum: ["claude", "codex"],
         description: "Optional agent backend (default `claude`). If `codex`, `model` must be a codex model id.",
       },
-      title: { type: "string", description: "Optional name for the new thread: one or two SHORT words naming its subject — its camelCase handle (\"Shell budgets\" → @shellBudgets) at most 16 characters — distinct from the project's other open threads. A longer one is ignored and frizz names the thread from the prompt instead." },
+      title: { type: "string", description: "Optional name for the new thread: one or two SHORT words naming its subject — its kebab-case handle (\"Shell budgets\" → @shell-budgets) at most 20 characters — distinct from the project's other open threads. A longer one is ignored and frizz names the thread from the prompt instead." },
       spinoff: {
         type: "string",
         description:
@@ -871,25 +872,26 @@ const TITLE = {
   },
 }
 
-// THREAD-TO-THREAD, BY HANDLE. The board shows every thread under a camelCase handle (`shellBudgets`), and
-// the human points one thread at another with it: "ask @shellBudgets", "reconcile with @focusMode". Two
+// THREAD-TO-THREAD, BY HANDLE. The board shows every thread under a kebab-case handle (`shell-budgets`), and
+// the human points one thread at another with it: "ask @shell-budgets", "reconcile with @focus-mode". Two
 // tools, one protocol: READ first (free, wakes nobody); MESSAGE when reading is not enough, with
 // `await_reply` when you need the answer before you can go on — that parks you until it comes.
 const READ_THREAD = {
   name: "read_thread",
   description:
-    "READ ANOTHER THREAD by its handle — the camelCase name the board shows it under (`shellBudgets`, " +
-    "`focusMode`), in this project or, when no thread here carries it, in another project Frizz has open. " +
-    "The human writes these as `@shellBudgets`: \"ask @shellBudgets about " +
-    "this\", \"reconcile with @focusMode\". Returns that thread's original request, its status line, " +
+    "READ ANOTHER THREAD by its handle — the kebab-case name the board shows it under (`shell-budgets`, " +
+    "`focus-mode`), in this project or, when no thread here carries it, in another project Frizz has open. " +
+    "The human writes these as `@shell-budgets`: \"ask @shell-budgets about " +
+    "this\", \"reconcile with @focus-mode\". Write them the same way: wherever you mention another thread " +
+    "or a sub-agent, name it by its `@` address, which the board links. Returns that thread's original request, its status line, " +
     "whether it is running, resting or done, its last few messages (its approach, and its handoff when it " +
     "is resting) and the files it edited.\n\n" +
     "ALWAYS READ BEFORE YOU MESSAGE: this wakes nobody and costs the other thread nothing, and it usually " +
     "answers \"what is @x doing, how, and what did it change\" on its own. For the diff itself, read the " +
     "files it lists or `git log`. It reaches finished threads too. A handle that names nothing is answered " +
     "with the handles that exist.\n\n" +
-    "A thread's SUB-AGENTS answer to its handle, a dot, then theirs: `portTheParser.cacheKeys`, and a " +
-    "Workflow's agents one segment further (`portTheParser.wave2.implW3`). Reading one returns its own " +
+    "A thread's SUB-AGENTS answer to its handle, a dot, then theirs: `port-the-parser.cache-keys`, and a " +
+    "Workflow's agents one segment further (`port-the-parser.wave-2.impl-w3`). Reading one returns its own " +
     "request and its newest messages — its report, once it has returned. It reaches sub-agents that have " +
     "already returned too; a name used twice means the running one, else the latest.",
   inputSchema: {
@@ -904,7 +906,7 @@ const READ_THREAD = {
 const MESSAGE_THREAD = {
   name: "message_thread",
   description:
-    "SEND A MESSAGE TO ANOTHER OPEN THREAD by handle (`@shellBudgets`) — in this project, or another " +
+    "SEND A MESSAGE TO ANOTHER OPEN THREAD by handle (`@shell-budgets`) — in this project, or another " +
     "project Frizz has open when no thread here carries the handle — to ask it a " +
     "question, to tell it what you are doing and how, or to agree who changes what. It arrives in that " +
     "thread's conversation signed with THIS thread's handle, joining its current turn if it is working and " +
@@ -1111,7 +1113,7 @@ const HANDLERS = {
 async function readThread(args) {
   // `to` is accepted too: it is the name a worker reaches for first (seen on a real worker, 2026-09-29).
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
-  if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
+  if (!handle) throw new Error("`handle` is required — the other thread's kebab-case name, e.g. `shell-budgets`")
   const r = (await callRpc("readThread", { slug: threadSlug(), handle }))?.result
   if (!r?.found && r?.subAgentOf) {
     return r.known?.length
@@ -1138,7 +1140,7 @@ async function readThread(args) {
 async function messageThread(args) {
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
   const message = typeof args.message === "string" ? args.message.trim() : ""
-  if (!handle) throw new Error("`handle` is required — the other thread's camelCase name, e.g. `shellBudgets`")
+  if (!handle) throw new Error("`handle` is required — the other thread's kebab-case name, e.g. `shell-budgets`")
   if (!message) throw new Error("`message` is required")
   const awaitReply = args.await_reply === true || args.await_reply === "true"
   const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}), ...(awaitReply && typeof args.for === "string" && args.for.trim() ? { for: args.for.trim() } : {}) }
@@ -1716,6 +1718,9 @@ async function spawnThread(args) {
     body.spinoffFrom = threadSlug()
   }
 
+  // Ask for the new thread's `@handle` with the answer — not for a spinoff, whose result names nothing.
+  if (!body.spinoff) body.awaitHandle = true
+
   const payload = await postToFrizz("dispatch", rpcPath("dispatch"), body)
   const slug = payload?.result?.slug
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
@@ -1738,12 +1743,18 @@ async function spawnThread(args) {
       `carry on with it. Do not wait on the new thread; it reports to the human, not to you.`
     )
   }
-  const label = typeof body.title === "string" ? body.title : slug
-  return (
+  const intro =
     `${spawned} It is now on the board driving independently — it reports ` +
-    `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
-    `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
-  )
+    `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n`
+  // A thread names another by its `@handle`, which the board links. The server hands one back once the
+  // new thread has a name; a thread still unnamed when its bounded wait ran out (or one nothing names,
+  // with no model wired) has none to give, and the link to its slug is the only reference that opens it.
+  const handle = payload?.result?.handle
+  if (typeof handle === "string" && handle) {
+    return `${intro}It is @${handle}: name it that way in anything the human reads, and the board links it.`
+  }
+  const label = typeof body.title === "string" ? body.title : slug
+  return `${intro}It has no handle yet, so paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
 }
 
 // HOW LONG A RESTART WINDOW IS ALLOWED TO BE INVISIBLE. frizz replaces its own server routinely

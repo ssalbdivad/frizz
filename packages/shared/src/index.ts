@@ -5023,6 +5023,10 @@ export const DispatchInput = z.object({
   // one started before the rename (2026-09-29) still sends these; the router reads either.
   spinOff: z.string().regex(SPINOFF_ID_RE).optional(),
   spinOffFrom: ThreadSlug.optional(),
+  // `spawn_thread` sets it: hold the answer until the new thread has its NAME (a caller's title at once,
+  // else the mint, bounded) and return its `@handle`, which is how one thread names another. The board's
+  // own dispatch leaves it off and is answered the moment the thread exists.
+  awaitHandle: z.boolean().optional(),
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
 

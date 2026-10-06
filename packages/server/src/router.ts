@@ -158,6 +158,7 @@ import {
   addressSegments,
   subAgentAddress,
   subAgentChain,
+  threadHandle,
   subAgentHandle,
   MessageThreadInput,
   MessageThreadResult,
@@ -1205,6 +1206,26 @@ export function createRouter(ctx: AppContext) {
         return chain ? { ...row, address: subAgentAddress(threadHandle!, chain) } : row
       }),
     }
+  }
+
+  // THE NEW THREAD'S `@handle`, for `spawn_thread` (maintainer 2026-10-06: "threads should refer to other
+  // threads using the standard @ syntax"). The caller is told how to name what it spawned, and a link to
+  // a slug is not that: the board shows the thread by its handle, and the human and every other thread
+  // type that. A dispatch with no caller title is named by the mint, a short model call off the dispatch
+  // path, so this waits for it — bounded, because a slow or failed mint must not hold the caller's tool
+  // call: past the bound, or for a thread nothing will name, the answer carries no handle and the caller
+  // falls back to the link.
+  const SPAWNED_NAME_WAIT_MS = 10_000
+  async function spawnedHandle(slug: string): Promise<string | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      threadNamer().named(slug),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, SPAWNED_NAME_WAIT_MS) }),
+    ])
+    clearTimeout(timer)
+    const row = ctx.storage.getSession(slug)
+    const name = row ? rowThreadName(row) : undefined
+    return name ? threadHandle(name) : undefined
   }
 
   // `read_thread` on a SUB-AGENT's address: the answer a thread gives, off the child's OWN transcript —
@@ -2687,17 +2708,20 @@ export function createRouter(ctx: AppContext) {
 
     dispatch: mutation({
       input: DispatchInput,
-      output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
+      output: z.object({ slug: ThreadSlug, sessionId: z.string(), handle: z.string().optional() }),
       // Forward the picker-selected backend into the dispatch opts seam (Codex-support epic, Phase 3).
       // Omitted ⇒ the dispatcher defaults to "claude", so an old client (no backend field) is
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
         // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
-        const { spinoff, spinoffFrom, spinOff, spinOffFrom, ...rest } = input
+        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, ...rest } = input
         const request = spinoff ?? spinOff
-        if (!request) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
-        return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
+        if (request) return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
+        const started = await ctx.dispatcher.dispatch(rest, { backend: input.backend })
+        if (!awaitHandle) return started
+        const handle = await spawnedHandle(started.slug)
+        return handle ? { ...started, handle } : started
       },
     }),
 
@@ -4971,7 +4995,7 @@ export function createRouter(ctx: AppContext) {
         }
         const holder = namer.holder(input.title, input.slug)
         if (holder) {
-          return refuse(`another open thread is already named "${holder.name}" (thread ${holder.slug}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
+          return refuse(`another open thread is already named "${holder.name}" (@${handleOf(holder)}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
         }
         const accepted = ctx.storage.setAgentTitle(input.slug, input.title)
         if (accepted) ctx.board.refresh()

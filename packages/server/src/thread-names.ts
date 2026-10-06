@@ -332,6 +332,9 @@ export interface ThreadNamer {
    *  name already in its taken list — the model then picks a distinct name itself rather than colliding
    *  and falling back. Resolves when this mint is settled (tests await it). */
   mint(slug: string, sessionId: string, source: string): Promise<void>
+  /** Resolves once `slug`'s mint (if one is pending) has settled, at once when none is. `spawn_thread`
+   *  waits on it so the caller is handed the new thread's `@handle` rather than a link to a slug. */
+  named(slug: string): Promise<void>
   /** A status line for a thread from its recent conversation, or undefined. Throws with no model. */
   status(input: { name?: string; conversation: string }): Promise<string | undefined>
 }
@@ -342,6 +345,7 @@ export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
   const distinct = (name: string, source: string, exceptSlug?: string) =>
     distinguishingName(name, source, (candidate) => holder(candidate, exceptSlug) !== undefined)
   let mintChain: Promise<void> = Promise.resolve()
+  const pendingMints = new Map<string, Promise<void>>()
 
   async function name(source: string, exceptSlug?: string): Promise<string> {
     const complete = deps.complete
@@ -385,8 +389,11 @@ export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
         }
       })
       mintChain = run
+      pendingMints.set(slug, run)
+      void run.then(() => { if (pendingMints.get(slug) === run) pendingMints.delete(slug) })
       return run
     },
+    named: (slug) => pendingMints.get(slug) ?? Promise.resolve(),
     async status({ name: current, conversation }) {
       if (!deps.complete) throw new Error("No model is available to write a status")
       return cleanThreadStatus(await deps.complete(statusRequest(current, conversation)))

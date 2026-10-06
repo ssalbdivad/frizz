@@ -205,15 +205,19 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
   }
 })
 
-test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer link", async () => {
+// A thread names another by its `@handle` (maintainer 2026-10-06), so the result hands the new thread's
+// back; a thread the server could not name in time has none, and gets the drawer link instead.
+test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its @handle, else links it", async () => {
   const seen: Array<{ url: string; body: unknown }> = []
+  const handles = ["child", undefined]
   const http = createServer((req, res) => {
     let body = ""
     req.on("data", (c) => (body += c))
     req.on("end", () => {
       seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      const handle = handles.shift()
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+      res.end(JSON.stringify({ result: { slug: "spawned-child", ...(handle ? { handle } : {}) } }))
     })
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
@@ -232,9 +236,20 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
     })
     const call = await rpc.next(2)
     assert.equal(call.result.isError, undefined)
-    assert.match(call.result.content[0].text, /\[Child\]\(\/thread\/spawned-child\)/)
+    assert.match(call.result.content[0].text, /It is @child: name it that way/)
+    assert.doesNotMatch(call.result.content[0].text, /\/thread\//, "a named thread is not handed over as a link")
     assert.equal(SPAWN_THREAD_RESULT_RE.exec(call.result.content[0].text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
-    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child" } }])
+    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child", awaitHandle: true } }])
+
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "spawn_thread", arguments: { prompt: "do the thing", model: "opus", effort: "high", title: "Child" } },
+    })
+    const unnamed = await rpc.next(4)
+    assert.match(unnamed.result.content[0].text, /It has no handle yet[\s\S]*\[Child\]\(\/thread\/spawned-child\)/)
+    assert.equal(SPAWN_THREAD_RESULT_RE.exec(unnamed.result.content[0].text)?.[1], "spawned-child")
 
     // model/effort stay REQUIRED server-side, not only in the schema — a lenient client must not be
     // able to skip the deliberate choice.
@@ -786,11 +801,11 @@ test("`title` names the CALLING thread, and a human's own name refuses it out lo
 
     // A DUPLICATE is the server's call, and its words — naming the holder — reach the worker verbatim,
     // so it can pick another subject rather than retry the same name.
-    reply = { accepted: false, title: "chop", lockedByHuman: false, refusal: "another open thread is already named \"Focus mode\" (thread holder)." }
+    reply = { accepted: false, title: "chop", lockedByHuman: false, refusal: "another open thread is already named \"Focus mode\" (@focus-mode)." }
     rpc.send({ jsonrpc: "2.0", id: 5, method: "tools/call", params: { name: "title", arguments: { title: "Focus mode" } } })
     const dupe = await rpc.next(5)
     assert.equal(dupe.result.isError, undefined)
-    assert.match(dupe.result.content[0].text, /^Not renamed — another open thread is already named "Focus mode" \(thread holder\)/)
+    assert.match(dupe.result.content[0].text, /^Not renamed — another open thread is already named "Focus mode" \(@focus-mode\)/)
 
     // An empty name is refused in the HANDLER, so a whitespace-only title never reaches the server.
     const before = seen.length
