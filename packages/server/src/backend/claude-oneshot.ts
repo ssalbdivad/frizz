@@ -2,6 +2,7 @@ import { query } from "@frizz/claude-agent-sdk-runtime"
 import { sanitizeProviderChildEnvironment } from "./claude-agent-sdk.ts"
 import { resolveClaudeExecutableAbsolute } from "./claude-broker-host.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
+import { log as frizzLog } from "../logging.ts"
 
 // ONE SHORT COMPLETION with a system prompt Frizz writes — the thread NAMER and the thread STATUS line
 // (thread-names.ts) are its callers.
@@ -36,6 +37,12 @@ export interface ClaudeOneShotOptions {
   timeoutMs?: number
   /** At most this many completions at once; the rest queue. A fan-out dispatch must not spawn N CLIs. */
   concurrency?: number
+  /** Where a failure to shut a finished session down is reported. It never reaches the caller, who has
+   *  its answer already. Defaults to the server log. */
+  log?: (message: string) => void
+  /** The SDK's `query`, injectable so a unit test can stand in a session whose shutdown it controls and a
+   *  harness can time the real one. Production passes nothing. */
+  query?: typeof query
 }
 
 export type ClaudeOneShot = (request: ClaudeOneShotRequest) => Promise<string>
@@ -55,20 +62,45 @@ export function createClaudeOneShot(options: ClaudeOneShotOptions): ClaudeOneSho
   }
   return async (request) => {
     await acquire()
+    let run: OneShotRun
     try {
-      return await runOnce(request, options)
-    } finally {
+      run = runOnce(request, options)
+    } catch (error) {
       release()
+      throw error
     }
+    // The SLOT is held until the CLI has shut down, though the caller has its answer before then: a queued
+    // completion still never spawns beside a CLI that is still exiting, so `concurrency` keeps bounding live
+    // processes, not just unanswered ones. A queued call pays the shutdown it always paid; the caller that
+    // was answered no longer does.
+    void run.closed.then(release)
+    return run.answer
   }
 }
 
-async function runOnce(request: ClaudeOneShotRequest, options: ClaudeOneShotOptions): Promise<string> {
+interface OneShotRun {
+  /** The model's answer, settled the moment the SDK's `result` message arrives. */
+  answer: Promise<string>
+  /** Settles (never rejects) once the session has been shut down, after `answer` has settled. */
+  closed: Promise<void>
+}
+
+// RESOLVE ON THE RESULT, CLOSE IN THE BACKGROUND. This used to `return` from inside a `for await`, which
+// calls the iterator's `return()` and AWAITS it, and the SDK's `return()` waits (bounded) for the CLI to
+// exit after the stdin EOF it sends. Measured 2026-10-05 against the real CLI: 420–520ms on every call
+// between the result message arriving and the completion resolving, paid by the schedule interpreter, the
+// thread namer and the live status line alike (plans/schedule-live-reading.md §13). Nothing the caller
+// needs arrives after `result` in a single-turn, tool-less session, so the answer settles there and the
+// identical shutdown — `return()` then `close()` — runs after it, unawaited. A shutdown failure is logged,
+// never thrown: the answer it would have rejected is already in the caller's hands. The timeout stays
+// armed through the shutdown, so a CLI that will not exit is still aborted (killed) at the deadline.
+function runOnce(request: ClaudeOneShotRequest, options: ClaudeOneShotOptions): OneShotRun {
   const executable = resolveClaudeExecutableAbsolute(options.claudeBin)
   const abort = new AbortController()
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   const timer = setTimeout(() => abort.abort(), timeoutMs)
-  const q = query({
+  const log = options.log ?? ((message: string) => frizzLog.warn("claude-oneshot", message))
+  const q = (options.query ?? query)({
     prompt: request.prompt,
     options: {
       cwd: options.cwd,
@@ -84,18 +116,41 @@ async function runOnce(request: ClaudeOneShotRequest, options: ClaudeOneShotOpti
       systemPrompt: request.system,
     },
   })
-  try {
-    for await (const message of q) {
-      if (message.type !== "result") continue
-      if (message.subtype === "success" && !message.is_error) return message.result
-      throw new Error(`Claude answered with ${message.subtype}${message.is_error ? " (error)" : ""}`)
+  const answer = (async () => {
+    try {
+      // Stepped by hand rather than `for await`: leaving a `for await` early awaits `return()`, which is
+      // the shutdown wait this function exists to keep off the caller's clock.
+      for (;;) {
+        const step = await q.next()
+        if (step.done) throw new Error("Claude ended the session without a result")
+        const message = step.value
+        if (message.type !== "result") continue
+        if (message.subtype === "success" && !message.is_error) return message.result
+        throw new Error(`Claude answered with ${message.subtype}${message.is_error ? " (error)" : ""}`)
+      }
+    } catch (error) {
+      if (abort.signal.aborted) throw new Error(`Claude did not answer within ${Math.round(timeoutMs / 1000)}s`)
+      throw error
     }
-    throw new Error("Claude ended the session without a result")
-  } catch (error) {
-    if (abort.signal.aborted) throw new Error(`Claude did not answer within ${Math.round(timeoutMs / 1000)}s`)
-    throw error
-  } finally {
-    clearTimeout(timer)
-    q.close()
+  })()
+  const report = (what: string, error: unknown) => {
+    // A shutdown racing the deadline's own abort is the abort working, not a failure worth a line.
+    if (abort.signal.aborted) return
+    log(`closing a finished completion: ${what} failed: ${error instanceof Error ? error.message : String(error)}`)
   }
+  const closed = answer.then(() => undefined, () => undefined).then(async () => {
+    try {
+      await q.return(undefined)
+    } catch (error) {
+      report("return()", error)
+    } finally {
+      clearTimeout(timer)
+      try {
+        q.close()
+      } catch (error) {
+        report("close()", error)
+      }
+    }
+  })
+  return { answer, closed }
 }
