@@ -74,6 +74,7 @@ import { useNowMs } from "../lib/liveClock.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BANDS, type BandKey } from "./BandLabel.tsx"
 import { ProjectMenu, projectFacts, shortPath, useAddProject, warmProjectPicker } from "./ProjectActions.tsx"
+import { ProjectBoard } from "./ProjectBoard.tsx"
 import { QueueBadge } from "./ProjectSwitcher.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { ROW_ACTION_CLASS, RailRow, type RowScope } from "./Sidebar.tsx"
@@ -192,6 +193,10 @@ export function ProjectList({
   const busy = run("busy")
   const quiet = run("quiet")
   const grip = reorder.grips([busy.map((entry) => entry.project), quiet.map((entry) => entry.project)])
+  // A PROJECT'S BOARD is its own component (ProjectBoard.tsx): Colin's banded sidebar, not this list with
+  // one project in it. After every hook above, so a change of view keeps this component's hook order.
+  const boarded = view.kind === "project" ? reorder.ordered.find((project) => project.slug === view.slug) : undefined
+  if (boarded) return <ProjectBoard project={boarded} activeKey={activeKey} hidden={hidden} onQueuedRow={onQueuedRow} switcher={switcher} />
   const group = (entry: (typeof groups)[number], spaced: boolean) => (
     <ProjectGroup
       key={entry.project.id}
@@ -1149,7 +1154,7 @@ function PinCountGlyph({ size = 10 }: { size?: number }) {
  * will not run on its own, warning-toned when that is Frizz's doing or a proposal's. A click opens the
  * schedule's drawer.
  */
-function ScheduleRows({ project, count, attention }: { project: QueuesProject; count: number; attention: boolean }) {
+export function ScheduleRows({ project, count, attention }: { project: QueuesProject; count: number; attention: boolean }) {
   const list = useQuery({
     // The poll's count and attention ride the key, so the list is read again the moment either moves.
     queryKey: [...scheduleKeys.list(project.id), count, attention],

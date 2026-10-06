@@ -1,6 +1,6 @@
 import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
-import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
+import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, Repeat, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents, restIsWorking } from "../groups.ts"
@@ -8,7 +8,7 @@ import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { humpStarts } from "../lib/threadMentions.ts"
-import { BANDS, BAND_LABEL_TYPE, BandCount, BandGlyph, type BandKey } from "./BandLabel.tsx"
+import { BANDS, BAND_LABEL_TYPE, BandCount, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
 import { Tooltip } from "./Tooltip.tsx"
@@ -31,11 +31,12 @@ import { RailDeadline } from "./DeadlineControl.tsx"
 // verbs it offers on hover (pin, Retry, reopen). Everything's project list draws
 // every project's threads with these (ProjectList.tsx), each group under its project's ThreadProjectScope.
 //
-// The file is named for the column it was written for: a project's own board had a floating sidebar of
-// these rows in four bands (Rested, Active, Snoozed, Done) until 2026-09-28, when the board went with the
-// project view. The bands are Everything's now — a project's current work in the list, and the rest of
-// it (Snoozed, Done, External) under its row when it is opened — and ARCHITECTURE.md § Board
-// nomenclature still fixes their names.
+// The file is named for the column it was written for: a project's own board, whose floating sidebar
+// listed these rows in named bands. The board went with the project view on 2026-09-28 and came back
+// on 2026-10-06 as `/project/<slug>` (ProjectBoard.tsx), banded under Colin's names — Pinned, Queue,
+// Running, Snoozed, Done, External — with SectionHeader below over each band. All projects lists every
+// project's current work with the same rows (ProjectList.tsx), and ARCHITECTURE.md § Board nomenclature
+// fixes the bands' names.
 //
 // ENTIRELY MOUSE-DRIVEN: no arrow-walk, no selection chevron. A row CLICK opens the thread — in the list,
 // through its RowScope: its card when the queue is showing it, else its drawer, in place.
@@ -106,36 +107,97 @@ export function RailRow({ t, active, open = false, restedAge = false, scope, car
   return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} />
 }
 
-// A section header: an optional collapse caret, the band's icon, its name, and the count. ONE source
-// of truth for every band header so they can never visually drift apart again. Snoozed, Done and
-// External are collapsible; Pinned, Ready and Working (since 2026-09-19) omit onToggle and render as a
-// static div with a caret-width spacer, so every icon and label sits in the same column.
+// A BAND'S HEADER — its glyph, its NAME and its count, over its rows. ONE source of truth for every band
+// header so they can never visually drift apart again (Colin's rule, upstream Sidebar.tsx SectionHeader).
+// Pinned, Queue and Running are never collapsible (upstream 2026-09-19: the Pinned, Queue and Running
+// labels "should not be collapsible") and render as a static line; Snoozed, Done, External and Schedules
+// pass `onToggle`, and the whole line is the fold's button, with the disclosure chevron in the row gutter
+// — where the scroll marker and a project row's own chevron sit — so the glyphs stay in one column.
 //
-// The name and icon come from the band table (BandLabel.tsx), which the inbox's header and a thread
-// header's stamp read too — so the rail's headers are the legend for the rest of the screen.
-export function SectionHeader({ band, count, collapsed, onToggle }: { band: BandKey; count: number; collapsed?: boolean; onToggle?: () => void }) {
-  const inner = (
+// THE ROW'S GEOMETRY, NOT UPSTREAM'S. The glyph stands in the INDICATOR column (`data-xq-indicator`, the
+// 16px slot each row's state glyph stands in) and the name on the titles' column, so a band's name is
+// strung on its project's cord like a row (ThreadConnector) and reads as the head of the column under
+// it. The name and icon come from the band table (BandLabel.tsx), which the queue's header and a thread
+// header's stamp read too — so the board's headers are the legend for the rest of the screen.
+//
+// 15px TALL, MEASURED against the rows either side (sans, 2026-09-29, when the fork named its loud bands
+// this way): the name's 11px capitals are 8px of ink, and a row's 13px title leaves ~7px of its own line
+// box and padding clear above and below its ink, so at 15px the name stands ~10.5px off the row above and
+// ~9.5px off the row below — a gap each way that reads as a break in the list, where 12px left the name
+// touching the titles and 19px (a row's line) read as an empty row. It is also what lets the board carry
+// a header over each band and still show upstream's 22 rows at 1440x900 (capacityParity.e2e.test.ts):
+// upstream's headers were 24.5px, and the board has no room for that.
+export function SectionHeader({ band, count, collapsed, onToggle, attention = false }: {
+  band: BandKey | "schedules"
+  count: number
+  collapsed?: boolean
+  onToggle?: () => void
+  /** The count in the warning tone: one of the band's rows wants the human (a paused schedule). */
+  attention?: boolean
+}) {
+  const { Icon, label } = band === "schedules" ? SCHEDULES_BAND : BANDS[band]
+  const body = (
     <>
-      {onToggle ? (
-        <ChevronRight size={11} className={`transition-transform ${collapsed ? "" : "rotate-90"}`} />
-      ) : (
-        // Reserve the caret's width so a non-collapsible header lines up with the collapsible ones.
-        <span className="w-[11px] shrink-0" aria-hidden />
+      {onToggle && (
+        // In the row gutter (x 4.5, where a project row's own chevron stands), as a flex item rather than an
+        // overlay so it can sit on the label's baseline: its negative margins hand the 15.5px back, and the
+        // glyph after it stays in the indicator column.
+        <span aria-hidden data-band-chevron className={`${BAND_MARK} -ml-[15.5px] -mr-[3.5px] w-[11px] text-muted-60 transition-[rotate] ${collapsed ? "" : "rotate-90"}`}>
+          <ChevronRight size={11} />
+        </span>
       )}
-      <BandGlyph band={band} />
-      <span>{BANDS[band].label}</span>
-      <BandCount count={count} />
+      <span data-xq-indicator className={`${BAND_MARK} w-4`}>
+        <Icon size={11} />
+      </span>
+      {/* The count rides right beside its name, as it does on the queue's header (BandLabel.tsx): `gap-1`
+          and the count's own `ml-1.5`, 10px, where the line's `gap-2` would have stood it 14px off. */}
+      <span className="flex min-w-0 items-baseline gap-1">
+        <span>{label}</span>
+        {attention ? <span className="ml-1.5 tabular-nums text-attention-soft">{count}</span> : <BandCount count={count} />}
+      </span>
     </>
   )
-  const cls = `flex w-full items-center gap-1 px-1.5 py-1 ${BAND_LABEL_TYPE}`
-  return onToggle ? (
-    <button onClick={onToggle} className={`${cls} transition-colors hover:text-fg`}>
-      {inner}
+  const className = `${BAND_HEADER} ${BAND_LABEL_TYPE}`
+  if (!onToggle) {
+    return (
+      <div data-band-header={band} data-xq-band-label={band} className={className}>
+        {body}
+      </div>
+    )
+  }
+  const verb = collapsed ? "Show" : "Hide"
+  return (
+    <button
+      type="button"
+      data-band-header={band}
+      data-xq-band-label={band}
+      // Folding a band reshapes the list by the human's own hand (lib/listHold.ts): the list follows it.
+      data-xq-reshape
+      aria-expanded={!collapsed}
+      title={`${verb} ${label.toLowerCase()}`}
+      onClick={onToggle}
+      className={`${className} w-full rounded-md text-left outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+    >
+      {body}
     </button>
-  ) : (
-    <div className={cls}>{inner}</div>
   )
 }
+
+/** The header's line — see SectionHeader. `pl-5` and `gap-2` put the glyph in the indicator column and the
+ *  name on the titles' column; `items-baseline` so each mark can sit on the name's cap band (BAND_MARK). */
+const BAND_HEADER = "relative flex h-[15px] min-w-0 items-baseline gap-2 pl-5 pr-1.5 pt-1"
+/**
+ * A mark beside the band's name — the glyph in the indicator column, the fold's chevron in the gutter — ON
+ * THE NAME'S CAP BAND, computed by the browser rather than fitted: the 1em box's bottom sits on the name's
+ * baseline (`self-baseline`; a box with no baseline of its own offers its bottom edge) and the translate
+ * lowers its centre from half an em to half a cap above it. Lucide draws both glyphs symmetrically in
+ * their boxes, so the box centre is the ink centre. Box-centred on the 15px line instead, every glyph and
+ * the chevron read 1.34px low (sans, 11px, 2026-10-06); the residual after this is in the commit.
+ */
+const BAND_MARK = "flex h-[1em] shrink-0 justify-center self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
+/** Schedules are no band of the rail's — not threads — so their name and glyph are their own: the repeat
+ *  mark every surface draws for a schedule. */
+const SCHEDULES_BAND = { label: "Schedules", Icon: Repeat }
 
 // The title's trailing adornment, the provider mark, is an ATOMIC inline box, and the line breaker is
 // free to break right BEFORE it even though no whitespace separates it from the title. On a wrapping title that regularly stranded the provider
@@ -326,7 +388,8 @@ export const ThreadRow = memo(function ThreadRow({
                 </TitleWithTrailers>
               </span>
               {working && (
-                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-[19px] text-muted-70" title={working.status}>
+                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-none text-muted-70" title={working.status}>
+                  <TitleStrut />
                   {working.status}
                 </span>
               )}
@@ -394,6 +457,20 @@ export const ThreadRow = memo(function ThreadRow({
   )
 })
 
+// A ROW'S SMALL READINGS SIT ON THE TITLE'S LINE, NOT ON A LINE OF THEIR OWN. A reading is set smaller than
+// the title (10.5px against 13px) and baseline-aligned with it, and a smaller font on the same 19px leading
+// hangs more of its line box BELOW the baseline — so the title's line and the reading's, aligned on one
+// baseline, spanned 20px, and every row carrying a rest time or a clock was 28px where the rest were 27
+// (measured 2026-10-06 on a project's board: every Queue row 28, every Pinned and Running row 27). That
+// was a pixel a row: 15 of them at the capacity load (capacityParity.e2e.test.ts), most of a row the
+// board could have shown. So a reading's own leading is none, and an empty inline box in the TITLE's
+// type stands in its line (TitleStrut): the line box is the title's exactly, in any font, and the digits
+// keep their baseline — the same pixel they were drawn on before.
+const READING_TYPE = "text-[10.5px] leading-none text-muted-55"
+function TitleStrut() {
+  return <span aria-hidden className="text-[13px] leading-[19px]" />
+}
+
 // THE CUE'S RIGHT-HAND COLUMN — how long ago this thread came to REST (maintainer 2026-08-08: "a
 // right-justified label on each item in the cue indicating when the thread came to rest").
 //
@@ -424,10 +501,11 @@ export function RestedAge({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?:
       aria-label={`${t.queuedAt ? "Queued" : "Rested"} ${relativeAge(at, now) ?? span}`}
       // shrink-0 + tabular-nums: the column must not compress under a long title, and the digits must
       // not jitter horizontally when the clock ticks. The title takes the remaining width and wraps.
-      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted-55 ${
+      className={`shrink-0 tabular-nums ${READING_TYPE} ${
         yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
       }`}
     >
+      <TitleStrut />
       {span}
     </time>
   )
@@ -695,14 +773,17 @@ function SubAgentCount({ t, yieldsToRetry }: { t: ThreadView; yieldsToRetry?: bo
       data-rail-subagents={t.id}
       title={names}
       aria-label={`${subs.length} ${subs.length === 1 ? "sub-agent" : "sub-agents"}`}
-      className={`flex shrink-0 items-baseline gap-[3px] text-[10.5px] leading-[19px] text-muted-55 ${
+      className={`flex shrink-0 items-baseline gap-[3px] ${READING_TYPE} ${
         yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
       }`}
     >
       <span aria-hidden className="flex self-baseline translate-y-[calc(4.17px_-_0.5cap)]">
         <Bot size={10} />
       </span>
-      <span className="tabular-nums">{subs.length}</span>
+      <span className="tabular-nums">
+        <TitleStrut />
+        {subs.length}
+      </span>
     </span>
   )
 }
@@ -712,10 +793,11 @@ function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry
     <span
       data-rail-working-age
       aria-label={`On this task for ${elapsed}`}
-      className={`shrink-0 tabular-nums text-[10.5px] leading-[19px] text-muted-55 ${
+      className={`shrink-0 tabular-nums ${READING_TYPE} ${
         yieldsToRetry ? "transition-opacity group-hover:opacity-0 group-focus-within:opacity-0" : ""
       }`}
     >
+      <TitleStrut />
       {elapsed}
     </span>
   )

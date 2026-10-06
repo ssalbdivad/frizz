@@ -263,3 +263,23 @@ export function setBandsOpen(projectId: string, bands: readonly QuietBandKey[], 
 export function useOpenBands(): ReadonlySet<string> {
   return useSyncExternalStore(openBands.subscribe, openBands.read, () => NONE)
 }
+
+// ---- A project board's folds ---------------------------------------------------------------------------
+//
+// THE BOARD'S QUIET BANDS — Snoozed, Done, External and Schedules under their own headers on a project's
+// board (ProjectBoard.tsx), collapsed to start as Colin's sidebar had them (upstream store.ts
+// `sidebarCollapsed`: snoozed, inactive and external true). A set of the OPEN ones, `<projectId>:<band>`,
+// per browser like every other fold here — and its own set, not All projects' `openBands`: a band opened
+// on a project's board is a header the human clicked, while one open in All projects lists that band
+// under the project's row among every other project's, and opening one should not reshape the other.
+const boardOpenBands = persistedSet("frizz.boardOpenBands")
+
+/** Open or close one of a project board's quiet bands; `on` omitted toggles it. */
+export function setBoardBandOpen(projectId: string, band: QuietBandKey, on?: boolean): void {
+  boardOpenBands.set(bandKey(projectId, band), on)
+}
+
+/** A project board's open quiet bands, as `bandKey`s — live, and a stable Set between changes. */
+export function useBoardOpenBands(): ReadonlySet<string> {
+  return useSyncExternalStore(boardOpenBands.subscribe, boardOpenBands.read, () => NONE)
+}
