@@ -317,6 +317,21 @@ test("§3.5.3 calendar quarters read as quarters, and only when the months match
   assert.deepEqual(next("FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0", { dtstart: "2026-10-05T00:00", n: 3 }), ["2027-01-01T09:00", "2027-04-01T09:00", "2027-07-01T09:00"])
 })
 
+test("a month filter over a daily or weekly rule reads in words, never as the raw rule (fix round 1, model-raw-rrule-echo)", () => {
+  // What the model wrote for "every Friday except in December": the panel echoed `on the rule FREQ=WEEKLY;…`.
+  const say = (rrule: string) => describeSchedule(compiled(rrule))
+  assert.equal(say("FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0"), "every Friday at 9am, except in December")
+  assert.equal(say("FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,9,10,11,12;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0"), "every weekday at 9am, except in July and August")
+  assert.equal(say("FREQ=DAILY;BYMONTH=3,4,5,6,7,8,9,10;BYHOUR=7;BYMINUTE=0"), "every day at 7am, from March to October")
+  assert.equal(say("FREQ=DAILY;BYMONTH=11,12,1,2;BYHOUR=7;BYMINUTE=0"), "every day at 7am, from November to February")
+  assert.equal(say("FREQ=WEEKLY;INTERVAL=2;BYMONTH=1,4,7;BYDAY=FR;BYHOUR=16;BYMINUTE=0"), "every other week on Friday at 4pm, in January, April and July")
+  assert.equal(say("FREQ=WEEKLY;BYMONTH=12;BYDAY=FR;BYHOUR=16;BYMINUTE=0;COUNT=3"), "every Friday at 4pm, in December, 3 times")
+  // A set the words would have to list at length stays the rule: the next runs are the confirmation.
+  assert.match(say("FREQ=WEEKLY;BYMONTH=1,3,5,7,9;BYDAY=FR;BYHOUR=9;BYMINUTE=0"), /^on the rule /)
+  // And what fires is what it says.
+  assert.deepEqual(next("FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0", { dtstart: "2026-11-20T00:00", n: 3 }), ["2026-11-20T09:00", "2026-11-27T09:00", "2027-01-01T09:00"])
+})
+
 test("§3.5.4 an even minute step from :00 reads as an interval", () => {
   const say = (rrule: string) => describeSchedule(compiled(rrule))
   assert.equal(say("FREQ=HOURLY;BYMINUTE=0,15,30,45"), "every 15 minutes")

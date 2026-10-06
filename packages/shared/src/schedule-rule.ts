@@ -460,6 +460,15 @@ function timePart(text: string): ScheduleDescribePart {
 }
 
 function phraseParts(rule: ScheduleRule, dtstart: Wall): Parts | undefined {
+  // A month FILTER over a daily or weekly rule — the model's spelling of "every Friday except in December"
+  // is WEEKLY;BYMONTH=1,…,11 — is the rule without it, then which months. It echoed as `on the rule …`
+  // until fix round 1 (model-raw-rrule-echo): the human was asked to confirm raw RRULE text.
+  if (rule.byMonth && (rule.freq === "DAILY" || rule.freq === "WEEKLY") && !rule.byMonthDay && !rule.bySetPos) {
+    const { byMonth, ...unfiltered } = rule
+    const months = monthsQualifier(byMonth)
+    const rest = months === undefined ? undefined : phraseParts(unfiltered, dtstart)
+    return rest && months!.length ? [...rest, lead(", "), ...months!] : rest
+  }
   const times = timesParts(rule, dtstart)
   if (rule.freq === "HOURLY") {
     const minute = sortedUnique(rule.byMinute ?? [dtstart.mi])
@@ -519,6 +528,29 @@ function phraseParts(rule: ScheduleRule, dtstart: Wall): Parts | undefined {
   const days = rule.byMonthDay ?? [dtstart.d]
   if (months.length !== 1 || days.length !== 1 || days[0]! < 0) return undefined
   return [intervalPart("every year"), lead(" on "), daysPart(`${months[0]} ${days[0]}`), ...at]
+}
+
+/** Which months a filter keeps, in the fewest words: "except in December" (one or two left out), "from March to
+ *  October" (one run, across the new year too), "in January, April and July" (three at most). Anything else
+ *  would have to list months at length, and stays the raw rule. Every month is no qualifier at all. */
+function monthsQualifier(byMonth: number[]): Parts | undefined {
+  const set = sortedUnique(byMonth).filter((m) => m >= 1 && m <= 12)
+  if (set.length === 12) return []
+  if (set.length === 0) return undefined
+  const name = (m: number) => MONTH_NAMES[m - 1]!
+  const missing = MONTH_NAMES.map((_, i) => i + 1).filter((m) => !set.includes(m))
+  if (missing.length <= 2) return [lead("except in "), daysPart(joinWords(missing.map(name)))]
+  if (set.length >= 3) {
+    // A run of consecutive months, possibly across December: the one month whose predecessor is missing.
+    const starts = set.filter((m) => !set.includes(m === 1 ? 12 : m - 1))
+    if (starts.length === 1) {
+      const from = starts[0]!
+      const to = ((from - 1 + set.length - 1) % 12) + 1
+      return [lead("from "), daysPart(`${name(from)} to ${name(to)}`)]
+    }
+  }
+  if (set.length <= 3) return [lead("in "), daysPart(joinWords(set.map(name)))]
+  return undefined
 }
 
 /** The minute step when BYMINUTE is an even step from :00 that fills the hour (0,15,30,45 → 15). */
