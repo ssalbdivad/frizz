@@ -220,8 +220,10 @@ const ABOUT = /\b(?:cron\w*|jobs?|workflows?|actions?|pipelines?|runs?|ran|runni
 const DEADLINE_BEFORE = /\b(?:until|by|before|after|since|than|from|for)\s+(?:\S+\s+)?$/
 const DEADLINE_OPENS = /^(?:until|till|by|before|after|since|than|from|for)\b/
 
-const TOUCH_AFTER = /^[\s,;:—–(-]*(unless|except|excluding|only(?:\s+(?:if|when|on|during|after|before))?|if|when|whenever|for|until|till|thru|through|starting|beginning|from|after|before|but(?:\s+not)?|skip|skipping|ending|between|during|while|provided|assuming|as\s+long\s+as)(?![\w'’])/
-const TOUCH_BEFORE_WORD = /(?:^|[^\w'’])(until|till|by|before|after|since|from|for|unless|except|if|when|only)\s+$/
+const TOUCH_AFTER = /^[\s,;:—–(-]*(unless|except|excluding|only(?:\s+(?:if|when|on|during|after|before))?|if|when|whenever|for|until|till|thru|through|starting|beginning|from|after|before|but(?:\s+not)?|skip|skipping|ending|between|during|while|provided|assuming|as\s+long\s+as|this\s+(?:week|month|year|quarter)|next\s+(?:week|month|year)|today|tonight|tomorrow)(?![\w'’])/
+const TOUCH_BEFORE_WORD = /(?:^|[^\w'’])(until|till|by|before|after|since|from|for|unless|except|if|when|only|stop|stopping|quit)\s+$/
+/** A deadline or anchor two words before: "have it done by Friday every week", "after standup every day". */
+const TOUCH_BEFORE_PAIR = /(?:^|[^\w'’])((?:until|till|by|before|after|since|from)\s+[^\s,;:.!?\u0001]+)\s+$/
 const CLAUSE_QUALIFIER = /^\s*(unless|except|excluding|only|if|when|whenever|until|till|for|starting|beginning|after|before|but|while|provided|assuming)(?![\w'’])/
 /** A second day's own clock, so the compound's unread words are the whole second rule. */
 const CONJ_CLOCK = `(?:\\s+(?:at|@)\\s*${CLOCK_ANY}|\\s+${CLOCK_STRICT})?`
@@ -1614,10 +1616,10 @@ function touching(p: Prep, region: Span, span: Span): { unread: Span; why: CueWh
   const conj = CONJOINED.exec(after)
   if (conj) return { unread: trimSpan(p, { start: span.end, end: span.end + conj[0].length }), why: "compound" }
   const before = m.slice(region.start, span.start)
-  const w = TOUCH_BEFORE_WORD.exec(before)
+  const w = TOUCH_BEFORE_WORD.exec(before) ?? TOUCH_BEFORE_PAIR.exec(before)
   if (w) {
     const at = region.start + w.index + w[0].trimEnd().length - w[1]!.length
-    return { unread: { start: at, end: at + w[1]!.length }, why: whyOf(w[1]!) }
+    return { unread: { start: at, end: at + w[1]!.length }, why: whyOf(w[1]!.split(/\s+/)[0]!) }
   }
   // A clause that OPENS with a qualifier and runs into the phrase with no comma: "if the build is green
   // every Monday at 9am". A qualifier inside the task ("check if the build is green every Monday at

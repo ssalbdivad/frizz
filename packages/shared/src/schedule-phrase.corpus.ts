@@ -281,7 +281,6 @@ export type CaseSource =
   | "escape"
   | "edge"
   | "kind"
-  | "dst"
 
 export interface PinnedCase {
   text: string
@@ -416,7 +415,7 @@ export const CASES: PinnedCase[] = [
   { text: "summarize what happened today in #incidents", source: "probe", edges: "none" },
   { text: "add a 'remind me tomorrow at 9' option to the snooze menu", source: "probe", edges: "none", anywhere: "exact inside «tomorrow at 9» FREQ=DAILY;COUNT=1;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 meridiem:9am/9pm" },
   { text: "bump the timeout from 5 minutes to 10 minutes", source: "probe", edges: "none" },
-  { text: "the build has been failing every day this week, find out why", source: "probe", edges: "none", anywhere: "exact inside «every day» FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 time:9am" },
+  { text: "the build has been failing every day this week, find out why", source: "probe", edges: "none", anywhere: "cue inside leftover «this week» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00" },
   { text: "refactor the scheduler so every Monday at 9am isn't parsed as UTC", source: "probe", edges: "none", anywhere: "exact inside «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   { text: "look at the hourly metrics and tell me if anything is off", source: "probe", edges: "none" },
   { text: "on Friday we shipped a regression; bisect it", source: "probe", edges: "none" },
@@ -534,7 +533,7 @@ export const CASES: PinnedCase[] = [
   { text: "don't stop until 10 am tomorrow", source: "timebox", edges: "none", anywhere: "cue close leftover «until» core FREQ=DAILY;COUNT=1;BYHOUR=10;BYMINUTE=0 @2026-10-06T10:00" },
   { text: "keep going until 6pm", source: "timebox", edges: "none" },
   { text: "work on the migration until tomorrow morning", source: "timebox", edges: "none", anywhere: "cue close leftover «until» core FREQ=DAILY;COUNT=1;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00" },
-  { text: "stop at 5pm today", source: "timebox", edges: "none", anywhere: "exact close «at 5pm today» FREQ=DAILY;COUNT=1;BYHOUR=17;BYMINUTE=0 @2026-10-05T17:00" },
+  { text: "stop at 5pm today", source: "timebox", edges: "none", anywhere: "cue close leftover «stop» core FREQ=DAILY;COUNT=1;BYHOUR=17;BYMINUTE=0 @2026-10-05T17:00" },
   { text: "go until 10am tomorrow, then summarize", source: "timebox", edges: "none", anywhere: "cue inside leftover «until» core FREQ=DAILY;COUNT=1;BYHOUR=10;BYMINUTE=0 @2026-10-06T10:00" },
   // ---- escape
   { text: "\"every Monday at 9am\" is parsed as UTC, fix it", source: "escape", edges: "none" },
@@ -546,7 +545,7 @@ export const CASES: PinnedCase[] = [
   { text: "\"every Monday at 9am", source: "escape", edges: "none" },
   { text: "see the doc.\n\nevery Monday at 9am triage new issues", source: "escape", edges: "none", anywhere: "exact inside «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   // ---- edge
-  { text: "have it done by Friday every week", source: "edge", edges: "exact close «every week» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00 day:Monday time:9am veto:deadline", anywhere: "exact close «every week» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00 day:Monday time:9am" },
+  { text: "have it done by Friday every week", source: "edge", edges: "cue close leftover «by Friday» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   { text: "schedule a sync every Monday at 9am", source: "edge", edges: "exact close «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   { text: "post the standup notes. every Monday at 9am", source: "edge", edges: "exact close «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   { text: "every Monday at 9am. Then post the notes", source: "edge", edges: "exact open «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },

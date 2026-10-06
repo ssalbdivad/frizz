@@ -311,8 +311,13 @@ test("a deadline word just before a close-edge phrase keeps it dark", () => {
       assert.equal(isScheduleOffer(r), false, `${text}: ${summarizeReading(text, r)}`)
     }
   }
-  const r = read("have it done by Friday every week", "edges")
-  assert.ok(r.kind === "exact" && r.veto === "deadline")
+  // The word right before, or a deadline and its object, is a qualifier the reading cannot drop: a cue,
+  // dark at the close edge. In the mode the model reads it ("by Friday every week" is Fridays to Sonnet).
+  const byFriday = read("have it done by Friday every week", "anywhere")
+  assert.ok(byFriday.kind === "cue" && byFriday.why === "leftover", summarizeReading("have it done by Friday every week", byFriday))
+  // Where the grammar can read the idiom's words as a start, the guard still turns it down.
+  const r = read("ship the fix from Friday every week", "edges")
+  assert.ok(r.kind === "exact" && r.veto === "deadline", summarizeReading("ship the fix from Friday every week", r))
   // Two words away is no longer the idiom.
   assert.equal(isScheduleOffer(read("ship it for the team every Monday at 9am", "edges")), true)
 })
@@ -355,11 +360,21 @@ test("quotes, backticks, fences, a leading /command and excluded runs are never 
 })
 
 test("mid-text phrases stay dark in the box and are read in the mode", () => {
-  for (const text of ["the build has been failing every day this week, find out why", "see the doc.\n\nevery Monday at 9am triage new issues", "list every Friday release from the changelog"]) {
+  for (const text of ["the job that runs every Monday at 9am is broken, fix it", "see the doc.\n\nevery Monday at 9am triage new issues", "list every Friday release from the changelog"]) {
     assert.equal(isScheduleOffer(read(text, "edges")), false, text)
     const r = read(text, "anywhere")
     assert.ok(r.kind === "exact" && r.edge === "inside", text)
   }
+})
+
+test("found by the model (the agreement experiment): words that bound or move a phrase, read as such", () => {
+  // Sonnet refused this as no schedule; the grammar had dropped "this week", a bound.
+  const week = read("the build has been failing every day this week, find out why", "anywhere")
+  assert.ok(week.kind === "cue" && week.why === "leftover")
+  // Sonnet read Fridays; the grammar had dropped "by Friday" and assumed Monday.
+  assert.ok(read("have it done by Friday every week", "anywhere").kind === "cue")
+  // A time box, not a one-off: Sonnet found no schedule.
+  assert.ok(read("stop at 5pm today", "anywhere").kind === "cue")
 })
 
 test("the two known residual offers are still offers", () => {
