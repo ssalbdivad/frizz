@@ -177,6 +177,12 @@ once a|twice a|\d+ times a|on the \d{1,2}(st|nd|rd|th)|(first|last|\d{1,2}(st|nd
 In the mode, and in the drawer's Change when field, there is no gate. The grammar always runs, and one-shots are
 read.
 
+*As built (Step 1):* four widenings, each a recurrence the families in §3.2 read but the regex above missed:
+`everyday` (Todoist's spelling), an ordinal two words from its `of` (`first business day of`), a spelled-out day
+range (`Monday to Friday`, `Monday through Friday`) and a plural time of day on a day (`Monday mornings`,
+`weekday evenings`). The gate only decides whether the grammar runs, so a widening costs microseconds; the
+cores still decide what is read.
+
 ### 2.2 Windows (the performance contract)
 `scheduleWindows(prose, exclude)` returns at most two windows of at most **240 characters** each:
 - The **opening window** runs from the first character the grammar may read to the end of the first sentence
@@ -192,6 +198,17 @@ The cost of a read is flat at ~1ms whatever the prompt length (*measured*: the s
 and ~1ms on windows). Every correct reading in the 133-text corpus touched a clause edge, so the windows lost
 0 of 85 (*measured*, on a corpus written by the same hand as the grammar, so an upper bound).
 
+*As built (Step 1), measured on a box at load average ~20:* the windows are not the whole cost. `checkSchedule`
+walks 60 runs, and the first build ran it for EVERY candidate in the text — 2.5–4.4ms for a 37-character prompt and
+~500ms for a 4k one in the mode. Now only the phrase a reading is about is checked, and a check is memoized by rule,
+zone and day until the rule's first run (the only instant its answer can change), so a keystroke in the task
+re-reads in ~0.1–0.5ms. A phrase's FIRST read still walks the engine: 2–6ms for most rules, 13ms for a quarterly
+one. `schedule-rule.ts` got faster under it: `zonedWall` parses `Intl` `format` instead of `formatToParts` (2.2x,
+4.4µs vs 9.7µs a call), offsets are cached per zone and UTC quarter hour (every offset in use since 1970 changes on
+one), `wallToInstant` skips its verification when the offsets 14h either side agree, and `isValidTimeZone` caches.
+The unit test pins the warm path at the numbers above (20k `edges` under 3ms, 4k `anywhere` under 10ms) and the cold
+path under 50ms, so a walk per candidate cannot come back.
+
 ### 2.3 Edges (where an offer may sit)
 - **Open edge:** the phrase starts at the window's first character. Recurrences, cues and ambiguous words are
   offered here.
@@ -203,6 +220,16 @@ and ~1ms on windows). Every correct reading in the 133-text corpus touched a cla
   - the phrase is not a one-shot.
 - A phrase that is both (the whole text is `every Monday at 9am`) counts as the open edge.
 - **Mid-text** phrases are never offered. The glyph does not light for them either.
+
+*As built (Step 1):*
+- The about-a-schedule veto skips the sentence's FIRST word: that word is the imperative, never the subject, so
+  `run the e2e suite against staging nightly`, `trigger the deploy every Friday at 5pm` and `schedule a sync every
+  Monday at 9am` offer, while `a script I will run each morning` and `make sure the cron job fires …` do not.
+- The deadline guard also fires when the phrase itself OPENS with one of its words: the grammar reads `from Friday`
+  and `until Friday` as a start and a bound, so `ship the fix from Friday every week` would otherwise slip past it.
+- A vetoed reading stays `exact` with `veto: "deadline" | "about"`, so the glyph can still hint (row 24).
+- When the whole text is one adverb (`daily`), the end of the text is not a clause boundary at the open edge: it
+  is a word being typed, and reads `none`.
 
 ### 2.4 Publishing: when the visible reading changes
 The grammar may run on every input event (it is cheap). A pure **publish policy** decides when its answer
@@ -220,6 +247,15 @@ reaches the screen. Constants live in `lib/scheduleOffer.ts`.
 *Measured* (typing simulation, 85 exact phrases): publishing on every keystroke changed the reading a median of 3
 and a max of 10 times per phrase, with mid-word flicker (`Frid` → none). At word boundaries it was a median of 2
 and a max of 4, mostly refinements (`every Monday` with 9am dim → `at 9am` solid).
+
+*As built (Step 1), one rule more for `scheduleOffer.ts`:* **a qualifier still being typed holds the reading it
+qualifies.** The grammar never eats a word it has not read, so `every Monday at 9am for` is a cue, and so is `… for
+3`. While a cue's unread words run to the end of the text and its core is the offer on screen, the human is
+mid-qualifier, and the offer stays until the qualifier is finished (`for 3 weeks` → exact again) or the typing stops.
+A cue whose unread words grow as they are typed (`every 2nd Tuesday`, `… of`, `… of the`) is one reading. *Measured*
+by the boundary-only publisher in `schedule-phrase.test.ts` over the 156 positives the corpus offers: median 2, max 4
+changes with the hold; max 6 without it (`every weekday at 9am for 2 weeks starting Oct 12`), where each bound typed
+after a clock flipped the ledge to a cue and back.
 
 ### 2.5 Dark (pinned as negative tests, §15.1)
 - **Pure events:** `every time …`, `each time …`, `whenever …`, `after every …`, `when the … (passes|fails|
@@ -251,6 +287,13 @@ The expected residue is ~1 offer in 1,296. Pre-feature prompts measure false-pos
 open-edge exact offer.** Known residual false offers, pinned in the corpus so any change is visible:
 `Each morning standup takes too long, write a bot that summarizes it` (open edge) and `the report should go out
 weekly` (close edge). Each costs one Esc.
+
+*As built (Step 1), measured* by `scripts/schedule-phrase-history.ts` over the same 1,296 prompts at the spec's
+clock: **0 offers** (0 open-edge exact, 0 close-edge exact, 0 cues, 0 ambiguous). Dark: 1 close-edge cue (`… at the
+beginning of each day`), 1 event (`each time you mention a pr …`). As a check that it reads them at all, the same
+prompts under `anywhere` read 5 exact (all mid-text: `each morning` ×2, `in 4 minutes`, `in 10 minutes`, `tonight`),
+16 cues, 54 events and 3 presences. Mean 0.18ms a prompt. The two pinned residuals are not in his history; they
+stay pinned in the corpus.
 
 ---
 
@@ -314,6 +357,33 @@ Rules that bind every `exact`:
 - `describeSchedule` of an exact rule never starts with `on the rule` (the raw-RRULE fallback). A rule it cannot
   phrase is a `cue` with `why: "unsupported"`.
 
+*As built (Step 1), where the contract differs:*
+- `Assumed` `time` carries an optional `word`, the time-of-day word it read as a clock (`morning`, `nightly`, `EOD`),
+  for the tooltip.
+- `exact` carries `veto?: "deadline" | "about"` (§2.3 as built). `isScheduleOffer(reading)` is exported: the one
+  predicate for "the box offers this", shared by the box and the history gate. `SCHEDULE_AMBIGUOUS_COPY` is exported.
+- `readingsConsistent` takes an optional `span` on both sides, which is check (a) of §4.3. An assumed meridiem
+  compares the clock on 12 hours and an assumed day compares the time of day only, as an assumed time already
+  compared dates only. Its comparison window runs through the whole day of the model's last run, so an assumed 9am
+  does not lose the model's 8am on that day.
+- **DTSTART is the rule's first run after now** (or after its start date), and an interval is anchored on it:
+  `every other day at 8am` said tonight starts tomorrow, `every 3 days at 9am` too (the probe corpus anchored on
+  today's passed 9am, a first run two and a half days out). §3.3 row 6 therefore reads `2026-10-05T15:00`, not
+  `09:00`; an even interval inside one day keeps the same runs.
+- What "touching" covers, as built: a qualifier right after the span, including a bound said as a time (`every day
+  this week`, `next week`, `today`); the one word before it (`stop at 5pm today` is a time box, not a one-off), or a
+  deadline and its object (`by Friday every week`, `after standup every day`) — the last three found by the
+  agreement experiment, where Sonnet read them and the grammar had dropped them; a clause that OPENS
+  with a qualifier and runs into the phrase, with or without a comma (`if the build is green every Monday at 9am`
+  — but `check if the build is green every Monday at 9am` is the task's own `if`); a second rule joined by `and`,
+  or by a comma alone when it has its own clock (`every Mon at 8pm, Tue at 9pm`). Anywhere in the text: a strong
+  condition (`unless`, `except`, `only if`, `skip`, holidays, business hours), a bound or start (`for N weeks`,
+  `until`, `starting`, `from Nov 2`, `as of Monday`), an event offset and an event. Leftover schedule words in the
+  read region (a clock, `tomorrow`, `on Friday`) are `leftover`. A presence clause that runs into the phrase ends
+  where the phrase starts, and the reading is `presence`.
+- `in 2 hours` that lands on the repeated hour of a fall-back night is `unsupported`: a local wall clock names the
+  first 1:30, an hour early.
+
 ### 3.2 Phrase families (exact)
 | | Family | Examples | Reading |
 |---|---|---|---|
@@ -351,6 +421,18 @@ Rules that bind every `exact`:
 | quarterly, with no day | `“Quarterly” needs a day, like “on the first weekday of every quarter”.` |
 
 **Presence** and **event**: see §2.5.
+
+*As built (Step 1), where the families differ:*
+- **A** A bare plural is a schedule beside a clock **or before a clause boundary**: `Thursdays, run the flaky test
+  sweep` offers, `Wednesdays check on the docs` stays dark (the old `scheduleHint` lit both).
+- **H** `every 2nd Tuesday` with no `of the month` is a `vague` cue (every other Tuesday to some, the month's second
+  to others); `every first Monday` and `every last Friday` can only be the month's and read exact.
+- **I** `every year` with no date is a `vague` cue; Feb 29 is `unsupported` (a leap-day rule).
+- **J** The day forms are `YEARLY;BYMONTH=1,4,7,10` (or `3,6,9,12` counting from the end), as written. The
+  weekday-class form is `MONTHLY;BYMONTH=1,4,7,10;BYSETPOS=1`: under `YEARLY`, `BYSETPOS` picks ONE position in the
+  whole year. `quarterly on the first weekday` reads exact, so the ambiguous copy's own example works.
+- **E/F** A window's pair settles its bare numbers (`from 9 to 5` can only be 9am–5pm inside a day), so it is not
+  `assumed`. EOD and close of business read 5pm, with the word kept.
 
 ### 3.3 Examples: input → reading → what the human sees
 Computed with the real `scheduleEcho` at the §0.1 clock (`live-preview-design-probes/spec-echo-table.ts`, output beside it). The
@@ -944,6 +1026,12 @@ Each step lands as its own commit and is safe on its own.
   - Toasts take `actions` now; the create toast still offers Open alone until Undo arrives with Step 4.
 
 ### Step 1: the grammar and echo fixes (shared, no UI)
+*As built:* see the *As built (Step 1)* notes in §2.1, §2.2, §2.3, §2.4, §2.6, §3.1, §3.2 and §15.1. Beyond them:
+`schedule-phrase.corpus.ts` pins every case as one line per scope (`summarizeReading`) at the spec's clock, and
+grades the 133-text probe corpus as written at its own clock, with eight documented overrides (`PROBE_OVERRIDES`).
+`schedule-rule.ts` also got the engine speed-ups in §2.2. The agreement experiment's result is in
+`plans/scheduled-threads.md` § Live reading.
+
 - **New** `packages/shared/src/schedule-phrase.ts` (§3.1).
 - **New** `packages/shared/src/schedule-phrase.corpus.ts`, holding:
   - the 133-text probe corpus `live-preview-latency/corpus.ts`, ported;
@@ -1088,6 +1176,17 @@ Each step lands as its own commit and is safe on its own.
 **History gate** (`scripts/schedule-phrase-history.ts`, local only, never a fixture): fail if more than 1% of
 prompts get an offer, or more than 0.25% get an open-edge exact offer. Print the counts.
 
+*As built (Step 1), `schedule-phrase.test.ts`:*
+- The no-silent-prefix property runs ~20k readings: every positive the box offers × 17 strong qualifiers (any
+  placement) and 5 weak ones (`if …`, `when …`, `while I'm …`, `before …`, `after …`), inserted after the span,
+  prepended to the phrase, after the phrase in the field, and appended to the text. A weak qualifier prepended to
+  the whole TEXT opens the task when the phrase sits at the other end (`if the build is green, triage new issues
+  every Monday at 9am`), so that placement is tried only against a phrase that opens the text.
+- Typing stability uses a boundary-only stand-in for `scheduleOffer.ts` with the §2.4 hold; "nothing from a
+  mid-word prefix" holds by construction there, so the grammar's own share is pinned instead: a half-typed word is
+  never a typo.
+- Performance pins the warm path at the §15.1 numbers and the cold first read under 50ms (§2.2 as built).
+
 ### 15.2 Real browser e2e
 **`components/composerScheduleLive.e2e.test.ts`** follows the pattern of `composerMentionTypeahead.e2e.test.ts`:
 - puppeteer against a Vite fixture that mounts a real `DispatchForm` (extending
@@ -1203,6 +1302,9 @@ Cases:
 - **A confidently wrong exact reading.** None was silently wrong on the corpus; one (`every weekday at 6 … overnight
   pipeline`, read as 6pm) was wrong but flagged. The guards are the concrete dates, the dim guesses, the
   guessed-meridiem line, the agreement experiment and Undo.
+  *As built (Step 1):* the agreement experiment (`plans/scheduled-threads.md` § Live reading) found three grammar
+  misreads Sonnet got right — `every day this week`, `by Friday every week`, `stop at 5pm today` — each now a cue.
+  None of the three was offered in the box (mid-text, a vetoed close edge, a one-off).
 - **Tab ownership.** While an offer shows, Tab accepts instead of moving focus. The Tab-then-Enter accident is
   the one fast path to an unwanted schedule. The guards are the visible panel, the swapped send glyph, and Undo.
   There is deliberately no time lock.

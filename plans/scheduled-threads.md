@@ -209,3 +209,32 @@ Both tables join `STORAGE_TABLES` (import + purge) and the isolation test. Caps:
 Waking a sleeping machine; a presence gate; a per-run wall-clock budget; worktree isolation by default
 (the prompt can ask for one); a worker creating schedules in another project; one-off schedules
 (`COUNT=1` is allowed, but "tomorrow at 8, do X" is better as a lazy thread snoozed until 8).
+
+## 10. Live reading
+
+The prompt box reads a schedule phrase as it is typed, with no model, through the local grammar in
+`packages/shared/src/schedule-phrase.ts`. The design is `plans/schedule-live-reading.md`; its corpus and tests
+are `schedule-phrase.corpus.ts` and `schedule-phrase.test.ts`, and `scripts/schedule-phrase-history.ts` is the
+standing gate against false offers (0 of the maintainer's 1,296 history prompts offered, 2026-10-05).
+
+**The agreement experiment (2026-10-05, one time; the harness is deleted).** The grammar against the real
+interpreter (`createScheduleInterpreter` over `createClaudeOneShot`, Sonnet, at the spec's clock Mon Oct 5 2026
+14:32 New York) on every text the grammar reads `exact` in the mode: 196 texts, one model run each. The
+interpreter refused 41 phrase-only texts for having no task (its own rule, `What should each run do?`); those ran
+again with `, check CI` appended. Each disagreement was classified by hand.
+
+| Outcome | Texts |
+|---|---|
+| Same RRULE and DTSTART | 151 |
+| Same next 12 runs, different text (COUNT's position, an explicit `INTERVAL=1`, `MONTHLY;INTERVAL=3` for a quarter, a past DTSTART on a rule with no interval, `BYSETPOS=2,4` for the 2nd and 4th Wednesday, `YEARLY;COUNT=1` for a date) | 29 |
+| What the text leaves open: a part the grammar marks assumed (`nightly` 9pm vs midnight, `afternoon` 2pm vs 3pm, `at 6` 6pm vs 6am, `every month` and `every other month` on the 1st vs the 5th, `every other week`'s phase) | 6 |
+| What the text leaves open: an interval's anchor (`every 4 hours` at 15:00 vs 16:00; `every other day` from tomorrow vs from this morning's passed 9am, where the probe corpus's author agreed with Sonnet and the grammar's first-run anchor is the documented choice) | 2 |
+| **Model slips** — `Friday at 3pm` read as every Friday (×2); today's remaining runs dropped (`weekdays at 9am and 5pm`, `every 2 hours on weekdays from 9 to 5`, both started tomorrow); `every two weeks on Monday at 10` anchored on this morning's passed 10am, first run Oct 19 (the corpus expected Oct 12) | 5 |
+| **Grammar bugs, fixed and pinned** — `every day this week` dropped its bound (Sonnet: no schedule); `have it done by Friday every week` dropped `by Friday` and assumed Monday (Sonnet: Fridays); `stop at 5pm today` read a time box as a one-off (Sonnet: no schedule). Each is now a cue, so in the mode the model reads it; none of the three was offered in the box | 3 |
+
+180 of 196 (92%) agree on every run; 186 agree once the parts the grammar flags as assumed are set aside. The
+phrase spans agree on 193 of 194 readings (the one: Sonnet took `runs every hour` where the grammar took `every
+hour`, in a question about a cron job). Strength: one run per text, one time of day, and a corpus written by the
+grammar's author, so an upper bound on agreement; Sonnet's run-to-run variance was not measured. Both readers also
+read mid-text dispatches as schedules in the mode (`list every Friday release from the changelog`); the box keeps
+those dark, and the mode is entered only on purpose.
