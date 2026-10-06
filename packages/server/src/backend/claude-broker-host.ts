@@ -3,7 +3,7 @@
 // codex-app-server-host.ts (fork/record/adopt), keyed per Claude session id (one broker per thread).
 import { spawn } from "node:child_process"
 import { createHash, randomUUID } from "node:crypto"
-import { accessSync, constants as fsConstants, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs"
+import { accessSync, constants as fsConstants, existsSync, mkdirSync, readFileSync, readdirSync, unlinkSync, writeFileSync } from "node:fs"
 import { basename, delimiter, dirname, isAbsolute, join } from "node:path"
 import { resolveDetachedDaemonEntry } from "../detached-daemons.ts"
 import type { BrokerRecord, ClaudeBrokerConfig } from "./claude-agent-broker.ts"
@@ -191,6 +191,30 @@ export function takeBrokerRetirement(stateDir: string, sessionId: string): Broke
   } catch { /* no mark, or a torn write — either way there is nothing to explain a death with */ }
   try { unlinkSync(path) } catch {}
   return mark
+}
+
+/** Where the bridge records that one agent in a session has had its first approval held back (see
+ *  `claudeFirstApprovalHint`). Per AGENT, because a sub-agent never sees the note its parent was given.
+ *  On disk because the daemon — and so the conversation that read the note — outlives a frizz restart,
+ *  and a second "first time" after every restart would be the noise the note exists to spare. Not a
+ *  `.json` name, for the reason claudeBrokerRetirementPath gives. */
+export function claudePermissionHintPath(stateDir: string, sessionId: string, agentId: string | undefined): string {
+  const key = createHash("sha256").update(sessionId).update("\0").update(agentId ?? "").digest("hex").slice(0, 16)
+  return join(stateDir, "claude-broker", `${key}.perm-hint`)
+}
+
+export function permissionHintGiven(stateDir: string, sessionId: string, agentId: string | undefined): boolean {
+  return existsSync(claudePermissionHintPath(stateDir, sessionId, agentId))
+}
+
+/** Best-effort, like the retirement mark: a mark that cannot be written costs one repeat of the note
+ *  after a restart. The bridge keeps its own in-memory copy, so it never costs a loop. */
+export function markPermissionHintGiven(stateDir: string, sessionId: string, agentId: string | undefined): void {
+  try {
+    const path = claudePermissionHintPath(stateDir, sessionId, agentId)
+    mkdirSync(dirname(path), { recursive: true })
+    writeFileSync(path, new Date().toISOString())
+  } catch { /* see above */ }
 }
 
 function pidAlive(pid: number): boolean {

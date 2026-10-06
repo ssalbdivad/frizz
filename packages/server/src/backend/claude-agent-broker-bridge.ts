@@ -5,7 +5,7 @@
 // auto-allow, honoring the thread's permission mode — matching the retired argv path's
 // `--permission-mode auto`), and sends follow-up turns.
 import { randomUUID } from "node:crypto"
-import { adoptOrForkBroker, killBroker, lastKnownBrokerDaemon, liveBrokerRecord, liveBrokerRecordListed, liveBrokerRecords, claudeBrokerRecordPath, resolveClaudeExecutableAbsolute, takeBrokerRetirement, type BrokerRetirementMark, type BrokerRetirementReason } from "./claude-broker-host.ts"
+import { adoptOrForkBroker, killBroker, lastKnownBrokerDaemon, liveBrokerRecord, liveBrokerRecordListed, liveBrokerRecords, claudeBrokerRecordPath, markPermissionHintGiven, permissionHintGiven, resolveClaudeExecutableAbsolute, takeBrokerRetirement, type BrokerRetirementMark, type BrokerRetirementReason } from "./claude-broker-host.ts"
 import { connectClaudeBroker, type ClaudeBrokerClient } from "./claude-broker-client.ts"
 import { describeClaudeBrokerExit, readClaudeBrokerExit, type ClaudeBrokerExitRecord } from "./claude-broker-diagnostics.ts"
 import type { ClaudeDiagnostic, ClaudePermissionDecision, ClaudePermissionRequest, ClaudePluginReload, ClaudeQueryEvent, ClaudeSkillInfo } from "./claude-agent-sdk-protocol.ts"
@@ -20,6 +20,7 @@ import {
   CLAUDE_PERMISSION_LAPSED_MESSAGE,
   buildClaudePermissionInteraction,
   buildClaudeQuestionInteraction,
+  claudeFirstApprovalHint,
   claudePermissionDecisionFor,
   claudeProviderRequestId,
   claudeQuestionDecisionFor,
@@ -354,6 +355,8 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // field values back into the tool's `{questions, answers}` updatedInput. It is re-derived from the
   // re-delivered request on reconnect, so it survives a frizz restart with the question still open.
   const pendingPerms = new Map<string, { client: ClaudeBrokerClient; requestId: string; scope: InteractionSessionScope; ask?: ClaudeAskSpec }>()
+  // `<sessionId>\0<agentId>` of every agent whose first escalation was already held back with a note.
+  const hintedAgents = new Set<string>()
 
   // One timer per approval card with a deadline. Firing runs the store's own expiry sweep, so the card
   // lands as `expired` through the same subscriber every other ending takes and the daemon is answered
@@ -383,7 +386,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
   // decision. So it becomes an `agent-question` interaction — the exact payload kind codex's
   // item/tool/requestUserInput already produces, so one web card renders both providers — rather than an
   // "Approve AskUserQuestion?" card over raw JSON, whose bare allow the model reads as "not answered".
-  const routePermissionToDashboard = (slug: string, sessionId: string, cwd: string, requestId: string, request: ClaudePermissionRequest, client: ClaudeBrokerClient): void => {
+  const routePermissionToDashboard = (slug: string, sessionId: string, cwd: string, requestId: string, request: ClaudePermissionRequest, client: ClaudeBrokerClient, permissionMode: string | undefined): void => {
     const store = deps.interactions!, projectId = deps.projectId!
     const scope: InteractionSessionScope = { projectId, threadSlug: slug, sessionId }
     const owner = { projectId, threadSlug: slug, sessionId, cwd }
@@ -396,6 +399,18 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     // freeform prose or as no answer at all, and it would ask again — the loop this whole path removes.
     if (request.toolName === CLAUDE_ASK_USER_QUESTION_TOOL && !ask) {
       client.answerPermission(requestId, { behavior: "deny", message: CLAUDE_ASK_DENY_MESSAGE })
+      return
+    }
+    // The first escalation from each agent goes back to it with a note instead of to the operator — see
+    // claudeFirstApprovalHint. AFTER the reuse check, so a re-delivery of a request that already has a
+    // card keeps it. Remembered in memory AND on disk: memory so a mark that cannot be written never
+    // bounces the agent's own retry, disk so a frizz restart does not make a later one "first" again.
+    const hint = claudeFirstApprovalHint(request, permissionMode, deadlineMs)
+    const hintKey = `${sessionId}\0${request.agentId ?? ""}`
+    if (hint !== null && !hintedAgents.has(hintKey) && !permissionHintGiven(deps.stateDir, sessionId, request.agentId)) {
+      hintedAgents.add(hintKey)
+      markPermissionHintGiven(deps.stateDir, sessionId, request.agentId)
+      client.answerPermission(requestId, { behavior: "deny", message: hint })
       return
     }
     // Only an AUTHORIZATION card gets a deadline. A native question is the agent asking for a decision it
@@ -499,7 +514,9 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
 
   // Wire a client onto a broker record and register the session. Shared by the fork/adopt path
   // (`attach`) and the boot reattach (`warmUp`), which must NEVER fork.
-  const bind = (slug: string, sessionId: string, cwd: string, record: BrokerRecord): ActiveSession => {
+  // `launchMode` is the mode the caller asked for, used only when the record predates carrying its own.
+  const bind = (slug: string, sessionId: string, cwd: string, record: BrokerRecord, launchMode?: string): ActiveSession => {
+    const permissionMode = record.permissionMode ?? launchMode
     const client = connectClaudeBroker(record.socketPath, {
       onEvent: (event) => {
         // A `result` ENDS the turn, so nothing the turn was blocked on can be answered after it. A
@@ -516,7 +533,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       onPermissionRequest: (requestId, request) => {
         // Dashboard routing when the store is wired; else the decision hook / auto-allow (tests).
         if (deps.interactions && deps.projectId) {
-          try { routePermissionToDashboard(slug, sessionId, cwd, requestId, request, client) }
+          try { routePermissionToDashboard(slug, sessionId, cwd, requestId, request, client, permissionMode) }
           catch { client.answerPermission(requestId, { behavior: "deny", message: "permission routing failed" }) }
           return
         }
@@ -602,7 +619,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
       const retirement = takeBrokerRetirement(deps.stateDir, sessionId)
       if (fork.resume) reportDeath(slug, sessionId, retirement, lostGeneration)
     }
-    return bind(slug, sessionId, cwd, record)
+    return bind(slug, sessionId, cwd, record, permissionMode)
   }
 
   // SINGLE-FLIGHT per session: every caller that needs this session's daemon while one attach is

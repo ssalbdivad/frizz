@@ -352,6 +352,13 @@ export interface ClaudePermissionRequest {
   input: ClaudeJsonObject
   blockedPath?: string
   decisionReason?: string
+  /** WHICH check escalated: the CLI's `decision_reason_type` (`safetyCheck`, `subcommandResults`, `rule`,
+   *  `workingDir`, `other`, …), a field the SDK forwards but does not declare. Advisory only — absent from
+   *  a daemon forked before 2026-10-06, and dropped rather than refused when it is not a plain word. */
+  decisionReasonType?: string
+  /** A `permissions.ask` rule forced this prompt (the SDK's `matchedAskRule`, which rides here instead of
+   *  `decisionReasonType: "rule"` when the tool minted a richer reason of its own). */
+  ruleForced?: boolean
   title?: string
   displayName?: string
   description?: string

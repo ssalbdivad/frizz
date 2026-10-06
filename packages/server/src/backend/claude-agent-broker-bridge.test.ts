@@ -13,7 +13,7 @@ import Database from "../sqlite.ts"
 import { createInteractionStore } from "../interaction-store.ts"
 import { createClaudeAgentBrokerBridge } from "./claude-agent-broker-bridge.ts"
 import { CLAUDE_PERMISSION_LAPSED_MESSAGE } from "./claude-permission-interactions.ts"
-import { claudeBrokerRecordPath, claudeBrokerRetirementPath, killBroker, liveBrokerRecords, markBrokerRetired, readBrokerRecord, takeBrokerRetirement } from "./claude-broker-host.ts"
+import { claudeBrokerRecordPath, claudeBrokerRetirementPath, killBroker, liveBrokerRecords, markBrokerRetired, markPermissionHintGiven, permissionHintGiven, readBrokerRecord, takeBrokerRetirement } from "./claude-broker-host.ts"
 import { describeClaudeBrokerDiagnostic } from "./claude-broker-diagnostics.ts"
 import { CLAUDE_BROKER_CAPABILITY_INPUT_ACK, CLAUDE_INPUT_DROP_DIAGNOSTIC_PREFIX, type ClaudeQueryEvent } from "./claude-agent-sdk-protocol.ts"
 import { claudeBrokerDiagnosticLogPath } from "./claude-broker-diagnostics.ts"
@@ -139,6 +139,88 @@ test("an approval nobody answers is denied at its deadline and the turn carries 
     try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
     await rmEventually(dir)
   }
+})
+
+// ---- the first approval each agent needs goes back to it with a note -----------------------------------
+// A frizz worker runs permissive, so an escalation is usually a check the agent could have routed around
+// (claude-permission-interactions.ts, claudeFirstApprovalHint). The first one is denied with a note
+// instead of raising a card; the agent's identical retry is what reaches the operator.
+async function hintCase(scenario: string, opts: { premarked?: boolean } = {}) {
+  const dir = mkdtempSync(join(tmpdir(), "cbrk-hint-"))
+  const exe = join(dir, `fake-claude--${scenario}.mjs`)
+  copyFileSync(fakeCli, exe); chmodSync(exe, 0o700)
+  const store = createInteractionStore(new Database(":memory:"))
+  let results = 0
+  const bridge = createClaudeAgentBrokerBridge({
+    stateDir: dir, executablePath: exe,
+    env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" },
+    interactions: store, projectId: "proj-1",
+    onEvent: (_slug: string, _sid: string, ev: ClaudeQueryEvent) => { if (ev.kind === "result") results++ },
+  })
+  const sessionId = randomUUID()
+  const slug = "hint-thread"
+  const scope = { projectId: "proj-1", threadSlug: slug, sessionId }
+  const waitFor = async (cond: () => boolean, ms = 10_000) => { const d = Date.now() + ms; while (!cond()) { if (Date.now() > d) throw new Error("timeout"); await sleep(50) } }
+  const hostResponses = () => {
+    try {
+      return readFileSync(join(dir, "capture.jsonl"), "utf8").split("\n").filter(Boolean)
+        .map((l) => JSON.parse(l) as { kind: string; requestId?: string; response?: { response?: { behavior?: string; message?: string } } })
+        .filter((r) => r.kind === "host-response")
+    } catch { return [] }
+  }
+  // A frizz restart forgets everything but the disk: a session whose agent was told before one starts
+  // with only the marker to go on.
+  if (opts.premarked) markPermissionHintGiven(dir, sessionId, "agent-main")
+  const approveTheCard = async () => {
+    await waitFor(() => store.listPending(scope).length > 0)
+    const [card] = store.listPending(scope)
+    store.resolve(scope, {
+      slug, sessionId, interactionId: card.id,
+      sessionEpoch: card.owner.sessionEpoch, capabilityRevision: card.owner.capabilityRevision,
+      expectedRecordRevision: card.recordRevision, responseId: `r-${card.id}`, decisionId: "grant-turn",
+    })
+    await waitFor(() => results > 0)
+    return card
+  }
+  const close = async () => {
+    bridge.releaseSession(slug, sessionId, "session-deleted")
+    bridge.close()
+    try { const r = readBrokerRecord(claudeBrokerRecordPath(dir, sessionId)); if (r) process.kill(r.daemonPid, "SIGKILL") } catch {}
+    await rmEventually(dir)
+  }
+  await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: dir, prompt: "do the thing", permissionMode: "bypassPermissions" })
+  return { dir, sessionId, hostResponses, approveTheCard, close }
+}
+
+test("the FIRST escalation goes back to the agent with a note, and its identical retry reaches the operator", { timeout: 25_000 }, async () => {
+  const c = await hintCase("permission-retry")
+  try {
+    const card = await c.approveTheCard()
+    assert.equal(card.providerRequestId, "permission-request-2", "only the RETRY became a card; the first call never reached the operator")
+    const [first, second] = c.hostResponses()
+    assert.equal(first?.response?.response?.behavior, "deny", "the first call is held back, never run")
+    assert.match(first?.response?.response?.message ?? "", /needs the operator's explicit approval/)
+    assert.match(first?.response?.response?.message ?? "", /Dangerous rm operation on possibly-empty variable path/, "claude's own reason — the one that names the fix — reaches the agent")
+    assert.equal(second?.response?.response?.behavior, "allow", "the operator's grant on the retry is applied")
+    assert.ok(permissionHintGiven(c.dir, c.sessionId, "agent-main"), "the note is remembered on disk, so a restart does not repeat it")
+  } finally { await c.close() }
+})
+
+test("an agent already told before a restart goes straight to the operator", { timeout: 25_000 }, async () => {
+  const c = await hintCase("permission-retry", { premarked: true })
+  try {
+    const card = await c.approveTheCard()
+    assert.equal(card.providerRequestId, "permission-request-1", "no second note: the first call of this daemon's life is the card")
+  } finally { await c.close() }
+})
+
+test("an escalation an ask rule forced is never held back, even beside a safety check", { timeout: 25_000 }, async () => {
+  const c = await hintCase("permission-ask-rule")
+  try {
+    const card = await c.approveTheCard()
+    assert.equal(card.providerRequestId, "permission-request-1")
+    assert.ok(!permissionHintGiven(c.dir, c.sessionId, "agent-main"), "the note is still owed for a check the agent could avoid")
+  } finally { await c.close() }
 })
 
 // ---- freshProcess: the usage-limit latch escape hatch ----------------------------------------------

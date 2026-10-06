@@ -473,6 +473,8 @@ test("canUseTool request and structured allow response traverse the real SDK con
       input: { command: "printf safe" },
       blockedPath: "/tmp/outside",
       decisionReason: "outside the working directory",
+      decisionReasonType: "workingDir",
+      ruleForced: false,
       title: "Run a safe command",
       displayName: "Run command",
       description: "Print a test marker",

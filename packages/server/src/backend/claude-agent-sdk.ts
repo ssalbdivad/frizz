@@ -1068,6 +1068,9 @@ function mapPermissionRequest(
     suggestions?: unknown[]
     blockedPath?: string
     decisionReason?: string
+    // Forwarded by the SDK (`decisionReasonType: request.decision_reason_type`) but absent from its typings.
+    decisionReasonType?: unknown
+    matchedAskRule?: unknown
     title?: string
     displayName?: string
     description?: string
@@ -1086,6 +1089,12 @@ function mapPermissionRequest(
     input: boundedJsonObject(rawInput, "permission.input"),
     blockedPath: optionalExactText(context.blockedPath, "permission.blockedPath", 8 * 1024),
     decisionReason: optionalExactText(context.decisionReason, "permission.decisionReason", 8 * 1024),
+    // Advisory: these only shape the hint frizz gives the agent, never whether authority is granted, so a
+    // value that is not what the CLI documents is dropped rather than turned into a denied tool call.
+    decisionReasonType: typeof context.decisionReasonType === "string" && /^[A-Za-z]{1,64}$/.test(context.decisionReasonType)
+      ? context.decisionReasonType
+      : undefined,
+    ruleForced: context.matchedAskRule !== undefined && context.matchedAskRule !== null,
     title: optionalExactText(context.title, "permission.title", 8 * 1024),
     displayName: optionalExactText(context.displayName, "permission.displayName", 2 * 1024),
     description: optionalExactText(context.description, "permission.description", 8 * 1024),
