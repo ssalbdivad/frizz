@@ -287,6 +287,20 @@ test("§3.5.2 a run in another year says its year; this year's do not", () => {
   assert.equal(formatOccurrence(Date.parse("2027-01-01T04:00:00Z"), NY, Date.parse("2026-12-30T12:00:00Z")), "Thu Dec 31, 11pm")
 })
 
+test("the next line names each run: a day two runs share gets its times, though the rule is not 'more than once a day'", () => {
+  // Asked on Monday at 2:32pm: 5pm today, then next Monday's 8am and 5pm — one run in the first 24h, so no
+  // perDay, but two of the three dates are the same day.
+  const echo = scheduleEcho({ title: "Standup notes", rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=8,17;BYMINUTE=0", dtstart: "2026-10-05T17:00", tz: NY }, SPEC_NOW, NY)
+  assert.ok(echo.ok)
+  if (echo.ok) {
+    assert.equal(echo.value.perDay, undefined)
+    assert.equal(echo.value.nextLine, "Next: Mon Oct 5, 5pm · Mon Oct 12, 8am · Mon Oct 12, 5pm")
+  }
+  // Distinct days keep the date alone.
+  const weekly = scheduleEcho({ title: "Triage", rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", tz: NY }, SPEC_NOW, NY)
+  if (weekly.ok) assert.equal(weekly.value.nextLine, "Next: Mon Oct 12 · Mon Oct 19 · Mon Oct 26")
+})
+
 test("§3.5.3 calendar quarters read as quarters, and only when the months match the end the day counts from", () => {
   const say = (rrule: string) => describeSchedule(compiled(rrule))
   assert.equal(say("FREQ=YEARLY;BYMONTH=3,6,9,12;BYDAY=-1FR;BYHOUR=9;BYMINUTE=0"), "on the last Friday of every quarter at 9am")

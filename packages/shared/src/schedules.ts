@@ -137,7 +137,11 @@ export function echoOf(
   const describe = `${describeSchedule(compiled, nowMs)}${zone}`
   const condition = spec.condition?.trim()
   const echo = [spec.title.trim(), describe, ...(condition ? [condition] : []), ...(perDay ? [`${perDay} runs a day`] : [])].join(" · ")
-  const day = perDay ? formatOccurrence : formatOccurrenceDay
+  // A date alone names a run only while no two runs share a day. `perDay` counts the 24h from the FIRST run,
+  // so "every Monday at 8am and 5pm" asked on a Monday afternoon counts one (5pm, then next Monday 8am) and
+  // read "Next: Mon Oct 5 · Mon Oct 12 · Mon Oct 12" until the times were added whenever a day repeats.
+  const days = next.map((ms) => formatOccurrenceDay(ms, spec.tz, nowMs))
+  const day = perDay || new Set(days).size < days.length ? formatOccurrence : formatOccurrenceDay
   return {
     describe,
     echo,
