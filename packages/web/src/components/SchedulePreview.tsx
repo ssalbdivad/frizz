@@ -1,6 +1,20 @@
 import { useMemo } from "react"
-import { cityOfZone, describeScheduleParts, scheduleEcho, type Assumed, type ScheduleDescribePart, type ScheduleEcho } from "@frizz/shared"
+import {
+  SCHEDULE_PRESENCE_COPY,
+  SCHEDULE_SPACING_COPY,
+  cityOfZone,
+  compileSchedule,
+  describeSchedule,
+  describeScheduleParts,
+  readingsConsistent,
+  scheduleEcho,
+  type Assumed,
+  type PhraseReading,
+  type ScheduleDescribePart,
+  type ScheduleEcho,
+} from "@frizz/shared"
 import { spanUntil } from "../lib/activityTime.ts"
+import { MODEL_BUDGET_COPY, MODEL_UNREACHABLE_COPY, modelRefusalCopy, type ModelReadOk, type ModelReader } from "../lib/scheduleModelRead.ts"
 
 // THE LIVE READING OF A SCHEDULE (plans/schedule-live-reading.md §5.6, §11): what a rule will do, rebuilt in
 // the browser from the rule itself while the human types — the drawer's Change when today, the prompt box's
@@ -237,4 +251,79 @@ export function SchedulePreview({
       )}
     </div>
   )
+}
+
+// ---- the words a reading cannot be shown in ------------------------------------------------------------------
+
+/** What a panel or a Change when shows for a model reading `describeSchedule` cannot put into words (I-11 for
+ *  the model): the human is never asked to confirm RRULE text. */
+export const UNPHRASABLE_COPY = "That schedule is too intricate to show here. Try saying it more simply, like “every Friday at 9am”."
+
+/** A rule `describeSchedule` cannot phrase: it falls back to the RRULE itself (`on the rule FREQ=…`). */
+export function unphrasableRule(rrule: string, dtstart: string, tz: string): boolean {
+  const c = compileSchedule({ rrule, dtstart, tz })
+  return c.ok && describeSchedule(c.value).startsWith("on the rule")
+}
+
+/** The house's words for a rule, or the rule itself when it does not compile. */
+export function describeRule(rrule: string, dtstart: string, tz: string): string {
+  const c = compileSchedule({ rrule, dtstart, tz })
+  return c.ok ? describeSchedule(c.value) : rrule
+}
+
+// ---- the drawer's Change when, its pure half (§11) -----------------------------------------------------------
+//
+// What the preview under a schedule's When field shows for the words on screen. It lives here, beside the
+// preview it decides, rather than in ScheduleDrawer.tsx, which a node test cannot load (it reaches a `.css`
+// import) — so its refusals are pinned in SchedulePreview.test.ts.
+
+const EVENT_COPY = "Schedules run on the clock. Try “every hour, check whether the build failed”."
+const CHANGE_WHEN_STALE_COPY = "Frizz has updated since this page loaded. Reload the page to save this."
+
+type CueCore = NonNullable<Extract<PhraseReading, { kind: "cue" }>["core"]>
+export type ChangeWhenView =
+  | { kind: "none" }
+  | { kind: "local"; reading: Extract<PhraseReading, { kind: "exact" }> }
+  | { kind: "model"; result: ModelReadOk }
+  | { kind: "reading"; core?: CueCore; quoted?: string }
+  | { kind: "disagree"; result: ModelReadOk; ours: string; theirs: string; corePhrase: string }
+  | { kind: "copy"; copy: string }
+
+/** What the preview shows for the words on screen: the local reading, a local refusal, or the model's. */
+export function changeWhenView({ shown, reader, tz, nowMs, stale }: {
+  /** The last published reading of the field and the words it read. */
+  shown: { words: string; reading: PhraseReading } | null
+  reader: Pick<ModelReader, "view">
+  tz: string
+  nowMs: number
+  stale: boolean
+}): ChangeWhenView {
+  if (!shown) return { kind: "none" }
+  if (stale) return { kind: "copy", copy: CHANGE_WHEN_STALE_COPY }
+  const r = shown.reading
+  if (r.kind === "exact") return r.spacing ? { kind: "copy", copy: SCHEDULE_SPACING_COPY } : { kind: "local", reading: r }
+  if (r.kind === "ambiguous") return { kind: "copy", copy: r.copy }
+  if (r.kind === "presence") return { kind: "copy", copy: SCHEDULE_PRESENCE_COPY }
+  if (r.kind === "event") return { kind: "copy", copy: EVENT_COPY }
+  const core = r.kind === "cue" ? r.core : undefined
+  const quoted = r.kind === "cue" ? shown.words.slice(r.unread.start, r.unread.end) : undefined
+  const mv = reader.view(shown.words)
+  if (mv.status === "failed") return { kind: "copy", copy: MODEL_UNREACHABLE_COPY }
+  if (mv.status === "budget") return { kind: "copy", copy: MODEL_BUDGET_COPY }
+  // Waiting out the idle with words that read as nothing at all (the first word, still being typed): say
+  // nothing until the model is actually asked. A cue shows what it IS sure of while it waits (§5.7).
+  if (mv.status === "none" && r.kind === "none") return { kind: "none" }
+  if (mv.status !== "answered") return { kind: "reading", ...(core ? { core } : {}), ...(quoted ? { quoted } : {}) }
+  if (!mv.result.ok) return { kind: "copy", copy: modelRefusalCopy(mv.result) }
+  const result = mv.result
+  // A model reading over a local core must be a faithful reading of it (§4.3, I-10): it may add a condition,
+  // a bound or a time, never move a day.
+  if (core && !readingsConsistent({ ...core, tz }, { rrule: result.rrule, dtstart: result.dtstart, tz: result.tz, span: { start: 0, end: shown.words.length } }, nowMs)) {
+    return { kind: "disagree", result, ours: describeRule(core.rrule, core.dtstart, tz), theirs: describeRule(result.rrule, result.dtstart, result.tz), corePhrase: shown.words.slice(core.span.start, core.span.end) }
+  }
+  // I-11 for the model, as the prompt box's panel has it (fix round 3, drawer-model-raw-rrule): a rule the
+  // house cannot put into words would preview as `on the rule FREQ=…` with Save enabled, and once saved the
+  // drawer's header and the project row read it too. The copy, and no Save (a `copy` view has none).
+  if (unphrasableRule(result.rrule, result.dtstart, result.tz)) return { kind: "copy", copy: UNPHRASABLE_COPY }
+  return { kind: "model", result }
 }

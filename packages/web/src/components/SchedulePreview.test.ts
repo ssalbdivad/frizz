@@ -4,7 +4,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { compileSchedule, describeScheduleParts, readSchedulePhrase } from "@frizz/shared"
-import { meridiemLine, previewSegments, schedulePreviewModel } from "./SchedulePreview.tsx"
+import { UNPHRASABLE_COPY, changeWhenView, meridiemLine, previewSegments, schedulePreviewModel, unphrasableRule } from "./SchedulePreview.tsx"
+import type { InterpretScheduleResult } from "@frizz/shared"
+import type { ModelReadOk, ModelReadView } from "../lib/scheduleModelRead.ts"
 import { holdsQualifier, publishesNow } from "../lib/scheduleWhenField.ts"
 
 const NY = "America/New_York"
@@ -103,4 +105,31 @@ test("a qualifier still being typed holds the reading it qualifies; a finished o
   assert.equal(holdsQualifier(thursday, "every Thursday at 3pm", at("every Thursday at 3pm")), false)
   // Nothing on screen to hold.
   assert.equal(holdsQualifier(undefined, "every Thursday at", at("every Thursday at")), false)
+})
+
+// Fix round 3 (drawer-model-raw-rrule): the prompt box refuses a model reading `describeSchedule` cannot put in
+// words (fix round 1, model-raw-rrule-echo), but the drawer's Change when did not. Driven on a real stack: the
+// words `the second and fourth Monday` went to the model, its valid answer
+// `FREQ=MONTHLY;BYDAY=MO;BYSETPOS=2,4;BYHOUR=9;BYMINUTE=0` previewed as `Post digest · on the rule FREQ=…`
+// with Save enabled, Enter saved it, and the drawer header and the project row then read `on the rule FREQ=…`.
+// The human never confirms RRULE text (I-11): the Change when shows the panel's copy, and no Save.
+test("Change when: a model reading no words cover is refused with the panel's copy, never offered as RRULE text", () => {
+  const words = "the second and fourth Monday"
+  const answer = (rrule: string): ModelReadOk => ({
+    ok: true, phrase: words, phraseStart: 0, phraseEnd: words.length, prompt: "", whenText: words, rrule,
+    dtstart: "2026-10-12T09:00", tz: NY, title: "Post digest",
+    preview: { describe: "", echo: "", nextLine: "", upcoming: [] },
+  })
+  const readerFor = (result: InterpretScheduleResult) => ({ view: (): ModelReadView => ({ status: "answered", result }) })
+  const shown = { words, reading: readSchedulePhrase(words, { nowMs: NOW, tz: NY, scope: "field" }) }
+  assert.ok(shown.reading.kind === "none" || shown.reading.kind === "cue", `the grammar declines it (${shown.reading.kind}), so the model reads it`)
+
+  const raw = "FREQ=MONTHLY;BYDAY=MO;BYSETPOS=2,4;BYHOUR=9;BYMINUTE=0"
+  assert.equal(unphrasableRule(raw, "2026-10-12T09:00", NY), true, "the house's words for it would be `on the rule FREQ=…`")
+  assert.deepEqual(changeWhenView({ shown, reader: readerFor(answer(raw)), tz: NY, nowMs: NOW, stale: false }), { kind: "copy", copy: UNPHRASABLE_COPY })
+
+  // A rule the house CAN phrase is the model's reading, to save.
+  const phrased = "FREQ=MONTHLY;BYDAY=2MO;BYHOUR=9;BYMINUTE=0"
+  assert.equal(unphrasableRule(phrased, "2026-10-12T09:00", NY), false)
+  assert.equal(changeWhenView({ shown, reader: readerFor(answer(phrased)), tz: NY, nowMs: NOW, stale: false }).kind, "model")
 })

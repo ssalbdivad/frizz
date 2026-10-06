@@ -3,13 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
 import {
   SCHEDULE_GRAMMAR_VERSION,
-  SCHEDULE_PRESENCE_COPY,
   SCHEDULE_READING_MOVED,
-  SCHEDULE_SPACING_COPY,
-  compileSchedule,
-  describeSchedule,
   readSchedulePhrase,
-  readingsConsistent,
   scheduleRefusalOf,
   type PhraseReading,
   type ScheduleRunView,
@@ -25,9 +20,9 @@ import { invalidateSchedules, proposedByLine, scheduleKeys, scheduleNextLabel } 
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { profileGridDisplayParts } from "../lib/profileGrid.ts"
 import { effortWord } from "../lib/mobileThread.ts"
-import { MODEL_BUDGET_COPY, MODEL_UNREACHABLE_COPY, modelReadKey, modelRefusalCopy, useModelReader, type ModelReadOk, type ModelReader } from "../lib/scheduleModelRead.ts"
+import { modelReadKey, useModelReader } from "../lib/scheduleModelRead.ts"
 import { holdsQualifier, publishesNow, readingKey } from "../lib/scheduleWhenField.ts"
-import { SchedulePreview, browserZone, schedulePreviewModel } from "./SchedulePreview.tsx"
+import { SchedulePreview, browserZone, changeWhenView, schedulePreviewModel } from "./SchedulePreview.tsx"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -339,7 +334,7 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
     if (shown && !declined) reader.cancelQueued()
   }, [shown?.reading.kind, declined])
 
-  const view = whenView({ shown, reader, tz, nowMs, stale: stale !== null && stale === words })
+  const view = changeWhenView({ shown, reader, tz, nowMs, stale: stale !== null && stale === words })
   const shimmer = useDelayedTrue(view.kind === "reading", SHIMMER_DELAY_MS)
   const localSpec = view.kind === "local" ? { title: schedule.title, rrule: view.reading.rrule, dtstart: view.reading.dtstart, tz, assumed: view.reading.assumed } : undefined
   const localOk = localSpec ? schedulePreviewModel(localSpec, nowMs, viewerTz).ok : false
@@ -423,7 +418,7 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
       return
     }
     if (fresh.kind !== "cue" && fresh.kind !== "none") return
-    const current = whenView({ shown: { words, reading: fresh }, reader, tz, nowMs: Date.now(), stale: false })
+    const current = changeWhenView({ shown: { words, reading: fresh }, reader, tz, nowMs: Date.now(), stale: false })
     if (current.kind === "model") {
       const r = current.result
       save.mutate({
@@ -566,52 +561,8 @@ const CHANGE_WHEN_MODEL_IDLE_MS = 600
 /** §5.7: the shimmer waits this long, so a cached or fast answer never flashes it. */
 const SHIMMER_DELAY_MS = 250
 
-const EVENT_COPY = "Schedules run on the clock. Try “every hour, check whether the build failed”."
-const STALE_COPY = "Frizz has updated since this page loaded. Reload the page to save this."
 const UPDATED_FOR_TIME = "Updated for the current time. Press Enter to save."
 const UPDATED_TO_TYPED = "Updated to what you typed. Press Enter to save."
-
-type CueCore = NonNullable<Extract<PhraseReading, { kind: "cue" }>["core"]>
-type WhenView =
-  | { kind: "none" }
-  | { kind: "local"; reading: Extract<PhraseReading, { kind: "exact" }> }
-  | { kind: "model"; result: ModelReadOk }
-  | { kind: "reading"; core?: CueCore; quoted?: string }
-  | { kind: "disagree"; result: ModelReadOk; ours: string; theirs: string; corePhrase: string }
-  | { kind: "copy"; copy: string }
-
-/** What the preview shows for the words on screen: the local reading, a local refusal, or the model's. */
-function whenView({ shown, reader, tz, nowMs, stale }: { shown: Published | null; reader: ModelReader; tz: string; nowMs: number; stale: boolean }): WhenView {
-  if (!shown) return { kind: "none" }
-  if (stale) return { kind: "copy", copy: STALE_COPY }
-  const r = shown.reading
-  if (r.kind === "exact") return r.spacing ? { kind: "copy", copy: SCHEDULE_SPACING_COPY } : { kind: "local", reading: r }
-  if (r.kind === "ambiguous") return { kind: "copy", copy: r.copy }
-  if (r.kind === "presence") return { kind: "copy", copy: SCHEDULE_PRESENCE_COPY }
-  if (r.kind === "event") return { kind: "copy", copy: EVENT_COPY }
-  const core = r.kind === "cue" ? r.core : undefined
-  const quoted = r.kind === "cue" ? shown.words.slice(r.unread.start, r.unread.end) : undefined
-  const mv = reader.view(shown.words)
-  if (mv.status === "failed") return { kind: "copy", copy: MODEL_UNREACHABLE_COPY }
-  if (mv.status === "budget") return { kind: "copy", copy: MODEL_BUDGET_COPY }
-  // Waiting out the idle with words that read as nothing at all (the first word, still being typed): say
-  // nothing until the model is actually asked. A cue shows what it IS sure of while it waits (§5.7).
-  if (mv.status === "none" && r.kind === "none") return { kind: "none" }
-  if (mv.status !== "answered") return { kind: "reading", ...(core ? { core } : {}), ...(quoted ? { quoted } : {}) }
-  if (!mv.result.ok) return { kind: "copy", copy: modelRefusalCopy(mv.result) }
-  const result = mv.result
-  // A model reading over a local core must be a faithful reading of it (§4.3, I-10): it may add a condition,
-  // a bound or a time, never move a day.
-  if (core && !readingsConsistent({ ...core, tz }, { rrule: result.rrule, dtstart: result.dtstart, tz: result.tz, span: { start: 0, end: shown.words.length } }, nowMs)) {
-    return { kind: "disagree", result, ours: describeRule(core.rrule, core.dtstart, tz), theirs: describeRule(result.rrule, result.dtstart, result.tz), corePhrase: shown.words.slice(core.span.start, core.span.end) }
-  }
-  return { kind: "model", result }
-}
-
-function describeRule(rrule: string, dtstart: string, tz: string): string {
-  const c = compileSchedule({ rrule, dtstart, tz })
-  return c.ok ? describeSchedule(c.value) : rrule
-}
 
 /** True once `on` has held for `ms` — a wait long enough to be worth showing motion for. */
 function useDelayedTrue(on: boolean, ms: number): boolean {
