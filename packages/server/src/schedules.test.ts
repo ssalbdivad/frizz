@@ -111,6 +111,7 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
   return {
     storage, service, router: createRouter(ctx), spawned, readings,
     at: (ms: number) => { clock = ms },
+    now: () => clock,
     tick: async () => { service.evalDue(clock); await service.drain() },
     failWith: (f: (() => Error | undefined) | undefined) => { fail = f },
     signOut: () => { preflight = "signed-out" },
@@ -367,7 +368,7 @@ test("failed starts are recorded, retried never, and pause the schedule after th
   }
 })
 
-test("the human's acts on the next run: done skips it, a snooze moves it, Wake now runs it", async () => {
+test("the human's acts on the next run: done skips it, a snooze moves it, Wake now runs it", async (t) => {
   const h = harness()
   try {
     const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
@@ -382,7 +383,15 @@ test("the human's acts on the next run: done skips it, a snooze moves it, Wake n
     assert.equal(tomorrow.occurrenceAt, new Date(MON_9AM + 86_400_000).toISOString())
     // Snooze it to 2pm tomorrow = move this occurrence: nothing at 9, a start at 2.
     const twoPm = new Date(MON_9AM + 86_400_000 + 5 * 3_600_000).toISOString()
-    await h.router.setThreadSnooze.handler({ input: { slug: tomorrow.slug, sessionId: tomorrow.sessionId, until: twoPm } as never })
+    // The router refuses a snooze time in the past by the WALL clock, and this schedule runs on the harness's.
+    // Unpinned, this call compared Tue Oct 6 2pm UTC against the real date and started failing the moment the
+    // real date passed it (2026-10-06 10am New York) — so the wall clock reads the harness's for this call.
+    const wall = t.mock.method(Date, "now", h.now)
+    try {
+      await h.router.setThreadSnooze.handler({ input: { slug: tomorrow.slug, sessionId: tomorrow.sessionId, until: twoPm } as never })
+    } finally {
+      wall.mock.restore()
+    }
     got = h.service.get(view.id)
     assert.equal(got.schedule.nextRun!.moved, true)
     h.at(MON_9AM + 86_400_000 + 1000)
