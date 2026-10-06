@@ -91,7 +91,7 @@ export type EmbedLinkAction = { kind: "navigate"; path: string } | { kind: "exte
  *   mailto:                                  the mail client, through the editor — its `openExternal`
  *   ⌘/Ctrl/Shift/Alt or middle click, in-app the browser, with the address — the "open in a new tab" it asked for
  *   a thread's /full page                    the browser, as `f` does: the frame is the drawer's width already
- *   any other in-app page (`/`, `?project=`) here, in the frame — the tab it would have opened
+ *   any other in-app page (`/`, `/project/…`) here, in the frame — the tab it would have opened
  *
  * A plain click on a thread's address is not here: lib/thread-links.ts opens its drawer. Same-origin
  * paths under `/_frizz/` are Frizz's API, not the app, and are left alone, as is everything cross-origin

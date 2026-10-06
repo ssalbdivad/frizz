@@ -1,7 +1,8 @@
-// THE PAGE — one project's list and queue, or every project's: `/`, showing its VIEW (lib/pageView.ts).
+// THE PAGE — one project's list and queue, or every project's: `/` or `/project/<slug>`, showing its VIEW
+// (lib/pageView.ts).
 //
 // ALL PROJECTS — the default, bare `/` — is every project's list and ONE queue across all of them. FOCUSED
-// ON A PROJECT — `/?project=<slug>`, from the switcher — the list on the left is that project and the
+// ON A PROJECT — its board, `/project/<slug>`, from the switcher — the list on the left is that project and the
 // queue on the right is its cards, and the prompt box dispatches into it. The two are
 // the same page drawn from the same parts, not two UIs: the list's bands (ProjectList.tsx) are identical in
 // both, and focus mode is All projects with one project in it and the prompt box's picker gone.
@@ -615,7 +616,7 @@ function Switcher({ projects, hidden, current, row = false }: { projects: Queues
 
 /**
  * CHANGE THE PAGE'S VIEW — the switcher's one verb, and the phone's projects list's (PhonePage.tsx), so the
- * two cannot drift. Choosing is a navigation (`/?project=<slug>`, `/`), so Back returns to the view before.
+ * two cannot drift. Choosing is a navigation (`/project/<slug>`, `/`), so Back returns to the view before.
  * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
  * where the operator just was. A different set of cards is a different page to read, so it is read from
  * its top.

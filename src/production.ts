@@ -360,7 +360,7 @@ let cachedSlugPath: string | undefined;
 /**
  * Where to land: the home page, All projects (bare `/`, maintainer 2026-09-30), or the add-project dialog
  * asking about a directory (`/?add=` opens it on `/`). Focusing one project is the page's switcher's job
- * (`/?project=<slug>`, web lib/pageView.ts), not the launcher's.
+ * (`/project/<slug>`, web lib/pageView.ts), not the launcher's.
  *
  * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
  * the page, which is the only reason an unmarked directory is safe to point the launcher at at all.

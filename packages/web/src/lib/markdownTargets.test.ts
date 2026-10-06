@@ -160,10 +160,10 @@ test("an in-app link classifies the same on /, in a drawer and on /full", () => 
   }
 })
 
-// The addresses Frizz minted before one page replaced the project view. Nothing mints them now and the
-// route tree sends each one home, but old handoffs hold them — and read as a file, each became a chip
-// whose click asked the server to open `/project/nub/thread/x`.
-test("a retired Frizz address is still in-app, not a file the server is asked to open", () => {
+// A project's board and the addresses under it (`/project/<slug>…`, live again since 2026-10-06), and the
+// retired bare `/status/<s>`: in-app, all of them — read as a file, each became a chip whose click asked
+// the server to open `/project/nub/thread/x`.
+test("a board's address, and a retired Frizz address, are in-app, not a file the server is asked to open", () => {
   for (const href of [
     "/project/nub",
     "/project/nub/",

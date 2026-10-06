@@ -7,12 +7,12 @@ test("VS Code's four theme kinds fold to the page's two", () => {
   assert.deepEqual([1, 2, 3, 4].map(embedTheme), ["light", "dark", "dark", "light"])
 })
 
-test("the frame's URL carries the embed switch, the theme and this window's project, encoded", () => {
-  assert.equal(embedUrl("http://127.0.0.1:9393", "dark", "frizz"), "http://127.0.0.1:9393/?embed=vscode&theme=dark&project=frizz")
-  assert.equal(embedUrl("http://127.0.0.1:9393", "light", undefined), "http://127.0.0.1:9393/?embed=vscode&theme=light", "no project param when no folder maps to one")
+test("the frame's URL is this window's project's board, carrying the embed switch and the theme", () => {
+  assert.equal(embedUrl("http://127.0.0.1:9393", "dark", "frizz"), "http://127.0.0.1:9393/project/frizz?embed=vscode&theme=dark")
+  assert.equal(embedUrl("http://127.0.0.1:9393", "light", undefined), "http://127.0.0.1:9393/?embed=vscode&theme=light", "All projects when no folder maps to one")
   const odd = new URL(embedUrl("http://127.0.0.1:9393", "dark", "a b&theme=light#x"))
-  assert.equal(odd.searchParams.get("project"), "a b&theme=light#x", "a slug cannot add or override a param")
-  assert.equal(odd.searchParams.getAll("theme").join(), "dark")
+  assert.equal(odd.pathname, "/project/a%20b%26theme%3Dlight%23x", "a slug is one path segment")
+  assert.equal(odd.searchParams.getAll("theme").join(), "dark", "a slug cannot add or override a param")
   assert.equal(odd.hash, "")
 })
 
@@ -250,17 +250,20 @@ test("a page that never gets ready, never answers or refuses leaves the selectio
 })
 
 test("a thread's tab frames the thread's own address in embed mode, with its project and theme", () => {
-  assert.equal(threadEmbedUrl("http://127.0.0.1:9393", "dark", "acme-api", "fix-login"), "http://127.0.0.1:9393/all/acme-api/thread/fix-login?embed=vscode&theme=dark&project=acme-api")
+  assert.equal(threadEmbedUrl("http://127.0.0.1:9393", "dark", "acme-api", "fix-login"), "http://127.0.0.1:9393/project/acme-api/thread/fix-login?embed=vscode&theme=dark")
   const odd = new URL(threadEmbedUrl("http://127.0.0.1:9393", "light", "a/b", "c?d#e"))
-  assert.equal(odd.pathname, "/all/a%2Fb/thread/c%3Fd%23e", "a name cannot add a path segment, a query or a fragment")
+  assert.equal(odd.pathname, "/project/a%2Fb/thread/c%3Fd%23e", "a name cannot add a path segment, a query or a fragment")
   assert.equal(odd.searchParams.get("theme"), "light")
   assert.equal(odd.hash, "")
 })
 
 test("the thread a page address shows: a drawer or a fullscreen page, nothing for any other page", () => {
+  assert.deepEqual(threadOfHref("http://127.0.0.1:9393/project/acme-api/thread/fix-login"), { project: "acme-api", thread: "fix-login" })
+  assert.deepEqual(threadOfHref("http://127.0.0.1:9393/project/acme-api/thread/fix-login/full"), { project: "acme-api", thread: "fix-login" })
   assert.deepEqual(threadOfHref("http://127.0.0.1:9393/all/acme-api/thread/fix-login"), { project: "acme-api", thread: "fix-login" })
   assert.deepEqual(threadOfHref("http://127.0.0.1:9393/all/acme-api/thread/fix-login/full?x=1"), { project: "acme-api", thread: "fix-login" })
-  assert.equal(threadOfHref("http://127.0.0.1:9393/?project=acme-api"), undefined)
+  assert.equal(threadOfHref("http://127.0.0.1:9393/project/acme-api"), undefined)
+  assert.equal(threadOfHref("http://127.0.0.1:9393/project/acme-api/status/blocked"), undefined)
   assert.equal(threadOfHref("http://127.0.0.1:9393/all/acme-api"), undefined)
   assert.equal(threadOfHref("http://127.0.0.1:9393/all/acme-api/thread/fix-login/files"), undefined)
   assert.equal(threadOfHref("http://127.0.0.1:9393/all/acme%20api/thread/x"), undefined, "a name no slug could be")

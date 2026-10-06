@@ -819,7 +819,7 @@ let cachedSlugPath: string | undefined;
 /**
  * Where to land: the home page, All projects (bare `/`, maintainer 2026-09-30), or the add-project dialog
  * asking about a directory (`/?add=` opens it on `/`). Focusing one project is the page's switcher's job
- * (`/?project=<slug>`, web lib/pageView.ts), not the launcher's.
+ * (`/project/<slug>`, web lib/pageView.ts), not the launcher's.
  *
  * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
  * the page, which is the only reason an unmarked directory is safe to point the launcher at at all.
@@ -1111,7 +1111,7 @@ if (options.link) {
       // is the one the join path already knows how to get.
       const joined = await joinRunningFrizz();
       if (joined) {
-        console.log(`running: http://127.0.0.1:${joined.port}/?project=${encodeURIComponent(joined.slug)}`);
+        console.log(`running: http://127.0.0.1:${joined.port}/project/${encodeURIComponent(joined.slug)}`);
         console.log(`workspace: ${workspace.root}`);
         console.log(`served by the frizz running on this machine, which this project did not start`);
       } else console.log(`stopped: ${workspace.root}`);

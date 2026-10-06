@@ -27,7 +27,7 @@
 
 import type * as vscode from "vscode"
 import type { EmbedComposeMessage, EmbedComposedMessage, EmbedHostMessage, EmbedPageMessage, EmbedRouteMessage } from "@frizz/shared/embed-protocol"
-import { embedTheme, embedUrl, frameTarget, isSlug, parsePageMessage, threadEmbedUrl, threadOfHref, type ComposeSidebar } from "./embed.ts"
+import { embedTheme, embedUrl, frameTarget, isSlug, parsePageMessage, threadEmbedUrl, threadOfHref, threadPath, type ComposeSidebar } from "./embed.ts"
 import { actOnPage, Composes, type FrameLink, type PageHost } from "./framed-page.ts"
 import { MATCH_THEME_SETTING } from "./sidebar.ts"
 import { frameDocument, HINT, messageDocument, nonce } from "./sidebar-html.ts"
@@ -319,7 +319,7 @@ export function registerThreadPanels(api: Vscode, context: vscode.ExtensionConte
           else if (envelope.view === "reload" || envelope.view === "retry") void render(tab)
           else if (envelope.view === "browser") {
             const origin = host.origin()
-            if (origin && tab.thread) host.openInBrowser(new URL(`/all/${encodeURIComponent(tab.project)}/thread/${encodeURIComponent(tab.thread)}`, origin).toString())
+            if (origin && tab.thread) host.openInBrowser(new URL(threadPath(tab.project, tab.thread), origin).toString())
           } else if (envelope.view === "focused") for (const listener of focusListeners) listener(tab)
           return
         }

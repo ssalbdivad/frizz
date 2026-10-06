@@ -194,8 +194,8 @@ test("an agent's @thread and @thread.child in rendered markdown are links that o
     ["@shell-budgets", "/thread/shell-budgets", "_blank"],
     ["@shell-budgets.cache-keys", "/thread/shell-budgets#shell-budgets.cache-keys", "_blank"],
     ["@ShellBudget.capAudit", "/thread/shell-budgets#ShellBudget.capAudit", "_blank"],
-    ["#arktype", "/?project=arktype", "_blank"],
-    ["#home", "/?project=home", "_blank"],
+    ["#arktype", "/project/arktype", "_blank"],
+    ["#home", "/project/home", "_blank"],
     ["@shell-budgets", "https://example.com", "_blank"],
   ], "code, a package, an author's own link, an unknown thread and an unknown project are untouched")
   const code = await page!.$$eval("[data-agent-prose] code", (cs) => cs.map((c) => c.textContent))
@@ -277,16 +277,16 @@ test("`#` offers the projects, completes one, and tints it like a thread mention
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
-test("a sent #project links to the page focused on it", {
+test("a sent #project links to its board", {
   skip: !baseUrl,
   timeout: 150_000,
 }, async () => {
   await open()
   const links = await page!.$$eval("[data-project-bubble] a", (as) => as.map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("title")]))
   assert.deepEqual(links, [
-    ["#arktype", "/?project=arktype", "ArkType"],
+    ["#arktype", "/project/arktype", "ArkType"],
     ["@focus-mode", "/thread/focus-mode", "Waiting on your call about the drawer"],
-    ["#Home", "/?project=home", "Home"],
+    ["#Home", "/project/home", "Home"],
   ], "an unknown project stays text")
   const look = await page!.evaluate(() => {
     const [project, thread] = ["[data-project-bubble] a[data-project-mention]", "[data-project-bubble] a[data-thread-mention]"].map((sel) => getComputedStyle(document.querySelector(sel)!))
@@ -294,6 +294,6 @@ test("a sent #project links to the page focused on it", {
   })
   assert.deepEqual(look, [true, true, true], "styled as a thread mention is")
   await Promise.all([page!.waitForNavigation(), page!.click("[data-project-bubble] a[data-project-mention='arktype']")])
-  assert.equal(new URL(page!.url()).search, "?project=arktype")
+  assert.equal(new URL(page!.url()).pathname, "/project/arktype")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })

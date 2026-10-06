@@ -57,7 +57,7 @@ import { shortPath } from "./ProjectActions.tsx"
 // and queue draw them (lib/allQueues.ts), the tabs band them with the list's own `loudBands`
 // (lib/phonePage.ts), and every row reading comes from the rail's helpers — `sessionIndicatorKind` for
 // the mark, the queue clock for the age. The VIEW is the page's too: focused on one project
-// (`/?project=<slug>`) or All projects (`/`), switched by navigating, so Back works and a reload keeps it.
+// (`/project/<slug>`) or All projects (`/`), switched by navigating, so Back works and a reload keeps it.
 //
 // WHAT IS UPSTREAM'S, each the maintainer's call from its mockup reviews (2026-08-17, 2026-09-30):
 //

@@ -13,7 +13,7 @@ import { crossProjectMentionCandidates, mentionCandidates, type MentionCandidate
  *  a mention there means that project's threads alone. Read off the address rather than the router, so a
  *  prompt box on a fixture page with no router still renders. */
 function useCrossProjectQueues(live: boolean): readonly ProjectQueue[] | undefined {
-  const allProjects = typeof window !== "undefined" && viewAt(window.location.pathname, window.location.search).kind === "all"
+  const allProjects = typeof window !== "undefined" && viewAt(window.location.pathname).kind === "all"
   // Not live: subscribed to nothing. An observer that reads no field re-renders on EVERY change to the
   // entry (react-query's tracked props start empty and an empty set means "all"); `[]` means none.
   const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues, enabled: allProjects && live, staleTime: 5_000, notifyOnChangeProps: live ? undefined : [] })

@@ -7,7 +7,7 @@ import { humpStarts } from "./threadMentions.ts"
 // grammar (threadMentions.ts): the prompt box offers the projects on this machine as `#` is typed and
 // tints a finished one, a human's bubble links it, and agent prose links it the same way
 // (mentionAutolink.ts). What lands after `#` is the project's registry slug — the `<slug>` in
-// `/?project=<slug>`, already kebab-case and unique — so there is nothing to fold: a mention resolves when
+// `/project/<slug>`, already kebab-case and unique — so there is nothing to fold: a mention resolves when
 // its text IS a slug, case aside.
 //
 // A bare `#123` stays GitHub's (githubAutolink.ts, plainLinks.ts): an all-digit token is never a project

@@ -18,7 +18,7 @@ import { projectRpc, rpc } from "../api/rpc.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
-import { ALL_PROJECTS, homeHref, projectViewHref, tabView, usePageView, viewHref } from "../lib/pageView.ts"
+import { ALL_PROJECTS, currentView, homeHref, projectViewHref, usePageView, viewHref } from "../lib/pageView.ts"
 import { projectBoardKey } from "../lib/projectBoards.ts"
 import { relativeAge } from "../lib/activityTime.ts"
 import { useShortcut } from "../lib/keyboardRuntime.ts"
@@ -258,12 +258,12 @@ function RenameProjectDialog({
       void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
       showToast(`Renamed ${project.name} to ${updated.name}`)
       onClose()
-      // The OLD slug no longer names anything. A page focused on the project follows it to the new one;
-      // a drawer of it (its address names the project) closes, home to the tab's view. The pick is kept
-      // by id, so All projects needs nothing.
+      // The OLD slug no longer names anything. A board of the project follows it to the new one; a drawer
+      // of it on All projects (its address names the project) closes, home. The pick is kept by id, so All
+      // projects needs nothing.
       if (updated.slug !== project.slug) {
-        const view = tabView()
-        const focused = view?.kind === "project" && view.slug === project.slug
+        const view = currentView()
+        const focused = view.kind === "project" && view.slug === project.slug
         if (focused) navigate(projectViewHref(updated.slug), { replace: true })
         else if (projectSlug() === project.slug && innerPath() !== "/") navigate(homeHref(), { replace: true })
       }
@@ -395,8 +395,8 @@ function DeleteProjectDialog({
       onClose()
       // Deleting the project the page is focused on leaves it showing nothing: All projects. Deleting the
       // one it is merely bound to (All projects' pick, a drawer's) goes home, which binds another.
-      const view = tabView()
-      if (view?.kind === "project" && view.slug === project.slug) navigate(viewHref(ALL_PROJECTS), { replace: true })
+      const view = currentView()
+      if (view.kind === "project" && view.slug === project.slug) navigate(viewHref(ALL_PROJECTS), { replace: true })
       else if (projectSlug() === project.slug) navigate(homeHref(), { replace: true })
     },
   })
@@ -796,7 +796,7 @@ export function useAddProject(): { start: () => void; pending: boolean } {
 
 /**
  * Adding a project is only ever a step towards working in it, so it lands there — WITHOUT changing the
- * view. Focused on a project, the page moves its focus to the new one (`?project=`, lib/pageView.ts).
+ * view. Focused on a project, the page moves to the new one's board (`/project/<slug>`, lib/pageView.ts).
  * Showing All projects, it stays on All projects and aims the prompt box at the new project, the way a
  * pick in the box's own picker does (maintainer 2026-10-01: adding `local` from All projects dropped
  * the page into `local`'s own view).

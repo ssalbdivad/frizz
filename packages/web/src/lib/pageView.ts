@@ -1,27 +1,27 @@
 // THE PAGE'S VIEW — which projects the one page shows: every project (All projects, the home and the
-// default) or ONE project (focus mode, chosen from the switcher).
+// default) or ONE project (its board, focus mode).
 //
 // All projects is home (maintainer 2026-09-30: "by default frizz should open the all projects view that
 // should be home and it shouldnt need a dedicated /all path"): every project's list and one queue across
-// all of them, with the prompt box's own project picker. Focus mode — from 2026-09-29 to 2026-09-30 the
-// default, after Colin McDonnell, Frizz's original author, whose version had one project per page — is a
-// choice in the switcher (AllQueues.tsx ProjectSwitcher): focused on a project, the list shows that
-// project, the queue shows its cards, and the prompt box dispatches into it.
+// all of them, with the prompt box's own project picker. A project's BOARD — Colin McDonnell's one project
+// per page, Frizz's original shape — is one click away in the switcher: the list is that project's, banded
+// as his sidebar banded it (ProjectBoard.tsx), the queue shows its cards, and the prompt box dispatches
+// into it.
 //
-// THE VIEW LIVES IN THE ADDRESS, so every tab, bookmark and launch keeps its own:
+// THE VIEW IS THE PATH, so every tab, bookmark and launch keeps its own, and a link says what it opens:
 //
-//   /                  All projects — the launcher opens this
-//   /?project=<slug>   focused on that project
-//   /?all              All projects' address until 2026-09-30, rewritten to `/` (routes.tsx)
+//   /                           All projects — the launcher opens this (`/all` is its other name)
+//   /all/<slug>/thread/<t>      All projects, with that thread's drawer over it
+//   /project/<slug>             that project's board
+//   /project/<slug>/thread/<t>  the board, with that thread open (its card, or its drawer)
+//   /project/<slug>/status/<s>  the board's status list
 //
-// A thread drawer's address (`/all/<slug>/thread/<t>`) names the thread, not the view, so under a drawer
-// the view is the tab's (sessionStorage), or the drawer's own project for a tab that has none — a link to
-// a thread opened in a new tab lands focused on that thread's project. The query rides along when it is
-// there; nothing strips it.
-//
-// NEVER SHARED BETWEEN TABS. Two tabs focused on two projects stay on them across reloads, whatever the
-// other does. That is the whole reason the view is not the prompt box's PICK (lib/crossProject.ts), which
-// IS one per browser: the pick aims All projects' prompt box and nothing else.
+// `/project/<slug>` is Colin's own scheme (upstream singleton-frizz.md: `?project=` was considered there and
+// rejected), restored 2026-10-06 (David: the fork is the base, and everything Colin decided is in it —
+// plans/upstream-superset.md §2). From 2026-09-29 to then the board was a QUERY on `/` (`/?project=<slug>`,
+// first spelled `?focus=`), and a drawer's address could not say which view it sat on, so each tab kept
+// its view in sessionStorage. The path says it now, so there is nothing left for a tab to remember; the
+// old queries redirect to the path (routes.tsx, legacyViewRedirect below).
 
 import { useLocation } from "react-router"
 
@@ -29,37 +29,21 @@ export type PageView = { kind: "project"; slug: string } | { kind: "all" }
 
 export const ALL_PROJECTS: PageView = { kind: "all" }
 
-const PROJECT_PARAM = "project"
-const ALL_PARAM = "all"
-/**
- * The launcher's name for `project` until 2026-09-29, when it named the prompt box's pick rather than a
- * view. A launcher from before then that JOINS this server still sends it, and it still means "the project
- * I was run in", so it reads as `project`.
- */
-const LEGACY_FOCUS_PARAM = "focus"
+/** `/project/<slug>…` — a board's address — and its (still encoded) slug. */
+const BOARD = /^\/project\/([^/?#]+)(?:\/|$)/u
 
-/**
- * The view an address's query names, or undefined when it names none. At `/` none means All projects
- * (viewAt); `?all` still reads as it, for a bookmark or launcher from before 2026-09-30.
- */
-export function viewInSearch(search: string): PageView | undefined {
-  const params = new URLSearchParams(search)
-  if (params.has(ALL_PARAM)) return ALL_PROJECTS
-  const slug = params.get(PROJECT_PARAM) ?? params.get(LEGACY_FOCUS_PARAM)
-  return slug ? { kind: "project", slug } : undefined
+/** The view a page at this path shows: a project's board for `/project/<slug>…`, else All projects. */
+export function viewAt(pathname: string): PageView {
+  const match = BOARD.exec(pathname)
+  return match ? { kind: "project", slug: decodeSafely(match[1]!) } : ALL_PROJECTS
 }
 
-/** `?project=<slug>`, or `""` for All projects — the query that names a view. */
-export function viewSearch(view: PageView): string {
-  return view.kind === "all" ? "" : `?${PROJECT_PARAM}=${encodeURIComponent(view.slug)}`
-}
-
-/** The page showing a view: `/?project=<slug>` or `/`. */
+/** The page showing a view: `/project/<slug>` or `/`. */
 export function viewHref(view: PageView): string {
-  return `/${viewSearch(view)}`
+  return view.kind === "all" ? "/" : `/project/${encodeURIComponent(view.slug)}`
 }
 
-/** The page focused on one project. */
+/** A project's board. */
 export function projectViewHref(slug: string): string {
   return viewHref({ kind: "project", slug })
 }
@@ -74,89 +58,36 @@ export function viewKey(view: PageView): string {
   return view.kind === "all" ? "*" : `project:${view.slug}`
 }
 
-// ---- This tab's view ----------------------------------------------------------------------------------
-
-const TAB_KEY = "frizz.pageView"
-let tab: PageView | null = null
-let tabLoaded = false
-
-/** The view this TAB last showed — survives a reload, never seen by another tab. */
-export function tabView(): PageView | null {
-  if (!tabLoaded) {
-    tabLoaded = true
-    try {
-      const stored = sessionStorage.getItem(TAB_KEY)
-      tab = stored === null ? null : viewInSearch(stored) ?? null
-    } catch {
-      tab = null
-    }
-  }
-  return tab
+/** The address bar's path, or `/` where there is none (a unit test under node, a stubbed location). */
+function currentPath(): string {
+  const path = typeof location === "undefined" ? undefined : location.pathname
+  return typeof path === "string" ? path : "/"
 }
 
-/** Remember the view this tab shows. Idempotent, so the route may call it on every render. */
-export function rememberTabView(view: PageView): void {
-  if (tabLoaded && sameView(tab ?? undefined, view)) return
-  tab = view
-  tabLoaded = true
-  try {
-    // `?all`, not viewSearch's `""`: the empty query names NO view, so All projects stored as one read back
-    // after a reload as "this tab has none" — and a reload with a drawer open landed focused on the
-    // drawer's project (2026-09-30).
-    sessionStorage.setItem(TAB_KEY, view.kind === "all" ? `?${ALL_PARAM}` : viewSearch(view))
-  } catch {
-    // Storage disabled: the address still carries the view; only a drawer's close forgets it.
-  }
-}
-
-// ---- Reading it -----------------------------------------------------------------------------------------
-
-/** A thread drawer's project, from its address (`/all/<slug>/thread/<t>`), or undefined. */
-function drawerProject(pathname: string): string | undefined {
-  const match = /^\/all\/([^/]+)\/thread\//u.exec(pathname)
-  if (!match) return undefined
-  try {
-    return decodeURIComponent(match[1]!)
-  } catch {
-    return undefined
-  }
+/** The view the page is showing right now, read off the address — for a handler, which has no hook. */
+export function currentView(): PageView {
+  return viewAt(currentPath())
 }
 
 /**
- * The view a page at this address shows: the one its query names; else, under a thread drawer, this tab's
- * or the drawer's own project; else — a bare `/` — All projects.
+ * Where "home" is for this page — the page with no drawer open, showing its view: the board it is on, or
+ * `/`. The store → URL writer closes the last drawer to this (lib/router.ts), and so does anything else
+ * that means "back to the page".
  */
-export function viewAt(pathname: string, search: string): PageView {
-  const asked = viewInSearch(search)
-  if (asked) return asked
-  const slug = drawerProject(pathname)
-  if (!slug) return ALL_PROJECTS
-  return tabView() ?? { kind: "project", slug }
-}
-
-/**
- * Where "home" is for this tab — the page with no drawer open, showing this tab's view. The store → URL
- * writer closes the last drawer to this (lib/router.ts), and so does anything else that means "back to
- * the page".
- */
-export function homeHref(): string {
-  const view = tabView()
-  return view ? viewHref(view) : "/"
+export function homeHref(pathname: string = currentPath()): string {
+  return viewHref(viewAt(pathname))
 }
 
 /** The view the page is showing, live. */
 export function usePageView(): PageView {
-  const { pathname, search } = useLocation()
-  return viewAt(pathname, search)
+  return viewAt(useLocation().pathname)
 }
 
 /**
- * The view a page at `/` resolves to, against the projects this machine has: `?project=<slug>` when that
- * slug is a registered project (its directory may be gone: asked for by name, it is shown, saying so),
- * else All projects.
- *
- * `unknown` is a slug the address asked for that no project has — renamed, removed, a typo — which the
- * page says rather than silently showing something else.
+ * Whether the view names a project this machine has. `unknown` is a board's slug no project has — renamed,
+ * removed, a typo — which the page says rather than silently showing something else; the server answers a
+ * cold load of one the same way (packages/server index.ts unknownProjectPage), so this catches the ones
+ * reached inside the page (a stale link, Back past a rename).
  */
 export function resolveView(
   cards: readonly { slug: string }[],
@@ -167,19 +98,38 @@ export function resolveView(
   return { view: ALL_PROJECTS, unknown: asked.slug }
 }
 
+// ---- The views' old addresses --------------------------------------------------------------------------
+
+const PROJECT_PARAM = "project"
+/** The board's query until 2026-09-29, when a launcher of that age sent it; it reads as `project`. */
+const LEGACY_FOCUS_PARAM = "focus"
+/** All projects' address until 2026-09-30, when it became the bare `/`. */
+const ALL_PARAM = "all"
+
 /**
- * Where a retired project address lands: focused on the project it names. `/project/<slug>` was a
- * project's own page until 2026-09-28, and old handoffs, toasts and bookmarks are full of it; its drawer
- * `/project/<slug>/thread/<t>` becomes that thread's drawer on the page, focused on its project, and its
- * `/full` the thread's fullscreen page. Undefined for any other address.
+ * Where an address that names its view in the QUERY lands now, or undefined for one that does not.
+ *
+ *   /?project=<slug>, /?focus=<slug>   → /project/<slug>
+ *   /all/<s>/thread/<t>?project=…      → /project/<s>/thread/<t>   (and its /full)
+ *   /?all                              → /
+ *
+ * A drawer's old address named its thread in the path and the tab's board in the query; the thread is what
+ * it opens, so its own project's board is where it lands. Everything else the query carries (an editor's
+ * `embed` and `theme`, a launcher's `add`) rides along.
  */
-export function retiredProjectHref(pathname: string): string | undefined {
-  const match = /^\/project\/([^/]+)(?:\/thread\/([^/]+)(\/full)?)?(?:\/.*)?$/u.exec(pathname)
-  if (!match) return undefined
-  const [, slug, thread, full] = match
-  if (!thread) return `/${viewSearch({ kind: "project", slug: decodeSafely(slug!) })}`
-  const drawer = `/all/${slug}/thread/${thread}`
-  return full ? `${drawer}/full` : `${drawer}${viewSearch({ kind: "project", slug: decodeSafely(slug!) })}`
+export function legacyViewRedirect(pathname: string, search: string): string | undefined {
+  const params = new URLSearchParams(search)
+  const slug = params.get(PROJECT_PARAM) || params.get(LEGACY_FOCUS_PARAM) || undefined
+  if (!slug && !params.has(ALL_PARAM) && !params.has(PROJECT_PARAM) && !params.has(LEGACY_FOCUS_PARAM)) return undefined
+  params.delete(PROJECT_PARAM)
+  params.delete(LEGACY_FOCUS_PARAM)
+  params.delete(ALL_PARAM)
+  const rest = params.toString()
+  const query = rest ? `?${rest}` : ""
+  const drawer = /^\/all\/([^/]+)\/thread\/([^/]+)(\/full)?\/?$/u.exec(pathname)
+  if (slug && drawer) return `/project/${drawer[1]}/thread/${drawer[2]}${drawer[3] ?? ""}${query}`
+  if (slug && (pathname === "/" || pathname === "/all" || pathname === "/all/")) return `${projectViewHref(slug)}${query}`
+  return `${pathname}${query}`
 }
 
 function decodeSafely(segment: string): string {

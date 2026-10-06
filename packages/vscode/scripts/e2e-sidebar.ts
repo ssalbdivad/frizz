@@ -887,7 +887,7 @@ try {
   warmBrowser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"], userDataDir: join(scratch, "warm-profile") })
   {
     const warm = await warmBrowser.newPage()
-    await warm.goto(`${origin}/?project=${workspace.slug}`, { waitUntil: "domcontentloaded", timeout: 180_000 })
+    await warm.goto(`${origin}/project/${workspace.slug}`, { waitUntil: "domcontentloaded", timeout: 180_000 })
     await warm.waitForSelector('textarea[data-surface="newComposer"]', { timeout: 180_000 })
     await warmBrowser.close()
     warmBrowser = undefined

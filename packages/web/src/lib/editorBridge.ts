@@ -330,7 +330,7 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
     thread,
     board,
     pageSlug: projectSlug(),
-    view: viewAt(location.pathname, location.search).kind,
+    view: viewAt(location.pathname).kind,
     projects: projects ?? [],
   })
   if (target.kind === "refused") return { ok: false, reason: target.reason }

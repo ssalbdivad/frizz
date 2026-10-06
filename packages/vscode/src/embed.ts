@@ -27,33 +27,48 @@ export function embedTheme(kind: number): EmbedTheme {
   return kind === 1 || kind === 4 ? "light" : "dark"
 }
 
-/** `<origin>/?embed=vscode&theme=dark&project=<slug>` — what the page reads once at boot. */
+/**
+ * `<origin>/project/<slug>?embed=vscode&theme=dark` — this window's project's board — or `<origin>/?embed=…`
+ * (All projects) when no folder maps to one. The page reads the query once at boot; the PATH names its view
+ * (web lib/pageView.ts). It was `/?…&project=<slug>` until 2026-10-06, while a board was a query on `/`; a
+ * Frizz that new still redirects that shape to the path, so an older extension lands on the board too.
+ */
 export function embedUrl(origin: string, theme: EmbedTheme, projectSlug: string | undefined): string {
-  const url = new URL("/", origin)
+  const url = new URL(projectSlug ? projectPath(projectSlug) : "/", origin)
   url.searchParams.set(EMBED_PARAM, EMBED_VSCODE)
   url.searchParams.set(EMBED_THEME_PARAM, theme)
-  if (projectSlug) url.searchParams.set("project", projectSlug)
   return url.toString()
 }
 
+/** A project's board on the page — `/project/<slug>`, the slug one encoded segment whatever it holds. */
+export function projectPath(projectSlug: string): string {
+  return `/project/${encodeURIComponent(projectSlug)}`
+}
+
 /**
- * A thread's page in embed mode — `<origin>/all/<project>/thread/<slug>?embed=vscode&theme=…&project=<project>`:
- * the page boots in embed mode from the query as the sidebar's does, and the path is the thread's own
- * address, which the page opens as its drawer painted open on the first render the board arrives (a cold
- * deep link; web lib/router.ts) — no queue flashing under a drawer sliding in, as a navigate after ready
- * would draw. What a thread's editor tab frames (thread-panel.ts).
+ * A thread's page in embed mode — `<origin>/project/<project>/thread/<slug>?embed=vscode&theme=…`: the page
+ * boots in embed mode from the query as the sidebar's does, and the path is the thread's own address on
+ * its project's board, which the page opens as its drawer painted open on the first render the board
+ * arrives (a cold deep link; web lib/router.ts) — no queue flashing under a drawer sliding in, as a
+ * navigate after ready would draw. What a thread's editor tab frames (thread-panel.ts). (A tab's page
+ * draws no cards, so even a queued thread opens its drawer there: web store.ts resolveRoutedThread.)
  */
 export function threadEmbedUrl(origin: string, theme: EmbedTheme, project: string, thread: string): string {
-  const url = new URL(`/all/${encodeURIComponent(project)}/thread/${encodeURIComponent(thread)}`, origin)
+  const url = new URL(threadPath(project, thread), origin)
   url.searchParams.set(EMBED_PARAM, EMBED_VSCODE)
   url.searchParams.set(EMBED_THEME_PARAM, theme)
-  url.searchParams.set("project", project)
   return url.toString()
 }
 
+/** A thread on its project's board — `/project/<project>/thread/<slug>`, each name one encoded segment. */
+export function threadPath(project: string, thread: string): string {
+  return `${projectPath(project)}/thread/${encodeURIComponent(thread)}`
+}
+
 /**
- * The thread a page address shows — `/all/<project>/thread/<slug>`, with or without `/full` — or undefined
- * for any other page (the queue, Settings). What a route's `href` says a frame shows.
+ * The thread a page address shows — `/project/<project>/thread/<slug>` on a board or `/all/<project>/thread/<slug>`
+ * on All projects, with or without `/full` — or undefined for any other page (the queue, Settings). What a
+ * route's `href` says a frame shows.
  */
 export function threadOfHref(href: string | undefined): { project: string; thread: string } | undefined {
   if (!href) return undefined
@@ -63,7 +78,7 @@ export function threadOfHref(href: string | undefined): { project: string; threa
   } catch {
     return undefined
   }
-  const match = /^\/all\/([^/]+)\/thread\/([^/]+)(?:\/full)?\/?$/u.exec(path)
+  const match = /^\/(?:project|all)\/([^/]+)\/thread\/([^/]+)(?:\/full)?\/?$/u.exec(path)
   if (!match) return undefined
   try {
     const project = decodeURIComponent(match[1]!)

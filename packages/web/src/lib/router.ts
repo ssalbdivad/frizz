@@ -6,8 +6,9 @@ import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 import { homeHref } from "./pageView.ts"
 
 // URL ⇄ state sync, SPA-style. Inner paths: `/` (the page), and `/thread/<slug>` (the page with that
-// thread open in the drawer STACK's topmost thread layer — `/all/<project>/thread/<slug>` in the
-// address bar, see base-path.ts). The fullscreen page, `/thread/<slug>/full`, is its own route.
+// thread open in the drawer STACK's topmost thread layer). In the address bar they sit under the page's
+// prefix — `/project/<slug>/…` on a board, `/all/<project>/…` for a drawer on All projects (base-path.ts).
+// The fullscreen page, `/thread/<slug>/full`, is its own route.
 //
 // History contract (standard SPA): opening a thread layer PUSHES an entry so the browser Back
 // button unwinds it; other transitions REPLACE so transient state never buries the back stack.
@@ -270,10 +271,10 @@ export function startRouter(navigate: (path: string, options: { replace: boolean
     const path = outerPath(currentPath())
     if (path === location.pathname) return
     // A NEW topmost thread pushes history; unwinding or non-thread transitions replace. `startsWith`
-    // is checked against the INNER path: under a project prefix every path starts with `/all/`.
+    // is checked against the INNER path: under a project prefix every path starts with its prefix.
     const openingThread = currentPath().startsWith("/thread/")
-    // Home is the page showing THIS TAB'S view (lib/pageView.ts): closing the last drawer goes back to
-    // `/?project=<slug>` when the tab was focused, else to `/`, All projects.
+    // Home is the page showing its view (lib/pageView.ts): closing the last drawer goes back to the board
+    // it is on, `/project/<slug>`, else to `/`, All projects.
     written = path
     navigate(path === "/" ? homeHref() : path, { replace: !openingThread })
   }

@@ -151,9 +151,11 @@ try {
   //
   // Until 2026-09-28 this announced the project's BOARD, `/project/<slug>`, because `/` was then the
   // all-projects grid and a `threads: N` assertion aimed there read 0 forever. The board and the grid
-  // are both gone — Everything at `/` is the only page — and every `/project/…` address lands on `/`,
-  // so a caller appending `/thread/<t>` to the old shape silently got the home page instead of a
-  // thread. `gridUrl` is kept, now naming that same `/`, so older callers keep a real address.
+  // are both gone — Everything at `/` is the home — and `/project/…` landed on `/` until 2026-10-06, so a
+  // caller appending `/thread/<t>` to the old shape silently got the home page instead of a thread. It is
+  // the project's focused board again since then (`/project/<slug>/thread/<t>` opens that thread too), but
+  // `url` stays the drawer prefix. `gridUrl` is kept, now naming that same `/`, so older callers keep a
+  // real address.
   const { findByPath, registerProject } = await import("../packages/server/src/project-registry.ts")
   const { resolveProject } = await import("../packages/server/src/project.ts")
   // The real launcher stamps the project it was run in as LAUNCHED (src/production.ts noteLaunchedHere),

@@ -2,7 +2,7 @@ import { useEffect } from "react"
 import { useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import { store } from "../store.ts"
-import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
+import { innerPath, outerPath, projectSlug } from "../lib/base-path.ts"
 import { SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, sheetWidth } from "../lib/sheet.ts"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 
@@ -31,7 +31,7 @@ export function PendingThreadSheet() {
     if (!open) return
     store.pendingOpen = null
     if (projectSlug() === open.projectSlug && innerPath(location.pathname).startsWith("/thread/")) {
-      navigate(crossProjectHref(encodeURIComponent(open.projectSlug)), { replace: true })
+      navigate(outerPath("/"), { replace: true })
     }
   }
 

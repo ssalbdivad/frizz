@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
-import { apiBase, basePath, crossProjectHref, innerPath, isCrossProjectPath, isRetiredAppPath, outerPath, prefixedAppRoute, projectSlug, setHomeFocus } from "./base-path.ts"
+import { apiBase, basePath, crossProjectHref, innerPath, isCrossProjectPath, isProjectBoardPath, isRetiredAppPath, outerPath, prefixedAppRoute, projectSlug, setHomeFocus } from "./base-path.ts"
 
 // The launching project's fullscreen page is still served unprefixed, so an empty base is a supported state.
 test("an unprefixed page has no base and addresses the unprefixed API", () => {
@@ -20,26 +20,52 @@ test("a drawer's project lives under /all, and its API stays flat", () => {
   assert.equal(apiBase("/all/nub/thread/fix-auth"), "/_frizz/nub")
 })
 
-// THERE IS NO PROJECT PAGE (2026-09-28): its old address is an unknown one, naming no project, so
-// nothing on the way home addresses that project's API or feed.
-test("/project/<slug> names nothing", () => {
-  for (const path of ["/project/nub", "/project/nub/thread/fix-auth", "/project/nub/thread/x/full"]) {
+// A PROJECT'S BOARD IS `/project/<slug>` (Colin's scheme, restored 2026-10-06): its board, a thread on it,
+// that thread's /full and its status list all name the project, address its API and feed, and keep the
+// board as the page's root.
+test("/project/<slug> is that project's board", () => {
+  for (const path of ["/project/nub", "/project/nub/", "/project/nub/thread/fix-auth", "/project/nub/thread/x/full", "/project/nub/status/active"]) {
+    assert.equal(projectSlug(path), "nub", path)
+    assert.equal(basePath(path), "/project/nub", path)
+    assert.equal(apiBase(path), "/_frizz/nub", path)
+    assert.equal(isCrossProjectPath(path), true, path)
+    assert.equal(isProjectBoardPath(path), true, path)
+  }
+  assert.equal(innerPath("/project/nub"), "/")
+  assert.equal(innerPath("/project/nub/"), "/")
+  assert.equal(innerPath("/project/nub/thread/fix-auth"), "/thread/fix-auth")
+  assert.equal(innerPath("/project/nub/status/active"), "/status/active")
+  // Closing the last drawer on a board goes back to the board, not to All projects.
+  assert.equal(outerPath("/", "/project/nub/thread/fix-auth"), "/project/nub")
+  assert.equal(outerPath("/thread/other", "/project/nub"), "/project/nub/thread/other")
+  assert.equal(outerPath("/status/blocked", "/project/nub"), "/project/nub/status/blocked")
+  // A thread opened in place keeps the page's view: a board's links stay on boards.
+  assert.equal(crossProjectHref("zod", "/project/nub/thread/x"), "/project/zod")
+  assert.equal(crossProjectHref("zod", "/project/nub"), "/project/zod")
+  assert.equal(prefixedAppRoute("/thread/other", "/project/nub"), "/project/nub/thread/other")
+  assert.equal(prefixedAppRoute("/project/zod/thread/x", "/project/nub"), null, "already names its project")
+})
+
+// EXACTLY those shapes: `/project` is a real directory on plenty of machines, and the markdown sanitizer
+// asks projectSlug whether a link is in-app (markdownTargets.ts isFrizzRoute).
+test("nothing else under /project/ is a page", () => {
+  for (const path of ["/project", "/project/", "/project/acme/src/main.rs", "/project/acme/thread/x/notes.md", "/project/acme/status", "/project/acme/status/a/b"]) {
     assert.equal(projectSlug(path), undefined, path)
     assert.equal(basePath(path), "", path)
-    assert.equal(apiBase(path), "/_frizz", path)
-    assert.equal(isCrossProjectPath(path), false, path)
+    assert.equal(isProjectBoardPath(path), false, path)
   }
 })
 
-// …but it is still an address Frizz minted, so a link to one is in-app (markdownTargets.ts isFrizzRoute)
-// and is left exactly as written: re-pointed under a drawer's prefix it would name a route that never
-// existed there, and it lands on the page either way.
+// A bare `/status/<s>` was the launching project's status list before the singleton; it is still an
+// address Frizz minted, so a link to one is in-app (markdownTargets.ts isFrizzRoute) and is left exactly as
+// written: re-pointed under a drawer's prefix it would name a route that never existed there, and it lands
+// on the page either way.
 test("a retired address is recognised, and never re-pointed", () => {
-  for (const path of ["/project/nub", "/project/nub/thread/fix-auth", "/project/nub/thread/x/full", "/project/nub/status/active", "/status/active", "/status/active/"]) {
+  for (const path of ["/status/active", "/status/active/"]) {
     assert.equal(isRetiredAppPath(path), true, path)
     assert.equal(prefixedAppRoute(path, "/all/zod/thread/x"), null, path)
   }
-  for (const path of ["/project", "/project/acme/src/main.rs", "/project/acme/thread/x/notes.md", "/status", "/status/a/b", "/thread/x", "/all/nub"])
+  for (const path of ["/project/nub", "/project/nub/thread/x", "/project", "/status", "/status/a/b", "/thread/x", "/all/nub"])
     assert.equal(isRetiredAppPath(path), false, path)
 })
 
@@ -56,7 +82,7 @@ test("inner and outer paths round-trip", () => {
 })
 
 // THE POINT of moving projects under a segment of their own: the root namespace stays Frizz's.
-test("only /all/<slug> names a project, so the root is free for other pages", () => {
+test("only /all/<slug> and /project/<slug> name a project, so the root is free for other pages", () => {
   assert.equal(basePath("/thread/nub"), "", "a thread called `nub` is not a project")
   assert.equal(basePath("/status/blocked"), "")
   // A future top-level page cannot be shadowed by a directory somebody happens to have.
@@ -86,7 +112,9 @@ test("the cross-project page is focused on a project", () => {
   assert.equal(outerPath("/thread/other", page), "/all/nub/thread/other")
   assert.equal(outerPath("/", page), "/")
   assert.equal(isCrossProjectPath(page), true)
-  assert.equal(crossProjectHref("nub"), "/all/nub")
+  assert.equal(isProjectBoardPath(page), false)
+  assert.equal(crossProjectHref("nub", page), "/all/nub")
+  assert.equal(crossProjectHref("nub", "/"), "/all/nub", "All projects' own drawers stay on All projects")
   // An agent's `/thread/<slug>` link opens in place, on this page.
   assert.equal(prefixedAppRoute("/thread/other", page), "/all/nub/thread/other")
   // …and an agent's `@thread.child` mention keeps the child's address in the fragment (mentionAutolink.ts).

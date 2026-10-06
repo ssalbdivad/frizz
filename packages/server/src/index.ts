@@ -325,8 +325,9 @@ export function registeredTenantHealth(
 /**
  * The `<slug>` a PAGE url names, when that project does not exist.
  *
- * `/all/<slug>/thread/<t>` — a thread drawer — is the SPA's own route, so the server just hands back the
- * app and lets the client sort it out. For a slug nobody has, the client cannot: every call it makes is answered by
+ * `/project/<slug>…` — a project's board, its thread, its status list — and `/all/<slug>/thread/<t>` — a
+ * thread drawer on All projects — are the SPA's own routes, so the server just hands back the app and lets
+ * the client sort it out. For a slug nobody has, the client cannot: every call it makes is answered by
  * the launching project's app with a 404 it has no way to interpret, the board never arrives, and the
  * page sits on its boot spinner saying "connecting…" while the event stream retries forever. Measured
  * on a real stack (2026-08-11) — the operator's only way out is the home crumb, if they spot it.
@@ -338,9 +339,9 @@ export function unknownProjectPage(
   pathname: string,
   isKnownSlug: (slug: string) => boolean,
 ): string | undefined {
-  // Only `/all/` names a project. `/project/<slug>` was a project's own page until 2026-09-28; nothing
-  // mints it now, so it is an unknown address like any other and the page's catch-all takes it home.
-  const match = /^\/all\/([^/?#]+)/u.exec(pathname)
+  // `/project/<slug>` is a project's board again (2026-10-06, the upstream scheme the fork had retired on
+  // 2026-09-28), and `/all/<slug>` a drawer's prefix on All projects; nothing else names a project.
+  const match = /^\/(?:project|all)\/([^/?#]+)/u.exec(pathname)
   if (!match) return undefined
   const slug = decodeURIComponent(match[1] ?? "")
   return slug && !isKnownSlug(slug) ? slug : undefined
@@ -1226,9 +1227,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         requestTasks.add(task)
         return
       }
-      // A page for a project that does not exist goes home — Everything, which lists every project
+      // A page for a project that does not exist goes home — All projects, which lists every project
       // there is and is where one is added. The slug rides along so the page can say what happened
-      // rather than appearing to have swallowed the URL (web routes.tsx HomeRoute).
+      // rather than appearing to have swallowed the URL (web routes.tsx usePageResolution).
       const missing = unknownProjectPage(url.split("?")[0] ?? "", (slug) => findWorkspaceBySegment(slug) !== undefined)
       if (missing !== undefined) {
         res.writeHead(302, { location: `/?unknown=${encodeURIComponent(missing)}` })

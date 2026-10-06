@@ -19,7 +19,7 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 // The menu lists every project in the list's order, then the Home workspace under a rule with the folder
 // its agents run in (as the prompt box's picker lists it), with All projects above them all as the one
 // view that is not a project. Each wears its Ready count, the accent badge. Choosing one is a
-// NAVIGATION (`/?project=<slug>`, `/`), so Back returns to the view before.
+// NAVIGATION (`/project/<slug>`, `/`), so Back returns to the view before.
 //
 // It must not read like the prompt box's project picker (AllQueues.tsx ProjectPicker), which All projects
 // still has: that one says where a new thread GOES, this one what the page SHOWS. So this one is the

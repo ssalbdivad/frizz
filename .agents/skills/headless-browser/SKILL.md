@@ -34,7 +34,7 @@ responsive checks, and optical review.
 ```bash
 # screenshot + assert page state (the eval's completion value prints as json)
 # `/` is the one page: every project's rows on the left ([data-xq-thread-row]), every Ready card on the
-# right ([data-xq-card]). A thread's drawer is /all/<slug>/thread/<t>; there is no /project/<slug> page.
+# right ([data-xq-card]). A thread's drawer is /all/<slug>/thread/<t>; one project's board is /project/<slug>.
 node scripts/shot.mjs "http://127.0.0.1:4930/" .adhoc-shots/page-desktop.png \
   "({title: document.title, rows: document.querySelectorAll('[data-xq-thread-row]').length, cards: document.querySelectorAll('[data-xq-card]').length})" \
   --w=1440 --h=900 --wait=2500

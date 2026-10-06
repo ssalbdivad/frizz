@@ -21,7 +21,7 @@ import { fixNote, fixTitle, lineSpan, terminalText, type Problem } from "./edito
 import { registerEditorStateFeed, SHARE_SETTING } from "./editor-state-feed.ts"
 import { registerEditorWatcher } from "./editor-watcher.ts"
 import { registerExtrasFeed } from "./extras-feed.ts"
-import { addRoute, composeInSidebar as composeVia, promptRoute, threadOfHref } from "./embed.ts"
+import { addRoute, composeInSidebar as composeVia, projectPath, promptRoute, threadOfHref, threadPath } from "./embed.ts"
 import { composeInput, composeMessage, normalizeNewlines, refLabel, type FileRef, type Selected } from "./message.ts"
 import { projectForPath, workspaceProjects } from "./projects.ts"
 import { registerReviews, type ReviewSnapshot } from "./review-view.ts"
@@ -532,7 +532,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
   }
 
   function projectUrl(origin: string, project: EditorProject | undefined): string {
-    return project ? `${origin}/?project=${encodeURIComponent(project.slug)}` : `${origin}/`
+    return project ? `${origin}${projectPath(project.slug)}` : `${origin}/`
   }
 
   /** Split a command's arguments: a resource (explorer, editor menu) and/or an options object. */
@@ -604,8 +604,7 @@ export function activateFrizz(api: Vscode, context: vscode.ExtensionContext): Fr
     return fromFile ?? workspaceProjects(folders(), projects)[0]
   }
 
-  const threadUrl = (origin: string, project: EditorProject, slug: string) =>
-    `${origin}/all/${encodeURIComponent(project.slug)}/thread/${encodeURIComponent(slug)}`
+  const threadUrl = (origin: string, project: EditorProject, slug: string) => `${origin}${threadPath(project.slug, slug)}`
 
   /** Why the last compose into the sidebar did not land, for a command with nowhere else to send it. */
   let sidebarWhy = ""

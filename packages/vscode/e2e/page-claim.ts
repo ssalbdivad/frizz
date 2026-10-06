@@ -22,7 +22,7 @@ import puppeteer from "puppeteer"
 
 export interface PageClaimOptions {
   origin: string
-  /** The project's slug: the page opens on `/?project=<slug>`, whose new-thread box an insert lands in. */
+  /** The project's slug: the page opens on its board, `/project/<slug>`, whose new-thread box an insert lands in. */
   project: string
   /** The chip token the insert should write, such as `@sample.ts:2-3`. */
   token: string
@@ -62,7 +62,7 @@ export async function watchPageClaim(options: PageClaimOptions): Promise<PageCla
       Document.prototype.hasFocus = () => true
     })
     page.on("pageerror", (error) => void errors.push(String(error)))
-    await page.goto(`${options.origin}/?project=${encodeURIComponent(options.project)}`, { waitUntil: "domcontentloaded" })
+    await page.goto(`${options.origin}/project/${encodeURIComponent(options.project)}`, { waitUntil: "domcontentloaded" })
     // A cold dev server optimizes its dependencies on the first load, which can take a minute.
     await page.waitForSelector(NEW_THREAD_BOX, { timeout: Math.max(1, Math.min(120_000, deadline - Date.now())) })
     log(`page ready on ${options.project}; waiting for ${options.token} in the new-thread box`)

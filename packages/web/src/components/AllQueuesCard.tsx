@@ -92,7 +92,7 @@ import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } f
  * threads, and the lanes that used to say whose they were are gone (lib/allQueues.ts mergedQueue). A
  * focused view shows one project's cards, so it draws no chip (AllQueues.tsx passes `chip={!focused}`).
  * Given `onChoose` it is a button that focuses the page on the project — navigates to its
- * `/?project=<slug>` view (lib/pageView.ts projectViewHref), the same place the READY header's switcher
+ * board, `/project/<slug>` (lib/pageView.ts projectViewHref), the same place the READY header's switcher
  * goes; it filtered the queue in place until focus mode retired the queue filter on 2026-09-29.
  * Without it, plain text, for a line that already sits inside a control (the command card's open button).
  * `square: false` drops its 12px square, for a card that already leads with the project's ProjectMark.
@@ -263,7 +263,7 @@ interface AllQueuesCardProps {
    *  (ProjectChip) — a flag and a stable chooser rather than the element, which would be a new object on
    *  every render of the queue and so re-render the card every time (sameCard). */
   chip?: boolean
-  /** What choosing the chip does: focus the page on the card's project (its `/?project=<slug>` view). */
+  /** What choosing the chip does: focus the page on the card's project (its board, `/project/<slug>`). */
   onChoose?: (project: QueuesProject) => void
 }
 

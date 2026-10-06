@@ -37,8 +37,8 @@ nub scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1     # Bash run_in_
 
 `url` is the launcher's drawer prefix, `/all/<slug>`: append `/thread/<t>` for that thread's drawer over
 the one page, or `/thread/<t>/full` for its fullscreen page. A bare `url` lands on `/`, Everything, which
-`gridUrl` names directly. It was `/project/<slug>` until 2026-09-28; every `/project/…` address now
-redirects to `/`, so a caller still appending to that shape silently gets the home page.
+`gridUrl` names directly. A project's BOARD (the page focused on it) is `/project/<slug>`, and its
+threads `/project/<slug>/thread/<t>` (a queued one lands on its card, anything else opens its drawer).
 
 **Never pipe it through `head`/`sed`/`grep` to read that line.** The stack keeps logging (every Vite HMR
 update, and the shared tree is edited constantly), so the reader exits, the pipe closes, and the next
@@ -88,13 +88,11 @@ Then address a tenant by **id or slug** — both work, and the id is what a work
 curl -s -H 'sec-fetch-site: same-origin' "http://127.0.0.1:45571/_frizz/<tenant-id>/rpc/board"
 ```
 
-**In a browser, every project is on ONE page, `/`** (since 2026-09-28 — there is no project page). A
-tenant's thread is `http://127.0.0.1:45571/all/<tenant-slug>/thread/<t>`: the page with that thread's
-drawer open, focused on the tenant. `…/thread/<t>/full` is its fullscreen page. To look at one project's
-cards, set the queue filter: the pill in the READY header, or the project row's ⋯ menu. `/project/<slug>`
-lands on `/` like any other unknown address, so a harness that navigates there and waits for a project
-page times out rather than failing loudly. `scripts/verify-all-queues.mjs` is a worked example of driving
-the page across four projects.
+**In a browser, every project is on ONE page, `/`** (All projects), and one project's board is
+`/project/<slug>` (the switcher over the prompt box goes there too). A tenant's thread is
+`http://127.0.0.1:45571/all/<tenant-slug>/thread/<t>` on All projects, or
+`/project/<tenant-slug>/thread/<t>` on its board. `…/thread/<t>/full` is its fullscreen page.
+`scripts/verify-all-queues.mjs` is a worked example of driving the page across four projects.
 
 The traps, each of which costs a full boot cycle to rediscover:
 

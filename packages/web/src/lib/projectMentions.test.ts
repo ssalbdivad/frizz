@@ -62,7 +62,7 @@ test("a finished mention resolves only when it IS a slug, case aside, and never 
 
 after(() => setProjectMentions(null))
 
-test("agent prose links a project mention to the page focused on it, and notifies on a change", () => {
+test("agent prose links a project mention to its board, and notifies on a change", () => {
   const marked = new Marked(MARKDOWN_OPTIONS)
   const render = (md: string) => marked.parseInline(md, { async: false }) as string
   setGithubRepo("acme/app")
@@ -74,8 +74,8 @@ test("agent prose links a project mention to the page focused on it, and notifie
     const settled = mentionIndexVersion()
     setProjectMentions([...CARDS])
     assert.equal(mentionIndexVersion(), settled, "the same projects again change nothing")
-    assert.equal(render("ported to #arktype"), 'ported to <a href="/?project=arktype" title="ArkType">#arktype</a>')
-    assert.match(render("fixes #12 in #home"), /<a href="https:\/\/github\.com\/acme\/app\/(?:issues|pull)\/12"[^>]*>#12<\/a> in <a href="\/\?project=home" title="Home">#home<\/a>/u)
+    assert.equal(render("ported to #arktype"), 'ported to <a href="/project/arktype" title="ArkType">#arktype</a>')
+    assert.match(render("fixes #12 in #home"), /<a href="https:\/\/github\.com\/acme\/app\/(?:issues|pull)\/12"[^>]*>#12<\/a> in <a href="\/project\/home" title="Home">#home<\/a>/u)
     assert.equal(render("`#home` and #nobody"), "<code>#home</code> and #nobody")
   } finally {
     setGithubRepo(null)

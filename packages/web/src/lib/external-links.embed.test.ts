@@ -11,8 +11,8 @@ const plain = { button: 0, metaKey: false, ctrlKey: false, shiftKey: false, altK
 test("an in-app page a link would open in a new tab opens here instead", () => {
   assert.deepEqual(embedLinkAction("/", plain, HERE), { kind: "navigate", path: "/" })
   assert.deepEqual(embedLinkAction("/all/marketing-site", plain, HERE), { kind: "navigate", path: "/all/marketing-site" })
-  assert.deepEqual(embedLinkAction("/?project=docs", plain, HERE), { kind: "navigate", path: "/?project=docs" })
-  assert.deepEqual(embedLinkAction("http://127.0.0.1:4917/?project=docs#x", plain, HERE), { kind: "navigate", path: "/?project=docs#x" })
+  assert.deepEqual(embedLinkAction("/project/docs", plain, HERE), { kind: "navigate", path: "/project/docs" })
+  assert.deepEqual(embedLinkAction("http://127.0.0.1:4917/project/docs#x", plain, HERE), { kind: "navigate", path: "/project/docs#x" })
 })
 
 test("a thread's /full page goes to the browser, as f does; a thread's drawer is the thread-link handler's", () => {

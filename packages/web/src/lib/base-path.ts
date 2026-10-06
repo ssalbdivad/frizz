@@ -2,59 +2,65 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 
 // WHICH PROJECT THIS PAGE IS SHOWING, taken from its own URL.
 //
-// One Frizz per machine serves every project from one origin, and ONE PAGE shows them, at `/`: every
-// project (bare `/`, the default) or one project (`/?project=<slug>`, focus mode) — its VIEW, which is a
-// query and not a path segment (lib/pageView.ts). A thread drawer open on it is `/all/<slug>/thread/<t>` —
-// the address names the thread's project, because that is the thread's address — and its fullscreen page
-// is the same plus `/full`. That works because Frizz's own routes live under `/_frizz/`, so the top-level
-// namespace is the SPA's.
+// One Frizz per machine serves every project from one origin, and ONE PAGE shows them. Its PATH names its
+// view (lib/pageView.ts), and with it the project the page is bound to:
 //
-// THERE IS NO PROJECT PAGE. `/project/<slug>` was one — a project's board, then its "project view" —
-// until 2026-09-28 (maintainer: "urls like this should not exist anymore"); nothing here parses or mints
-// it now, and the route tree lands it on the page focused on that project (routes.tsx HomeRedirect).
+//   /                              All projects, the home — bound to the prompt box's pick (below)
+//   /all/<slug>/thread/<t>         All projects with that thread's drawer open — bound to its project
+//   /project/<slug>                that project's board (Colin's scheme, restored 2026-10-06)
+//   /project/<slug>/thread/<t>     the board with that thread open (its card, or its drawer)
+//   /project/<slug>/status/<s>     the board's status list (StatusListView.tsx)
+//
+// and either thread address plus `/full` is that thread's fullscreen page. That works because Frizz's own
+// routes live under `/_frizz/`, so the top-level namespace is the SPA's.
+//
+// `/project/<slug>` was retired on 2026-09-28, when one page replaced the project view and focus mode moved
+// into the query (`/?project=<slug>`); it came back as the project board's address on 2026-10-06 (David:
+// the fork is the base, with Colin's `/project/<slug>` scheme, plans/upstream-superset.md §2), and the query
+// now only redirects to it (routes.tsx).
 //
 // AN EMPTY BASE IS A SUPPORTED STATE, not a bug: an unprefixed `/thread/<slug>/full` is the launching
 // project's fullscreen page, and a page with no project at all (the welcome) has nothing to prefix.
 //
-// The page is always BOUND to one project — the page project: the project it is focused on, All
-// projects' prompt-box pick, or the one whose drawer is open — and every helper below answers for it
-// (the same API base, the same live feed, the same cache scope), which is what lets the whole drawer
-// stack and composer work for any project on the one page.
+// The page is always BOUND to one project — the page project: the board's project, All projects'
+// prompt-box pick, or the one whose drawer is open — and every helper below answers for it (the same API
+// base, the same live feed, the same cache scope), which is what lets the whole drawer stack and composer
+// work for any project on the one page.
 //
-// AT `/` THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the view's project, or the pick
-// (lib/crossProject.ts) — and hands it here with `setHomeFocus`, so `/` answers as `/all/<slug>` did. A
-// drawer's URL still names its thread's project, because that is the thread's address.
+// AT `/` THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the pick (lib/crossProject.ts) — and
+// hands it here with `setHomeFocus`, so `/` answers as `/all/<slug>` does. A drawer's URL still names its
+// thread's project, because that is the thread's address.
 
 /**
  * The SPA's own top-level route names — the in-app links an agent writes unprefixed, and the ones a page
  * re-points under its project (prefixedAppRoute). This is the single definition of that set —
  * `isFrizzRoute` in markdownTargets.ts used to keep its own copy, and a stale copy is not a small bug:
  * every in-app link starts looking like a FILESYSTEM path to the markdown sanitizer, and renders as a
- * disabled local-file chip. Only `thread` since 2026-09-28: `status` went with its list views, and is a
- * retired address now (isRetiredAppPath).
+ * disabled local-file chip. Only `thread`: a status list lives under its project's board
+ * (`/project/<slug>/status/<s>`), and a bare `/status/<s>` is a retired address (isRetiredAppPath).
  */
 export const APP_ROUTE_SEGMENTS = new Set(["thread"])
 
 /**
- * The in-app addresses Frizz minted before one page replaced the project view (2026-09-28): a project's
- * page `/project/<slug>`, its drawer `/project/<slug>/thread/<t>` and fullscreen `…/full`, and the
- * `/status/<s>` lists, bare or under a project. Nothing mints them now, and the route tree sends each one
- * home untranslated (routes.tsx).
+ * The in-app addresses Frizz minted before the singleton put every project under a prefix: the launching
+ * project's unprefixed `/status/<s>` lists. Nothing mints them now, and the route tree sends each one home
+ * untranslated (routes.tsx). (The `/project/<slug>…` shapes were on this list from 2026-09-28 to
+ * 2026-10-06, while the project board was gone; they are its live addresses again — projectSlug.)
  *
- * They are still IN-APP, and that is the only thing this answers. Old handoffs and toasts are full of
- * them, and read as a filesystem path the markdown sanitizer turned each into a local-file chip whose
- * click asked the server to open `/project/nub/thread/x` — an error toast, where the link as written
- * lands on the page. EXACTLY these shapes, the way MACHINE_ROUTE_SEGMENTS matches its names: `/project`
- * is a real directory on plenty of machines, and `/project/acme/src/main.rs` is somebody's file.
+ * They are still IN-APP, and that is the only thing this answers. Old handoffs and toasts carry them, and
+ * read as a filesystem path the markdown sanitizer turned each into a local-file chip whose click asked
+ * the server to open `/status/blocked` — an error toast, where the link as written lands on the page.
+ * EXACTLY this shape, the way MACHINE_ROUTE_SEGMENTS matches its names: `/status/a/b` is somebody's file.
  */
 export function isRetiredAppPath(path: string): boolean {
-  return /^\/project\/[^/]+(?:\/thread\/[^/]+(?:\/full)?|\/status\/[^/]+)?\/?$/u.test(path) || /^\/status\/[^/]+\/?$/u.test(path)
+  return /^\/status\/[^/]+\/?$/u.test(path)
 }
 
 /**
  * Machine-level pages: they are in-app, but they name no project and are never re-pointed under one.
- * `/` itself is one too (the cross-project page); `queues` and `projects` are old addresses of it (the
- * page before it was the home, and the project grid it absorbed), which the route tree sends home.
+ * `/` itself is one too (All projects); `/all` is its other name, and `queues` and `projects` are old
+ * addresses of it (the page before it was the home, and the project grid it absorbed), which the route
+ * tree sends home.
  */
 export const MACHINE_ROUTE_SEGMENTS = new Set(["all", "projects", "queues"])
 
@@ -74,20 +80,41 @@ function here(pathname?: string): string {
 }
 
 /**
- * A drawer's project lives UNDER a segment of its own rather than at the root.
+ * A project lives UNDER a segment of its own rather than at the root — `/all/<slug>/…` for a drawer on All
+ * projects, `/project/<slug>…` for its board.
  *
  * `/nub/thread/x` would have made every project slug a top-level route name, so every page Frizz might
  * later want — settings, docs, a machine dashboard — would have to be fought for against a directory
- * somebody happens to have. `/all/nub/thread/x` costs one segment and keeps the root free.
+ * somebody happens to have. A segment in front costs one segment and keeps the root free.
  */
 const CROSS_PROJECT_SEGMENT = "all"
 export const CROSS_PROJECT_PREFIX = `/${CROSS_PROJECT_SEGMENT}`
+export const PROJECT_PREFIX = "/project"
+
+/**
+ * A project board's address, EXACTLY: `/project/<slug>`, its thread `…/thread/<t>` and that thread's
+ * `…/full`, and its status list `…/status/<s>`, each with an optional trailing slash. Nothing else under
+ * `/project/` is a page: `/project` is a real directory on plenty of machines, and the markdown sanitizer
+ * asks this (through projectSlug) whether a link is in-app — `/project/acme/src/main.rs` is somebody's file.
+ * Query and fragment are not part of a path; a caller handing an href is answered for its path.
+ */
+const PROJECT_BOARD = /^\/project\/([^/?#]+)(?:\/thread\/[^/?#]+(?:\/full)?|\/status\/[^/?#]+)?\/?(?:[?#].*)?$/u
+
+/** The slug a project board's address names (still encoded, as projectSlug answers), or undefined. */
+function boardSlug(path: string): string | undefined {
+  return PROJECT_BOARD.exec(path)?.[1]
+}
+
+/** Is this a project's board (`/project/<slug>…`) — the page focused on one project — rather than All projects? */
+export function isProjectBoardPath(pathname?: string): boolean {
+  return boardSlug(here(pathname)) !== undefined
+}
 
 let homeFocus: string | undefined
 
 /**
- * The project the cross-project page at `/` is focused on — set by its route (routes.tsx
- * CrossProjectPage) during render, before anything below it asks, and cleared when `/` has none to show.
+ * The project All projects at `/` is bound to — set by its route (routes.tsx CrossProjectPage) during
+ * render, before anything below it asks, and cleared when `/` has none to show.
  */
 export function setHomeFocus(slug: string | undefined): void {
   homeFocus = slug
@@ -101,34 +128,42 @@ function isHome(path: string): boolean {
 export function projectSlug(pathname?: string): string | undefined {
   const path = here(pathname)
   if (isHome(path)) return homeFocus
+  const board = boardSlug(path)
+  if (board !== undefined) return board
   const [, first, second] = path.split("/")
-  return first === CROSS_PROJECT_SEGMENT && second ? second : undefined
+  return first === CROSS_PROJECT_SEGMENT && second ? second.replace(/[?#].*$/u, "") || undefined : undefined
 }
 
 /**
- * Is this the cross-project page (`/` with a focus, or `/all/<slug>…`) — rather than a page with no
- * project in it: the welcome, or the launching project's unprefixed fullscreen page?
+ * Is this the one page (`/` with a focus, `/all/<slug>…`, or a project's board `/project/<slug>…`) — rather
+ * than a page with no project in it: the welcome, or the launching project's unprefixed fullscreen page?
  */
 export function isCrossProjectPath(pathname?: string): boolean {
   const path = here(pathname)
   if (isHome(path)) return homeFocus !== undefined
-  const [, first, second] = path.split("/")
-  return first === CROSS_PROJECT_SEGMENT && Boolean(second)
+  return projectSlug(path) !== undefined
 }
 
 /**
- * The cross-project page's prefix for a project — the one place that knows the shape, and only ever
- * with a path after it, a thread's (`/all/<slug>/thread/<t>`). The page itself is `/`, its view in the
- * query (lib/pageView.ts).
+ * A project's prefix ON THE VIEW THIS PAGE SHOWS — the one place that knows the shape, and only ever with a
+ * path after it, a thread's: `/project/<slug>/thread/<t>` on a project's board, `/all/<slug>/thread/<t>` on
+ * All projects (and on any page that names neither, such as the welcome). So a thread opened in place —
+ * from a card, a row, a link, a toast, a notification or the editor — keeps the page's view: All projects
+ * stays All projects with that thread's drawer over it, and a board moves to the thread's project's board,
+ * the way upstream's `/project/<slug>/thread/<t>` links always did. Every caller that spells a thread's
+ * address goes through here, which is what let the view move into the path without touching them.
  */
-export function crossProjectHref(slug: string): string {
-  return `${CROSS_PROJECT_PREFIX}/${slug}`
+export function crossProjectHref(slug: string, pathname?: string): string {
+  return isProjectBoardPath(pathname) ? `${PROJECT_PREFIX}/${slug}` : `${CROSS_PROJECT_PREFIX}/${slug}`
 }
 
-/** `/all/nub`, or `""` when this page names no project (the launching project's unprefixed /full). */
+/** `/project/nub` or `/all/nub`, or `""` when this page names no project (the launching project's unprefixed /full). */
 export function basePath(pathname?: string): string {
-  const slug = projectSlug(here(pathname))
-  return slug ? crossProjectHref(slug) : ""
+  const path = here(pathname)
+  const board = boardSlug(path)
+  if (board !== undefined) return `${PROJECT_PREFIX}/${board}`
+  const slug = projectSlug(path)
+  return slug ? `${CROSS_PROJECT_PREFIX}/${slug}` : ""
 }
 
 /** The path with the project prefix removed — what the router reasons about. */
@@ -136,16 +171,18 @@ export function innerPath(pathname?: string): string {
   const path = here(pathname)
   const base = basePath(path)
   if (!base) return path || "/"
-  return path.slice(base.length) || "/"
+  return path.slice(base.length).replace(/^\/$/u, "") || "/"
 }
 
 /**
- * An inner path put back in terms the address bar uses. The cross-project page's own root is `/`
- * whichever project a drawer had it focused on: closing the last drawer goes home, where the focus is
- * the pick again.
+ * An inner path put back in terms the address bar uses. A board's own root is the board,
+ * `/project/<slug>`. All projects' root is `/` whichever project a drawer had it bound to: closing the last
+ * drawer goes home, where the binding is the pick again.
  */
 export function outerPath(inner: string, pathname?: string): string {
-  return inner === "/" ? "/" : `${basePath(pathname)}${inner}`
+  const path = here(pathname)
+  if (inner !== "/") return `${basePath(path)}${inner}`
+  return isProjectBoardPath(path) ? basePath(path) : "/"
 }
 
 /**
