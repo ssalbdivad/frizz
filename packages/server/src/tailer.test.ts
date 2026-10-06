@@ -884,24 +884,25 @@ test("applyRecord: a Monitor timeout notification (no <status>, no <tool-use-id>
     timestamp: "2026-07-01T00:00:09.000Z",
     content: `<task-notification>\n<task-id>${taskId}</task-id>\n<summary>Monitor event: "wait for agent sweep"</summary>\n<event>${event}</event>\n</task-notification>`,
   })
-  const s = newTailState("t", "s", "/x")
-  applyRecord(s, monitorUse("toolu_mon", "wait for agent sweep", "test -f /tmp/marker", false))
-  applyRecord(s, resultText("toolu_mon", "Monitor started (task bnmdbtlwx, timeout 300s). You will be notified on each event."))
-  assert.equal(s.subAgents.get("toolu_mon")?.taskId, "bnmdbtlwx")
-  // An ordinary progress event ALSO has <event> and no <status> — it must never retire the watcher
-  // (the "missing status ⇒ terminal" trap would kill every live monitor on its first event).
-  applyRecord(s, monitorEvent("bnmdbtlwx", "DISK READY"))
-  assert.equal(s.subAgents.size, 1, "a status-less progress event must not retire a live monitor")
-  applyRecord(s, monitorEvent("bnmdbtlwx", "[Monitor timed out — re-arm if needed.]"))
-  assert.equal(s.subAgents.size, 0, "the timeout sentinel is terminal even with no <status>")
-  assert.equal(s.retiredShells.get("toolu_mon")?.status, "killed")
-  // THE WORDING TODAY — every one of the 57 in ~/.claude/projects on 2026-09-29, verbatim. Keyed on "timed
-  // out" alone, this Monitor stayed a pulsing "running" row after the harness had ended it.
-  applyRecord(s, monitorUse("toolu_mon2", "harness compare completion", "tail -f log", false))
-  applyRecord(s, resultText("toolu_mon2", "Monitor started (task buhepo6db, timeout 1800000ms). You will be notified on each event."))
-  applyRecord(s, monitorEvent("buhepo6db", "[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]"))
-  assert.equal(s.subAgents.has("toolu_mon2"), false, "an expired Monitor is over")
-  assert.equal(s.retiredShells.get("toolu_mon2")?.status, "killed")
+  // BOTH spellings Claude Code picks between (isMonitorTimeoutEvent). The `expired` pair is the default
+  // today, and the one a real lando Monitor carried while frizz still read it as "running" two days on.
+  for (const sentinel of [
+    "[Monitor timed out — re-arm if needed.]",
+    "[Monitor expired after 30m with 2 events delivered. Re-arm it if you still need the watch.]",
+    "[Monitor expired after 30m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]",
+  ]) {
+    const s = newTailState("t", "s", "/x")
+    applyRecord(s, monitorUse("toolu_mon", "wait for agent sweep", "test -f /tmp/marker", false))
+    applyRecord(s, resultText("toolu_mon", "Monitor started (task bnmdbtlwx, timeout 300s). You will be notified on each event."))
+    assert.equal(s.subAgents.get("toolu_mon")?.taskId, "bnmdbtlwx")
+    // An ordinary progress event ALSO has <event> and no <status> — it must never retire the watcher
+    // (the "missing status ⇒ terminal" trap would kill every live monitor on its first event).
+    applyRecord(s, monitorEvent("bnmdbtlwx", "DISK READY"))
+    assert.equal(s.subAgents.size, 1, "a status-less progress event must not retire a live monitor")
+    applyRecord(s, monitorEvent("bnmdbtlwx", sentinel))
+    assert.equal(s.subAgents.size, 0, `the timeout sentinel is terminal even with no <status>: ${sentinel}`)
+    assert.equal(s.retiredShells.get("toolu_mon")?.status, "killed")
+  }
 })
 
 test("applyRecord: a manual TaskStop clears a Monitor (task-id parsed from the real '(task <id>' ack)", () => {

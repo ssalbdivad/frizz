@@ -884,22 +884,24 @@ test("a Monitor card stays pending through launch ack + progress event; the time
   const stillLive = parseTranscript([launch, acked, monitorEvent("DISK READY", "2026-07-01T00:02:00.000Z")].join("\n"))
   assert.equal(stillLive[0].tools[0].status, "pending", "a status-less progress event must not end a live monitor")
   assert.equal(stillLive.length, 1, "a progress event emits no boundary card")
-  // The timeout record reaches a terminal state and emits a labeled wake boundary.
-  const msgs = parseTranscript(
-    [launch, acked, monitorEvent("DISK READY", "2026-07-01T00:02:00.000Z"), monitorEvent("[Monitor timed out — re-arm if needed.]", "2026-07-01T00:05:00.000Z")].join("\n"),
-  )
-  assert.equal(msgs[0].tools[0].status, "cancelled")
-  assert.equal(msgs[0].tools[0].durationMs, 5 * 60_000) // launch (00:00) → timeout record (05:00)
-  const boundary = msgs[1]
-  assert.equal(boundary.kind, "event")
-  assert.equal(boundary.text, "Agent monitor «wait for agent sweep» timed out")
-  // Today's wording (all 57 in ~/.claude/projects, 2026-09-29). It left the card pending, so the drawer's
-  // strip kept an expired Monitor as a live terminal the card and the rail had already dropped.
-  const expired = parseTranscript(
-    [launch, acked, monitorEvent("[Monitor expired after 5m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]", "2026-07-01T00:05:00.000Z")].join("\n"),
-  )
-  assert.equal(expired[0].tools[0].status, "cancelled")
-  assert.equal(expired[1].text, "Agent monitor «wait for agent sweep» expired")
+  // The timeout record reaches a terminal state and emits a labeled wake boundary — in BOTH spellings
+  // Claude Code picks between (isMonitorTimeoutEvent). The `expired` one is the default today; reading
+  // only the legacy one left a lando Monitor "running · 45h" and pinned to its transcript's tail. The
+  // divider prints the harness's own word for the end (1cfb6be9).
+  for (const [sentinel, word] of [
+    ["[Monitor timed out — re-arm if needed.]", "timed out"],
+    ["[Monitor expired after 5m with 1 event delivered. Re-arm it if you still need the watch.]", "expired"],
+    ["[Monitor expired after 5m with no events delivered. Re-arm it if you still need the watch — and widen the filter if silence was unexpected.]", "expired"],
+  ]) {
+    const msgs = parseTranscript(
+      [launch, acked, monitorEvent("DISK READY", "2026-07-01T00:02:00.000Z"), monitorEvent(sentinel!, "2026-07-01T00:05:00.000Z")].join("\n"),
+    )
+    assert.equal(msgs[0].tools[0].status, "cancelled", sentinel)
+    assert.equal(msgs[0].tools[0].durationMs, 5 * 60_000) // launch (00:00) → timeout record (05:00)
+    const boundary = msgs[1]
+    assert.equal(boundary.kind, "event")
+    assert.equal(boundary.text, `Agent monitor «wait for agent sweep» ${word}`)
+  }
 })
 
 test("a manual TaskStop result marks the stopped Monitor's card cancelled (no dangling pending card)", () => {
