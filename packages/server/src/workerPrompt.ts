@@ -254,7 +254,8 @@ card of three names plus "keep the current one", and the other seven were never 
     it. Once nothing is left to DECIDE and only the human's act remains, the steps go to them under
     \`steps:\` in an \` \`\`\`awaiting \` fence instead. Same for anything you WROTE
     but did not SEND (a drafted comment, reply, issue body or release note): \`done\` files that draft
-    away with the thread.
+    away with the thread — ask whether to send it, with the draft itself inside the option that sends
+    it (see **Questions for the human**).
   - Follow-up work you DISCOVERED blocks \`done\` just as hard as work you were assigned, even when it
     is someone else's to do — "not mine" is not "not owed", because the card takes the finding with
     it either way. If the thread points at future work AT ALL, see **When the work is finished but
@@ -603,14 +604,25 @@ Write the whole question actor-explicit — each option an instruction the human
 the hooks now") or one that names its actor outright ("the worker retries nightly", "left for the
 maintainer's own terminal"):
 
-    question: A reply for issue #482 explaining the workaround is drafted. Post it from the maintainer's GitHub account, or leave it a draft?
+    question: Post this reply to issue #482 from the maintainer's GitHub account?
     kind: question
     options:
       - label: Post it
-        description: the reporter is blocked and the workaround is verified
+        description: |
+          The reporter is blocked and the workaround is verified. The comment, as it would post:
+
+          > Thanks for the repro! Until the fix ships, pinning \`foo@1.4\` avoids it: …
         recommended: true
-      - label: Leave it in the handoff
-        description: for edits before anything is posted
+      - label: Leave it a draft
+        description: kept in the scratch file \`reply-482.md\` for edits before anything is posted
+
+**THE HUMAN SEES THE CARD, NOT YOUR MESSAGE — SO WHAT THEY DECIDE ON GOES IN THE CARD.** In the queue,
+your handoff prose is cut to its first few lines behind a "Show more", and the question card is drawn under that. A draft, diff or plan written into the prose and
+then asked about as "the draft (above)" is, at the moment of choosing, a few cut lines and a question
+about something nobody can see (maintainer 2026-10-06, of an issue draft asked about that way: "makes no
+sense"). So the thing being approved rides INSIDE the option that acts on it — the full comment, issue
+body or diff in that option's \`description\`, which renders as Markdown and holds 20,000 characters. Never write "above" or "below" in a
+question.
 
 Write the question in the human's OWN vocabulary: they have their original prompt and nothing else — not
 your plan, your notes, or the names you settled on while working. A name you coined mid-effort (a

@@ -126,6 +126,18 @@ test("the contract puts a question's answer in the prose, and the card below it"
   }
 })
 
+// A worker drafted an issue in its handoff and asked whether to post "the draft (above)"; the queue card
+// showed that prose clipped to a few lines, so the human was asked to approve something they could not
+// see (maintainer 2026-10-06). The draft belongs inside the option that posts it.
+test("the contract puts a draft being approved inside the option that sends it", () => {
+  for (const backend of ["claude", "codex"] as const) {
+    const prompt = buildWorkerPrompt(backend).replace(/\s+/g, " ")
+    assert.match(prompt, /THE HUMAN SEES THE CARD, NOT YOUR MESSAGE — SO WHAT THEY DECIDE ON GOES IN THE CARD/)
+    assert.match(prompt, /Never write "above" or "below" in a question/)
+    assert.doesNotMatch(prompt, /Leave it in the handoff/)
+  }
+})
+
 // A worker asked "can you see the highlighted code?" answered that it could not: its MCP tools are
 // deferred, so `mcp__frizz__editor` reaches it only if the contract names it, with the words that should
 // make it reach for the tool.

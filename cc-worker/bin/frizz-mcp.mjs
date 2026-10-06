@@ -575,7 +575,10 @@ function questionSchema(depth) {
           "ONE-SENTENCE PARAGRAPHS: four single sentences stacked with blank lines between them is the " +
           "shape that keeps arriving, and it is the least readable one in a card this narrow. An " +
           "option with no trade-off makes the human reconstruct your reasoning before they can choose; " +
-          "an option with four paragraphs makes them read an essay to answer one question.",
+          "an option with four paragraphs makes them read an essay to answer one question. WHEN THE " +
+          "OPTION SENDS OR APPLIES SOMETHING YOU WROTE — a comment, an issue body, a diff — put ALL of " +
+          "it here, never \"the draft above\": the human chooses from this card, and your message's " +
+          "prose above it is clipped to its first few lines.",
       },
       recommended: {
         type: "boolean",
