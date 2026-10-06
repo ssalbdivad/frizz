@@ -143,8 +143,12 @@ the sheet again on the words and their line.
 answers it cannot use (not JSON, no time of day, a phrase not in the words) are a failed read, never "no schedule". It is
 Sonnet, by measurement (71ae2ec7): 214 of 214 benchmark requests gave the same next 5 runs, against Haiku's 179 with
 31 wrong (paired McNemar p < 0.001). One read at a time through `claude-oneshot` with a spare CLI answers in 1.69s
-median (4b8a4de5). The kept benchmark is `scripts/schedule-extract-eval.ts`; run it when the interpreter's prompt or
-model changes.
+median (4b8a4de5). The benchmark that measured this, `scripts/schedule-extract-eval.ts` and its 4,463-line fixture
+(6554d0ea), was deleted on 2026-10-06 as a finished experiment once the choice was made (plans/upstream-superset.md §6).
+Its full results stay in the comment above `SCHEDULE_INTERPRETER_MODEL` and in 6554d0ea's message: haiku 175–179/214 same
+runs with 31–32 wrong schedules and 4/10 one-offs scheduled; sonnet 213–214/214, 0–1 wrong; 35 cases only haiku got
+wrong, 0 only sonnet; the trigger gate fires on 74 of 1,238 past prompts (6.0%). If the interpreter's prompt or model
+changes, restore it with `git show 6554d0ea:scripts/schedule-extract-eval.ts` (and `….fixture.json`) and re-run it.
 
 ## Where it lives
 

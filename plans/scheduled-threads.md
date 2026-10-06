@@ -218,8 +218,8 @@ Waking a sleeping machine; a presence gate; a per-run wall-clock budget; worktre
 **As built (2026-10-06): the model reads, and the words decide.** The prompt box reads a schedule out of its words as
 they are typed. A closed list of schedule words (`packages/shared/src/schedule-trigger.ts`) gates a model read
 (`interpretSchedule`). A schedule reading then shows under the box until Enter creates it, or × says it is not one.
-The design, as built, is `plans/schedule-live-reading.md`. Which model reads, and how well, is measured by the kept
-benchmark `scripts/schedule-extract-eval.ts`.
+The design, as built, is `plans/schedule-live-reading.md`. Which model reads, and how well, was measured by
+`scripts/schedule-extract-eval.ts` (6554d0ea, since deleted; its results are in `plans/schedule-live-reading.md` § The model).
 
 ### The local grammar it replaced (the record)
 

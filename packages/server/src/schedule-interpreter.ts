@@ -41,7 +41,8 @@ import { cleanThreadName, threadNameProblem } from "./thread-names.ts"
 // session with no tools, no settings, no MCP servers and one turn.
 //
 // THE MODEL: sonnet, for every read — the live box and Change when alike. Measured with
-// scripts/schedule-extract-eval.ts (its header says how to re-run it) on 2026-10-06 against this prompt: 214
+// scripts/schedule-extract-eval.ts on 2026-10-06 against this prompt (the harness is deleted now that the
+// choice is made; `git show 6554d0ea:scripts/schedule-extract-eval.ts` and its fixture restore it): 214
 // positives graded on their next 5 runs, 20 Change when texts, 10 one-off times, 88 negatives, and the
 // maintainer's 74 past prompts that hold a trigger word; at most 4 reads in flight, load average ~9:
 //            same runs  WRONG  missed  Change when  false positives: one-offs, negatives, history   per read

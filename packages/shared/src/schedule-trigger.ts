@@ -9,9 +9,10 @@
 // It is deliberately a GATE, not a reading. A trigger costs one model call and nothing the human sees until
 // the model answers that there is a schedule — so a broad list ("night" also fires on "the build broke last
 // night") only spends calls, while a missing word means a schedule typed without it is dispatched as a plain
-// thread. scripts/schedule-extract-eval.ts measures both directions. On 2026-10-06: it fires on 74 of the
-// maintainer's 1,238 unique past prompts (6.0%) — "each" alone on 50 of them, almost all "for each issue"
-// sets — and typing one of those costs a median 6 reads at 4s a read under the box's single flight (p90 20).
+// thread. The schedule extraction benchmark (schedule-interpreter.ts THE MODEL) measured both directions.
+// On 2026-10-06: it fires on 74 of the maintainer's 1,238 unique past prompts (6.0%) — "each" alone on 50
+// of them, almost all "for each issue" sets — and typing one of those costs a median 6 reads at 4s a read
+// under the box's single flight (p90 20).
 // The word list alone missed 5 of the benchmark's 214 schedule requests: "once a week …" (twice), "Mon-Fri at
 // 8am …", "twice a day, at 10 and 4 …" and "on the 1st and 15th …". SCHEDULE_TRIGGER_PHRASES now covers the
 // first four (a count per unit of time, and a range of abbreviated weekdays); "the 1st and 15th" is left out,

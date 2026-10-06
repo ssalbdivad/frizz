@@ -56,7 +56,7 @@ test("the system prompt teaches intent before rules: time words alone are not a 
     assert.match(system, kind)
   }
   // The first run is today's slot when one is still ahead: without this line both models started rules a
-  // day or a week late (scripts/schedule-extract-eval.ts, 2026-10-06).
+  // day or a week late (the schedule extraction benchmark, 2026-10-06; see schedule-interpreter.ts THE MODEL).
   assert.match(system, /Today counts: at 2:32pm on a Monday, "daily at 3pm" first runs today at 3pm/)
 })
 
