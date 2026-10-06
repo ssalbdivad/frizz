@@ -7,7 +7,7 @@
 //   I-1  outside the mode nothing creates a schedule;
 //   I-2  inside the mode nothing dispatches or saves lazily;
 //   I-3  the mode turns on only through an explicit act (Tab on an offer, ⌘⌥↵, the glyph, the ledge's
-//        Schedule) and off only through one (Esc, ⌘⌥↵, the glyph, Cancel) — no reading, timer or answer.
+//        Schedule) and off only through one (Esc, ⌘⌥↵, the glyph, Cancel, Undo) — no reading, timer or answer.
 //
 // The states (§5): S0 dark, S1–S3 an offer on screen (exact, cue, ambiguous), M1–M5 the mode (ready,
 // reading, disagree, refused, empty) and the instant a create is in flight.
@@ -128,7 +128,8 @@ export function sendGlyphOf(state: ScheduleUiState): "send" | "schedule" {
 }
 
 /** The actions that turn the mode on, and those that turn it off (I-3). Nothing else writes `mode.on`
- *  except a successful create and a draft clear, which clear the whole draft. */
+ *  except a successful create and a draft clear, which clear the whole draft, and Undo, which restores the
+ *  state before the accept (`draftAfterUndo`). */
 export const MODE_ON_ACTIONS: ReadonlySet<ScheduleAction> = new Set(["accept", "enter-mode"])
 export const MODE_OFF_ACTIONS: ReadonlySet<ScheduleAction> = new Set(["leave", "leave-dismiss"])
 
@@ -158,13 +159,20 @@ export function draftAfter(action: ScheduleAction, prev: ScheduleDraftRecord, ed
 }
 
 /**
- * What Undo (§5.11) does to the mode record it finds. The create left the draft OFF (it cleared the record),
- * and Undo puts back the dismissals as they were before the accept (§1.3.1). But the Undo window is 8s, and
- * the human may have typed new text and pressed Tab inside it: that mode belongs to the new text, entered by
- * an explicit act after the create, and Undo is not one of the acts that end a mode (I-3). Turning it off there
- * left the new text one Enter from a DISPATCH it was being set up not to be (fix round 1, X1). So a record
- * that is on is left exactly as it is; the old text still merges back, and the mode reads both.
+ * The mode record Undo (§5.11, I-13) leaves: exactly the state before the accept — the mode OFF and the
+ * dismissals as they were (§1.3.1) — WHATEVER record it finds. The undone words come back first in the box
+ * (`mergeIntoDraft`), their offer re-derives from them, and the ledge prints what each key does with them:
+ * `↵ Start now`, `⇥ Schedule`. Undo is therefore one of the acts that end the mode (I-3), never one that
+ * starts or keeps it.
+ *
+ * Fix round 1 (X1) kept a mode found ON, for new text the human set up inside the 8s window, on the premise
+ * that the merged text then reads as a compound cue. Fix round 3 (undo-into-mode-recreates-undone) found it
+ * reads as the UNDONE schedule whenever the box had no phrase of its own — empty, or plain words the model had
+ * refused: the panel came back ready with the rule just undone, and the next Enter created it again, the new
+ * words folded into its prompt. A kept mode is a guess at intent over text it was never entered for; the
+ * pre-accept state guesses nothing, and its Enter is printed on screen. (The cost, taken knowingly: Tab on
+ * the next schedule, then Undo of the last one, ends the new mode too — Tab sets it again.)
  */
-export function draftAfterUndo(prev: ScheduleDraftRecord, preAccept: ScheduleDraftRecord["dismissed"]): ScheduleDraftRecord {
-  return prev.on ? prev : { v: 1, on: false, dismissed: preAccept }
+export function draftAfterUndo(preAccept: ScheduleDraftRecord["dismissed"]): ScheduleDraftRecord {
+  return { v: 1, on: false, dismissed: { ...preAccept } }
 }

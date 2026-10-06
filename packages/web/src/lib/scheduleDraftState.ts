@@ -1,4 +1,4 @@
-import { useCallback, useMemo } from "react"
+import { useCallback, useMemo, useSyncExternalStore } from "react"
 import { draftKey, draftStore, useDraft, type DraftStore } from "./drafts.ts"
 import { carryDraft } from "./stagedContext.ts"
 
@@ -115,5 +115,76 @@ export function clearDispatchDraft(
  */
 export function carryDispatchDraft(fromDir: string | undefined, toDir: string | undefined): void {
   if (!fromDir || !toDir || fromDir === toDir) return
+  // A create in flight owns these words (see `beginDraftCreate`): they stay where it will take them from.
+  if (isDraftCreating(draftKey.dispatchSchedule(fromDir))) return
   carryDraft(draftKey.dispatch(fromDir), draftKey.dispatch(toDir), [[draftKey.dispatchSchedule(fromDir), draftKey.dispatchSchedule(toDir)]])
+}
+
+// ---- a create in flight owns its draft (fix round 3) -------------------------------------------------------
+//
+// From the Enter that sends `createSchedule` to the moment its words leave the box (the RPC, then the mark's
+// 220ms wash), the draft IS the schedule being made. Two things went wrong in that window, both driven on the
+// fixture: the box re-aimed at another project carried the words and their {on:true} away, the create then
+// cleared the old project's key — already empty — and the same schedule sat one Enter from being created
+// again over there (reaim-during-wash); and Undo of the previous schedule merged its words ABOVE the ones
+// being created, so the create no longer found its own words at the start of the box and left them there
+// (undo-during-next-create). So, per draft — the mode's key, which every box on the draft shares, and which
+// outlives the box that pressed Enter (the `c` dialog closes on create, the All-projects box remounts on a
+// re-aim):
+//   - the draft does not MOVE while a create on it is in flight (`carryDispatchDraft` declines; the re-aimed
+//     box opens on the other project's own draft, and the words leave with their create);
+//   - Undo puts its words back only after every create on the draft has landed (`afterDraftCreates`), so the
+//     words being created are gone first and only the undone ones come back;
+//   - every box on the draft reads it as creating (`useDraftCreating`): a box remounted mid-create is not one
+//     Enter from creating the same words a second time.
+// Kept for the tab, like the draft store's own snapshot; a reload mid-create forgets it, and the create's
+// words are then the draft's as they were.
+
+const inFlight = new Map<string, number>()
+const settledWaiters = new Map<string, Array<() => void>>()
+const creatingListeners = new Set<() => void>()
+
+/** A create on this draft (its mode's key) is in flight. Returns the call that says it landed or failed —
+ *  safe to call twice: only the first releases the hold. */
+export function beginDraftCreate(key: string): () => void {
+  inFlight.set(key, (inFlight.get(key) ?? 0) + 1)
+  for (const l of [...creatingListeners]) l()
+  let ended = false
+  return () => {
+    if (ended) return
+    ended = true
+    const left = (inFlight.get(key) ?? 1) - 1
+    if (left > 0) inFlight.set(key, left)
+    else {
+      inFlight.delete(key)
+      const waiters = settledWaiters.get(key) ?? []
+      settledWaiters.delete(key)
+      for (const w of waiters) w()
+    }
+    for (const l of [...creatingListeners]) l()
+  }
+}
+
+export function isDraftCreating(key: string): boolean {
+  return inFlight.has(key)
+}
+
+/** Resolves once no create on this draft is in flight — at once when none is. */
+export function afterDraftCreates(key: string): Promise<void> {
+  if (!inFlight.has(key)) return Promise.resolve()
+  return new Promise((resolve) => {
+    const list = settledWaiters.get(key) ?? []
+    list.push(resolve)
+    settledWaiters.set(key, list)
+  })
+}
+
+/** Whether a create on this draft is in flight, from any box. */
+export function useDraftCreating(key: string): boolean {
+  const subscribe = useCallback((listener: () => void) => {
+    creatingListeners.add(listener)
+    return () => { creatingListeners.delete(listener) }
+  }, [])
+  const read = useCallback(() => inFlight.has(key), [key])
+  return useSyncExternalStore(subscribe, read, read)
 }

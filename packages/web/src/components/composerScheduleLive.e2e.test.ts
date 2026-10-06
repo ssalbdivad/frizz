@@ -696,7 +696,10 @@ test("14. under reduced motion every state arrives with no draw", { skip: !baseU
 
 // ---- fix round 1 (2026-10-06): the break-it findings that only a browser shows ----------------------------------
 
-test("15. Undo of an older schedule never ends a mode entered since for new text (X1)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+// Case 15 pinned fix round 1's X1 (a mode entered since stayed ON through Undo) until fix round 3 reversed it:
+// the kept mode read the merged text as the UNDONE schedule whenever the new text had no phrase of its own (case
+// 28). §1.3.1 holds in every case now: Undo restores the pre-accept state, and the ledge prints what Enter does.
+test("15. Undo of an older schedule ends a mode entered since for new text: the pre-accept state, its Enter printed (fix round 3 reverses X1)", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {
     await accept(page)
@@ -710,15 +713,16 @@ test("15. Undo of an older schedule never ends a mode entered since for new text
     assert.equal((await state(page))!.send, "schedule")
     await page.click('[data-toast-action="Undo"]')
     assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1, 3_000), "Undo deleted the first")
-    await sleep(500)
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "ledge", 3_000), "the undone words' offer is back")
     const s = (await state(page))!
     assert.ok(s.text?.includes(PHRASE_TASK) && s.text.includes(next), `both texts kept: ${JSON.stringify(s.text)}`)
-    assert.equal(s.glyph, "on", "the mode entered for the new text is still on")
-    assert.equal(s.send, "schedule", "so Enter still says it schedules")
+    assert.notEqual(s.glyph, "on", "the mode is off")
+    assert.equal(s.send, "send", "the send button says Enter starts it")
+    assert.equal(s.startNow, true, "and the ledge prints ↵ Start now")
     await focusEnd(page)
     await page.keyboard.press("Enter")
-    await sleep(600)
-    assert.equal((await counts(page)).dispatch, 0, "Enter never dispatched the merged text")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000), "Enter did what the ledge said")
+    assert.equal((await counts(page)).createSchedule, 1, "and created nothing more")
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
@@ -1272,6 +1276,277 @@ test("27. the ledge's Each run reads the whole task once typing stops", { skip: 
       }
     }, PAGE_BOX)
     assert.equal(each.segment, "· Each run: triage new issues", `the ledge segment: ${JSON.stringify(each)}`)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// ---- fix round 3 (2026-10-06): verify round 3's safety findings, each through the real box -------------------
+
+const draftEntries = (page: Page) => page.evaluate(() => {
+  const raw = sessionStorage.getItem("frizz-drafts:v1")
+  const entries = raw ? (JSON.parse(raw) as { entries: Record<string, { value: string }> }).entries : {}
+  return Object.fromEntries(Object.entries(entries).map(([k, v]) => [k, v.value]))
+})
+const OTHER_PROJECT = "/fixture/other-project"
+
+// undo-into-mode-recreates-undone: X1 kept a mode found ON at Undo. With the box empty (⌘⌥↵ there: M5) or
+// holding words the model had refused (M4), the undone words came back FIRST, read `exact` in the mode, and
+// the panel was ready with the rule just undone — the next Enter created it again (create 2, delete 1), the
+// new words folded into its prompt.
+test("28. Undo into a mode on an empty box or over plain words: the undone schedule comes back as an offer, and Enter starts the thread", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  for (const since of ["", "fix the flaky login test"]) {
+    const { page, errors } = await open()
+    try {
+      await accept(page)
+      await page.keyboard.press("Enter")
+      assert.ok(await waitFor(async () => !!(await state(page))?.toast?.actions.includes("Undo"), 3_000))
+      assert.ok(await waitFor(async () => (await state(page))?.text === "", 3_000))
+      await focusEnd(page)
+      if (since) {
+        await typeFast(page, since)
+        await sleep(400)
+      }
+      await chord(page, ["Control", "Alt"], "Enter") // ⌘⌥↵ off a Mac: into the mode, empty (M5) or refused (M4)
+      await sleep(since ? 900 : 300)
+      assert.equal((await state(page))!.send, "schedule", `${JSON.stringify(since)}: in the mode before Undo`)
+      await page.click('[data-toast-action="Undo"]')
+      assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1, 3_000))
+      assert.ok(await waitFor(async () => (await state(page))?.slot === "ledge", 3_000), `${JSON.stringify(since)}: the offer is back`)
+      const s = (await state(page))!
+      const restored = since ? `${PHRASE_TASK}\n\n${since}` : PHRASE_TASK
+      assert.equal(s.text, restored)
+      assert.notEqual(s.glyph, "on", "the mode is off")
+      assert.equal(s.create, null, "no Create to press")
+      assert.equal(s.send, "send")
+      assert.equal(s.startNow, true)
+      await focusEnd(page)
+      await page.keyboard.press("Enter")
+      assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000), `${JSON.stringify(since)}: Enter dispatched`)
+      await sleep(300)
+      const c = await counts(page)
+      assert.equal(c.createSchedule, 1, `${JSON.stringify(since)}: the undone schedule was not created again`)
+      assert.equal((await bodies(page, "dispatch"))[0]?.prompt, restored)
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+})
+
+// undo-during-next-create: Undo of the last schedule, clicked while the next one is still in its RPC or wash,
+// merged its words ABOVE the next one's; the next create's onCreated no longer found its own words at the
+// start and kept them all, the mode off — the next Enter dispatched both texts.
+test("29. Undo of the last schedule clicked while the next one creates: the next one's words leave, and only the undone ones come back", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await accept(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => !!(await state(page))?.toast?.actions.includes("Undo"), 3_000))
+    assert.ok(await waitFor(async () => (await state(page))?.text === "", 3_000))
+    await focusEnd(page)
+    await accept(page, "every Friday at 5pm post the summary")
+    // The next create takes 1.5s, so the Undo below is clicked inside its flight — on the FIRST schedule's toast,
+    // which a 0ms create plus the 220ms wash replaced before a loaded machine's click landed.
+    await page.evaluate(() => { window.__sched.createDelayMs = 1_500 })
+    await page.keyboard.press("Enter")
+    assert.match((await state(page))!.toast?.text ?? "", /^Triage issues scheduled/, "the toast clicked is the first schedule's")
+    await page.click('[data-toast-action="Undo"]')
+    assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1, 1_000), "Undo deleted the first at once")
+    await sleep(300)
+    let mid = (await state(page))!
+    assert.equal(mid.text, "every Friday at 5pm post the summary", "while the next one creates, its words are still its own")
+    assert.equal(mid.send, "schedule")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 2, 3_000))
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "ledge", 3_000), "the undone words' offer")
+    await sleep(300)
+    mid = (await state(page))!
+    const s = mid
+    assert.match(s.toast?.text ?? "", /^Post summary scheduled/, "the next one was created")
+    assert.equal(s.text, PHRASE_TASK, "the created words left; only the undone ones are back")
+    assert.notEqual(s.glyph, "on")
+    assert.equal(s.send, "send")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000))
+    assert.equal((await bodies(page, "dispatch"))[0]?.prompt, PHRASE_TASK, "the thread carries the undone words alone")
+    assert.equal((await counts(page)).createSchedule, 2)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// reaim-during-wash: the box re-aimed (and so remounted, as AllQueues keys it by project) inside the create's
+// RPC and 220ms wash. The carry took the words and their {on:true} to the other project; the create then
+// cleared the OLD key, already empty, and the same schedule sat one Enter away in the new project's box.
+test("30. a create in flight across a re-aim or a remount: its words leave from where they were created, and no box is left one Enter from a second", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await accept(page)
+    // The create takes 1s, so the re-aim and the remount land inside its flight on any machine.
+    await page.evaluate(() => { window.__sched.createDelayMs = 1_000 })
+    await page.keyboard.press("Enter")
+    await page.evaluate((dir) => { window.__sched.reaim(dir); window.__sched.remount() }, OTHER_PROJECT)
+    await ready(page)
+    assert.equal((await counts(page)).createSchedule, 1)
+    assert.equal((await state(page))!.text, "", "the re-aimed box opens on the other project's own (empty) draft")
+    assert.ok(await waitFor(async () => !!(await state(page))?.toast, 3_000))
+    await sleep(600)
+    let s = (await state(page))!
+    assert.equal(s.text, "", "the other project's box is empty")
+    assert.notEqual(s.glyph, "on")
+    assert.equal(s.send, "send")
+    assert.deepEqual(Object.keys(await draftEntries(page)).filter((k) => k.startsWith("dispatch")), [], "no draft left in either project")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    await sleep(400)
+    assert.equal((await counts(page)).createSchedule, 1, "Enter there created nothing")
+    // (Enter on an empty box is the textarea's own newline; take it out before the box goes back.)
+    await clearBox(page)
+
+    // The same box remounted inside the wash (a layout pass, the incident's viewport change): it reads the
+    // create in flight and does not create the same words a second time.
+    await page.evaluate((dir) => window.__sched.reaim(dir), "/fixture/schedule-live")
+    await sleep(300)
+    await focusEnd(page)
+    await accept(page)
+    await page.keyboard.press("Enter")
+    await page.evaluate(() => window.__sched.remount())
+    await ready(page)
+    s = (await state(page))!
+    assert.equal(s.text, PHRASE_TASK, "remounted inside the flight: the words are still there…")
+    assert.equal((await counts(page)).createSchedule, 2)
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    await sleep(300)
+    assert.equal((await counts(page)).createSchedule, 2, "…and Enter there is not a second create")
+    assert.ok(await waitFor(async () => (await state(page))?.text === "", 3_000), "the create's words leave the remounted box")
+    await sleep(300)
+    s = (await state(page))!
+    assert.equal((await counts(page)).createSchedule, 2, "one create for one Enter, across the remount")
+    assert.equal(s.text, "")
+    assert.equal((await counts(page)).dispatch, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// relocate-blind-behind-punctuation: a model reading survived an edit that extended its condition after a
+// comma — no second read, and the schedule was created with the old condition and the new words in its task.
+test("31. a model reading is dropped by an edit that continues its clause past a comma, and kept by an edit to its task", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    const P = "every day unless it's a holiday"
+    await armModel(page, { phrase: P, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-06T09:00", condition: "unless it's a holiday", title: "Post digest" })
+    await accept(page, `${P}, post the digest`)
+    assert.ok(await waitFor(async () => !!(await state(page))?.echo, 3_000), "the model's reading lands")
+    assert.equal((await counts(page)).interpretSchedule, 1)
+    // An edit to the task, after the comma: the reading stands, re-cut.
+    await focusEnd(page)
+    await typeFast(page, " to #eng")
+    await sleep(1_200)
+    let s = (await state(page))!
+    assert.equal((await counts(page)).interpretSchedule, 1, "a task-only edit asks nothing again")
+    assert.match(s.echo ?? "", /^Post digest · every day at 9am · unless it.s a holiday$/)
+    assert.equal(s.each, "Each run: post the digest to #eng")
+    // An edit that continues the condition past the comma: the reading goes, and the model reads it again.
+    await armModel(page, { phrase: `${P}, or a weekend`, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-06T09:00", condition: "unless it's a holiday or a weekend", title: "Post digest" })
+    await page.evaluate((sel) => {
+      const area = document.querySelector<HTMLTextAreaElement>(sel)!
+      const i = area.value.indexOf(", post") + 2
+      area.focus()
+      area.setSelectionRange(i, i)
+    }, ta(PAGE_BOX))
+    await typeFast(page, "or a weekend, ", 60)
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule === 2, 3_000), "the edited words went to the model")
+    assert.ok(await waitFor(async () => /or a weekend$/.test((await state(page))?.echo ?? ""), 3_000), "and its new reading is on screen")
+    s = (await state(page))!
+    assert.equal(s.each, "Each run: post the digest to #eng")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 3_000))
+    const body = (await bodies(page, "createSchedule"))[0]!
+    assert.equal(body.condition, "unless it's a holiday or a weekend", "the created schedule carries the whole condition")
+    assert.equal(body.prompt, "post the digest to #eng", "and none of it is left in the task")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// dialog-hidden-box-rearms-dismissal: the page box under the `c` dialog got each of the dialog's keystrokes as
+// a wholesale change — a publish point — so a typo fixed mid-word in the gate word (`every` → `ever` →
+// `every`, never published by the dialog itself) read to it as the phrase deleted, and it wrote the re-armed
+// dismissal back to the shared draft: the offer came back in the dialog.
+test("32. in the `c` dialog a dismissed offer stays dismissed through a typo fixed in its gate word, and re-arms when the phrase is deleted there", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await page.evaluate(() => window.__sched.openDialog())
+    await ready(page, DIALOG_BOX)
+    await typeFast(page, PHRASE_TASK)
+    assert.ok(await waitFor(async () => (await state(page, DIALOG_BOX))?.slot === "ledge", 3_000), "the offer in the dialog")
+    await page.keyboard.press("Escape")
+    await sleep(400)
+    assert.ok(await page.$(DIALOG_BOX), "the claim kept the dialog")
+    assert.equal((await state(page, DIALOG_BOX))!.open, false, "dismissed")
+    await page.evaluate((sel) => {
+      const area = document.querySelector<HTMLTextAreaElement>(sel)!
+      area.focus()
+      area.setSelectionRange(5, 5)
+    }, ta(DIALOG_BOX))
+    await page.keyboard.press("Backspace")
+    await sleep(80)
+    await page.keyboard.type("y")
+    await sleep(1_200)
+    let dlg = (await state(page, DIALOG_BOX))!
+    assert.equal(dlg.text, PHRASE_TASK)
+    assert.equal(dlg.open, false, "still dismissed: nobody deleted the phrase")
+    assert.equal(dlg.glyph, "hint", "the glyph keeps the way back")
+    const record = JSON.parse(Object.entries(await draftEntries(page)).find(([k]) => k.startsWith("dispatch-schedule:"))?.[1] ?? "{}") as { dismissed?: { open?: boolean } }
+    assert.equal(record.dismissed?.open, true, "the shared draft still says so")
+    // The control: the phrase deleted in the dialog itself re-arms the edge, as §8 says.
+    await focusEnd(page, DIALOG_BOX)
+    await page.keyboard.down("Control"); await page.keyboard.press("a"); await page.keyboard.up("Control")
+    await page.keyboard.press("Backspace")
+    await sleep(500)
+    await typeFast(page, PHRASE_TASK)
+    assert.ok(await waitFor(async () => (await state(page, DIALOG_BOX))?.slot === "ledge", 3_000), "deleted and retyped: offered again")
+    dlg = (await state(page, DIALOG_BOX))!
+    assert.equal(dlg.startNow, true)
+    const c = await counts(page)
+    assert.equal(c.dispatch + c.createSchedule, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// Undo after a re-aim (fix round 3, the orchestrator's case): the undone words go back to the project the
+// schedule was created in, with the mode off; the box re-aimed elsewhere — its own text and mode — is not
+// touched.
+test("33. Undo after a re-aim restores into the schedule's own project with the mode off, and leaves the other box alone", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await accept(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => !!(await state(page))?.toast?.actions.includes("Undo"), 3_000))
+    assert.ok(await waitFor(async () => (await state(page))?.text === "", 3_000))
+    const next = "every Friday at 4pm write the changelog"
+    await focusEnd(page)
+    await accept(page, next)
+    await page.evaluate((dir) => window.__sched.reaim(dir), OTHER_PROJECT)
+    await sleep(400)
+    assert.equal((await state(page))!.send, "schedule", "the next schedule's mode went with its words")
+    await page.click('[data-toast-action="Undo"]')
+    assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1, 3_000))
+    await sleep(600)
+    let s = (await state(page))!
+    assert.equal(s.text, next, "the box on screen keeps its own words…")
+    assert.equal(s.glyph, "on", "…and its own mode: Undo is not about them")
+    const store = await draftEntries(page)
+    assert.equal(store[`dispatch:${encodeURIComponent("/fixture/schedule-live")}:new`], PHRASE_TASK, "the undone words are back where they were created")
+    assert.equal(store[`dispatch-schedule:${encodeURIComponent("/fixture/schedule-live")}:new`], undefined, "with the mode off (the absent record)")
+    // Back in that project, the undone words' offer, and Enter starts them.
+    await page.evaluate(() => window.__sched.reaim("/fixture/schedule-live"))
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "ledge", 3_000))
+    s = (await state(page))!
+    assert.equal(s.text, PHRASE_TASK)
+    assert.equal(s.send, "send")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000))
+    assert.equal((await counts(page)).createSchedule, 1)
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })

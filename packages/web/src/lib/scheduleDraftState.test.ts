@@ -3,8 +3,11 @@ import test from "node:test"
 import { DraftStore, draftKey, draftStore } from "./drafts.ts"
 import {
   SCHEDULE_DRAFT_OFF,
+  afterDraftCreates,
+  beginDraftCreate,
   carryDispatchDraft,
   clearDispatchDraft,
+  isDraftCreating,
   parseScheduleDraftState,
   readScheduleDraftState,
   serializeScheduleDraftState,
@@ -164,4 +167,51 @@ test("re-aiming the box carries the mode and its dismissals with the text, and l
   assert.equal(readScheduleDraftState(draftKey.dispatchSchedule(c)).on, true)
 
   for (const dir of [a, b, c]) clearDispatchDraft(dir)
+})
+
+// Fix round 3: a CREATE IN FLIGHT owns its draft until it lands. Two findings, driven on the fixture:
+//   - reaim-during-wash: the box re-aimed (and so remounted) inside the create's RPC and 220ms wash. The carry
+//     moved the text and its {on:true} to the other project, then the create cleared the OLD key, already
+//     empty — a second, identical schedule one Enter away in the new project's box;
+//   - undo-during-next-create: Undo of the last schedule clicked while the next one was still creating merged
+//     its words ABOVE the next one's, so the next create's `onCreated` no longer found its own words at the
+//     start and kept them all — the created words stayed in the box, under a mode turned off.
+// So the draft does not move while a create on it is in flight, and Undo puts its words back only once every
+// create on that draft has landed (or failed).
+test("a create in flight holds its draft: no carry while it creates, and the carry works again once it lands", () => {
+  const a = "/work/inflight-a", b = "/work/inflight-b"
+  const key = draftKey.dispatchSchedule(a)
+  const text = "every Monday at 9am triage new issues"
+  draftStore.set(draftKey.dispatch(a), text)
+  writeScheduleDraftState(key, { v: 1, on: true, dismissed: {} })
+  assert.equal(isDraftCreating(key), false)
+  const end = beginDraftCreate(key)
+  assert.equal(isDraftCreating(key), true)
+  carryDispatchDraft(a, b)
+  assert.equal(draftStore.get(draftKey.dispatch(b)), "", "nothing moved into the other project's box")
+  assert.equal(draftStore.get(draftKey.dispatchSchedule(b)), "", "nor its mode")
+  assert.equal(draftStore.get(draftKey.dispatch(a)), text, "the words stay where the create will take them from")
+  end()
+  end() // idempotent: a second end never releases another create's hold
+  assert.equal(isDraftCreating(key), false)
+  carryDispatchDraft(a, b)
+  assert.equal(draftStore.get(draftKey.dispatch(b)), text, "landed: the draft moves again")
+  for (const dir of [a, b]) clearDispatchDraft(dir)
+})
+
+test("afterDraftCreates waits for every create on that draft, and only that draft", async () => {
+  const key = draftKey.dispatchSchedule("/work/inflight-c")
+  const other = draftKey.dispatchSchedule("/work/inflight-d")
+  const settled = (p: Promise<void>) => Promise.race([p.then(() => true), new Promise<boolean>((r) => setTimeout(() => r(false), 20))])
+  assert.equal(await settled(afterDraftCreates(key)), true, "nothing in flight: at once")
+  const first = beginDraftCreate(key)
+  const second = beginDraftCreate(key)
+  const busy = beginDraftCreate(other)
+  const waiting = afterDraftCreates(key)
+  assert.equal(await settled(waiting), false, "two in flight")
+  first()
+  assert.equal(await settled(waiting), false, "one still in flight")
+  second()
+  assert.equal(await settled(waiting), true, "both landed; the other draft's create does not hold this one")
+  busy()
 })

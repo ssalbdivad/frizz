@@ -46,6 +46,10 @@ interface SchedFixture {
   answer: ModelAnswer | null
   /** Error messages the next createSchedule calls fail with, in order (`schedule-reading-moved: …`). */
   createFail: string[]
+  /** How long createSchedule takes to answer (ms; 0 by default). A test that acts INSIDE a create's flight
+   *  (an Undo click, a re-aim, a remount) widens the window with it rather than racing a 0ms RPC plus the
+   *  220ms wash, which a loaded machine loses. */
+  createDelayMs: number
   /** RPC names the fixture does not answer — so a test can see what the box asked for. */
   unknown: string[]
   remount: () => void
@@ -71,6 +75,7 @@ const sched: SchedFixture = {
   bodies: empty(),
   answer: null,
   createFail: [],
+  createDelayMs: 0,
   unknown: [],
   remount: () => {},
   openDialog: () => {},
@@ -181,6 +186,7 @@ window.fetch = async (input, init) => {
       return json(interpret(input.text, input.tz ?? "America/New_York"))
     }
     case "createSchedule": {
+      if (sched.createDelayMs) await new Promise((r) => setTimeout(r, sched.createDelayMs))
       const fail = sched.createFail.shift()
       if (fail) return new Response(JSON.stringify({ error: fail }), { status: 400, headers: { "content-type": "application/json" } })
       return json(viewOf(body as unknown as CreateScheduleInput))

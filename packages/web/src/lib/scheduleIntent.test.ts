@@ -21,6 +21,8 @@ import {
   type ScheduleKey,
   type ScheduleUiState,
 } from "./scheduleIntent.ts"
+import { DraftStore, draftKey } from "./drafts.ts"
+import { readScheduleDraftState, writeScheduleDraftState } from "./scheduleDraftState.ts"
 
 // The spec's table, copied by hand (not from the implementation), one row per state. Columns, in the spec's
 // order: Enter/Send · ⌘↵ · ⌘⇧↵/snail · ⌘⌥↵/glyph/ledge Schedule · Tab · Esc · ledge ×. "—" (no ledge ×) is
@@ -118,16 +120,40 @@ test("§8: entering explicitly re-arms every edge; Esc in the mode leaves AND di
   assert.deepEqual(draftAfter("dismiss", { v: 1, on: false, dismissed: {} }), { v: 1, on: false, dismissed: {} })
 })
 
-test("I-3 and Undo: Undo puts back the pre-accept dismissals, and never ends a mode entered since", () => {
+// Fix round 3 (undo-into-mode-recreates-undone) reverses fix round 1's X1. X1 kept a mode found on at Undo,
+// on the premise that the merged text then reads as a compound cue. It reads as the UNDONE schedule whenever
+// the box held no phrase of its own — empty (M5), or plain words the model had refused (M4): Undo's text goes
+// FIRST (mergeIntoDraft), so the mode read it `exact`, the panel came back ready, and the next Enter created
+// the schedule just undone (driven on the fixture: create 2, delete 1, the second with the new words folded
+// into its prompt). §1.3.1's decision holds instead, in every case: Undo restores the pre-accept state.
+test("I-13 / §1.3.1: Undo restores exactly the pre-accept state — mode OFF, the dismissals as they were — whatever it finds", () => {
   const preAccept = { open: true as const }
-  // The create left the draft off (it cleared the record): Undo restores what the accept took.
-  assert.deepEqual(draftAfterUndo({ v: 1, on: false, dismissed: {} }, preAccept), { v: 1, on: false, dismissed: { open: true } })
-  // The human pressed Tab on NEW text before Undo (fix round 1, X1): that mode is theirs, for that text. Undo
-  // deletes the old schedule and merges its text back, but the record it finds is the one it leaves — Undo
-  // is not among the explicit acts that turn the mode off.
-  const since = { v: 1 as const, on: true, dismissed: {} }
-  assert.equal(draftAfterUndo(since, preAccept), since)
-  assert.equal(draftAfterUndo(since, {}).on, true)
+  const found: ScheduleDraftRecord[] = [
+    // The create cleared the record: the usual case.
+    { v: 1, on: false, dismissed: {} },
+    // A mode entered since — on an empty box, over plain words, or for the next schedule's text (X1's case).
+    { v: 1, on: true, dismissed: {} },
+    // Dismissals made since, at either edge, are the new text's; the restored text's edges are the accept's.
+    { v: 1, on: true, dismissed: { close: true } },
+    { v: 1, on: false, dismissed: { close: true } },
+  ]
+  // As the box writes it: over whatever record the draft holds when the delete lands.
+  const memory = new Map<string, string>()
+  const store = new DraftStore({ getItem: (k) => memory.get(k) ?? null, setItem: (k, v) => void memory.set(k, v) })
+  const key = draftKey.dispatchSchedule("/repo")
+  for (const prev of found) {
+    writeScheduleDraftState(key, prev, store)
+    writeScheduleDraftState(key, draftAfterUndo(preAccept), store)
+    assert.deepEqual(readScheduleDraftState(key, store), { v: 1, on: false, dismissed: { open: true } }, JSON.stringify(prev))
+  }
+  // Nothing dismissed before the accept: every edge armed, so the offer is back on screen — `⇥ Schedule  ↵ Start
+  // now`, each intent one key, printed (§1.3.1).
+  assert.deepEqual(draftAfterUndo({}), { v: 1, on: false, dismissed: {} })
+  // The record is Undo's own: no later write to the dismissals it was handed reaches it.
+  const handed: { open?: true; close?: true } = {}
+  const after = draftAfterUndo(handed)
+  handed.close = true
+  assert.deepEqual(after.dismissed, {})
 })
 
 test("Tab accepts only on an acceptable offer (S1, S2); everywhere else it is the browser's", () => {

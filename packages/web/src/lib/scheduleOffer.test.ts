@@ -13,6 +13,7 @@ import {
   REST_MS,
   carry,
   classifyEdit,
+  dismissalsNow,
   initialOfferState,
   publish,
   rearmDismissed,
@@ -48,11 +49,17 @@ class Box {
     this.state = publish(this.state, prose, this.read(prose), ev, { mode: this.mode, dismissed: this.dismissed })
     this.log.push({ prose, shown: this.shownLine(), ev: ev.kind, rule: this.ruleLine() })
   }
-  /** The text becomes `next` by one edit. */
-  edit(next: string, opts: { inputType?: string; caret?: number; composing?: boolean } = {}) {
+  /** The text becomes `next` by one edit. `external`: another box on the draft made it (the `c` dialog over
+   *  this page box, an Undo, a clear) — the hook sees it as a wholesale change with no caret. */
+  edit(next: string, opts: { inputType?: string; caret?: number; composing?: boolean; external?: boolean } = {}) {
     const caret = opts.caret ?? next.length
-    if (opts.composing) this.apply(next, { kind: "composing", at: this.t })
+    if (opts.external) this.apply(next, { kind: "edit", edit: "wholesale", caret: null, at: this.t, external: true })
+    else if (opts.composing) this.apply(next, { kind: "composing", at: this.t })
     else this.apply(next, { kind: "edit", edit: classifyEdit(this.state.prose, next, caret, opts.inputType), caret, at: this.t })
+  }
+  /** The dismissals as this box would write them back (the hook's `dismissed`). */
+  get rearmed(): Dismissed {
+    return dismissalsNow(this.state, this.dismissed)
   }
   /** Type `text` at the end, one key every `every` ms (timers fire in between, as they would). */
   type(text: string, every = 80) {
@@ -463,4 +470,60 @@ test("§8 a dismissal takes the offer down at once — not at the next publish p
   assert.equal(shownUnder(shown, false, { close: true }), shown, "the other edge's dismissal does not touch it")
   assert.equal(shownUnder(shown, true, { open: true }), shown, "in the mode the panel shows the reading, dismissed or not")
   assert.equal(shownUnder(null, false, {}), null)
+})
+
+// Fix round 3 (dialog-hidden-box-rearms-dismissal): the `c` dialog and the page box under it edit ONE draft.
+// The human dismissed the offer in the dialog, then fixed a typo in its gate word (`every` → `ever` → `every`,
+// two mid-word keys). The dialog published nothing — mid-word — but the hidden page box got each change as a
+// WHOLESALE edit, a publish point, read `ever Monday…` with no gate word at the open edge, and wrote the
+// re-armed dismissals to the shared draft: the offer came back in the dialog. §8 re-arms an edge when the
+// human deleted its phrase, which only the box being typed in can say; a box that only watched the change
+// writes nothing back.
+test("§8 a dismissal re-arms only at the editing box's own publish point, never at a box that only watched", () => {
+  const typed = "every Monday at 9am triage new issues"
+  const typo = "ever Monday at 9am triage new issues"
+  // The page box, hidden under the dialog: every change reaches it from the other box.
+  const page = new Box()
+  page.edit(typed, { external: true })
+  page.advance(1_000)
+  page.dismissed = { open: true }
+  page.advance(100)
+  page.edit(typo, { external: true })
+  assert.equal(page.state.last?.prose, typo, "it did read the typo, at the publish point the change gave it")
+  assert.deepEqual(page.rearmed, { open: true }, "but it watched the edit: nothing to write back")
+  page.advance(1_000)
+  assert.deepEqual(page.rearmed, { open: true }, "nor at the idle the watched edit armed")
+  page.advance(80)
+  page.edit(typed, { external: true })
+  assert.deepEqual(page.rearmed, { open: true })
+
+  // The dialog, where the keys landed: both are mid-word, so it publishes nothing and keeps the dismissal.
+  const dialog = new Box()
+  dialog.type(typed)
+  dialog.advance(1_000)
+  dialog.dismissed = { open: true }
+  dialog.advance(100)
+  dialog.edit(typo, { caret: 4, inputType: "deleteContentBackward" })
+  dialog.advance(80)
+  dialog.edit(typed, { caret: 5, inputType: "insertText" })
+  dialog.advance(1_000)
+  assert.deepEqual(dialog.rearmed, { open: true }, "the typing box kept it dismissed")
+
+  // The control: the human deletes the phrase in the box being typed in — a re-arm, as §8 says.
+  const own = new Box()
+  own.type(typed)
+  own.advance(1_000)
+  own.dismissed = { open: true }
+  own.edit("triage new issues", { caret: 0, inputType: "deleteContentBackward" })
+  assert.deepEqual(own.rearmed, {}, "its own publish point with no gate word re-arms")
+  // …and a box that only WATCHED that deletion never re-arms on its own: the editing box writes it.
+  const watcher = new Box()
+  watcher.edit(typed, { external: true })
+  watcher.dismissed = { open: true }
+  watcher.edit("triage new issues", { external: true })
+  assert.deepEqual(watcher.rearmed, { open: true })
+  // A box's OWN edit after a watched one reads for itself again.
+  watcher.advance(1_000)
+  watcher.edit("triage new issues ", { caret: 18, inputType: "insertText" })
+  assert.deepEqual(watcher.rearmed, {})
 })

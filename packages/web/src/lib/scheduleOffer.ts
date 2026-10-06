@@ -49,7 +49,9 @@ export type BoxInputEvent =
 export type EditKind = "boundary" | "midword" | "wholesale"
 
 export type OfferEvent =
-  | { kind: "edit"; edit: EditKind; caret: number | null; at: number }
+  /** `external`: another box on the draft changed the text (the `c` dialog over the page box, an Undo, a
+   *  clear) — this box only watched it. */
+  | { kind: "edit"; edit: EditKind; caret: number | null; at: number; external?: boolean }
   | { kind: "composing"; at: number }
   /** REST_MS with no input. */
   | { kind: "rest"; at: number }
@@ -59,8 +61,9 @@ export type OfferEvent =
   | { kind: "hold"; at: number }
   | { kind: "blur"; at: number }
   /** An explicit act read the text now — Tab, the glyph, ⌘⌥↵, Enter in the mode, the mode itself flipping
-   *  (I-6). It publishes whatever the text reads, at any edge, with no wait. */
-  | { kind: "force"; at: number }
+   *  (I-6). It publishes whatever the text reads, at any edge, with no wait. `external`: the mode flipped in
+   *  another box on the draft. */
+  | { kind: "force"; at: number; external?: boolean }
 
 /** A reading, the prose its spans index, and the prose it was READ from — the same text, unless a word has
  *  been half-typed since and the reading was carried over it. */
@@ -81,6 +84,13 @@ export interface OfferState {
   /** The reading at the last publish point, whatever it was — what the glyph's hint and the dismissal's
    *  re-arm read. */
   last: Published | null
+  /** Whether the latest change to the text (or the mode) was this box's own — typed, composed, blurred or
+   *  acted on here — rather than one it only watched another box make. Timers inherit it from the change
+   *  that armed them. */
+  own: boolean
+  /** Whether `last` was read at a publish point of this box's OWN: only those may re-arm a dismissal
+   *  (`dismissalsNow`, §8). */
+  lastOwn: boolean
   caret: number | null
   /** The timers this state wants, as absolute deadlines (ms). A timer that fires is removed; the rest keep
    *  counting from the input that armed them. */
@@ -282,7 +292,7 @@ function touches(caret: number | null, span: Span | undefined): boolean {
 
 /** The state before anything was read: nothing shown, nothing armed. */
 export function initialOfferState(prose: string, mode: boolean): OfferState {
-  return { prose, mode, shown: null, last: null, caret: null, wait: {}, seq: 0 }
+  return { prose, mode, shown: null, last: null, own: false, lastOwn: false, caret: null, wait: {}, seq: 0 }
 }
 
 /**
@@ -291,7 +301,9 @@ export function initialOfferState(prose: string, mode: boolean): OfferState {
  */
 export function publish(prev: OfferState, prose: string, read: () => Published, ev: OfferEvent, opts: PublishOptions): OfferState {
   const caret = ev.kind === "edit" ? ev.caret : prev.caret
-  const base: OfferState = { ...prev, prose, mode: opts.mode, caret, seq: prev.seq + 1 }
+  // A timer belongs to the change that armed it: an idle armed by a watched edit is the other box's too.
+  const own = ev.kind === "edit" || ev.kind === "force" ? !ev.external : ev.kind === "blur" || ev.kind === "composing" ? true : prev.own
+  const base: OfferState = { ...prev, prose, mode: opts.mode, caret, own, seq: prev.seq + 1 }
   // A composition is the IME's: nothing publishes, nothing is armed until it commits (a `compositionend`
   // reaches here as a wholesale edit).
   if (ev.kind === "composing") return { ...base, shown: carry(prev.shown, prose), wait: {} }
@@ -307,7 +319,7 @@ export function publish(prev: OfferState, prose: string, read: () => Published, 
   if (ev.kind === "edit" && ev.edit === "midword") return { ...base, shown: carry(prev.shown, prose), wait }
 
   const now = read()
-  const next: OfferState = { ...base, last: now, wait }
+  const next: OfferState = { ...base, last: now, lastOwn: own, wait }
   // A pause mid-word publishes only a word the reading has finished with: else the screen keeps what it shows.
   if (ev.kind === "rest" || ev.kind === "idle") {
     const kept = carry(prev.shown, prose)
@@ -357,6 +369,20 @@ export function rearmDismissed(dismissed: Dismissed, gates: { open: boolean; clo
   const close = !!dismissed.close && gates.close
   if (open === !!dismissed.open && close === !!dismissed.close) return dismissed
   return { ...(open ? { open: true as const } : {}), ...(close ? { close: true as const } : {}) }
+}
+
+/**
+ * The dismissals as THIS box holds them now: the stored ones, less any edge that re-armed at this box's own
+ * last publish point. A publish point the box only WATCHED — the text changed in another box on the draft —
+ * re-arms nothing (fix round 3, dialog-hidden-box-rearms-dismissal): under the `c` dialog, the page box got
+ * each of the dialog's keystrokes as a wholesale change, a publish point, so a typo fixed mid-word in the gate
+ * word (`every` → `ever` → `every`, which the dialog itself never published) read as the phrase deleted, and
+ * the page box wrote the re-arm back to the shared draft: the dismissed offer came back in the dialog. Whether
+ * the human deleted the phrase is the editing box's to say, at its own publish point.
+ */
+export function dismissalsNow(state: OfferState, stored: Dismissed, exclude: readonly Span[] = []): Dismissed {
+  if (!state.last || !state.lastOwn) return stored
+  return rearmDismissed(stored, scheduleEdgeGates(state.last.prose, exclude))
 }
 
 /** The edge a dismissal applies to: the offer's own, when it is at one. */
@@ -411,7 +437,7 @@ export function useScheduleOffer(input: ScheduleOfferInput): ScheduleOffer {
   // published at once, as a paste would be.
   const [state, setState] = useState<OfferState>(() => {
     const first = initialOfferState(prose, mode)
-    return prose ? publish(first, prose, () => readAt(prose, mode), { kind: "edit", edit: "wholesale", caret: null, at: Date.now() }, { mode, dismissed: input.dismissed }) : first
+    return prose ? publish(first, prose, () => readAt(prose, mode), { kind: "edit", edit: "wholesale", caret: null, at: Date.now(), external: true }, { mode, dismissed: input.dismissed }) : first
   })
 
   // DERIVED during render: a new text (or a mode flip) steps the policy here, with what the textarea said it
@@ -422,11 +448,14 @@ export function useScheduleOffer(input: ScheduleOfferInput): ScheduleOffer {
     const meta = pendingInput.current
     pendingInput.current = null
     const at = Date.now()
+    // Whether THIS box made the change: its textarea reported it (`onInput`) for exactly this text. A mode
+    // flip arrives through the shared draft whichever box flipped it; the box that did so already wrote what
+    // its act meant for the dismissals (§8), so the flip itself re-arms nothing.
     const ev: OfferEvent = state.mode !== mode
-      ? { kind: "force", at }
+      ? { kind: "force", at, external: true }
       : meta && meta.prose === prose
         ? meta.composing ? { kind: "composing", at } : { kind: "edit", edit: classifyEdit(state.prose, prose, meta.caret, meta.inputType), caret: meta.caret, at }
-        : { kind: "edit", edit: "wholesale", caret: null, at }
+        : { kind: "edit", edit: "wholesale", caret: null, at, external: true }
     current = publish(state, prose, () => readAt(prose, mode), ev, { mode, dismissed: input.dismissed })
     setState(current)
   }
@@ -444,8 +473,7 @@ export function useScheduleOffer(input: ScheduleOfferInput): ScheduleOffer {
     return () => timers.forEach(clearTimeout)
   }, [seq])
 
-  const gates = current.last ? scheduleEdgeGates(current.last.prose, input.exclude) : { open: false, close: false }
-  const dismissed = current.last ? rearmDismissed(input.dismissed, gates) : input.dismissed
+  const dismissed = dismissalsNow(current, input.dismissed, input.exclude)
 
   return {
     shown: shownUnder(current.shown, mode, dismissed),

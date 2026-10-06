@@ -6,9 +6,7 @@ import {
   SCHEDULE_PRESENCE_COPY,
   SCHEDULE_READING_MOVED,
   SCHEDULE_SPACING_COPY,
-  compileSchedule,
   cutPhrase,
-  describeSchedule,
   isScheduleOffer,
   provisionalScheduleTitle,
   readingsConsistent,
@@ -21,7 +19,7 @@ import {
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { flashScheduleCount, pushScheduleDrawer, showToast } from "../store.ts"
 import { invalidateSchedules } from "../lib/schedules.ts"
-import { useScheduleDraftState, writeScheduleDraftState } from "../lib/scheduleDraftState.ts"
+import { afterDraftCreates, beginDraftCreate, useDraftCreating, useScheduleDraftState, writeScheduleDraftState } from "../lib/scheduleDraftState.ts"
 import { MODEL_IDLE_MS, dismissalEdge, useScheduleOffer, type BoxInputEvent, type Dismissed, type Published } from "../lib/scheduleOffer.ts"
 import { draftAfter, draftAfterUndo, keyAction, sendGlyphOf, type ScheduleKey, type ScheduleUiState } from "../lib/scheduleIntent.ts"
 import {
@@ -38,7 +36,7 @@ import {
 import { useNowMs } from "../lib/liveClock.ts"
 import { useIsMobile } from "../lib/mobile.ts"
 import { spanUntil } from "../lib/activityTime.ts"
-import { PreviewDescribe, SOON_MS, browserZone, schedulePreviewModel, type PreviewSegment } from "./SchedulePreview.tsx"
+import { PreviewDescribe, SOON_MS, UNPHRASABLE_COPY, browserZone, describeRule, schedulePreviewModel, unphrasableRule, type PreviewSegment } from "./SchedulePreview.tsx"
 import type { ComposerMark } from "./Composer.tsx"
 
 // THE PROMPT BOX'S LIVE SCHEDULE READING (plans/schedule-live-reading.md — the spec; §0 is the feature on one
@@ -81,7 +79,9 @@ export interface LiveScheduleInput {
   /** Whether the box may act at all (a settings write in flight, an account alias typed). */
   blocked: boolean
   /** The draft became a schedule: take it out of the box (`submittedProse` is what was read; anything typed
-   *  after it stays). Returns how to put it back, for Undo. */
+   *  after it stays). Returns how to put it back, for Undo. The one handed in at the Enter that created it is
+   *  the one called, so the words leave the draft they were created from even if the box has since been
+   *  aimed at another project. */
   onCreated: (submittedProse: string) => () => void
   /** Focus the box (this one, or the page's when this one is gone), caret at the end. */
   focus: () => void
@@ -129,7 +129,6 @@ const STALE_COPY = "Frizz has updated since this page loaded. Reload the page to
 /** The server read the same words as a different first run twice: its clock and this page's disagree (a run
  *  between the two). Reloading would not change that; reading again once they agree does. */
 const CLOCK_COPY = "This computer's clock is off from Frizz's. Press Enter to read it again."
-const UNPHRASABLE_COPY = "That schedule is too intricate to show here. Try saying it more simply, like “every Friday at 9am”."
 const UPDATED_FOR_TIME = "Updated for the current time. Press Enter to create."
 const UPDATED_TO_TYPED = "Updated to what you typed. Press Enter to create."
 
@@ -190,17 +189,6 @@ export function needsModel(p: Published, promptOf: (cut: string) => string): boo
   if (!p.prose.trim()) return false
   if (r.kind === "none") return true
   return r.kind === "cue" && promptOf(cutPhrase(p.prose, r.span)) !== ""
-}
-
-/** A rule `describeSchedule` cannot phrase: it falls back to the RRULE itself. */
-function unphrasable(rrule: string, dtstart: string, tz: string): boolean {
-  const c = compileSchedule({ rrule, dtstart, tz })
-  return c.ok && describeSchedule(c.value).startsWith("on the rule")
-}
-
-function describeRule(rrule: string, dtstart: string, tz: string): string {
-  const c = compileSchedule({ rrule, dtstart, tz })
-  return c.ok ? describeSchedule(c.value) : rrule
 }
 
 const capitalize = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s)
@@ -273,7 +261,7 @@ export function modeViewOf(a: {
     }
     // I-11 held for the model too: a rule the house cannot put into words would echo as `on the rule FREQ=…`,
     // and the human is never asked to confirm RRULE text (fix round 1, model-raw-rrule-echo).
-    if (unphrasable(answer.result.rrule, answer.result.dtstart, answer.result.tz)) return { kind: "copy", copy: UNPHRASABLE_COPY, rereads: false }
+    if (unphrasableRule(answer.result.rrule, answer.result.dtstart, answer.result.tz)) return { kind: "copy", copy: UNPHRASABLE_COPY, rereads: false }
     return { kind: "model", result: answer.result, text: answer.text, span: answer.span, prompt: answer.prompt, ...(core ? { core: core.span } : {}) }
   }
   if (mv.status === "failed") return { kind: "copy", copy: MODEL_UNREACHABLE_COPY, rereads: true }
@@ -438,7 +426,21 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   // ---- create (T3, §10.1) -------------------------------------------------------------------------------------
 
-  type CreateJob = { input: CreateScheduleInput; prose: string; local: boolean; startedAt: number; dismissed: Dismissed }
+  // A create in flight HOLDS ITS DRAFT (lib/scheduleDraftState.ts, fix round 3) from Enter until its words
+  // leave the box: the draft does not move to another project meanwhile, Undo of the last schedule waits for
+  // it, and every box on the draft — this one remounted, the page box under the `c` dialog — reads as creating.
+  // The job carries what it was created from (the draft, its `onCreated`) because the box that pressed Enter
+  // may be gone or re-aimed by the time it lands: react-query still runs these callbacks after an unmount.
+  type CreateJob = {
+    input: CreateScheduleInput
+    prose: string
+    local: boolean
+    startedAt: number
+    dismissed: Dismissed
+    draftKey: string
+    onCreated: LiveScheduleInput["onCreated"]
+    landed: () => void
+  }
   const create = useMutation({
     mutationFn: (job: CreateJob) => rpc.createSchedule(job.input),
     onSuccess: (created: ScheduleView, job) => {
@@ -446,23 +448,28 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
       // The mark washes bright and back first (§5.11), then the box clears and the panel folds as the text
       // leaves — the words read as having become the schedule.
       setTimeout(() => {
-        setCommitting(false)
-        movedOnce.current = null
-        setNotice(null)
-        const restore = latest.current.onCreated(job.prose)
-        invalidateSchedules(queryClient)
-        flashScheduleCount(created.projectId)
-        showToast(`${created.title} scheduled`, {
-          detail: toastDetail(created, Date.now()),
-          actions: [
-            { label: "Undo", run: () => undo(created, restore, job.dismissed) },
-            { label: "Open", run: () => pushScheduleDrawer(created.id, created.projectId) },
-          ],
-          duration: UNDO_WINDOW_MS,
-        })
+        try {
+          setCommitting(false)
+          movedOnce.current = null
+          setNotice(null)
+          const restore = job.onCreated(job.prose)
+          invalidateSchedules(queryClient)
+          flashScheduleCount(created.projectId)
+          showToast(`${created.title} scheduled`, {
+            detail: toastDetail(created, Date.now()),
+            actions: [
+              { label: "Undo", run: () => undo(created, restore, job) },
+              { label: "Open", run: () => pushScheduleDrawer(created.id, created.projectId) },
+            ],
+            duration: UNDO_WINDOW_MS,
+          })
+        } finally {
+          job.landed()
+        }
       }, Math.max(0, WASH_MS - (Date.now() - job.startedAt)))
     },
     onError: (error, job) => {
+      job.landed()
       const refusal = scheduleRefusalOf(error)
       // The server read the phrase differently at its clock (a minute rolled over, a midnight passed): read it
       // again here and show that. A second refusal of the same words is this page's clock and the server's
@@ -486,19 +493,31 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
       showToast(`Could not create the schedule: ${(error as Error).message.slice(0, 100)}`)
     },
   })
-  const creating = create.isPending || committing
+  // Any box's create on this draft: a box remounted mid-create (or the page box under the `c` dialog) must
+  // not read as M1, one Enter from creating the same words again. The hold — Enter to the words leaving, or
+  // the refusal — IS "a create is in flight", and it ends in the same callback that puts the refusal's line on
+  // screen. `create.isPending` is not used for it: react-query clears it a task after `onError` has run, and
+  // Chrome runs a queued keydown first, so an Enter pressed as `Updated for the current time. Press Enter to
+  // create.` appeared was swallowed (e2e 20, 2 runs in 3, once the hold made that line paint a microtask
+  // after `onError`). `committing` is this box's own wash after a re-aim moved it to another draft.
+  const draftCreating = useDraftCreating(draftKey)
+  const creating = committing || draftCreating
   const creatingLabel = useDelayedTrue(create.isPending, CREATING_LABEL_MS)
 
   /** Undo (§5.11, I-13): delete the schedule, then put back exactly what the accept took — the text merged
-   *  with anything typed since, the chips, the pick, the mode off and the dismissals as they were. The offer
-   *  re-derives from the text, so `⇥ Schedule  ↵ Start now` is back on screen. A mode the human entered
-   *  since, for new text, stays on (`draftAfterUndo`, I-3). */
-  const undo = (created: ScheduleView, restore: () => void, dismissed: Dismissed) => {
+   *  with anything typed since, the chips, the pick, the mode OFF and the dismissals as they were, whatever
+   *  the draft holds by then (`draftAfterUndo`; fix round 3 reversed X1's kept mode). The offer re-derives
+   *  from the text, so `⇥ Schedule  ↵ Start now` is back on screen. Into the draft the schedule was created
+   *  from — after a re-aim that is not the box on screen — and only once no create on that draft is in
+   *  flight: the next schedule's words leave first, so only the undone ones come back (fix round 3,
+   *  undo-during-next-create). */
+  const undo = (created: ScheduleView, restore: () => void, job: Pick<CreateJob, "draftKey" | "dismissed">) => {
     void projectRpc(created.projectId).deleteSchedule({ id: created.id }).then(
-      () => {
+      async () => {
         invalidateSchedules(queryClient, created.id)
+        await afterDraftCreates(job.draftKey)
         restore()
-        writeScheduleDraftState(draftKey, (m) => draftAfterUndo(m, dismissed))
+        writeScheduleDraftState(job.draftKey, draftAfterUndo(job.dismissed))
         latest.current.focus()
       },
       (error: unknown) => showToast(`Could not undo: ${(error as Error).message.slice(0, 100)}`),
@@ -510,7 +529,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     if (blocked || !profile || creating) return
     const fresh = offer.readNow(true)
     const decision = t3({ view, shownRead: offer.shown?.read, fresh, promptOf })
-    const base = { prose: fresh.prose, startedAt: Date.now(), dismissed: beforeAccept.get(draftKey) ?? {} }
+    const base = { prose: fresh.prose, startedAt: Date.now(), dismissed: beforeAccept.get(draftKey) ?? {}, draftKey, onCreated: input.onCreated }
     const pick = {
       model: profile.model,
       ...(profile.backend ? { backend: profile.backend } : {}),
@@ -527,6 +546,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
         const r = decision.reading
         create.mutate({
           ...base,
+          landed: beginDraftCreate(draftKey),
           local: true,
           input: {
             title: provisionalScheduleTitle(decision.prompt),
@@ -546,6 +566,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
         const m = decision.result
         create.mutate({
           ...base,
+          landed: beginDraftCreate(draftKey),
           local: false,
           input: {
             title: m.title,
