@@ -209,6 +209,18 @@ export function visibleOffer(r: PhraseReading, dismissed: Dismissed): r is Extra
   return !(edge === "open" ? dismissed.open : edge === "close" ? dismissed.close : false)
 }
 
+/** What the box shows, under the dismissals as they are NOW. A dismissal is not a publish point: it changes no
+ *  text, so the policy's state still holds the offer it showed — and only a later publish point (the 800ms
+ *  idle, a keystroke, a blur) would have taken it down. Esc and × looked like they worked only while that idle
+ *  was still armed (inside 800ms of the last key); a human who paused, read the ledge and then tapped × saw
+ *  nothing happen (found on the phone, where the tap row is read before it is answered, 2026-10-06). So the
+ *  shown offer is filtered here, at render, by the same predicate the policy publishes with. In the mode the
+ *  panel shows whatever the text reads, dismissed or not. */
+export function shownUnder(shown: Published | null, mode: boolean, dismissed: Dismissed): Published | null {
+  if (!shown || mode) return shown
+  return visibleOffer(shown.reading, dismissed) ? shown : null
+}
+
 /** §2.4 as built: a QUALIFIER STILL BEING TYPED holds the reading it qualifies. The grammar never eats a word
  *  it has not read, so `every Monday at` and `every Monday unless` are cues whose unread words run to the end
  *  of the text; when the cue's core is exactly the reading on screen, a word boundary inside the qualifier
@@ -387,7 +399,7 @@ export function useScheduleOffer(input: ScheduleOfferInput): ScheduleOffer {
   const dismissed = current.last ? rearmDismissed(input.dismissed, gates) : input.dismissed
 
   return {
-    shown: current.shown,
+    shown: shownUnder(current.shown, mode, dismissed),
     last: current.last,
     dismissed,
     onInput: (e) => {

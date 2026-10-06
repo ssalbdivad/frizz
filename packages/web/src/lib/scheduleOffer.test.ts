@@ -16,6 +16,7 @@ import {
   initialOfferState,
   publish,
   rearmDismissed,
+  shownUnder,
   visibleOffer,
   type Dismissed,
   type OfferEvent,
@@ -347,4 +348,21 @@ test("I-3 at the source: the publish policy imports no setter of the mode and wr
   }
   assert.doesNotMatch(source, /\bon\s*:\s*true\b|\.on\s*=(?!=)/, "no write of the mode's `on`")
   assert.doesNotMatch(source, /draftStore|sessionStorage|localStorage/, "no store writes of any kind")
+})
+
+test("§8 a dismissal takes the offer down at once — not at the next publish point", () => {
+  // A dismissal changes no text, so nothing publishes, and the policy's state still holds the offer after Esc
+  // or ×. Long after the last key (every timer spent), the screen must still drop it the moment its edge is
+  // dismissed. Before shownUnder it stayed up until the next keystroke or blur.
+  const box = new Box()
+  box.type("every Monday at 9am triage new issues")
+  box.advance(5_000)
+  assert.deepEqual(box.state.wait, {}, "every timer spent: no publish point is coming")
+  const shown = box.state.shown
+  assert.equal(shown?.reading.kind, "exact")
+  assert.equal(shownUnder(shown, false, {}), shown, "undismissed: shown")
+  assert.equal(shownUnder(shown, false, { open: true }), null, "its edge dismissed: gone at once")
+  assert.equal(shownUnder(shown, false, { close: true }), shown, "the other edge's dismissal does not touch it")
+  assert.equal(shownUnder(shown, true, { open: true }), shown, "in the mode the panel shows the reading, dismissed or not")
+  assert.equal(shownUnder(null, false, {}), null)
 })
