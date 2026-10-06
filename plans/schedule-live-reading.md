@@ -894,7 +894,9 @@ go, and fixes the comment.
 ## 13. Server changes (all small)
 1. **`backend/claude-oneshot.ts`:** resolve on the `result` message, and close the iterator in the background
    (log close errors, never throw them). *Measured* 420–520ms after the answer on every call. This helps the
-   interpreter, the namer and the status line alike.
+   interpreter, the namer and the status line alike. *Built 2026-10-05 (`6ce93a8d`):* the concurrency slot is
+   released only after the background shutdown, so `concurrency` still bounds live CLIs; only the answered
+   caller stops waiting. Real CLI, n=5 per arm on a loaded box: result→resolve median 841ms → 0.4ms.
 2. **`shared/schedules.ts`:**
    - `CreateScheduleInput` gains `titleAuto?: true` and `source?: { kind: "local"; grammar: number }`;
      `UpdateScheduleInput` gains `source?`.
