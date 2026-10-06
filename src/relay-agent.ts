@@ -41,6 +41,22 @@ export interface ServeOptions {
   publicOrigin: string;
 }
 
+/**
+ * Conditional-GET headers, dropped so the board never answers a relayed request with a 304.
+ *
+ * A relay deployed before 7264ab4c (2026-09-30) turns every 304 into a 504 — the Workers `Response`
+ * constructor throws on a null-body status given a stream. The board cannot see which relay build it
+ * is talking to, and the relay is deployed separately from the board, so this half must not depend on
+ * the fix having shipped there. The failure it prevents is total, not cosmetic: a phone that has
+ * the board cached revalidates every module on the next load, every one comes back 504, and the app
+ * never boots — a blank page that a fresh browser (no cache, so no 304s) cannot reproduce. That is
+ * exactly what took ssalbdivad.frizz.sh down on 2026-10-05 while the board itself ran fine.
+ *
+ * The cost is a full 200 where a 304 would have done. Immutable assets never revalidate, so what is
+ * re-sent is the small, uncached set: the HTML shell and the dev server's source modules.
+ */
+const REVALIDATION_HEADERS = new Set(["if-none-match", "if-modified-since"]);
+
 /** A response streams when it has no length we can know up front — SSE above all. */
 function shouldStream(headers: Array<[string, string]>): boolean {
   for (const [name, value] of headers) {
@@ -84,7 +100,10 @@ export function serveRelayRequest(frame: Extract<RelayDownFrame, { t: "req" }>, 
       if (!cancelled) options.send(upFrame);
     };
     const headers: Record<string, string> = {};
-    for (const [name, value] of stripHopByHop(frame.headers)) headers[name] = value;
+    for (const [name, value] of stripHopByHop(frame.headers)) {
+      if (REVALIDATION_HEADERS.has(name.toLowerCase())) continue;
+      headers[name] = value;
+    }
     // Present the request as the visitor's, not as loopback. See ServeOptions.publicOrigin.
     headers.host = publicUrl.host;
 

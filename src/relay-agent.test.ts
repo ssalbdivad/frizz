@@ -169,6 +169,31 @@ test("hop-by-hop headers are not replayed onto the local connection", async () =
   } finally { await b.close(); }
 });
 
+test("a revalidating visitor gets a full 200, never a 304 a stale relay would turn into a 504", async () => {
+  // The board answers like Vite and every static server do: 304 whenever the validator matches.
+  let seen: string[] = [];
+  const b = await board((req, res) => {
+    seen = Object.keys(req.headers);
+    if (req.headers["if-none-match"] === '"v1"') { res.writeHead(304); res.end(); return; }
+    res.writeHead(200, { etag: '"v1"', "content-length": "6" });
+    res.end("module");
+  });
+  const out = collect();
+  try {
+    await serveToEnd(
+      {
+        t: "req", id: "1", method: "GET", url: `${b.origin}/src/main.tsx`,
+        headers: [["if-none-match", '"v1"'], ["if-modified-since", "Mon, 05 Oct 2026 00:00:00 GMT"], ["x-keep", "1"]],
+      },
+      { origin: b.origin, send: out.send, publicOrigin: "https://ada.frizz.sh" },
+    );
+    assert.ok(seen.includes("x-keep"));
+    assert.ok(!seen.includes("if-none-match") && !seen.includes("if-modified-since"), "a conditional header reached the board");
+    assert.equal((out.frames[0] as Extract<RelayUpFrame, { t: "res" }>).status, 200);
+    assert.equal(text(out.frames), "module");
+  } finally { await b.close(); }
+});
+
 /**
  * A stand-in terminal: a REAL WebSocket server, because the whole point of this half is that it speaks
  * to one. A fake socket here would prove the frame bookkeeping and nothing about the upgrade itself.
