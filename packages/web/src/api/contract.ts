@@ -53,6 +53,7 @@ import type {
   DropOwnLinkResult,
   BoardSnapshot,
   Settings,
+  PluginsReport,
   DispatchInput,
   AdoptThreadInput,
   AdoptThreadResult,
@@ -500,6 +501,7 @@ export interface Api {
   // checkbox only when the folder is already named after the project, and leaves it off.
   projectRename(input: { id: string; name: string; renameDirectory?: boolean }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
+  plugins(): Promise<PluginsReport>
   settingsSet(input: Settings): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
   // has an input schema), and the transport posts `{}` for it.
@@ -680,6 +682,7 @@ export const PROCEDURES = {
   projectIconClear: "mutation",
   projectRename: "mutation",
   settingsGet: "query",
+  plugins: "query",
   settingsSet: "mutation",
   settingsReset: "mutation",
   dispatchPreferencesGet: "query",

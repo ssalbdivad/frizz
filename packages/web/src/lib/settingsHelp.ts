@@ -20,6 +20,7 @@ export const SETTINGS_HELP = {
   projectInstructions: "Instructions every agent in this project follows, Claude Code and Codex alike. They are the project's FRIZZ.md: saved to the repo root, where they can be committed and reviewed, and injected into each worker's system prompt. Takes effect on the next thread you dispatch and on any thread when it next resumes.",
   githubPrompt: "The prompt for every item dispatched from the GitHub picker, issues and PRs alike. The default has the worker read the whole thread, classify it, and branch — reproduce + fix-plan for a bug, a plan for a feature, an adversarial review for a PR.",
   remoteAccess: "How a phone or another machine reaches this Frizz. Every choice keeps Frizz on 127.0.0.1 and puts something in front of it, and the first visit from each device needs a single-use sign-in link. Applies at once and is remembered for later launches. The same setup as pressing R in the terminal running Frizz, and changeable only from this machine.",
+  plugins: "Code you installed to run inside Frizz, with your permissions and no sandbox. Each one is a folder in the plugins folder shown here, running as long as it is there. This list is what each one adds — the procedures it answers, the MCP tools and Claude Code plugin it gives every agent — and why one is not running. Not Claude Code plugins, which are a different thing. To start Frizz without any, set FRIZZ_PLUGINS_OFF=1.",
 } as const
 
 // The few that read differently in an editor's sidebar (lib/embed.ts), where the row itself says what

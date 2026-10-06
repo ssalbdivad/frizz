@@ -9,6 +9,7 @@ import { test, type TestContext } from "node:test"
 import { randomUUID } from "node:crypto"
 import { ContextStartupError, type AppContext } from "./context.ts"
 import { openFrizzDatabase } from "./frizz-db.ts"
+import { emptyPluginRegistry } from "./plugins/loader.ts"
 import {
   ServerStartupError,
   startServer,
@@ -108,6 +109,9 @@ function fixture(t: TestContext, controls: FixtureControls = {}) {
       const real = openFrizzDatabase({ path: ":memory:", importLegacy: false })
       return { ...real, close: () => { closeCounts.database++; real.close() } }
     },
+    // Never the machine's real `<data>/user-plugins`: a test must not import the operator's plugins or
+    // open their databases.
+    loadPlugins: async () => emptyPluginRegistry(),
     createContext() {
       const state: ContextState = {
         storageClosed: 0,

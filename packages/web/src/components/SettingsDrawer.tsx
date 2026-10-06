@@ -29,6 +29,7 @@ import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
 import { embedded } from "../lib/embed.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 import { SlashCommandsField } from "./SlashCommandsField.tsx"
+import { PluginsField } from "./PluginsField.tsx"
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -253,6 +254,10 @@ export function SettingsDrawer() {
               {inEditor ? <EditorHint>Code files from the sidebar open in this window.</EditorHint> : null}
               <EditorConnectedHint />
             </SettingsField>
+
+            {/* Read-only, and after everything an operator adjusts: the audit of the code running inside
+                Frizz besides its own (PluginsField.tsx). */}
+            <PluginsField />
             </>
           )}
         </div>

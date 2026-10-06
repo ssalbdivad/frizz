@@ -170,6 +170,21 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     })
   })
 
+  // FRIZZ PLUGINS' web halves, types stripped (plugins/web-assets.ts). MACHINE-SCOPED like the icon route
+  // above: a plugin belongs to the machine, so whichever project's app answers serves the same file, and
+  // `plugins` is a reserved slug so no project can shadow the path. The entry's URL carries `?v=<hash>`
+  // (PluginSummary.web), so a changed plugin is a new module; every file revalidates by ETag.
+  app.get(`${frizzRoute("/plugins")}/:id/*`, (c) => {
+    const id = c.req.param("id")
+    const prefix = `${frizzRoute("/plugins")}/${encodeURIComponent(id)}/`
+    const r = ctx.pluginRegistry?.webAsset(id, c.req.path.startsWith(prefix) ? c.req.path.slice(prefix.length) : "")
+      ?? { status: 404 as const, message: "no such plugin running" }
+    if (r.status !== 200) return c.text(r.message, r.status)
+    const headers = { etag: r.etag, "cache-control": "no-cache", "x-content-type-options": "nosniff" }
+    if (c.req.header("if-none-match") === r.etag) return c.body(null, 304, headers)
+    return c.body(r.body, 200, { ...headers, "content-type": "text/javascript; charset=utf-8" })
+  })
+
   app.get(frizzRoute("/local-visualization"), (c) => {
     const row = ctx.storage.getSession(c.req.query("slug") ?? "")
     const r = resolveLocalVisualization(ctx.project.dir, row?.session_id, c.req.query("file"))

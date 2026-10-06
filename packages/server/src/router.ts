@@ -57,6 +57,8 @@ import {
   GithubBatchInput,
   GithubBatchResult,
   Settings,
+  PluginsReport,
+  PLUGIN_API,
   StartLazyThreadInput,
   UpdateLazyPromptInput,
   TranscriptMessage,
@@ -5939,6 +5941,15 @@ export function createRouter(ctx: AppContext) {
     settingsGet: query({
       output: Settings,
       handler: async () => ctx.getSettings(),
+    }),
+
+    // FRIZZ PLUGINS (plugins/loader.ts): the machine's plugins and where each stands — Settings → Frizz
+    // plugins draws it as the read-only audit of what runs in the control plane (its procedures, the MCP
+    // tools and Claude Code directories it hands every worker, every failure), and the page's loader
+    // reads each running plugin's web half from it. Machine-wide: every project answers the same.
+    plugins: query({
+      output: PluginsReport,
+      handler: async () => ctx.pluginRegistry?.report() ?? { api: PLUGIN_API, off: false, root: "", plugins: [] },
     }),
 
     settingsSet: mutation({

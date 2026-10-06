@@ -91,6 +91,7 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { RETENTION_FIRST_SWEEP_MS, RETENTION_SWEEP_INTERVAL_MS } from "./thread-retention.ts"
 import { projectScopedEnvironment } from "./project-launch.ts"
+import type { PluginRegistry } from "./plugins/loader.ts"
 import { homedir } from "node:os"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
@@ -274,6 +275,11 @@ export interface AppContext {
    * Supplied by the server, which owns it; absent under a test context, where every opener spawns.
    */
   editors?: EditorBridge
+  /**
+   * The machine's FRIZZ PLUGINS (plugins/loader.ts) — one registry for the process, loaded before any
+   * project opened. Supplied by the server; absent under a test context, which then has none.
+   */
+  pluginRegistry?: PluginRegistry
   // GitHub detection (installed/inRepo/nameWithOwner) resolved ONCE at boot via initGithub() — stable
   // for the process lifetime. `authed` is NOT cached here; the githubStatus query re-checks it live so
   // a mid-session `gh auth login` reflects immediately. Undefined until initGithub() resolves (the
@@ -347,6 +353,8 @@ export interface ContextOptions {
   reopenHomeWorkspace?: AppContext["reopenHomeWorkspace"]
   /** See AppContext.editors — supplied by the server, which owns the one bridge. */
   editors?: EditorBridge
+  /** See AppContext.pluginRegistry — supplied by the server, which loads it once for every project. */
+  plugins?: PluginRegistry
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -1368,6 +1376,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     reopenHomeWorkspace: opts.reopenHomeWorkspace,
     launchProjectId: opts.launchProjectId,
     editors: opts.editors,
+    pluginRegistry: opts.plugins,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     terminalRunner,

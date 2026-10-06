@@ -121,6 +121,8 @@ const RESERVED = new Set([
   "editor",
   // `/_frizz/vite-hmr`, the dev board's Vite HMR socket (index.ts VITE_HMR_PATH).
   "vite-hmr",
+  // `/_frizz/plugins/<id>/…`, the Frizz plugins' web halves (app.ts, plugins/web-assets.ts).
+  "plugins",
 ])
 
 export function registryPath(home = homedir()): string {
