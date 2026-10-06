@@ -210,6 +210,7 @@ import { openExternalUrl } from "./open-external.ts"
 import { editorKindsForOpener, folderEditor, mainCheckoutCopy, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
 import { projectsNamedIn, resolveSpawnProject, spawnProjectList, type SpawnProject } from "./spawn-project.ts"
+import { dispatchCaller } from "./dispatch-caller.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
@@ -2168,7 +2169,9 @@ export function createRouter(ctx: AppContext) {
   // projects so the worker chooses one. `prompt` is passed only for a worker's dispatch. The candidates
   // are every REGISTERED project (and Home), not only the ones this process has open: priming opens the
   // rest in the background, and a project not open yet is opened here, as its first request would.
-  async function spawnTarget(project: string | undefined, prompt: string | undefined): Promise<{ ctx: AppContext; slug: string } | undefined> {
+  // `staleShim`: a worker whose MCP server predates the `project` argument (dispatch-caller.ts) — it cannot
+  // pass one, so its refusal hands the spawn to the human rather than asking for an argument it lacks.
+  async function spawnTarget(project: string | undefined, prompt: string | undefined, staleShim = false): Promise<{ ctx: AppContext; slug: string } | undefined> {
     if (project === undefined && prompt === undefined) return undefined
     const tenants = new Map((ctx.activeTenants?.() ?? []).map((t) => [t.project.id, t]))
     const candidates = new Map<string, SpawnProject>()
@@ -2194,6 +2197,15 @@ export function createRouter(ctx: AppContext) {
       const named = projectsNamedIn(prompt ?? "", here, all)
       if (!named.length) return undefined
       const where = named.map(({ project: p, mention }) => `\`${mention}\` is in ${p.name} (\`${p.slug}\`)`).join("; ")
+      if (staleShim) {
+        throw new Error(
+          `Nothing was spawned. The prompt names another project's checkout — ${where} — but the thread would ` +
+            `start in ${here.name}, this thread's project, where that project's board would never show it. This ` +
+            `session's spawn_thread is older than its \`project\` argument, so it cannot start a thread anywhere ` +
+            `else. Hand the spawn to the human: write the prompt to a file and give them steps to start it from ` +
+            `${named[0]!.project.name}'s board (\`${named[0]!.project.slug}\`) with that file.\n${listing}`,
+        )
+      }
       throw new Error(
         `Nothing was spawned. The prompt names another project's checkout — ${where} — but the thread would ` +
           `start in ${here.name}, this thread's project, where that project's board would never show it. ` +
@@ -2773,7 +2785,11 @@ export function createRouter(ctx: AppContext) {
         const request = spinoff ?? spinOff
         // A spinoff's project was chosen by the human with the request; `project` cannot redirect it.
         if (request) return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
-        const target = await spawnTarget(project, spawnedFrom === undefined ? undefined : rest.prompt)
+        // A worker's spawn is checked for another project's checkout. A current shim says so with
+        // `spawnedFrom`; one older than it (a session started before 2026-10-06 16:44 keeps its shim for
+        // life) is known by its request instead, which a browser's never resembles (dispatch-caller.ts).
+        const staleShim = spawnedFrom === undefined && dispatchCaller() === "worker"
+        const target = await spawnTarget(project, spawnedFrom === undefined && !staleShim ? undefined : rest.prompt, staleShim)
         const on = target?.ctx ?? ctx
         const started = await on.dispatcher.dispatch(rest, { backend: input.backend })
         if (target) target.ctx.board.refresh()

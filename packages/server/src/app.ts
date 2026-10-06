@@ -11,6 +11,7 @@ import { createRouter } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import { allowedLocalCorsOrigin, isTrustedLocalHttpRequest } from "./local-origin.ts"
 import { compress, negotiateEncoding, shouldCompress } from "./compression.ts"
+import { withDispatchCaller } from "./dispatch-caller.ts"
 import { localImageHeaders, localImageStream, resolveLocalImage } from "./local-image.ts"
 import { resolveProjectIconResponse } from "./project-icon.ts"
 import { resolveLocalVisualization } from "./local-visualization.ts"
@@ -81,6 +82,11 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
     c.header("x-frizz-boot", ctx.bootId)
     await next()
   })
+
+  // Whether a `dispatch` came from the board or a worker's `spawn_thread`, read off the request itself so
+  // a worker whose shim predates `spawnedFrom` is still checked (dispatch-caller.ts).
+  app.use(frizzRoute("/rpc/dispatch"), (c, next) =>
+    withDispatchCaller({ origin: c.req.header("origin"), userAgent: c.req.header("user-agent") }, next))
 
   // Compress RPC responses. The board payload for a busy project is ~780 KB of JSON and every page
   // load fetches it; the server produces it in ~11 ms and then spends far longer pushing it up a home

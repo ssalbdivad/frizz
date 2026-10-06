@@ -7,6 +7,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BoardSnapshot, DispatchInput } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
+import { createApp } from "./app.ts"
 import { createRouter } from "./router.ts"
 import Database from "./sqlite.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -166,6 +167,40 @@ test("a registered project this server has not opened yet is a candidate, and sp
     assert.equal(result.project, entry!.slug)
     assert.equal(gamma.dispatched.length, 1)
     gamma.close()
+  } finally {
+    h.close()
+  }
+})
+
+// A worker whose MCP shim predates `spawnedFrom` (one is spawned per session and lives as long as it) sends
+// the body below — what @pullfrog-status's did when it started @superset-impl in Home with the fork's
+// checkout in its brief. Through the real app: its request has no `Origin` and node's user agent, so the
+// guard runs anyway; the board's own dispatch, from a browser, still goes through untouched.
+test("a worker too old to send `spawnedFrom` is still checked, and the board's dispatch is not", async () => {
+  const h = harness()
+  try {
+    const port = 49_178
+    const app = createApp(Object.assign(h.alpha.ctx, { bootId: "boot" }), { port })
+    const prompt = `Implement the plan in the fork at \`${h.beta.dir}\`.`
+    const post = (headers: Record<string, string>) =>
+      app.request(`http://127.0.0.1:${port}/_frizz/rpc/dispatch`, {
+        method: "POST",
+        headers: { host: `127.0.0.1:${port}`, "content-type": "application/json", ...headers },
+        body: JSON.stringify({ prompt, model: "opus", effort: "xhigh", title: "Superset impl" }),
+      })
+
+    // The shim's headers exactly (frizz-mcp.mjs postToFrizz, sent through node's fetch).
+    const stale = await post({ "sec-fetch-site": "same-origin", "user-agent": "node" })
+    const error = ((await stale.json()) as { error: string }).error
+    assert.match(error, /^Nothing was spawned\./)
+    assert.match(error, /older than its `project` argument/)
+    assert.match(error, /start it from beta's board \(`beta`\)/)
+    assert.equal(h.alpha.dispatched.length + h.beta.dispatched.length, 0, "a refusal starts nothing")
+
+    // A browser: Origin on the POST, or (the no-Origin PWA path app.test.ts keeps open) a browser's user agent.
+    assert.equal((await post({ origin: `http://127.0.0.1:${port}` })).status, 200)
+    assert.equal((await post({ "sec-fetch-site": "same-origin", "user-agent": "Mozilla/5.0 (X11; Linux x86_64)" })).status, 200)
+    assert.equal(h.alpha.dispatched.length, 2, "what the human types is never second-guessed")
   } finally {
     h.close()
   }
