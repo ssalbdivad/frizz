@@ -13,9 +13,11 @@
 //     another tab) is still drawn where it was, as itself, `held`. Not a ghost gap, as the queue draws: a
 //     gap in a list of one-line rows is a hole the pointer falls through onto the row beyond, and the row
 //     that was there is exactly what the human was aiming at — a click on it still opens THAT thread.
-//   - A thread that ARRIVES (new, or moved into a band it was not drawn in) waits until the hold ends.
-//     Appending even at a band's end would push every band and project under it down; holding moves
-//     nothing. A thread that moved bands is therefore drawn once, in its old place.
+//   - A thread that ARRIVES new is appended at its band's END at once. It used to wait for the hold to
+//     end, so nothing below it moved — but a thread that was in no band drawn was then on no band at all
+//     (maintainer 2026-10-06: "it should never be the case that a thread should be totally invisible for
+//     any circumstances"; then chose appending, accepting the shift below it). A thread that MOVED bands
+//     is already drawn, so it stays in its old place, once, until the hold ends.
 //   - A thread the HUMAN moved (`moved`: pinned, reopened, replied to, finished, dispatched — anything this
 //     tab did to it, lib/humanActs.ts) goes where the live layout puts it at once. That motion is theirs;
 //     holding it would read as the click not landing. Its old slot closes and it is placed after its
@@ -99,6 +101,18 @@ export function holdLayout<T>({ prev, target, keyOf, frozen, moved, live }: Hold
       for (let i = index - 1; i >= 0 && after < 0; i--) after = into.slots.findIndex((slot) => slot.key === keys[i])
       into.slots.splice(after + 1, 0, { key, item: at.item, held: false })
     })
+  }
+
+  // Every other arrival goes at its band's END: nothing above it moves, and no thread is ever off the list.
+  const drawnKeys = new Set(out.flatMap((section) => section.slots.map((slot) => slot.key)))
+  for (const section of target) {
+    const into = out.find((drawn) => drawn.id === section.id)!
+    for (const item of section.items) {
+      const key = keyOf(item)
+      if (drawnKeys.has(key) || now.get(key)?.section !== section.id) continue
+      drawnKeys.add(key)
+      into.slots.push({ key, item, held: false })
+    }
   }
   return out
 }

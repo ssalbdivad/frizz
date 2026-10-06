@@ -67,9 +67,9 @@ test("held, a thread that leaves the list entirely holds its slot, as it is now 
   assert.equal(drawn(hold(before, "ready: a c")), "ready: a (b) c")
 })
 
-test("held, an arrival waits for the hold to end — nothing is pushed down", () => {
+test("held, an arrival is appended at its band's end — nothing above it moves", () => {
   const before = first("ready: a | working: b")
-  assert.equal(drawn(hold(before, "ready: n a | working: b m")), "ready: a | working: b")
+  assert.equal(drawn(hold(before, "ready: n a | working: b m")), "ready: a n | working: b m")
 })
 
 test("held, a thread that moves INTO a band is not drawn twice", () => {
@@ -82,7 +82,7 @@ test("held, a thread that moves INTO a band is not drawn twice", () => {
 test("the hold ending draws every waiting move at once", () => {
   const before = first("ready: a b | working: c")
   const held = hold(before, "ready: b n | working: a c")
-  assert.equal(drawn(held), "ready: (a) b | working: c")
+  assert.equal(drawn(held), "ready: (a) b n | working: c")
   assert.equal(drawn(hold(held, "ready: b n | working: a c", { frozen: false })), "ready: b n | working: a c")
 })
 
@@ -91,10 +91,10 @@ test("a hold carries over render to render: what was held stays held until it en
   drawnNow = hold(drawnNow, "ready: c b")
   assert.equal(drawn(drawnNow), "ready: (a) b c")
   drawnNow = hold(drawnNow, "ready: c b x")
-  assert.equal(drawn(drawnNow), "ready: (a) b c")
+  assert.equal(drawn(drawnNow), "ready: (a) b c x")
   // `a` comes back where it was drawn: not held any more, the same slot.
   drawnNow = hold(drawnNow, "ready: a c b x")
-  assert.equal(drawn(drawnNow), "ready: a b c")
+  assert.equal(drawn(drawnNow), "ready: a b c x")
 })
 
 test("held, a thread the HUMAN moved goes where the live layout puts it at once", () => {
@@ -111,15 +111,15 @@ test("held, a thread the human put away (finished, snoozed) leaves at once, and 
 
 test("held, a human move lands after its nearest live predecessor that is drawn, else first in its band", () => {
   const before = first("ready: a b | working: x y")
-  // Live Working is `n y x b`: `n` is an arrival (not drawn), so `b` lands at Working's top, before `x`.
-  assert.equal(drawn(hold(before, "ready: a | working: n b y x", { moved: ["b"] })), "ready: a | working: b x y")
+  // Live Working is `n b y x`: `n` is an arrival, appended after the move, so `b` lands at Working's top, before `x`.
+  assert.equal(drawn(hold(before, "ready: a | working: n b y x", { moved: ["b"] })), "ready: a | working: b x y n")
   // Live predecessor `y` is drawn: `b` lands right after it, wherever the held layout has it.
   assert.equal(drawn(hold(before, "ready: a | working: y b x", { moved: ["b"] })), "ready: a | working: x y b")
 })
 
-test("held, a thread the human dispatched appears at once; other arrivals still wait", () => {
+test("held, a thread the human dispatched lands in place; other arrivals append", () => {
   const before = first("working: a")
-  assert.equal(drawn(hold(before, "working: m n a", { moved: ["n"] })), "working: n a")
+  assert.equal(drawn(hold(before, "working: m n a", { moved: ["n"] })), "working: n a m")
 })
 
 test("held, a section only the live layout has follows the drawn ones, and takes the human's moves", () => {
@@ -134,12 +134,12 @@ test("a key listed twice is drawn once, in the first section that lists it", () 
   assert.equal(drawn(hold(before, "snoozed: a | done: a b")), "snoozed: a | done: b")
 })
 
-test("nothing drawn twice and nothing lost: held output is a permutation of last drawn plus the human's arrivals", () => {
+test("nothing drawn twice and nothing lost: held output is a permutation of last drawn plus every arrival", () => {
   const before = first("pinned: p | ready: a b c | working: d e | snoozed: f")
   const out = hold(before, "pinned: p e | ready: c x | working: a d | snoozed: b f y", { moved: ["e", "y"] })
   const keys = out.flatMap((section) => section.slots.map((slot) => slot.key)).sort()
-  assert.deepEqual(keys, ["a", "b", "c", "d", "e", "f", "p", "y"])
-  assert.equal(drawn(out), "pinned: p e | ready: (a) (b) c | working: d | snoozed: f y")
+  assert.deepEqual(keys, ["a", "b", "c", "d", "e", "f", "p", "x", "y"])
+  assert.equal(drawn(out), "pinned: p e | ready: (a) (b) c x | working: d | snoozed: f y")
 })
 
 test("never moved: with nothing moved by the human, every drawn row keeps its index", () => {
