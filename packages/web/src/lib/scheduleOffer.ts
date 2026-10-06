@@ -138,7 +138,9 @@ const CLOCK_FRAGMENT = /^\d{1,2}(?::\d{0,2})?(?:[ap]\.?)?$/i
  *     hour, 1pm: at a REST it waits for the idle or the word's end instead (an idle is a real stop);
  *   - a reading that stops short of the word the caret is in ("every Tuesday and Thursda" reads Tuesday
  *     alone, where "Thurs" had read both) has not read that word at all, and no offer ("every Mond" reads as an
- *     event) in a word the shown offer runs into is not one either: what is on screen (`shown`, carried) stays.
+ *     event) in a word the shown offer runs into is not one either: what is on screen (`shown`, carried) stays —
+ *     except at the IDLE when the reading is the one on screen: the caret's word is then the task's, and only
+ *     `Each run` changes (end-to-end round 2).
  */
 export function pausePublishes(ev: "rest" | "idle", reading: PhraseReading, prose: string, caret: number | null, shown: Published | null): boolean {
   if (caret === null || caret <= 0) return true
@@ -146,7 +148,16 @@ export function pausePublishes(ev: "rest" | "idle", reading: PhraseReading, pros
   if (!word) return true
   const wordStart = caret - word.length
   if (ev === "rest" && CLOCK_FRAGMENT.test(word)) return false
-  if (reading.kind === "exact" || reading.kind === "cue" || reading.kind === "ambiguous") return reading.span.end >= wordStart
+  if (reading.kind === "exact" || reading.kind === "cue" || reading.kind === "ambiguous") {
+    if (reading.span.end >= wordStart) return true
+    // The reading stops short of the caret's word. At a REST that word may still be joining the phrase
+    // ("Thursda"), so the screen holds. At the IDLE the human has stopped, and if the phrase reads exactly as
+    // the screen already shows it, the word is the TASK's: publishing changes no reading, only the text it was
+    // read from, which the ledge's `Each run` is cut from. Refusing it left `Each run: triage new` for good
+    // under `… triage new issues` (end-to-end round 2). A reading that DIFFERS still holds ("Thursda" read as
+    // Tuesday alone keeps Tuesday and Thursday).
+    return ev === "idle" && shown !== null && sameReading(shown.reading, reading)
+  }
   // No offer at all ("every Mond" reads as an event, "every Tuesd" as nothing): a word the shown offer runs
   // into is still being typed.
   const on = shown?.reading

@@ -1255,11 +1255,11 @@ test("26. re-aiming the box at another project carries the mode with its text: E
   } finally { await page.close() }
 })
 
-// OPEN since end-to-end round 2 (§15.3), and still open in round 3: `pausePublishes` refuses a rest or idle
-// whenever the reading ends before the caret's word, which at the open edge is every task word, so the ledge's
-// `Each run` keeps the text of the last word BOUNDARY and drops the last word for good. Pinned as a todo so the
-// suite stays green and the day it is fixed this reports a passing todo.
-test("27. the ledge's Each run reads the whole task once typing stops", { skip: !baseUrl, timeout: 60_000, todo: "open: Each run stops one word short (§15.3, end-to-end round 2)" }, async () => {
+// Open from end-to-end round 2 (§15.3) through round 3: `pausePublishes` refused a rest or idle whenever the
+// reading ended before the caret's word, which at the open edge is every task word, so the ledge's `Each run`
+// kept the text of the last word BOUNDARY and dropped the last word for good. Fixed at the final gate: the IDLE
+// publishes a reading that is the one already on screen (scheduleOffer.test.ts pins the policy half).
+test("27. the ledge's Each run reads the whole task once typing stops", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {
     await offer(page)

@@ -276,6 +276,15 @@ at 1` as 1pm, paused inside `10am`; `every Tuesday and Thursda` dropping Thursda
   event), keeps what is on screen;
 - a qualifier being typed holds through a rest as well as a word's end; the idle shows its cue.
 
+*As built (final gate):* the "stops short of the caret's word" rule held at the IDLE too, and at the open edge
+every TASK word is one the reading stops short of — so the ledge's `Each run`, cut from the text of the last
+publish, kept `triage new` for good under `… triage new issues` (found in end-to-end round 2, still open in
+round 3). The idle now publishes such a reading when it is the one already on screen (`sameReading`): the word is
+then the task's, no reading changes, and only `Each run` catches up, 800ms after the last key. A REST still holds
+(a 250ms pause may be inside a word that is joining the phrase), and a reading that DIFFERS still holds at the
+idle (`every Tuesday and Thursda` keeps Tuesday and Thursday). Pinned in `scheduleOffer.test.ts` (red first) and
+by e2e case 27.
+
 *Measured* (`scheduleOffer.test.ts`, 11 phrases × 200 seeded trials, 15% of keys after a pause): with pauses of
 300–900ms, up to 8 changes (means 2.3–4.8) became at most 5 in 1 trial of 2,200 (mean 2.39), every extra change from
 a pause past the 800ms idle, where the screen rightly shows what the words say so far; pauses kept under the idle
@@ -1633,8 +1642,10 @@ Enter there creates and never dispatches, and new text back in the first project
 were run red against the pre-fix code first (a copy of the tree with fix round 2's six source files at
 `c1c55bfd`, on its own vite; the fixture's re-aim there is the old prompt-only carry): 25 failed on all 18
 open-edge texts and 5 of the 7 close-edge ones, 26 on "the re-aimed box is still in the mode" (`hint`). 27 is the
-open `Each run` regression below, pinned as a node `todo` so the file stays green and reports it until it is
-fixed (it reads `· Each run: triage new`). `nub run test:e2e -- <this file>`: **27 pass, 1 todo** (28 tests; case 10 is two).
+`Each run` regression below, pinned as a node `todo` through round 3 (it read `· Each run: triage new`).
+`nub run test:e2e -- <this file>`: **27 pass, 1 todo** (28 tests; case 10 is two). *Final gate:* 27 fixed (§2.4)
+and no longer a todo; the same command, after `git merge main` at `efd27ce6`: **28 pass, 0 todo** (the todo had
+failed on the line before the fix, so it is its own negative control).
 
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
@@ -1703,7 +1714,7 @@ launcher and `proj-b` tenant, Tue Oct 6 2026 ~04:08–04:30), grammar 3, no page
   thread that runs; the count flashed; Open showed the drawer; the namer renamed `Triage issues` → `Issue
   triage` 3.05s after the toast and the pending run followed. **Still open:** the ledge's `Each run` read `·
   Each run: triage new` 1.5s after the last key (and phase 2's ledge `… the single word ok and nothing`, without
-  `else`).
+  `else`). *Fixed at the final gate (§2.4 as built); not re-driven on a real stack, only on the fixture (e2e 27).*
 - **2–3** 9/9: a real Haiku thread for the offered text and no schedule (then killed and archived); reload +
   Enter a schedule and no thread; Undo deleted it and its run and restored the draft with the offer.
 - **4** real Sonnet, n=4, one each, typing at 60ms a key: keystroke → cue ledge **566, 453, 10, 1191ms**; Tab →

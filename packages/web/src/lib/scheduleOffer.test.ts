@@ -307,6 +307,27 @@ test("mid-word the last reading stays, carried over the edit", () => {
   assert.equal(carry(s, ""), null)
 })
 
+test("the idle re-reads the task's last word when the phrase has not changed (Each run one word short, e2e round 2)", () => {
+  // The ledge's `Each run` is cut from the text the shown reading was READ from (`shown.read`), and it refreshes
+  // only when that is the text on screen. A rest or idle with the caret in a task word used to be refused for
+  // every task word at the open edge (the reading stops short of it), so `Each run: triage new` stayed for good.
+  const box = new Box()
+  box.type("every Monday at 9am triage new issues")
+  box.advance(REST_MS + 10)
+  assert.equal(box.state.shown?.read, "every Monday at 9am triage new ", "a REST in a task word still holds: it is a pause, not a stop")
+  box.advance(CLOSE_IDLE_MS)
+  assert.equal(box.state.shown?.read, "every Monday at 9am triage new issues", "the idle publishes the whole text")
+  assert.equal(box.shownLine(), "exact open «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0")
+  // The same idle does NOT publish a reading that dropped the word being typed: Thursday stays read.
+  const b = new Box()
+  b.type("every Tuesday and Thurs")
+  b.advance(REST_MS + 10)
+  assert.match(b.ruleLine(), /BYDAY=TU,TH/)
+  b.type("da")
+  b.advance(CLOSE_IDLE_MS + 10)
+  assert.match(b.ruleLine(), /BYDAY=TU,TH/, `a stop at "Thursda" keeps Thursday: ${b.shownLine()}`)
+})
+
 test("HOLD_MS: an offer whose words go is held while the caret touches them, then folds; elsewhere it folds at once", () => {
   const box = new Box()
   box.type("every Monday at 9am triage new issues")
