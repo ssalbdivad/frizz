@@ -394,10 +394,17 @@ export function checkSchedule(spec: ScheduleSpec, nowMs: number, preview = 3): S
       return fail("Runs would be less than 15 minutes apart. Scheduled threads start a fresh agent each time; use a goal on one thread for a tighter loop.")
     }
   }
-  const dayAfterFirst = sample.filter((ms) => ms < sample[0]! + DAY_MS).length
+  // Runs a day, counted over the 24h from the first run. The 60-run sample is too short to count a dense
+  // rule — every 15 minutes is 96 a day and read as 60 — so a saturated sample is recounted over 97 runs,
+  // one more than the 15m floor allows in a day (plans/schedule-live-reading.md §3.5.1).
+  let perDay = sample.filter((ms) => ms < sample[0]! + DAY_MS).length
+  if (perDay === sample.length && sample.length === 60) {
+    const dense = occurrencesAfter(compiled.value, nowMs, 97)
+    perDay = dense.filter((ms) => ms < dense[0]! + DAY_MS).length
+  }
   return {
     ok: true,
-    value: { compiled: compiled.value, next: sample.slice(0, preview), ...(dayAfterFirst > 1 ? { perDay: dayAfterFirst } : {}) },
+    value: { compiled: compiled.value, next: sample.slice(0, preview), ...(perDay > 1 ? { perDay } : {}) },
   }
 }
 
@@ -407,79 +414,152 @@ const WEEKDAY_NAMES = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "
 const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", [-1]: "last", [-2]: "second-to-last" }
 
-/** "every Monday at 9am", "every 2 weeks on Friday at 4:30pm", "on the first weekday of every month at
- *  9am". Built from the compiled rule — never from the agent's own summary — so it says what will fire.
- *  A rule this cannot phrase falls back to its RRULE text; the next-run list is the real confirmation. */
-export function describeSchedule(c: CompiledSchedule): string {
-  const { rule, dtstart } = c
-  const phrased = phrase(rule, dtstart)
-  const limits: string[] = []
-  if (rule.count !== undefined) limits.push(rule.count === 1 ? "once" : `${rule.count} times`)
-  if (rule.until) {
-    const wall = rule.until.kind === "local" ? rule.until.wall : zonedWall(rule.until.ms, c.tz)
-    limits.push(`until ${MONTH_NAMES[wall.mo - 1]!.slice(0, 3)} ${wall.d}, ${wall.y}`)
-  }
-  if (rule.count === 1 && phrased !== undefined) {
-    return `once, ${formatOccurrence(c.dtstartMs, c.tz)}`
-  }
-  return [phrased ?? `on the rule ${ruleText(rule)}`, ...limits].join(", ")
+/** One run of a rule's description, typed by what it says, so a reader can mark the parts it ASSUMED
+ *  (plans/schedule-live-reading.md §3.4): the prompt box dims `9am` when nobody typed a time, `Monday`
+ *  when "weekly" named no day, and only the `pm` of a `time` when "at 3" was read as the afternoon.
+ *  `lead` is connective wording ("every ", " at ", ", "); the rest carry the rule. Joined, the parts are
+ *  exactly {@link describeSchedule} — a test pins that for every rule in the grammar corpus. */
+export interface ScheduleDescribePart {
+  kind: "lead" | "days" | "interval" | "time" | "bound"
+  text: string
 }
 
-function phrase(rule: ScheduleRule, dtstart: Wall): string | undefined {
-  const times = timesPhrase(rule, dtstart)
+type Parts = ScheduleDescribePart[]
+const lead = (text: string): ScheduleDescribePart => ({ kind: "lead", text })
+const daysPart = (text: string): ScheduleDescribePart => ({ kind: "days", text })
+const intervalPart = (text: string): ScheduleDescribePart => ({ kind: "interval", text })
+const boundPart = (text: string): ScheduleDescribePart => ({ kind: "bound", text })
+
+/** "every Monday at 9am", "every 2 weeks on Friday at 4:30pm", "on the first weekday of every month at
+ *  9am". Built from the compiled rule — never from the agent's own summary — so it says what will fire.
+ *  A rule this cannot phrase falls back to its RRULE text; the next-run list is the real confirmation.
+ *  `nowMs`, when given, adds the year to a one-off run that is not this year. */
+export function describeSchedule(c: CompiledSchedule, nowMs?: number): string {
+  return describeScheduleParts(c, nowMs).map((p) => p.text).join("")
+}
+
+/** {@link describeSchedule}, as typed parts. */
+export function describeScheduleParts(c: CompiledSchedule, nowMs?: number): ScheduleDescribePart[] {
+  const { rule, dtstart } = c
+  const phrased = phraseParts(rule, dtstart)
+  if (rule.count === 1 && phrased !== undefined) {
+    const w = zonedWall(c.dtstartMs, c.tz)
+    return [lead("once, "), daysPart(formatOccurrenceDate(c.dtstartMs, c.tz, nowMs)), lead(", "), timePart(formatClock(w.h, w.mi))]
+  }
+  const parts: Parts = phrased ?? [lead(`on the rule ${ruleText(rule)}`)]
+  if (rule.count !== undefined) parts.push(lead(", "), boundPart(`${rule.count} times`))
+  if (rule.until) {
+    const wall = rule.until.kind === "local" ? rule.until.wall : zonedWall(rule.until.ms, c.tz)
+    parts.push(lead(", "), boundPart(`until ${MONTH_NAMES[wall.mo - 1]!.slice(0, 3)} ${wall.d}, ${wall.y}`))
+  }
+  return parts
+}
+
+function timePart(text: string): ScheduleDescribePart {
+  return { kind: "time", text }
+}
+
+function phraseParts(rule: ScheduleRule, dtstart: Wall): Parts | undefined {
+  const times = timesParts(rule, dtstart)
   if (rule.freq === "HOURLY") {
-    const every = rule.interval === 1 ? "every hour" : `every ${rule.interval} hours`
     const minute = sortedUnique(rule.byMinute ?? [dtstart.mi])
-    const at = minute.length === 1 && minute[0] === 0 ? "" : ` at ${minute.map((m) => `:${pad2(m)}`).join(", ")}`
-    const window = rule.byHour ? ` from ${formatClock(Math.min(...rule.byHour), minute[0]!)} to ${formatClock(Math.max(...rule.byHour), minute[minute.length - 1]!)}` : ""
     const days = daysPhrase(rule)
     if (days === undefined) return undefined
-    return `${every}${at}${window}${days ? ` on ${pluralDays(rule.byDay!)}` : ""}`
+    const on: Parts = days ? [lead(" on "), daysPart(pluralDays(rule.byDay!))] : []
+    // An even step from :00 is a minute interval: BYMINUTE=0,15,30,45 is "every 15 minutes", not a list
+    // of four marks past the hour (plans/schedule-live-reading.md §3.5.4).
+    const step = minuteStep(minute)
+    if (step !== undefined && rule.interval === 1 && !rule.byHour) return [intervalPart(`every ${step} minutes`), ...on]
+    const every = rule.interval === 1 ? "every hour" : `every ${rule.interval} hours`
+    const at: Parts = minute.length === 1 && minute[0] === 0 ? [] : [lead(" at "), timePart(minute.map((m) => `:${pad2(m)}`).join(", "))]
+    const window: Parts = rule.byHour
+      ? [lead(" from "), timePart(formatClock(Math.min(...rule.byHour), minute[0]!)), lead(" to "), timePart(formatClock(Math.max(...rule.byHour), minute[minute.length - 1]!))]
+      : []
+    return [intervalPart(every), ...at, ...window, ...on]
   }
   if (times === undefined) return undefined
+  const at = [lead(" at "), ...times]
   if (rule.freq === "DAILY") {
     const days = daysPhrase(rule)
     if (days === undefined) return undefined
-    if (rule.interval > 1) return days ? undefined : `every ${rule.interval} days at ${times}`
-    return `${days || "every day"} at ${times}`
+    if (rule.interval > 1) return days ? undefined : [intervalPart(`every ${rule.interval} days`), ...at]
+    return [...(days ? [lead("every "), daysPart(days)] : [intervalPart("every day")]), ...at]
   }
   if (rule.freq === "WEEKLY") {
     if (rule.byMonth) return undefined
     const days = rule.byDay ? weekdayList(rule.byDay) : WEEKDAY_NAMES[weekdayOf(dayNumber(dtstart.y, dtstart.mo, dtstart.d))]!
     if (days === undefined) return undefined
-    if (rule.interval === 1) return `every ${days === "weekday" || days === "weekend day" ? days : days} at ${times}`
+    if (rule.interval === 1) return [lead("every "), daysPart(days), ...at]
     const weeks = rule.interval === 2 ? "every other week" : `every ${rule.interval} weeks`
-    return `${weeks} on ${days} at ${times}`
+    return [intervalPart(weeks), lead(" on "), daysPart(days), ...at]
   }
   if (rule.freq === "MONTHLY") {
-    if (rule.byMonth) return undefined
     const which = monthDayPhrase(rule, dtstart)
     if (which === undefined) return undefined
+    if (rule.byMonth) {
+      if (rule.interval !== 1 || !isQuarterSet(rule)) return undefined
+      return [lead("on "), daysPart(which), lead(" of "), intervalPart("every quarter"), ...at]
+    }
     const months = rule.interval === 1 ? "every month" : rule.interval === 2 ? "every other month" : `every ${rule.interval} months`
-    return `on ${which} of ${months} at ${times}`
+    return [lead("on "), daysPart(which), lead(" of "), intervalPart(months), ...at]
   }
   // YEARLY
-  if (rule.interval !== 1 || rule.byDay || rule.bySetPos) return undefined
+  if (rule.interval !== 1 || rule.bySetPos) return undefined
+  // A calendar-quarter set (BYMONTH=1,4,7,10 or 3,6,9,12) with a day in each: an ordinal under YEARLY
+  // narrowed by BYMONTH counts within the month, so it reads exactly like the MONTHLY form. BYSETPOS is
+  // refused above: under YEARLY it picks positions across the whole YEAR, not one per quarter.
+  if (rule.byMonth && rule.byMonth.length > 1) {
+    if (!isQuarterSet(rule)) return undefined
+    const which = monthDayPhrase(rule, dtstart)
+    if (which === undefined || (rule.byMonthDay && rule.byMonthDay.length !== 1)) return undefined
+    return [lead("on "), daysPart(which), lead(" of "), intervalPart("every quarter"), ...at]
+  }
+  if (rule.byDay) return undefined
   const months = (rule.byMonth ?? [dtstart.mo]).map((m) => MONTH_NAMES[m - 1]!)
   const days = rule.byMonthDay ?? [dtstart.d]
   if (months.length !== 1 || days.length !== 1 || days[0]! < 0) return undefined
-  return `every year on ${months[0]} ${days[0]} at ${times}`
+  return [intervalPart("every year"), lead(" on "), daysPart(`${months[0]} ${days[0]}`), ...at]
 }
 
-function timesPhrase(rule: ScheduleRule, dtstart: Wall): string | undefined {
+/** The minute step when BYMINUTE is an even step from :00 that fills the hour (0,15,30,45 → 15). */
+function minuteStep(minutes: number[]): number | undefined {
+  if (minutes.length < 2 || minutes[0] !== 0) return undefined
+  const step = minutes[1]!
+  if (step * minutes.length !== 60) return undefined
+  return minutes.every((m, i) => m === i * step) ? step : undefined
+}
+
+/** A BYMONTH set that is the calendar quarters, read from the end its day counts from: the FIRST months
+ *  (1,4,7,10) with a day counted from the start, or the LAST months (3,6,9,12) with one counted from the
+ *  end — "the last Friday of every quarter". Anything else names months the words would not. */
+function isQuarterSet(rule: ScheduleRule): boolean {
+  const months = sortedUnique(rule.byMonth ?? []).join()
+  const positions = rule.bySetPos ? rule.bySetPos : [...(rule.byDay ?? []).map((d) => d.nth), ...(rule.byMonthDay ?? [])]
+  if (positions.length === 0 || positions.some((p) => p === undefined)) return false
+  const fromStart = positions.every((p) => p! > 0)
+  const fromEnd = positions.every((p) => p! < 0)
+  return (months === "1,4,7,10" && fromStart) || (months === "3,6,9,12" && fromEnd)
+}
+
+function timesParts(rule: ScheduleRule, dtstart: Wall): Parts | undefined {
   const hours = sortedUnique(rule.byHour ?? [dtstart.h])
   const minutes = sortedUnique(rule.byMinute ?? [dtstart.mi])
   if (hours.length * minutes.length > 4) return undefined
   const clocks: string[] = []
   for (const h of hours) for (const m of minutes) clocks.push(formatClock(h, m))
-  return joinWords(clocks)
+  const parts: Parts = []
+  clocks.forEach((clock, i) => {
+    if (i > 0) parts.push(lead(i === clocks.length - 1 ? " and " : ", "))
+    parts.push(timePart(clock))
+  })
+  return parts
 }
 
 function daysPhrase(rule: ScheduleRule): string | undefined {
   if (rule.byMonth || rule.byMonthDay || rule.bySetPos) return undefined
   if (!rule.byDay) return ""
   const list = weekdayList(rule.byDay)
-  return list === undefined ? undefined : `every ${list}`
+  return list === undefined ? undefined : list
 }
 
 function weekdayList(days: ScheduleWeekday[]): string | undefined {
@@ -540,11 +620,20 @@ export function formatClock(h: number, mi: number): string {
   return mi === 0 ? `${h12}${suffix}` : `${h12}:${pad2(mi)}${suffix}`
 }
 
-/** "Mon Oct 12, 9am" in the schedule's zone. */
-export function formatOccurrence(ms: number, tz: string): string {
+/** "Mon Oct 12, 9am" in the schedule's zone. With `nowMs`, a run in another year than now (in that zone)
+ *  says its year — "Sat Jan 2, 2027, 9am" — so a yearly rule's next three runs do not read as three
+ *  identical dates (plans/schedule-live-reading.md §3.5.2). */
+export function formatOccurrence(ms: number, tz: string, nowMs?: number): string {
+  const w = zonedWall(ms, tz)
+  return `${formatOccurrenceDate(ms, tz, nowMs)}, ${formatClock(w.h, w.mi)}`
+}
+
+/** The date half of {@link formatOccurrence}: "Mon Oct 12", or "Sat Jan 2, 2027" in another year. */
+function formatOccurrenceDate(ms: number, tz: string, nowMs?: number): string {
   const w = zonedWall(ms, tz)
   const weekday = WEEKDAY_NAMES[weekdayOf(dayNumber(w.y, w.mo, w.d))]!.slice(0, 3)
-  return `${weekday} ${MONTH_NAMES[w.mo - 1]!.slice(0, 3)} ${w.d}, ${formatClock(w.h, w.mi)}`
+  const year = nowMs !== undefined && zonedWall(nowMs, tz).y !== w.y ? `, ${w.y}` : ""
+  return `${weekday} ${MONTH_NAMES[w.mo - 1]!.slice(0, 3)} ${w.d}${year}`
 }
 
 // ---- local wall time ⇄ instant ------------------------------------------------------------------------
