@@ -1425,6 +1425,22 @@ unpublished edit, not a stubbed `Date.now` — a stubbed browser clock would ske
 re-derive), 13 and 14. Cases 4, 5 and 6 are Step 0's real-stack checks (`scratch/verify-schedule-step0.ts`). The
 cost is that nothing runs them in `nub --test`; the harness is kept in the thread's scratch to re-run.
 
+*As built (end-to-end round, `05357b19`): the file now exists*, over its own fixture (`schedule-live-fixture.html`
+/ `.tsx`) rather than an extension of the profile one: the real `DispatchForm`, the `c` dialog over it and the
+`Toaster`, every listed RPC counted with its body, the model a per-case stub (consistent or inconsistent), the
+server's two refusals a queue, and the clock pinned before any module reads it to the §0.1 clock, so every string
+asserted is this spec's. A stubbed clock is right here (no server re-derives behind the page); `__clock.skew`
+drives case 12. 15/15 against a static vite (case 10 is two tests: consistent, inconsistent). Where the cases
+differ: **4** remounts through `__sched.remount()` (the fixture has no breakpoint that unmounts); **7** opens the
+SLASH menu at the draft's start — a user command is offered only as the first token, and a leading `/command` is
+skipped by the window, so that is where a slash menu and an offer share the screen; **14** records motion on
+every frame from before the first key (sampled after typing, as the Step 4 harness did, it saw nothing even
+without the emulation — the reveal is over 180ms after its space), and does not count the house's 120ms colour
+and opacity fades, which run under reduced motion app-wide. Without the emulation the same recorder catches
+`sched-reveal`, `sched-ledge-in` and the slot's `grid-template-rows` at the offer alone. `nub run test:e2e` does
+not reach it today: its `NEEDS_REAL_STACK` cross-check exits first on `projectPickerIcon.e2e.test.ts` (from the
+upstream merge `7142546f`), so run it as `FRIZZ_SCHEDULE_E2E_URL=<vite> nub --test <file>`.
+
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
    - the schedule row and its next lazy run exist;
@@ -1439,6 +1455,28 @@ cost is that nothing runs them in `nub --test`; the harness is kept in the threa
    without resolve-on-result, on this box **and on the maintainer's machine**. That settles the 7–8s question.
 5. Change when saves a local reading, and a cue through the model.
 6. The phone sheet at 360px.
+
+*End-to-end round, driven* on a disposable stack (`--creds --wakers`, a throwaway git project, headless puppeteer,
+dark, `America/New_York`, Tue Oct 6 2026 ~01:30–01:45) by `scratch/verify-live-stack.ts`, 23/23 (one phase per run), no page errors:
+- **1.** Tab then Enter from the real box: one `createSchedule` with `source {local, grammar 1}` and `titleAuto`, no
+  dispatch; the row exists with its next run (Mon Oct 12 9am); the board's only new row is that pending run
+  (`turn-idle`), so no thread that runs was added; the project row's count flashed; the toast's Open showed it in
+  the drawer; the namer renamed `Triage issues` → `Issue triage` within ~2s and the pending run's title followed.
+- **2.** Enter with the offer on screen (`… · Start now` on the ledge) started a REAL thread (Haiku, `running`) with
+  the whole text as its prompt and created no schedule; the thread was then killed and archived.
+- **3.** The mode survived a reload; Enter created a schedule and no thread; Undo deleted it, its pending run went
+  with it, and the draft came back with the mode off and the offer on screen.
+- **4.** Real Sonnet, n=3, one each: the cue ledge is local (0 model calls before Tab). A no-core cue (`twice a
+  week`) showed 13ms after the space; a qualifier cue (`… unless it's a holiday`, `… except in December`) 379 and
+  461ms after the space that ended the qualifier, because §2.4's hold keeps it until the next word's boundary
+  (typing at 60ms a key). Tab → model reading landed **3.18, 2.60, 2.82s** (the RPC alone 3.15, 2.58, 2.79s), on
+  the code with resolve-on-result; not measured without it, nor on the maintainer's machine. The December answer
+  came back as `FREQ=WEEKLY;BYMONTH=1,…,11;BYDAY=FR`, which `describeSchedule` cannot phrase: the panel read
+  `Changelog · on the rule FREQ=WEEKLY;BYMONTH=…` with Create enabled (I-11 bans that for local readings only).
+- **5.** Change when: `every Thursday at 3pm` read locally with no model and saved with the local source (the
+  server stored Thursday 3pm); `every Monday unless it's a holiday` went to the model 541ms after the last key,
+  landed 3.15s after it (RPC 2.59s) and saved with its condition and no source — at Monday **3pm**, the stored
+  time, the known design call in §11.
 
 *As built (Step 5), driven* on a disposable stack (`--creds`, a throwaway git project), headless puppeteer with
 touch emulation (`isMobile`, `hasTouch`, every press a `page.tap`), dark, `America/New_York`, Tue Oct 6 2026
