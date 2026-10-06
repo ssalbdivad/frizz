@@ -140,19 +140,23 @@ export function restoreContextItems(key: string, items: ComposerContextItem[]): 
 
 /**
  * Move a draft to another key WITH what its tokens stand for — the new-thread box re-aimed at another
- * project (AllQueues carryDraft). Only into an empty draft, so one already waiting there is never
- * overwritten; a no-op when there is nothing to move. Text first, then the items, the order an insert
- * uses: a mounted box sweeps any staged item whose token its draft lacks. Moving the text alone left
+ * project (AllQueues, through `carryDispatchDraft`). Only into an empty draft, so one already waiting there
+ * is never overwritten; a no-op when there is nothing to move. Text first, then the items, the order an
+ * insert uses: a mounted box sweeps any staged item whose token its draft lacks. Moving the text alone left
  * the chips filed under the old project (review C5): the new box showed `@a.ts:12-20` as bare text,
  * the dispatch went out with no definition behind it, and the next reload's load dropped the orphans.
+ *
+ * `siblings`: `[from, to]` keys whose values belong to this text and travel with it — the schedule mode
+ * (fix round 2). Each lands in the SAME commit as the text, replacing whatever the target key held (a
+ * value of "" clears it), and leaves in the same commit as the text leaves.
  */
-export function carryDraft(from: string, to: string): void {
+export function carryDraft(from: string, to: string, siblings: readonly (readonly [string, string])[] = []): void {
   if (from === to) return
   const text = draftStore.get(from)
   if (!text || draftStore.get(to)) return
-  draftStore.set(to, text)
+  draftStore.setMany({ [to]: text, ...Object.fromEntries(siblings.map(([f, t]) => [t, draftStore.get(f)])) })
   restoreContextItems(to, takeContextItems(from))
-  draftStore.clear(from)
+  draftStore.clearMany([from, ...siblings.map(([f]) => f)])
 }
 
 /**

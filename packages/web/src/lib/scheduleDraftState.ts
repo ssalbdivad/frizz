@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react"
 import { draftKey, draftStore, useDraft, type DraftStore } from "./drafts.ts"
+import { carryDraft } from "./stagedContext.ts"
 
 // THE SCHEDULE MODE IS PART OF THE DRAFT (plans/schedule-live-reading.md §9 I-4).
 //
@@ -100,4 +101,19 @@ export function clearDispatchDraft(
   store: Pick<DraftStore, "clearMany"> = draftStore,
 ): void {
   store.clearMany(dispatchDraftKeys(projectDir, opts))
+}
+
+/**
+ * The new-thread box RE-AIMED at another project (All projects: its picker, ⌥↑/⌥↓): the text goes with the
+ * choice, its staged chips with the text — and its schedule MODE with the text, dismissals and all (I-4). The
+ * mode stayed behind until fix round 2 (carry-drops-mode, driven on a real stack): Tab set the panel up, the
+ * re-aim landed the text in the other project's box with the mode off, and Enter DISPATCHED it; the `{on:true}`
+ * left under the old project then put the next text typed there straight into the mode. Now the mode lands in
+ * the commit the text lands in, replacing whatever the target held, and leaves with it. Only into an empty box
+ * (`carryDraft`), so a draft already waiting in the target keeps its own text and mode. (The profile pick was
+ * never carried, and still is not: that is not this fix's question.)
+ */
+export function carryDispatchDraft(fromDir: string | undefined, toDir: string | undefined): void {
+  if (!fromDir || !toDir || fromDir === toDir) return
+  carryDraft(draftKey.dispatch(fromDir), draftKey.dispatch(toDir), [[draftKey.dispatchSchedule(fromDir), draftKey.dispatchSchedule(toDir)]])
 }

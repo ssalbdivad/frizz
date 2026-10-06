@@ -1,8 +1,9 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { DraftStore, draftKey } from "./drafts.ts"
+import { DraftStore, draftKey, draftStore } from "./drafts.ts"
 import {
   SCHEDULE_DRAFT_OFF,
+  carryDispatchDraft,
   clearDispatchDraft,
   parseScheduleDraftState,
   readScheduleDraftState,
@@ -114,4 +115,53 @@ test("clearDispatchDraft keepPick: an account alias consumes the text, not the p
   assert.equal(drafts.get(promptKey), "")
   assert.equal(drafts.get(modeKey), "")
   assert.notEqual(drafts.get(pickKey), "")
+})
+
+// Fix round 2, carry-drops-mode: the All-projects box re-aimed at another project (its picker, ⌥↑/⌥↓) moved
+// the TEXT and left the mode behind. Driven on a real stack: Tab, re-aim, Enter — a dispatch of text that was
+// being set up as a schedule, and an orphaned {on:true} that put the next text typed back in the old project
+// straight into the mode. Wherever the text goes, its mode and its dismissals go (I-4), in the commit the text
+// lands in, and nothing is left behind.
+test("re-aiming the box carries the mode and its dismissals with the text, and leaves nothing behind", () => {
+  const a = "/work/carry-a", b = "/work/carry-b", c = "/work/carry-c"
+  const text = "every Monday at 9am triage new issues"
+  draftStore.set(draftKey.dispatch(a), text)
+  writeScheduleDraftState(draftKey.dispatchSchedule(a), { v: 1, on: true, dismissed: { close: true } })
+  // A stale record under the target with no text there: the carried draft's own state replaces it.
+  writeScheduleDraftState(draftKey.dispatchSchedule(b), { v: 1, on: false, dismissed: { open: true } })
+  const observed: Array<{ b: string; bOn: boolean; a: string; aOn: boolean }> = []
+  const unsubscribe = draftStore.subscribe(() =>
+    observed.push({
+      b: draftStore.get(draftKey.dispatch(b)),
+      bOn: readScheduleDraftState(draftKey.dispatchSchedule(b)).on,
+      a: draftStore.get(draftKey.dispatch(a)),
+      aOn: readScheduleDraftState(draftKey.dispatchSchedule(a)).on,
+    }),
+  )
+  carryDispatchDraft(a, b)
+  unsubscribe()
+  assert.equal(draftStore.get(draftKey.dispatch(b)), text)
+  assert.deepEqual(readScheduleDraftState(draftKey.dispatchSchedule(b)), { v: 1, on: true, dismissed: { close: true } })
+  assert.equal(draftStore.get(draftKey.dispatch(a)), "")
+  assert.equal(draftStore.get(draftKey.dispatchSchedule(a)), "", "no orphaned mode under the project the text left")
+  // No subscriber ever saw the carried text in a box whose Enter would dispatch it.
+  for (const o of observed) assert.ok(!(o.b === text && !o.bOn), `observed ${JSON.stringify(o)}`)
+
+  // The mode OFF travels too: text set up as a dispatch never lands under a mode left on in the target.
+  writeScheduleDraftState(draftKey.dispatchSchedule(c), { v: 1, on: true, dismissed: {} })
+  writeScheduleDraftState(draftKey.dispatchSchedule(b), SCHEDULE_DRAFT_OFF)
+  carryDispatchDraft(b, c)
+  assert.equal(draftStore.get(draftKey.dispatch(c)), text)
+  assert.equal(readScheduleDraftState(draftKey.dispatchSchedule(c)).on, false)
+
+  // Never into a draft already waiting there: neither the text nor the mode moves.
+  draftStore.set(draftKey.dispatch(a), "mine")
+  writeScheduleDraftState(draftKey.dispatchSchedule(c), { v: 1, on: true, dismissed: {} })
+  carryDispatchDraft(c, a)
+  assert.equal(draftStore.get(draftKey.dispatch(a)), "mine")
+  assert.equal(draftStore.get(draftKey.dispatchSchedule(a)), "")
+  assert.equal(draftStore.get(draftKey.dispatch(c)), text)
+  assert.equal(readScheduleDraftState(draftKey.dispatchSchedule(c)).on, true)
+
+  for (const dir of [a, b, c]) clearDispatchDraft(dir)
 })

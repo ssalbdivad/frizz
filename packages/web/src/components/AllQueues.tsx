@@ -48,8 +48,7 @@ import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
 import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
-import { draftKey } from "../lib/drafts.ts"
-import { carryDraft as carryDraftWithContext } from "../lib/stagedContext.ts"
+import { carryDispatchDraft } from "../lib/scheduleDraftState.ts"
 import { QUEUE_CARD_VIEWPORT_TOP, showToast, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -190,7 +189,7 @@ export function AllQueuesPage() {
     // Focused, the box's project IS the page's, so stepping it moves the page: the next project, with
     // what was typed carried along as a pick carries it.
     if (focused) {
-      carryDraft(draftKey.dispatch, dirs?.projectDir, next.projectDir)
+      carryDispatchDraft(dirs?.projectDir, next.projectDir)
       navigate(projectViewHref(next.slug))
     } else pickProject(next, dirs?.projectDir)
     return true
@@ -756,7 +755,7 @@ function usePickProject(): (project: QueuesProject, from: string | undefined) =>
   const navigate = useNavigate()
   return useCallback(
     (project: QueuesProject, from: string | undefined) => {
-      carryDraft(draftKey.dispatch, from, project.projectDir)
+      carryDispatchDraft(from, project.projectDir)
       rememberCrossProjectFocus(project.id)
       // A drawer open on the page has it bound to the drawer's project, and the box follows the binding,
       // so aiming the box closes the drawers: home, where the binding is the pick.
@@ -764,13 +763,6 @@ function usePickProject(): (project: QueuesProject, from: string | undefined) =>
     },
     [navigate],
   )
-}
-
-// The draft goes with its staged chips (lib/stagedContext.ts carryDraft): the new-thread box carries editor
-// selections, and a chip left under the old project's key is a reference with no definition behind it.
-function carryDraft(key: (projectDir: string | undefined) => string, from: string | undefined, to: string | undefined) {
-  if (!from || !to || from === to) return
-  carryDraftWithContext(key(from), key(to))
 }
 
 /**

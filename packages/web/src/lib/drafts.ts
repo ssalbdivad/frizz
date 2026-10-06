@@ -63,10 +63,16 @@ export class DraftStore {
   getSnapshot = (): DraftSnapshot => this.snapshot
   subscribe = (listener: Listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   get(key: string): string { return this.snapshot.entries[key]?.value ?? "" }
-  set(key: string, value: string): void {
+  set(key: string, value: string): void { this.setMany({ [key]: value }) }
+  // Several values in ONE commit and so ONE notify ("" deletes, as `set` does): a draft that moves keys with
+  // its siblings (lib/stagedContext.ts carryDraft) lands whole, never as text without the mode it was typed in.
+  setMany(values: Readonly<Record<string, string>>): void {
     const entries = { ...this.snapshot.entries }
-    if (!value) delete entries[key]
-    else entries[key] = { value, touchedAt: Date.now() }
+    const now = Date.now()
+    for (const [key, value] of Object.entries(values)) {
+      if (!value) delete entries[key]
+      else entries[key] = { value, touchedAt: now }
+    }
     this.commit({ version: DRAFT_SCHEMA_VERSION, entries })
   }
   clear(key: string): void { this.clearMany([key]) }
