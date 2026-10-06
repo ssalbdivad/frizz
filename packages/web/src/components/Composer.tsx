@@ -6,7 +6,7 @@ import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
-import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { lazyComposerEnter, shouldInterruptSubmitComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
 import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
@@ -207,6 +207,8 @@ export function Composer({
   schedule,
   highlight,
   onEscape,
+  sendGlyph = "send",
+  lazyBlocked = false,
   attachBase,
   phone,
   onUploadingChange,
@@ -311,6 +313,13 @@ export function Composer({
   // Escape, before the box's own blur. Return true to claim it: the schedule mode leaves itself on the
   // first Escape and keeps the caret, rather than climbing out of the box with the mode still on.
   onEscape?: () => boolean
+  // WHAT ENTER DOES, ON THE BUTTON THAT DOES IT (plans/schedule-live-reading.md §9 I-5). `schedule` while the
+  // caller's schedule mode is on: Send wears the repeat glyph and says "Create schedule", because Enter and a
+  // click there create the schedule on screen and start nothing. The glyph and Enter's act never disagree.
+  sendGlyph?: "send" | "schedule"
+  // The lazy save is closed (schedule mode, I-2): the snail is disabled with a title saying how to reach it,
+  // and ⌘/Ctrl-Shift-Enter is consumed rather than saving or falling through to the textarea.
+  lazyBlocked?: boolean
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
@@ -914,10 +923,11 @@ export function Composer({
       onSubmit()
       return
     }
-    if (onSaveLazy && shouldSaveLazyComposerEnter(keyboardEvent, canSend)) {
+    const lazy = onSaveLazy ? lazyComposerEnter(keyboardEvent, canSend, lazyBlocked) : undefined
+    if (lazy) {
       e.preventDefault()
       e.stopPropagation()
-      onSaveLazy()
+      if (lazy === "save") onSaveLazy!()
       return
     }
     if (onSchedule && shouldScheduleComposerEnter(keyboardEvent)) {
@@ -1525,8 +1535,8 @@ export function Composer({
           data-composer-lazy
           onMouseDown={(e) => e.preventDefault()}
           onClick={onSaveLazy}
-          disabled={!hasContent || busy || uploading}
-          title={`Add as lazy thread, without starting an agent (${lazyChord})`}
+          disabled={!hasContent || busy || uploading || lazyBlocked}
+          title={lazyBlocked ? "Leave schedule mode to save it for later" : `Add as lazy thread, without starting an agent (${lazyChord})`}
           aria-label="Add as lazy thread"
           className={`icon-hover-outline absolute bottom-2 ${RAIL_LAZY_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
         >
@@ -1542,8 +1552,9 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title={`Send (Enter · ${interruptChord} sends now)`}
-        aria-label="Send"
+        title={sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`}
+        aria-label={sendGlyph === "schedule" ? "Create schedule" : "Send"}
+        data-composer-send={sendGlyph}
         // Never `transition-all`: it animates box-shadow, which holds the hover edge back (styles.css).
         className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color,opacity,scale] ${
           // Primary actions use neutral contrast; the accent marks focus.
@@ -1552,7 +1563,7 @@ export function Composer({
             : "bg-panel-2 text-muted"
         }`}
       >
-        {busy ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : <ArrowUp size={14} strokeWidth={2.5} />}
+        {busy ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : sendGlyph === "schedule" ? <Repeat size={14} strokeWidth={2.5} /> : <ArrowUp size={14} strokeWidth={2.5} />}
       </button>
     </div>
   )

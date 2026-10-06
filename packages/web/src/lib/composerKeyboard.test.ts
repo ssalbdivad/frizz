@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { canInterruptAndSend, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
+import { canInterruptAndSend, lazyComposerEnter, shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldSubmitComposerEnter, shouldSubmitStagedEnter, type ComposerKeyboardEvent } from "./composerKeyboard.ts"
 
 function key(overrides: Partial<ComposerKeyboardEvent> = {}): ComposerKeyboardEvent {
   return {
@@ -153,4 +153,24 @@ test("⌘/Ctrl-Option-Enter schedules, and claims no other Enter", () => {
   assert.equal(shouldSaveLazyComposerEnter(key({ metaKey: true, altKey: true }), true), false)
   assert.equal(shouldRestoreOptionEnterNewline(key({ metaKey: true, altKey: true })), false)
   assert.equal(shouldPushQueuedComposerEnter(key({ metaKey: true, altKey: true }), true), false)
+})
+
+test("in schedule mode ⌘/Ctrl-Shift-Enter is consumed, never a lazy save, whatever the box holds", () => {
+  const lazy = key({ metaKey: true, shiftKey: true })
+  // Out of the mode: the ordinary lazy save, on the ordinary gate.
+  assert.equal(lazyComposerEnter(lazy, true, false), "save")
+  assert.equal(lazyComposerEnter(key({ ctrlKey: true, shiftKey: true }), true, false), "save")
+  assert.equal(lazyComposerEnter(lazy, false, false), undefined)
+  // In the mode: consumed with content AND without it, so it never reaches the textarea or the save.
+  assert.equal(lazyComposerEnter(lazy, true, true), "consume")
+  assert.equal(lazyComposerEnter(lazy, false, true), "consume")
+  assert.equal(lazyComposerEnter(key({ ctrlKey: true, shiftKey: true }), true, true), "consume")
+  // The mode claims ONLY that chord: IME confirmations, Shift-Enter newlines and every other Enter pass.
+  assert.equal(lazyComposerEnter(key({ metaKey: true, shiftKey: true, isComposing: true }), true, true), undefined)
+  assert.equal(lazyComposerEnter(key({ metaKey: true, shiftKey: true, keyCode: 229 }), true, true), undefined)
+  assert.equal(lazyComposerEnter(key({ shiftKey: true }), true, true), undefined)
+  assert.equal(lazyComposerEnter(key(), true, true), undefined)
+  assert.equal(lazyComposerEnter(key({ metaKey: true }), true, true), undefined)
+  assert.equal(lazyComposerEnter(key({ metaKey: true, altKey: true }), true, true), undefined)
+  assert.equal(lazyComposerEnter(key({ key: "a", metaKey: true, shiftKey: true }), true, true), undefined)
 })

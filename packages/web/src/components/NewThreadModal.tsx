@@ -19,8 +19,9 @@ import { MakeDefaultButton } from "./MakeDefaultButton.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
-import { handleDialogEscape } from "../lib/selectOverlay.ts"
+import { focusedEscapeClaim, handleDialogEscape, registerEscapeClaim } from "../lib/selectOverlay.ts"
 import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { clearDispatchDraft } from "../lib/scheduleDraftState.ts"
 import type { ComposerContextItem } from "../lib/composerContext.ts"
 import { outgoingMessage } from "../lib/editorContext.ts"
 import { restoreContextItems, stagedItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
@@ -105,7 +106,7 @@ function PromptForm({
   const boardDir = useProjectDir()
   const projectDir = dirs ? dirs.projectDir : boardDir
   // Queue and modal are the same semantic new-thread composer.
-  const [prompt, setPrompt, clearPrompt] = useDraft(draftKey.dispatch(projectDir))
+  const [prompt, setPrompt] = useDraft(draftKey.dispatch(projectDir))
   const promptKey = draftKey.dispatch(projectDir)
   const submittedDraftRef = useRef("")
   // SELECTED CONTEXT in a new thread's prompt — a selection sent from an editor window lands here as an
@@ -198,6 +199,9 @@ function PromptForm({
   })
 
   function submitLazy() {
+    // Nothing saves lazily in schedule mode (plans/schedule-live-reading.md §9 I-2): the snail is disabled
+    // and ⌘⇧↵ consumed there (Composer `lazyBlocked`), and this is the gate behind both, like `submit`'s.
+    if (schedule.on) return
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: CreateLazyThreadInput = {
       // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
@@ -216,8 +220,7 @@ function PromptForm({
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
     submittedContextRef.current = takeContextItems(promptKey)
-    clearPrompt()
-    setPick(undefined)
+    clearDispatchDraft(projectDir)
     saveLazy.mutate(input)
   }
 
@@ -229,8 +232,9 @@ function PromptForm({
     submittedPickRef.current = pick
     // Taken here, not in submit: a submit the sign-in gate holds keeps its draft, and so its chips.
     submittedContextRef.current = takeContextItems(promptKey)
-    clearPrompt()
-    setPick(undefined)
+    // The prompt, its pick and its schedule mode in ONE commit (lib/scheduleDraftState.ts): no subscriber
+    // ever renders this text with the mode it was typed in gone, or the reverse.
+    clearDispatchDraft(projectDir)
     setPendingDispatch(input.prompt)
     dispatch.mutate(input)
   }
@@ -240,7 +244,9 @@ function PromptForm({
   // it reads is the prompt as a lazy save would write it — the chips, never the editor block — because a
   // schedule's prompt is sent hours or weeks later, like a lazy thread's.
   const schedule = useScheduleMode({
-    draftKey: promptKey,
+    // The mode is part of the draft, under its sibling key: it survives a remount and a reload, and the
+    // page box and the `c` dialog over it — one draft — agree on it (§9 I-4).
+    draftKey: draftKey.dispatchSchedule(projectDir),
     text: prompt.trim() ? outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim() : "",
     prose: prompt,
     profile: resolved
@@ -249,11 +255,21 @@ function PromptForm({
     blocked: savingSettings || !!parseAccountAlias(prompt),
     onCreated: () => {
       takeContextItems(promptKey)
-      clearPrompt()
-      setPick(undefined)
+      clearDispatchDraft(projectDir)
       onDispatched?.()
     },
   })
+
+  // ESCAPE IN THE `c` DIALOG LEAVES THE MODE FIRST (plans/schedule-live-reading.md §7). Radix closes a dialog
+  // on Escape at the document's capture phase, before the box below ever sees the key, so the box's own
+  // `onEscape` never ran there: one Escape threw away the dialog with the mode on. This claim is asked first
+  // (lib/selectOverlay.ts) and takes the key only while the mode is on AND focus is inside THIS box — the
+  // page box under the dialog shares the draft, and its mode, but not the key. The next Escape closes the
+  // dialog as before. On the page itself there is no dialog and `onEscape` is the whole story.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const leaveScheduleRef = useRef(schedule.escape)
+  leaveScheduleRef.current = schedule.escape
+  useEffect(() => registerEscapeClaim(focusedEscapeClaim(() => rootRef.current, () => leaveScheduleRef.current())), [])
 
   function submit() {
     if (schedule.on) {
@@ -265,7 +281,8 @@ function PromptForm({
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
     if (alias) {
-      clearPrompt()
+      // The text was an account action, not this thread: the pick it is about to sign in to stays.
+      clearDispatchDraft(projectDir, { keepPick: true })
       if (resolved.backend === "acp") {
         showToast("An ACP agent signs in through its own CLI — Frizz holds no account for it")
         return
@@ -379,7 +396,7 @@ function PromptForm({
   }, [resolved, defaultResolved, picked, codexList, claudeList, acpList, profileLoadError, choose, chooseAcpModel, makeDefault, target])
 
   return (
-    <div className="w-full flex flex-col gap-3">
+    <div ref={rootRef} className="w-full flex flex-col gap-3">
       <Composer
         surface="newComposer"
         autoFocus={autoFocus}
@@ -391,6 +408,8 @@ function PromptForm({
         schedule={schedule.glyph}
         highlight={schedule.highlight}
         onEscape={schedule.escape}
+        sendGlyph={schedule.on ? "schedule" : "send"}
+        lazyBlocked={schedule.on}
         contextTokens={contextTokens}
         contextSources={contextSources}
         header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}

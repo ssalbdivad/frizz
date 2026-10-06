@@ -30,9 +30,13 @@ import { shortPath } from "./ProjectActions.tsx"
 
 // THE PHONE'S PAGE — a header, three text tabs, ONE list, and a "New thread" button. A fourth tab,
 // Schedules, joins the three while the view has any (plans/scheduled-threads.md §8): the desktop's project
-// row lists them as its fourth quiet count, and here they are the list's fourth band. There is no schedule
-// mode in the phone's prompt box — a schedule is made on the desktop, or proposed by a worker — so the
-// phone reads, runs, pauses, turns on and deletes them (PhoneScheduleSheet.tsx).
+// row lists them as its fourth quiet count, and here they are the list's fourth band, where the phone reads,
+// runs, pauses, turns on and deletes them (PhoneScheduleSheet.tsx). A schedule can also be MADE here: the New
+// thread sheet (PhoneNewThread, below) holds the desktop's own prompt box, repeat glyph and schedule mode
+// included, so `every weekday at 9 …` typed on the go becomes a schedule the same way it does at a desk
+// (plans/schedule-live-reading.md §12). Its Escape goes through `handleDialogEscape`, so a hardware
+// keyboard's first Escape leaves the mode before it closes the sheet. Only the thread reply bar
+// (ThreadComposerBox, `layout: "bar"`) has no schedules.
 //
 // Upstream's phone board (colinhacks/frizz MobileBoard.tsx, its 2026-09-30 redesign: 6754e72a "the phone
 // board gets a header, text tabs and one line per row", 39db08a6 "the projects page is a plain list on a

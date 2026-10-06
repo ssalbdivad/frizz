@@ -145,7 +145,7 @@ export const store = proxy({
   vtReturnTarget: null as string | null,
   // Transient bottom-center toast (e.g. "Steer failed …" when an eager reply is rejected). `id` bumps per call so
   // repeat toasts re-trigger the fade. Rendered by <Toaster>; null when nothing is showing.
-  toast: null as { id: number; text: string; detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction } | null,
+  toast: null as { id: number; text: string; detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; actions?: readonly ToastAction[] } | null,
   // The open image LIGHTBOX — one ```lightbox gallery's pictures and which of them is on screen. Here
   // rather than in the gallery's own state because the gallery is a transcript row: the virtualizer
   // unmounts it once it scrolls out of the window, and a worker still writing below a gallery the
@@ -199,8 +199,14 @@ export type ToastLink = { label: string; slug: string; project?: string }
 // A toast's own verb — the snooze confirmation's "Undo". A callback where `link` is data, because the
 // act belongs to whoever raised the toast: its thread's project client, and the card it faded out.
 export type ToastAction = { label: string; run: () => void }
-export function showToast(text: string, opts?: { detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction }) {
-  store.toast = { id: ++toastSeq, text, ...opts }
+// AT MOST TWO verbs, in the order given: a created schedule offers Undo, then Open
+// (plans/schedule-live-reading.md §10.3). A toast is a strip, and a third button turns it into a menu.
+// `action` is sugar for a one-verb toast and leads the list when both are passed.
+export const MAX_TOAST_ACTIONS = 2
+export function showToast(text: string, opts?: { detail?: string; spinner?: boolean; sticky?: boolean; duration?: number; link?: ToastLink; action?: ToastAction; actions?: readonly ToastAction[] }) {
+  const { action, actions, ...rest } = opts ?? {}
+  const verbs = [...(action ? [action] : []), ...(actions ?? [])].slice(0, MAX_TOAST_ACTIONS)
+  store.toast = { id: ++toastSeq, text, ...rest, ...(verbs.length ? { actions: verbs } : {}) }
 }
 
 export function openLightbox(images: LightboxImage[], index: number): void {

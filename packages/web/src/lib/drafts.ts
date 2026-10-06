@@ -69,7 +69,17 @@ export class DraftStore {
     else entries[key] = { value, touchedAt: Date.now() }
     this.commit({ version: DRAFT_SCHEMA_VERSION, entries })
   }
-  clear(key: string): void { if (this.snapshot.entries[key]) this.commit({ version: DRAFT_SCHEMA_VERSION, entries: Object.fromEntries(Object.entries(this.snapshot.entries).filter(([candidate]) => candidate !== key)) }) }
+  clear(key: string): void { this.clearMany([key]) }
+  // Several keys in ONE commit and so ONE notify. A draft that spans keys (a new thread's prompt, its
+  // profile pick and its schedule mode, lib/scheduleDraftState.ts) must never be observed half-cleared:
+  // a subscriber rendering between two single-key clears saw the prompt gone and the mode still on, or —
+  // the order that matters — the mode gone and the prompt still there, which is a box where Enter starts
+  // a thread from text that was being set up as a schedule.
+  clearMany(keys: readonly string[]): void {
+    if (!keys.some((key) => this.snapshot.entries[key])) return
+    const drop = new Set(keys)
+    this.commit({ version: DRAFT_SCHEMA_VERSION, entries: Object.fromEntries(Object.entries(this.snapshot.entries).filter(([candidate]) => !drop.has(candidate))) })
+  }
   private commit(next: DraftSnapshot): void {
     this.snapshot = next
     // A too-large value remains in this tab's memory and subscribers see it immediately. `bounded`
@@ -104,6 +114,10 @@ export const draftKey = {
   // The profile picked for that same prompt (useDraftDispatchPick): `{backend, model, effort}` as JSON,
   // one small non-secret record, kept and cleared with the prompt it belongs to.
   dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
+  // That same prompt's SCHEDULE MODE (lib/scheduleDraftState.ts): `{v, on, dismissed}` as JSON, so what
+  // Enter does with the draft lives and dies with the draft — across a remount and a same-tab reload, and
+  // cleared in the same commit as the prompt (clearDispatchDraft). Absent means off, nothing dismissed.
+  dispatchSchedule: (projectDir: string | undefined) => `dispatch-schedule:${projectDraftScope(projectDir)}:new`,
   // A thread's "Spinoff" dialog (SpinoffDialog) — the instructions for the new thread, one per thread.
   spinoff: (projectDir: string | undefined, slug: string) => `spinoff:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // A finished terminal's next line (TerminalFollowUp) — one per terminal.

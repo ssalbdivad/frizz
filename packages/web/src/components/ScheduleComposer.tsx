@@ -6,6 +6,7 @@ import { rpc } from "../api/rpc.ts"
 import { pushScheduleDrawer, showToast } from "../store.ts"
 import { startsWithRecurrence } from "../lib/scheduleHint.ts"
 import { invalidateSchedules } from "../lib/schedules.ts"
+import { useScheduleDraftState } from "../lib/scheduleDraftState.ts"
 
 // THE PROMPT BOX'S SCHEDULE MODE (plans/scheduled-threads.md §3). The new-thread box has three ways out:
 // Enter starts the thread now, the snail writes it down for later, and this — the repeat glyph left of the
@@ -21,7 +22,8 @@ import { invalidateSchedules } from "../lib/schedules.ts"
 /** What the box passes in: the text to read (the prompt as it would be sent), the profile to snapshot,
  *  and what to do once the schedule exists (clear the draft, close a phone sheet). */
 export interface ScheduleModeInput {
-  /** The box's draft key (lib/drafts.ts): the mode and its reading are kept under it, like the draft. */
+  /** The key the mode is kept under (`draftKey.dispatchSchedule`, lib/scheduleDraftState.ts): a sibling of
+   *  the prompt's own, so the mode lives and dies with the draft and every box on it reads one value. */
   draftKey: string
   /** The prompt as it would be sent — chips serialized, user commands expanded — or "" when empty. */
   text: string
@@ -51,25 +53,39 @@ export interface ScheduleMode {
 
 type Reading = { text: string; result: InterpretScheduleResult }
 
-// THE MODE OUTLIVES A REMOUNT, the way the draft does (lib/drafts.ts). The box is remounted by things the
-// human never sees — a layout pass across the phone breakpoint, a viewport change — and its draft comes back
-// while plain component state would not: the text stayed, the panel vanished, and the next Enter STARTED a
-// thread from text that was being set up as a schedule (seen in a headless run, 2026-10-05, where a
-// screenshot's viewport override did exactly this and dispatched a real worker). What Enter does with the
-// draft is part of the draft, so it is kept beside it, per box, for the life of the tab.
-const kept = new Map<string, { on: boolean; reading: Reading | null }>()
+// THE MODE IS PART OF THE DRAFT (lib/scheduleDraftState.ts, plans/schedule-live-reading.md §9 I-4). The box
+// is remounted by things the human never sees — a layout pass across the phone breakpoint, a viewport change —
+// and its draft comes back while plain component state would not: the text stayed, the panel vanished, and
+// the next Enter STARTED a thread from text that was being set up as a schedule (seen in a headless run,
+// 2026-10-05, where a screenshot's viewport override did exactly this and dispatched a real worker). So the
+// mode is read from the draft store, beside the prompt: it survives a remount and a same-tab reload, the
+// page box and the `c` dialog over it agree, and it is cleared in the same commit as the prompt.
+//
+// The READING is only a cache of what the server said about some text. It is kept in memory for the tab, so
+// a remount does not cost a second read, but never in the draft: a reload in the mode reads the text again.
+const readings = new Map<string, Reading>()
 
 export function useScheduleMode({ draftKey, text, prose, profile, blocked, onCreated }: ScheduleModeInput): ScheduleMode {
   const queryClient = useQueryClient()
-  const [on, setOnState] = useState(() => kept.get(draftKey)?.on ?? false)
-  const [reading, setReadingState] = useState<Reading | null>(() => kept.get(draftKey)?.reading ?? null)
-  const setOn = (next: boolean) => {
-    kept.set(draftKey, { on: next, reading: next ? (kept.get(draftKey)?.reading ?? null) : null })
-    setOnState(next)
-  }
+  const [mode, setMode] = useScheduleDraftState(draftKey)
+  const on = mode.on
+  const [reading, setReadingState] = useState<Reading | null>(() => readings.get(draftKey) ?? null)
   const setReading = (next: Reading | null) => {
-    kept.set(draftKey, { on: kept.get(draftKey)?.on ?? false, reading: next })
+    if (next) readings.set(draftKey, next)
+    else readings.delete(draftKey)
     setReadingState(next)
+  }
+  const setOn = (next: boolean) => {
+    setMode((prev) => ({ ...prev, on: next }))
+    if (!next) setReading(null)
+  }
+  // The mode can go off from ANOTHER box on the key (the `c` dialog created the schedule and cleared the
+  // draft under the page box). A reading held from before must not come back with the next mode-on and let
+  // Enter create from it before the text is read again, so it goes whenever the mode is off — during render,
+  // React's pattern for state derived from a prop, never an effect a stale frame could act before.
+  if (!on && reading) {
+    readings.delete(draftKey)
+    setReadingState(null)
   }
   const interpret = useMutation({
     mutationFn: (read: string) => rpc.interpretSchedule({ text: read, tz: browserZone() }),

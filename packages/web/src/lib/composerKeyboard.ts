@@ -67,6 +67,18 @@ export function shouldSaveLazyComposerEnter(event: ComposerKeyboardEvent, canSub
 }
 
 /**
+ * What the lazy-save chord does in a box that MAY be in schedule mode. In the mode nothing may dispatch or
+ * save lazily (plans/schedule-live-reading.md §9 I-2): Enter there creates the schedule on screen, and a
+ * lazy thread written from that text would be the one exit that skips the reading entirely. So the chord is
+ * CONSUMED — prevented and dropped, never left to the textarea, where ⌘⇧-Enter is not a newline the human
+ * wants either — whatever the box holds. Out of the mode it is the ordinary lazy save, on the same gate.
+ */
+export function lazyComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean, blocked: boolean): "save" | "consume" | undefined {
+  if (blocked) return shouldSaveLazyComposerEnter(event, true) ? "consume" : undefined
+  return shouldSaveLazyComposerEnter(event, canSubmit) ? "save" : undefined
+}
+
+/**
  * SCHEDULE IT — ⌘/Ctrl-Option-Enter in the new-thread box (Ctrl-Alt-Enter off a Mac): the text is read for
  * WHEN it should run and shown back as a schedule to confirm, instead of being dispatched now
  * (plans/scheduled-threads.md §3). Disjoint from every other Enter: the sends and the lazy save refuse
