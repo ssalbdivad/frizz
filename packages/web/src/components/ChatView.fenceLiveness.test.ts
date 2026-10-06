@@ -9,15 +9,21 @@ const renderText = () => {
   return render
 }
 
-// An ```awaiting fence that is not a LIVE wait draws NOTHING — not the card, and not its prose. Two ways
-// it stops being live: frizz REFUSED the park (the flag the server sets when it folds the correction out
-// of the transcript, transcript.ts markFenceRefused), or the worker has SPOKEN since, which settles by
-// construction whatever the fence named.
+// An ```awaiting fence that is not a LIVE wait never draws as a card. Two ways it stops being live: frizz
+// REFUSED the park (the flag the server sets when it folds the correction out of the transcript,
+// transcript.ts markFenceRefused), which draws nothing at all, or the worker has SPOKEN since, which
+// settles by construction whatever the fence named — and keeps its prose as a muted note, because since
+// sub-agent check-ins that prose is the orchestration's progress history (2026-10-06).
 test("a fence that is not a live wait is skipped before it ever reaches a card", () => {
   assert.match(
     renderText(),
-    /if \(fseg\.fenceKind === "awaiting" && \(m\.fenceRefused \|\| staleAwaiting \|\| restingCardShown\)\) continue/,
-    "both non-live cases must be skipped, not rendered as an empty card",
+    /if \(fseg\.fenceKind === "awaiting" && \(m\.fenceRefused \|\| restingCardShown\)\) continue/,
+    "a refused fence and one the resting card states draw nothing",
+  )
+  assert.match(
+    renderText(),
+    /if \(fseg\.fenceKind === "awaiting" && staleAwaiting\) \{\n\s*if \(fseg\.body\.trim\(\)\) push\(<SettledAwaitingNote[^\n]*\n\s*continue/,
+    "a settled fence draws its body as a note, never a card, and nothing when it has no body",
   )
   // SKIPPED, not returned as null from the card: the block list is interleaved with explicit spacers, so
   // a slot that renders nothing still spends one.
@@ -44,7 +50,7 @@ test("a fence the resting card states never reaches the card either", () => {
   const helper = source.match(/export function rendersNothingIn[\s\S]*?\n}/)?.[0]
   assert.ok(helper, "rendersNothingIn must exist")
   assert.match(helper, /restingCardShown = false/, "it takes the resting-card reason")
-  assert.match(helper, /entry\.messageIndex === awaitingCut\) stale\.add\(entry\.message\)/, "…and folds the last message in")
+  assert.match(helper, /entry\.messageIndex === awaitingCut\) owned\.add\(entry\.message\)/, "…and folds the last message in, apart from the settled set")
   assert.equal(chat.match(/rendersNothingIn\([a-zA-Z]+, awaitingCut, restingShown\)/g)?.length, 3, "every rendersNothingIn call passes it")
 })
 
@@ -62,8 +68,8 @@ test("the thread view holds its tail cards until the transcript window has loade
 })
 
 // THE CARD NEVER LEARNS ABOUT STALENESS. It used to: a `stale` branch stripped the frame and printed the
-// body as free-standing prose. That prose is what the whole block now drops with it, so a prop that can
-// only mean "draw a settled card" would be a card shape that no longer exists.
+// body as free-standing prose. A settled body now draws through SettledAwaitingNote instead, never the
+// card, so a prop that can only mean "draw a settled card" would be a card shape that does not exist.
 test("FenceCard has no settled branch to fall into", () => {
   const card = source.match(/export function FenceCard\([\s\S]*?\n}/)?.[0]
   assert.ok(card, "FenceCard must exist")
@@ -92,16 +98,18 @@ test("the empty-message predicates take the settled case", () => {
   // (messageHasRenderableText, the project board's queue-card twin of this predicate, went with that
   // card on 2026-09-28.)
   for (const fn of ["messageRendersNothing"]) {
-    const re = new RegExp(`export function ${fn}\\(m: ChatMessage, staleAwaiting\\?: boolean\\)`)
+    const re = new RegExp(`export function ${fn}\\(m: ChatMessage, staleAwaiting\\?: boolean, cardOwned\\?: boolean\\)`)
     assert.match(source, re, `${fn} must accept the message's staleness`)
   }
   const blank = source.match(/function blankText\([\s\S]*?\n}/)?.[0]
   assert.ok(blank, "blankText must exist")
   assert.match(
     blank.replace(/^\s*\/\/.*$/gm, ""),
-    /if \(!m\.fenceRefused && !staleAwaiting\) return !text\.trim\(\)/,
-    "a settled fence must be stripped exactly as a refused one is",
+    /if \(!m\.fenceRefused && !staleAwaiting && !cardOwned\) return !text\.trim\(\)/,
+    "a settled fence must reach the fence-aware test, as a refused one does",
   )
+  // …and a settled fence with a BODY still renders (its note), so it is not blank; one without is.
+  assert.match(blank, /const drawsNothing = \(body: string\) => m\.fenceRefused \|\| cardOwned \|\| !body\.trim\(\)/)
 })
 
 // ONE CUT, SHARED. The renderer marks a fence settled by comparing its index against the last assistant

@@ -1934,10 +1934,10 @@ function answeredBySettledCards(paired: PairedAnswer[] | null | undefined): bool
 }
 // Matches exactly when Message returns null (an empty/thinking-only assistant turn) — such a message
 // takes no slot, so the adjacency-spacer walk must SKIP it (else two spacers stack into a double gap).
-export function messageRendersNothing(m: ChatMessage, staleAwaiting?: boolean): boolean {
+export function messageRendersNothing(m: ChatMessage, staleAwaiting?: boolean, cardOwned?: boolean): boolean {
   if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.every((p) => (p.kind === "tools" ? p.tools.length === 0 : blankText(m, p.text, staleAwaiting)))
-  return (m.tools?.length ?? 0) === 0 && blankText(m, m.text, staleAwaiting)
+  if (m.parts && m.parts.length > 0) return m.parts.every((p) => (p.kind === "tools" ? p.tools.length === 0 : blankText(m, p.text, staleAwaiting, cardOwned)))
+  return (m.tools?.length ?? 0) === 0 && blankText(m, m.text, staleAwaiting, cardOwned)
 }
 // THE LAST THING THE AGENT SAID. Any ```awaiting fence above it states a wait that has already resolved —
 // the worker spoke again, so whatever it named came back or was given up on — and draws nothing at all
@@ -1964,8 +1964,8 @@ export function lastAssistantIndex(messages: readonly ChatMessage[]): number {
 // stable only within one coalesced list, while the entry's `messageIndex` still points at the original.
 //
 // `restingCardShown` is the same cut from the other side: when the resting card at the tail states the
-// LAST message's wait (showsRestingCard), that message's fence draws nothing either — the card owns it —
-// so a fence-only last message is as empty as a settled one. Same set, one more member.
+// LAST message's wait (showsRestingCard), that message's fence draws nothing at all — the card owns it,
+// body included — where a settled fence keeps its body as a note. So it is a set of its own.
 //
 // `awaitingCut` is the index a fence goes stale BELOW — past every message while the thread is running,
 // else the last assistant message (ChatView's `awaitingCut`).
@@ -1975,9 +1975,10 @@ export function rendersNothingIn<T extends { message: ChatMessage; messageIndex:
   restingCardShown = false,
 ): (message: ChatMessage) => boolean {
   const stale = new WeakSet<ChatMessage>()
+  const owned = new WeakSet<ChatMessage>()
   if (awaitingCut >= 0) for (const entry of entries) if (entry.messageIndex < awaitingCut) stale.add(entry.message)
-  if (awaitingCut >= 0 && restingCardShown) for (const entry of entries) if (entry.messageIndex === awaitingCut) stale.add(entry.message)
-  return (message) => messageRendersNothing(message, stale.has(message))
+  if (awaitingCut >= 0 && restingCardShown) for (const entry of entries) if (entry.messageIndex === awaitingCut) owned.add(entry.message)
+  return (message) => messageRendersNothing(message, stale.has(message), owned.has(message))
 }
 // Does this text draw NOTHING? Ordinarily that is "is it blank", but an ```awaiting fence that is not a
 // LIVE wait draws nothing either (see renderText) — and neither does a live one whose thread is at rest
@@ -1988,11 +1989,13 @@ export function rendersNothingIn<T extends { message: ChatMessage; messageIndex:
 // it. That was already true of a REFUSED fence; it became true of a SETTLED one when the settled body
 // stopped rendering, and 99 of the 6,999 awaiting fences in this machine's transcripts are fence-only,
 // so the case is ordinary rather than theoretical.
-function blankText(m: ChatMessage, text: string, staleAwaiting?: boolean): boolean {
-  if (!m.fenceRefused && !staleAwaiting) return !text.trim()
-  // splitFenceBlocks already drops whitespace-only prose runs, so "every segment is an awaiting fence"
-  // is the whole test. A ```done fence still draws its card and keeps the message visible.
-  return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting")
+function blankText(m: ChatMessage, text: string, staleAwaiting?: boolean, cardOwned?: boolean): boolean {
+  if (!m.fenceRefused && !staleAwaiting && !cardOwned) return !text.trim()
+  // splitFenceBlocks already drops whitespace-only prose runs, so "every segment is an awaiting fence
+  // that draws nothing" is the whole test. A ```done fence still draws its card and keeps the message
+  // visible, and so does a SETTLED fence with a body, which draws as its note.
+  const drawsNothing = (body: string) => m.fenceRefused || cardOwned || !body.trim()
+  return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting" && drawsNothing(s.body))
 }
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
 // — the LIVE continuation of the very meta column that the reasoning rows and tool bands form above
@@ -3744,9 +3747,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // controller (which numbers ```question blocks over the flat text in the same order).
     for (const [fi, fseg] of splitFenceBlocks(text).entries()) {
       if (fseg.kind === "fence") {
-        // AN ```awaiting FENCE THAT IS NOT A LIVE WAIT DRAWS NOTHING AT ALL — not the card, and not its
-        // prose either. Skipped here rather than returned as null from the card, so the block list never
-        // carries an empty slot and the spacer either side of it collapses with it.
+        // AN ```awaiting FENCE THAT IS NOT A LIVE WAIT NEVER DRAWS AS A CARD. Skipped here rather than
+        // returned as null from the card, so the block list never carries an empty slot and the spacer
+        // either side of it collapses with it. A SETTLED one keeps its prose as a note (below); the other
+        // two draw nothing at all.
         //
         // REFUSED — frizz declined to arm the park (see TranscriptMessage.fenceRefused), so a card would
         // assert a wait nothing is holding, and the body is a handoff the worker is about to write again
@@ -3762,13 +3766,26 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
         // past-tense card): by nature an awaiting card is never settled, and a wait that is over is not a
         // card and not a message either.
         //
+        // EXCEPT ITS PROSE CAME BACK, AS A NOTE (2026-10-06). Sub-agent check-ins (746f29ce, 2026-10-03)
+        // made the body under `---` the orchestrator's progress note, written every 30m — and this skip
+        // erased every one of them but the newest, so a long orchestration showed ten "Wait expired"
+        // dividers and none of the updates (maintainer: "what happened to incremental updates?"). He chose
+        // a compact muted line over a contract change. It is still not a card — no frame, no hourglass, no
+        // items — and the ruled left edge is what answers "why is it here": it reads as an aside of the
+        // rest it belongs to, like a reasoning block, not as an orphaned paragraph. A fence with no body
+        // (the quiet park the contract asks for) still draws nothing.
+        //
         // `done` is neither: a finished thread stays finished, and its card is the thread's own outcome.
         //
         // STATED BY THE RESTING CARD — the third skip. A live fence whose thread is at rest on it is drawn
         // by the resting card at the tail (AwaitingBackgroundCard opens on this very body), so this block
         // goes too, for the spacer reason above: FenceCard returning null would still leave its slot's
         // spacer standing between the prose and that card.
-        if (fseg.fenceKind === "awaiting" && (m.fenceRefused || staleAwaiting || restingCardShown)) continue
+        if (fseg.fenceKind === "awaiting" && (m.fenceRefused || restingCardShown)) continue
+        if (fseg.fenceKind === "awaiting" && staleAwaiting) {
+          if (fseg.body.trim()) push(<SettledAwaitingNote key={`${keyBase}-f${fi}`} body={fseg.body} wrap={dense} />)
+          continue
+        }
         push(
           <FenceCard
             key={`${keyBase}-f${fi}`}
@@ -3936,6 +3953,16 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
 // and a second number can only COMPETE with whatever numbering the worker used inside the question text:
 // a batch answering a BURIED ask renumbers its rows from 1 (they may span several messages), so
 // answering questions 9–11 of an earlier ask rendered "1" against a question that reads "9. …".
+// A SETTLED ```awaiting fence's prose — a check-in's progress note once the worker has moved past it
+// (see renderText). One step down from answer prose, in the reasoning block's ruled-aside treatment.
+function SettledAwaitingNote({ body, wrap }: { body: string; wrap?: boolean }) {
+  return (
+    <div className="frizz-settled-note border-l border-border/70 pl-3">
+      <ProseHtml md={body} wrap={wrap} />
+    </div>
+  )
+}
+
 function ProseHtml({ md, wrap }: { md: string; wrap?: boolean }) {
   const html = useMarkdownHtml(md)
   const inner = useInnerHtml(html)

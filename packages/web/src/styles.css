@@ -268,6 +268,15 @@ body {
   --md-step: 8px;
   color: var(--color-muted);
 }
+/* A settled awaiting fence's note (ChatView SettledAwaitingNote): a check-in's progress update the worker
+   has since moved past. Same quiet aside as the reasoning body — muted, one step down — so a run of them
+   reads as the orchestration's history rather than competing with what the worker is saying now. */
+.frizz-settled-note .md-body {
+  font-size: 12px;
+  --md-step: 8px;
+  color: var(--color-muted);
+}
+
 /* Codex emits each reasoning step as a bare `**bold header**` (default summary = header-only, no body),
    so a turn is often a stack of 5-10 such fragments. Rendered at markdown's 700 weight that reads as a
    wall of loud headers — the opposite of the quiet metadata aside this block wants. Drop the emphasis to
