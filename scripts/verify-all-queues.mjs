@@ -139,7 +139,7 @@ try {
   // Click only once the target is where the eye would find it: inside the viewport and holding still for
   // two frames. A Radix menu mounts its items BEFORE it has positioned them (off-screen, until measured),
   // and a drawer slides in over ~300ms, so a click issued the moment the node exists lands nowhere
-  // (verify-one-view.mjs, where this was worked out).
+  // (worked out in the since-deleted verify-one-view.mjs).
   const clickSettled = async (selector) => {
     const handle = await page.waitForFunction(
       (selector) => new Promise((resolve) => {
@@ -180,7 +180,7 @@ try {
   })
 
   // Until 2026-09-28 this checked a lane per project in the rail's order; the queue is one queue now, in
-  // the order the threads became ready (verify-everything-queue.mjs holds that order), so what is left to
+  // the order the threads became ready (lib/allQueues.test.ts holds that order), so what is left to
   // check here is WHOSE cards it holds.
   await step("the queue holds the cards of every project with work queued, and only those", async () => {
     // The seed queues work in these three; docs-portal (only archived threads) and any other project on
@@ -544,7 +544,7 @@ try {
   // It was a filter on the queue column, held per tab at `/`, from 2026-09-28 until focus mode; before
   // that, each of these doors navigated to `/project/<slug>`. The doors are a card's
   // project chip (All projects draws one on every card), the READY header's switcher, and a project row's
-  // ⋯ (verify-one-view.mjs). What each check reads is the address and whose cards the queue shows:
+  // ⋯. What each check reads is the address and whose cards the queue shows:
   // focused, exactly the one project's.
   const focusedTo = async (slug) => {
     await page.waitForFunction((slug) => new URLSearchParams(location.search).get("project") === slug, { timeout: 15_000 }, slug).catch(() => {})

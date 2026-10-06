@@ -93,7 +93,7 @@ tenant's thread is `http://127.0.0.1:45571/all/<tenant-slug>/thread/<t>`: the pa
 drawer open, focused on the tenant. `…/thread/<t>/full` is its fullscreen page. To look at one project's
 cards, set the queue filter: the pill in the READY header, or the project row's ⋯ menu. `/project/<slug>`
 lands on `/` like any other unknown address, so a harness that navigates there and waits for a project
-page times out rather than failing loudly. `scripts/verify-one-view.mjs` is a worked example of driving
+page times out rather than failing loudly. `scripts/verify-all-queues.mjs` is a worked example of driving
 the page across four projects.
 
 The traps, each of which costs a full boot cycle to rediscover:

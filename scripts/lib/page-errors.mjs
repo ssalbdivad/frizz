@@ -7,8 +7,6 @@
 // OTHER failed response and every console error still counts. The console's "Failed to load resource"
 // line is the echo of a failed response and carries no URL, so it is dropped here and the response
 // listener records the same failure once, WITH the URL that failed.
-//
-// The same filter lives inline in verify-one-view.mjs, where it was first written.
 export const HARNESS_404 = /\/_frizz\/control\/status$|\/_frizz\/project-icon\?/
 
 export function recordPageErrors(page, errors) {

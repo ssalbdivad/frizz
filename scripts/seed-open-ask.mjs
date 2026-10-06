@@ -9,8 +9,8 @@
 // in `thread_question`, written here the way scripts/seed-all-queues.mjs writes its own, because no
 // human-facing RPC registers a question — only a worker's MCP call does.
 //
-// A broker row with a live stand-in daemon (a `sleep`), the same stand-in seed-resting-thread.mjs and
-// seed-everything-queue.mjs use. At rest the stand-in changes nothing; it is there for the verify
+// A broker row with a live stand-in daemon (a `sleep`), the same stand-in seed-resting-thread.mjs
+// uses. At rest the stand-in changes nothing; it is there for the verify
 // script's step 4, a real followUp. With no live daemon record the bridge would COLD-RESUME, i.e. start
 // a real `claude` from this sandbox; with one it adopts the stand-in, the RPC returns 200, and the steer
 // lands in the thread through the delivery ledger without any provider process being touched.

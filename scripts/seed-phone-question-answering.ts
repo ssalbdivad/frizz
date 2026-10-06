@@ -1,7 +1,7 @@
 // Seed the shapes the PHONE answers in place (components/PhoneQuestionCards.tsx, 2026-10-03): one tap on
 // a plain single-choice option sends it; a follow-up, a rich option body or a typed answer opens the sheet
-// at that question; a multi toggles in place under its own Send. Same recipe as
-// seed-question-set-aside.ts — session row + JSONL for the REAL tailer, the question rows as fixture.
+// at that question; a multi toggles in place under its own Send. The frizz-stack
+// recipe — session row + JSONL for the REAL tailer, the question rows as fixture.
 //
 //   • q-phone-one  — ONE plain yes/no question: the case that must never need the sheet.
 //   • q-phone-mix  — four at one rest: plain single, single whose first option opens follow-ups, a multi,

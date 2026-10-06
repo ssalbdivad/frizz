@@ -137,10 +137,10 @@ function supersededByInstall(root: string, platformData: string, exists: (path: 
  *
  * Setting XDG_DATA_HOME is how a harness isolates a throwaway Frizz, and its fresh temp root has no
  * registry yet — so supersededByInstall cannot fire, and the legacy rule used to hand the harness the
- * REAL `~/.frizz` instead. On 2026-10-02 `scripts/verify-dev-remote.ts` booted a test board that way;
- * `~/.frizz` existed only as agent scratch debris, the board wrote its registry into it, and that
- * registry made `~/.frizz` an install: the live board re-resolved its root on the next lookup, saw
- * one throwaway project, and answered 404 to every worker's `/_frizz/<project>/rpc/…` call.
+ * REAL `~/.frizz` instead. On 2026-10-02 a dev-board harness (verify-dev-remote.ts, since deleted)
+ * booted a test board that way; `~/.frizz` existed only as agent scratch debris, the board wrote its
+ * registry into it, and that registry made `~/.frizz` an install: the live board re-resolved its root
+ * on the next lookup, saw one throwaway project, and answered 404 to every worker's `/_frizz/<project>/rpc/…` call.
  *
  * A real legacy install always has a registry (every launch writes one), so this only ever passes
  * over debris; a `~/.frizz` with a registry still wins whatever XDG says.
