@@ -529,6 +529,8 @@ export function deliverClaudeBrokerWake(deps: {
   deliveryMessage: string
   /** Retire the live daemon first — see the bridge's followUp contract and needsFreshProcessForLimit. */
   freshProcess?: boolean
+  /** What the project's Frizz plugins add to the system prompt (plugins/project.ts), re-applied on a cold resume. */
+  pluginSystemPrompt?: string
 }): Promise<void> {
   const { bridge, slug, cwd, row, settings, deliveryMessage, freshProcess } = deps
   const board = { dir: deps.boardDir ?? cwd, workDir: cwd }
@@ -537,7 +539,7 @@ export function deliverClaudeBrokerWake(deps: {
     scratchpadOrientation(row.session_id, "claude", workerScratchPath(board, row.session_id)),
     frizzConfigBlock(board.dir),
     deadlineSection(row),
-
+    deps.pluginSystemPrompt,
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({
     threadSlug: slug,
@@ -893,6 +895,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // fork (project-mcp-servers.ts): under `--strict-mcp-config` nothing mounts that frizz did not hand over.
         workerEnv: {
           pluginDir: workerPluginDir(),
+          // Each running Frizz plugin's `claude/` directory, read at every fork (plugins/loader.ts).
+          extraPluginDirs: () => opts.plugins?.claudeDirs() ?? [],
           ...claudeMcpConfig(resolveFrizzMcp(frizzMcpTarget)),
           permDir: permRequestDir(project),
           // Only where the board is NOT the worker's cwd (the Home workspace): the cc-worker hooks write
@@ -1149,6 +1153,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         ? Promise.resolve(readCodexAuthState())
         : readClaudePreflightAuth({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }),
     preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
+    pluginSystemPrompt: (kind) => plugins?.systemPrompt(kind) ?? "",
   })
 
   // SCHEDULED THREADS (plans/scheduled-threads.md). One held-thread starter per project, shared by the
@@ -1285,6 +1290,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           row,
           settings: getSettings(storage, home),
           deliveryMessage,
+          pluginSystemPrompt: plugins?.systemPrompt("claude"),
           // Recomputed here rather than carried on the delivery: the outbox stores a message, not a
           // runtime decision, and the tail is the live answer to "is this thread still behind a wall
           // its own process is enforcing".

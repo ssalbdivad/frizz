@@ -15,6 +15,7 @@ import {
   sanitizeProviderChildEnvironment,
   mapAssistant,
   mapTask,
+  sdkPlugins,
   type ClaudeQueryHandle,
 } from "./claude-agent-sdk.ts"
 import {
@@ -1624,4 +1625,14 @@ test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers
   } finally {
     await harness.close()
   }
+})
+
+test("sdkPlugins: the cc-worker plugin first, then each Frizz plugin's Claude Code directory, once each", () => {
+  assert.deepEqual(sdkPlugins({}), [], "none is left out, never passed as []")
+  assert.deepEqual(sdkPlugins({ pluginDir: "/cc-worker" }), [{ type: "local", path: "/cc-worker" }])
+  assert.deepEqual(sdkPlugins({ pluginDir: "/cc-worker", extraPluginDirs: ["/p/lazy/claude", "/cc-worker", "/p/lazy/claude"] }), [
+    { type: "local", path: "/cc-worker" },
+    { type: "local", path: "/p/lazy/claude" },
+  ])
+  assert.deepEqual(sdkPlugins({ extraPluginDirs: ["/p/lazy/claude"] }), [{ type: "local", path: "/p/lazy/claude" }])
 })

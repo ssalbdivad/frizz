@@ -179,6 +179,27 @@ test("forkBroker: control — a daemon that publishes its record and stays up re
   }
 })
 
+// --- forkBroker: a Frizz plugin's Claude Code directory rides the daemon's config ---------------------
+
+test("forkBroker: Frizz plugins' Claude Code directories reach the daemon beside the cc-worker plugin", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-broker-fork-"))
+  let daemonPid: number | undefined
+  try {
+    const reportPath = join(dir, "plugins.json")
+    const entry = scratchDaemon(dir, "reports-plugins", [
+      `writeFileSync(${JSON.stringify(reportPath)}, JSON.stringify({ pluginDir: config.pluginDir ?? null, extraPluginDirs: config.extraPluginDirs ?? null }))`,
+      "writeFileSync(config.recordPath, JSON.stringify({ daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation: config.generation, createdAt: new Date().toISOString() }))",
+      "setInterval(() => {}, 1000)",
+    ].join("\n"))
+    const record = await forkBroker({ ...forkOptions(dir, entry), pluginDir: "/cc-worker", extraPluginDirs: ["/data/user-plugins/lazy/claude"] })
+    daemonPid = record.daemonPid
+    assert.deepEqual(JSON.parse(readFileSync(reportPath, "utf8")), { pluginDir: "/cc-worker", extraPluginDirs: ["/data/user-plugins/lazy/claude"] })
+  } finally {
+    if (daemonPid) { try { process.kill(daemonPid, "SIGKILL") } catch {} }
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
 // --- forkBroker: the daemon is forked from the LAUNCH env, not the live one ---------------------------
 //
 // 2026-09-30: the dev server creates Vite in-process, Vite writes NODE_ENV=development into its

@@ -91,22 +91,25 @@ async function harness() {
     snapshot: async () => snapshot, currentSeq: () => 0, rebuild: async () => snapshot,
     refresh: () => snapshot, start: async () => {}, stop: async () => {},
   }
-  const spawned: { threadSlug: string; sessionId: string; prompt: string }[] = []
+  const spawned: { threadSlug: string; sessionId: string; prompt: string; appendSystemPrompt?: string }[] = []
   const claudeBroker = {
-    spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string }) => {
-      spawned.push({ threadSlug: input.threadSlug, sessionId: input.sessionId, prompt: input.prompt })
+    spawnDispatch: async (input: { threadSlug: string; sessionId: string; cwd: string; prompt: string; appendSystemPrompt?: string }) => {
+      spawned.push({ threadSlug: input.threadSlug, sessionId: input.sessionId, prompt: input.prompt, appendSystemPrompt: input.appendSystemPrompt })
       return { binding: { threadSlug: input.threadSlug, sessionId: input.sessionId, cwd: input.cwd } }
     },
     followUp: async () => {},
     releaseSession: () => {},
   } as unknown as ClaudeAgentBrokerBridge
+  // Late-bound exactly as context.ts binds it: the plugins need the dispatcher, and it reads them per dispatch.
+  let plugins: ReturnType<typeof createProjectPlugins> | undefined
   const dispatcher = createDispatcher({
     project, storage, board, claudeBroker,
     getSettings: () => defaultSettings(),
     dispatchProfile: () => ({ model: "opus" }),
+    pluginSystemPrompt: (kind) => plugins?.systemPrompt(kind) ?? "",
   })
   const starter = createHeldThreadStarter({ dispatcher, board })
-  const plugins = createProjectPlugins({
+  plugins = createProjectPlugins({
     registry, project, storage, dispatcher,
     startHeld: (row, prompt, profile) => starter.start(row, prompt, profile),
     refresh: () => {},
@@ -284,5 +287,19 @@ test("deleting a thread tells the plugins; systemPrompt and project() reach ever
     assert.equal(h.plugins.systemPrompt("codex"), "")
     h.plugins.opened()
     assert.deepEqual(probe().find((entry) => entry[0] === "project"), ["project", "plugin-project"])
+  } finally { h.close() }
+})
+
+test("a plugin's systemPrompt reaches the worker's system prompt, after Frizz's own, and leaves the user prompt alone", async () => {
+  const h = await harness()
+  try {
+    await h.ctx.dispatcher.dispatch({ prompt: "Fix the flaky test" })
+    const system = h.spawned[0]!.appendSystemPrompt ?? ""
+    assert.ok(system.endsWith("The probe plugin is watching."), "appended last")
+    assert.ok(system.length > "The probe plugin is watching.".length, "after the worker contract, not instead of it")
+    assert.doesNotMatch(h.spawned[0]!.prompt, /probe plugin/)
+    h.registry.guard.fail(h.registry.get("probe")!, "off")
+    await h.ctx.dispatcher.dispatch({ prompt: "Another" })
+    assert.doesNotMatch(h.spawned[1]!.appendSystemPrompt ?? "", /probe plugin/, "a failed plugin adds nothing")
   } finally { h.close() }
 })

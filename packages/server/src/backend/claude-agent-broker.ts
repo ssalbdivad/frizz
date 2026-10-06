@@ -73,6 +73,9 @@ export interface ClaudeBrokerConfig {
    *  the MCP servers; `workerEnv` carries the per-thread frizz vars the plugin hooks gate on (FRIZZ_THREAD,
    *  FRIZZ_PERM_DIR) — merged into the SDK env AFTER the ambient allowlist. */
   pluginDir?: string
+  /** The Claude Code plugin directories the machine's running FRIZZ PLUGINS ship (a plugin's `claude/`),
+   *  loaded beside `pluginDir` — appended to the SDK's `plugins`, never in place of the cc-worker one. */
+  extraPluginDirs?: string[]
   mcpServers?: WorkerMcpServers
   allowedTools?: string[]
   workerEnv?: Record<string, string>
@@ -227,6 +230,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig, options: RunClaudeBr
     model: config.model,
     effort: config.effort,
     pluginDir: config.pluginDir,
+    ...(config.extraPluginDirs?.length ? { extraPluginDirs: config.extraPluginDirs } : {}),
     // The WHOLE MCP surface of this thread, and STRICT so the CLI discovers nothing else: the project's
     // approved `.mcp.json` (and the operator's remote user-scope servers) under the frizz mount, which
     // wins a name collision. Read at every fork, not once per project, so a `.mcp.json` edit reaches the

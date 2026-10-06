@@ -888,6 +888,9 @@ export interface DispatchDeps {
   // "daemon exited before it became ready" a missing binary otherwise produces. Fails open on
   // "unknown". Absent (tests) ⇒ no probe.
   preflightCodexBinary?: () => Promise<"present" | "missing" | "unknown">
+  // What the project's FRIZZ PLUGINS add to a worker's system prompt (plugins/project.ts systemPrompt),
+  // read per dispatch and joined after the Frizz config block. Absent or "" ⇒ nothing.
+  pluginSystemPrompt?: (kind: BackendKind) => string
   // Durable adoption recovery seams. The production runtime is INERT since the transport cutover —
   // it answers "absent" to every lookup, because the terminal panes its token-aware exact-match
   // implementation used to identify no longer exist — so recovery now rests entirely on the durable
@@ -1064,7 +1067,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock, deps.pluginSystemPrompt?.(kind)]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
@@ -1137,7 +1140,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(!bridge ? "The ACP bridge is unavailable; cannot start this thread." : `An ACP dispatch needs an agent: pick one in the composer (model \`acp:<agent>\`), got ${JSON.stringify(model ?? null)}.`)
         }
-        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock, prompt]
+        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock, deps.pluginSystemPrompt?.(kind), prompt]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: workDir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
@@ -1197,6 +1200,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           scratchpadOrientation(sessionId, kind, scratchPath),
           frizzConfigBlock(deps.project.dir),
           deadlineBlock,
+          deps.pluginSystemPrompt?.(kind),
         ].filter(Boolean).join("\n\n")
         // A FORK's opening prompt is sent under a uuid minted here, so the record the CLI writes for it —
         // the first record of this thread's own, below the copied conversation — can be found again.
@@ -1530,6 +1534,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             loadWorkerPrompt("claude"),
             scratchpadOrientation(sessionId, "claude", workerScratchPath(deps.project, sessionId)),
             frizzConfigBlock(deps.project.dir),
+            deps.pluginSystemPrompt?.("claude"),
             adoption,
           ].filter(Boolean).join("\n\n"),
           model: adoptProfile.model,

@@ -3150,7 +3150,7 @@ export function createRouter(ctx: AppContext) {
             scratchpadOrientation(row.session_id, "claude", workerScratchPath(ctx.project, row.session_id)),
             frizzConfigBlock(ctx.project.dir),
             deadlineSection(row),
-
+            ctx.plugins?.systemPrompt("claude"),
           ].filter(Boolean).join("\n\n")
           // Is this thread MID-TURN right now? Sampled BEFORE the bridge call on purpose: a cold resume
           // takes seconds, and by the time it returns the turn this very message started reads as
@@ -3486,7 +3486,7 @@ export function createRouter(ctx: AppContext) {
           scratchpadOrientation(row.session_id, "claude"),
           frizzConfigBlock(ctx.project.dir),
           deadlineSection(row),
-
+          ctx.plugins?.systemPrompt("claude"),
         ].filter(Boolean).join("\n\n")
         await bridge.followUp({
           threadSlug: input.slug,
