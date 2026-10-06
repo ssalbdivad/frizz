@@ -4022,6 +4022,9 @@ export const ThreadView = z.object({
   // it — `schedules` for a schedule's next run, or a Frizz plugin's id (`lazy`). A message sent to it goes to
   // that holder, and starts it when the holder is gone. Base never queues one; its holder may.
   held: z.string().optional(),
+  // What each FRIZZ PLUGIN wrote for this thread (its `threadView`), keyed by plugin id — read only by that
+  // plugin's own web half. Absent when no plugin wrote anything.
+  plugins: z.record(z.string(), z.unknown()).optional(),
   // The SCHEDULE this thread is a run of (plans/scheduled-threads.md) — what draws the repeat glyph and
   // its tooltip. `pending` marks the schedule's next run: a lazy row that sits in Snoozed with its wake
   // time until the scheduler starts it, even once that time has passed (isSnoozed). Absent on every other

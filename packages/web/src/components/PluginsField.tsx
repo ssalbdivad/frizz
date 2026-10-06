@@ -1,9 +1,10 @@
-import type { ReactElement } from "react"
-import { useQuery } from "@tanstack/react-query"
+import type { ComponentType, ReactElement } from "react"
+import { useQuery, useQueryClient } from "@tanstack/react-query"
 import type { PluginState, PluginSummary } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
-import { useWebPluginFailures } from "../plugins/loader.tsx"
+import { PluginBoundary, usePluginSlots, useWebPluginFailures } from "../plugins/loader.tsx"
+import type { SettingsSectionSlotProps } from "../plugins/api.ts"
 import { SettingsField } from "./SettingsField.tsx"
 
 // Settings → Frizz plugins: the READ-ONLY audit of the code running inside this Frizz besides its own
@@ -36,6 +37,7 @@ const HINT = "text-[11px] leading-relaxed text-muted-70"
 export function PluginsField(): ReactElement {
   const report = useQuery({ queryKey: ["plugins"], queryFn: () => rpc.plugins(), staleTime: 30_000 })
   const webFailures = useWebPluginFailures()
+  const sections = new Map(usePluginSlots("settings.section").map(({ plugin, slot }) => [plugin.id, slot]))
   const data = report.data
   return (
     <SettingsField label="Frizz plugins" help={SETTINGS_HELP.plugins}>
@@ -50,7 +52,7 @@ export function PluginsField(): ReactElement {
       ) : (
         <ul data-plugins-list className="flex flex-col gap-3">
           {data.plugins.map((plugin) => (
-            <PluginEntry key={plugin.id} plugin={plugin} webFailure={webFailures.get(plugin.id)} />
+            <PluginEntry key={plugin.id} plugin={plugin} webFailure={webFailures.get(plugin.id)} Section={plugin.settings ? sections.get(plugin.id) : undefined} />
           ))}
         </ul>
       )}
@@ -58,7 +60,11 @@ export function PluginsField(): ReactElement {
   )
 }
 
-function PluginEntry({ plugin, webFailure }: { plugin: PluginSummary; webFailure: string | undefined }): ReactElement {
+function PluginEntry({ plugin, webFailure, Section }: {
+  plugin: PluginSummary
+  webFailure: string | undefined
+  Section: ComponentType<SettingsSectionSlotProps> | undefined
+}): ReactElement {
   const failed = plugin.state === "failed" || plugin.state === "incompatible"
   return (
     <li data-plugin={plugin.id} data-plugin-state={plugin.state} className="flex flex-col gap-1 rounded-md border border-border px-3 py-2">
@@ -80,6 +86,26 @@ function PluginEntry({ plugin, webFailure }: { plugin: PluginSummary; webFailure
         <dt>Folder</dt>
         <dd className="font-mono-keep break-all">{plugin.dir}</dd>
       </dl>
+      {Section && plugin.state === "active" && <PluginSettingsSection id={plugin.id} Section={Section} />}
     </li>
+  )
+}
+
+/** The plugin's own `settings.section` slot, fed its record and a save the server validates. */
+function PluginSettingsSection({ id, Section }: { id: string; Section: ComponentType<SettingsSectionSlotProps> }): ReactElement | null {
+  const queryClient = useQueryClient()
+  const key = ["pluginSettings", id]
+  const settings = useQuery({ queryKey: key, queryFn: () => rpc.pluginSettings({ id }) })
+  if (settings.data === undefined) return null
+  const save = async (value: unknown) => {
+    await rpc.setPluginSettings({ id, value })
+    await queryClient.invalidateQueries({ queryKey: key })
+  }
+  return (
+    <div data-plugin-settings={id} className="mt-1 border-t border-border pt-2">
+      <PluginBoundary id={id} slot="settings.section">
+        <Section settings={settings.data} save={save} />
+      </PluginBoundary>
+    </div>
   )
 }

@@ -54,6 +54,8 @@ import type {
   BoardSnapshot,
   Settings,
   PluginsReport,
+  PluginSettingsInput,
+  SetPluginSettingsInput,
   DispatchInput,
   AdoptThreadInput,
   AdoptThreadResult,
@@ -502,6 +504,8 @@ export interface Api {
   projectRename(input: { id: string; name: string; renameDirectory?: boolean }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
   plugins(): Promise<PluginsReport>
+  pluginSettings(input: PluginSettingsInput): Promise<unknown>
+  setPluginSettings(input: SetPluginSettingsInput): Promise<void>
   settingsSet(input: Settings): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
   // has an input schema), and the transport posts `{}` for it.
@@ -683,6 +687,8 @@ export const PROCEDURES = {
   projectRename: "mutation",
   settingsGet: "query",
   plugins: "query",
+  pluginSettings: "query",
+  setPluginSettings: "mutation",
   settingsSet: "mutation",
   settingsReset: "mutation",
   dispatchPreferencesGet: "query",

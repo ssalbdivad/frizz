@@ -24,9 +24,12 @@
 // own `setTimeout` are OUTSIDE that guard — a throw there reaches the process's uncaughtException handler
 // and ends the control plane (dev-child.ts), so `host.every` / `host.after` are the documented path.
 import type { z } from "zod"
-import type { ThreadView } from "@frizz/shared"
+import type { DispatchInput, ThreadView } from "@frizz/shared"
 
 export type { ThreadView }
+
+/** An effort level a dispatch accepts ("auto" reads one off the prompt). */
+export type PluginEffort = NonNullable<DispatchInput["effort"]>
 
 /** The backend a dispatch starts — what `systemPrompt` is asked for. */
 export type PluginBackendKind = "claude" | "codex" | "acp"
@@ -98,7 +101,7 @@ export interface PluginThreadRow {
 export interface PluginStartProfile {
   model?: string
   backend?: PluginBackendKind
-  effort?: string
+  effort?: PluginEffort
 }
 
 /** The per-project half of the host, handed to every hook that acts on one project's threads. */
@@ -114,7 +117,7 @@ export interface ProjectHost {
      * this plugin's `onSend`. A typed `title` is the human's and is locked; otherwise one is minted from
      * `prompt`, as a dispatch would be. The profile is what it will start on.
      */
-    create(input: { prompt: string; title?: string; model?: string; backend?: PluginBackendKind; effort?: string }): { slug: string; sessionId: string }
+    create(input: { prompt: string; title?: string; model?: string; backend?: PluginBackendKind; effort?: PluginEffort }): { slug: string; sessionId: string }
     /**
      * Start a thread this plugin holds: its agent is dispatched on the row's own slug and session id, so its
      * place, pin, links and name carry over, and it is no longer held. One start at a time per thread —

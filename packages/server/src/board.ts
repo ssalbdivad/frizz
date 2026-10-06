@@ -14,6 +14,7 @@ import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
 import { isHeadlessRow, isBrokerClaudeRow, isHeldRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
+import type { ProjectPlugins } from "./plugins/project.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinoffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { deadlineViewOf, rowDeadline } from "./deadline.ts"
@@ -2699,6 +2700,9 @@ export interface BoardManagerDeps {
   // The schedule a row is a run of (schedules.ts threadRef) — the repeat glyph's data, and what parks a
   // schedule's pending next run in Snoozed. Absent ⇒ no row carries one.
   scheduleRef?: (row: SessionRow) => ThreadScheduleRef | undefined
+  // FRIZZ PLUGINS (plugins/project.ts): each running plugin's `threadView` over every thread's reading, and
+  // what each build drew, from which the plugins' `threadDone` / `rest` events are read. Absent ⇒ none.
+  plugins?: () => Pick<ProjectPlugins, "threadView" | "observe"> | undefined
 }
 
 /**
@@ -2985,11 +2989,13 @@ export function createBoard(
       )
       const schedule = row.schedule_id ? deps.scheduleRef?.(row) : undefined
       const scheduled = schedule ? { ...base, schedule } : base
+      const plugins = deps.plugins?.()
       if (isHeldRow(row)) {
-        out.push(heldThreadView(scheduled, row))
+        const held = heldThreadView(scheduled, row)
+        out.push(plugins ? plugins.threadView(held, row) : held)
         continue
       }
-      const view = scheduled
+      const view = plugins ? plugins.threadView(scheduled, row) : scheduled
       out.push(view)
       surfaceSideTurn(row, tele, view, nowMs)
     }
@@ -3057,6 +3063,7 @@ export function createBoard(
     // Each thread's terminals ride its row (withThreadTerminals) — read once per build, like the registries.
     const terminals = deps.threadTerminals?.()
     const sessionThreads = buildSessionThreads(assembledAtMs).map((t) => withThreadTerminals(t, terminals?.get(t.id), workDirOf(project)))
+    deps.plugins?.()?.observe(sessionThreads)
     // REGISTERED ROWS ONLY reach these two, and that is the point rather than an oversight. A snooze
     // is a durable column on a row a foreign session does not have, and a needs-decision notification
     // is frizz telling you a WORKER is waiting on you — a terminal session is waiting on you in the
