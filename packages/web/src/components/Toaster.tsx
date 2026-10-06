@@ -9,7 +9,8 @@ import { spaNavigate } from "../lib/router.ts"
 // Each showToast bumps the id, which re-arms the timer so a repeat message (the same failure twice
 // running, say) flashes again. Variants: `spinner` (in-flight feel), `sticky` (no auto-hide — replaced by the
 // next toast, e.g. "Starting agent…" → the started confirmation), `link` (a button that opens
-// the named thread in the side drawer) and `action` (a button that runs the raiser's own verb — Undo).
+// the named thread in the side drawer) and `actions` (up to two buttons that run the raiser's own verbs —
+// Undo, then Open).
 export function Toaster() {
   const snap = useSnapshot(store)
   const toast = snap.toast
@@ -30,7 +31,7 @@ export function Toaster() {
     setVisible(true)
     if (toast.sticky) return
     // A toast with a button holds long enough to reach it; a bare one only has to be read.
-    const t = setTimeout(() => setVisible(false), toast.duration ?? (toast.link || toast.action ? 5000 : 1600))
+    const t = setTimeout(() => setVisible(false), toast.duration ?? (toast.link || toast.actions?.length ? 5000 : 1600))
     return () => clearTimeout(t)
   }, [toast?.id])
 
@@ -67,7 +68,9 @@ export function Toaster() {
         {toast.detail ? (
           <span className="min-w-0">
             {toast.text}
-            <span className="block text-[12px] font-normal text-muted">{toast.detail}</span>
+            {/* `text-pretty`: with two verbs beside it the line wraps sooner, and a greedy wrap left a
+                schedule's "in 6d" with its "6d" alone on line three. Pretty wrapping never strands one word. */}
+            <span className="block text-pretty text-[12px] font-normal text-muted">{toast.detail}</span>
           </span>
         ) : (
           toast.text
@@ -84,19 +87,20 @@ export function Toaster() {
             {toast.link.label}
           </button>
         )}
-        {toast.action && (
+        {toast.actions?.map((action) => (
           <button
-            data-toast-action
+            key={action.label}
+            data-toast-action={action.label}
             onClick={() => {
-              toast.action!.run()
+              action.run()
               store.toast = null
             }}
             tabIndex={buttonTab}
             className={buttonClass}
           >
-            {toast.action.label}
+            {action.label}
           </button>
-        )}
+        ))}
       </div>
     </div>
   )

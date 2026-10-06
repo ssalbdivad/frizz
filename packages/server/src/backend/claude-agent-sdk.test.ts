@@ -70,7 +70,10 @@ test("Agent SDK and its Zod 4 peer are pinned behind a runtime-only membrane whi
   assert.equal(runtimeZodPackage.version, "4.4.3")
   assert.match(serverZodPackage.version ?? "", /^3\./)
   assert.notEqual(runtimeRequire.resolve("zod"), serverRequire.resolve("zod"))
-  assert.deepEqual(Object.keys(claudeRuntime), ["query"], "no Zod schema or provider union crosses the runtime membrane")
+  // Functions only: `query`, and `startup`, which starts the same CLI ahead of a request (the one-shot
+  // completer's spare, claude-oneshot.ts). Neither is a schema; what each returns is typed by declarations.
+  assert.deepEqual(Object.keys(claudeRuntime).sort(), ["query", "startup"], "no Zod schema or provider union crosses the runtime membrane")
+  for (const value of Object.values(claudeRuntime)) assert.equal(typeof value, "function", "only SDK functions cross the membrane")
   assert.deepEqual(sdkPackage.optionalDependencies, {
     "@anthropic-ai/claude-agent-sdk-linux-x64": CLAUDE_AGENT_SDK_VERSION,
     "@anthropic-ai/claude-agent-sdk-linux-arm64": CLAUDE_AGENT_SDK_VERSION,

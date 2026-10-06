@@ -21,8 +21,8 @@ import type { AppContext } from "./context.ts"
 // they are ordinary procedures of the tenant they are addressed to — `/_frizz/<project>/rpc/<name>` — and
 // every one is mirrored in packages/web/src/api/contract.ts, which rpc-contract.ts holds to these schemas.
 //
-// Two audiences. The HUMAN's (the prompt box's schedule mode, the schedule drawer, the palette) can do
-// everything. The WORKER's is the one `ownSchedule` procedure behind the `schedule` MCP tool, keyed by the
+// Two audiences. The HUMAN's (the prompt box, which reads its own words for a schedule as they are typed; the
+// schedule drawer; the palette) can do everything. The WORKER's is the one `ownSchedule` procedure behind the `schedule` MCP tool, keyed by the
 // caller's own slug like every worker procedure, and narrower by design (schedules.ts `own`): a worker
 // PROPOSES, and only a human turns a schedule on.
 
@@ -58,10 +58,11 @@ export function scheduleProcedures(ctx: AppContext) {
       handler: async ({ input }) => service().get(input.id),
     }),
 
-    // Read the schedule out of plain words (schedule-interpreter.ts). A mutation, not a query: it is a model
-    // call with a cost, never something to cache or prefetch. With `scheduleId` it is "Change when": the
-    // words are only the new WHEN, read against the stored words, rule and condition, in the schedule's
-    // own zone.
+    // Read the schedule out of plain words (schedule-interpreter.ts): whether they ask for the work to repeat,
+    // and if so, when. A mutation, not a query: it is a model call with a cost, never something to prefetch
+    // (the browser keeps its own short cache of answers, lib/scheduleModelRead.ts). With `scheduleId` it is
+    // "Change when": the words are only the new WHEN, read against the stored words, rule and condition, in
+    // the schedule's own zone.
     interpretSchedule: mutation({
       input: InterpretScheduleInput,
       output: InterpretScheduleResult,

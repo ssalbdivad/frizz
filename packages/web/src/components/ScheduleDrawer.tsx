@@ -1,7 +1,7 @@
-import { useEffect, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Loader2 } from "lucide-react"
-import type { InterpretScheduleResult, ScheduleRunView, ScheduleView, UpdateScheduleInput } from "@frizz/shared"
+import { type ScheduleRunView, type ScheduleView, type UpdateScheduleInput } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { closeDrawersById, pushDrawer, showToast, store } from "../store.ts"
 import { projectSlug } from "../lib/base-path.ts"
@@ -11,6 +11,9 @@ import { invalidateSchedules, proposedByLine, scheduleKeys, scheduleNextLabel } 
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { profileGridDisplayParts } from "../lib/profileGrid.ts"
 import { effortWord } from "../lib/mobileThread.ts"
+import { modelReadKey, useModelReader, useNewestAnswer } from "../lib/scheduleModelRead.ts"
+import { classifyEdit, createReadScheduler, type ReadScheduler } from "../lib/scheduleReadScheduler.ts"
+import { SchedulePreview, browserZone, changeWhenView } from "./SchedulePreview.tsx"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 import { Sheet } from "./ui/Sheet.tsx"
@@ -231,106 +234,189 @@ function Echo({ schedule }: { schedule: ScheduleView }) {
   )
 }
 
-/** "Change when": the human's words, re-read by the server against the rule and condition it stores, the
- *  new echo shown, and Save. Nothing is written until Save. */
+/**
+ * "Change when", LIVE (plans/schedule-live-reading.md). The field means nothing but WHEN, so it needs no schedule
+ * word to be read: every change is read by the model — at a word's end, or after the typing rests
+ * (lib/scheduleReadScheduler.ts) — against the schedule's stored words, rule and condition, in its own zone.
+ *
+ * - The preview shows the reading of the words on screen. While newer words are being read the last reading
+ *   STAYS, shimmering, and the new one replaces it in place (stale-while-revalidate); with nothing read yet the
+ *   line says it is reading.
+ * - Save is offered only on a reading of EXACTLY the words on screen. Enter saves that reading; on words not read
+ *   yet it reads them now (past the budget) and saves nothing.
+ * - A refusal — the words do not say when, a presence, too frequent, a failed read — is said, with no Save.
+ * - Nothing is written until Save; the first Esc puts the words back, the next closes the drawer.
+ */
 function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
   const queryClient = useQueryClient()
   const api = projectRpc(schedule.projectId)
+  const nowMs = useNowMs()
+  const viewerTz = browserZone()
+  const tz = schedule.tz
   const [text, setText] = useState(schedule.whenText)
-  const [reading, setReading] = useState<{ text: string; result: InterpretScheduleResult } | null>(null)
-  // A save elsewhere (another tab, a worker's move) brings new words while this one is untouched.
+  // Edited since the words were last put back: a save elsewhere (another tab, a worker's move) only replaces
+  // words the human has not touched.
+  const dirty = useRef(false)
+  const [shake, setShake] = useState(0)
   useEffect(() => {
-    if (!reading) setText(schedule.whenText)
+    if (!dirty.current) setText(schedule.whenText)
   }, [schedule.whenText])
-  const interpret = useMutation({
-    mutationFn: (words: string) => api.interpretSchedule({ text: words, scheduleId: schedule.id, tz: Intl.DateTimeFormat().resolvedOptions().timeZone }),
-    onSuccess: (result, words) => setReading({ text: words, result }),
-    onError: (error, words) => setReading({ text: words, result: { ok: false, error: (error as Error).message.slice(0, 120) } }),
+
+  const reader = useModelReader({
+    interpret: (words) => api.interpretSchedule({ text: words, scheduleId: schedule.id, tz: viewerTz }),
+    // A Change when reads against this schedule's stored rule and condition: its answers are its own.
+    keyOf: (words, at) => modelReadKey({ context: `schedule:${schedule.id}`, tz, nowMs: at, text: words }),
   })
+  const readerRef = useRef(reader)
+  readerRef.current = reader
+
+  const words = text.trim()
+  const changed = words !== schedule.whenText.trim()
+  const live = changed && words !== ""
+
+  // When to ask: the box's own policy, with every word that differs from the stored ones wanted.
+  const stored = useRef(schedule.whenText)
+  stored.current = schedule.whenText
+  const scheduler = useRef<ReadScheduler | null>(null)
+  scheduler.current ??= createReadScheduler({
+    request: (value) => readerRef.current.request(value.trim()),
+    cancel: () => readerRef.current.cancelQueued(),
+    wanted: (value) => value.trim() !== "" && value.trim() !== stored.current.trim(),
+  })
+  useEffect(() => () => scheduler.current?.dispose(), [])
+
+  const view = live ? reader.view(words) : ({ status: "none" } as const)
+  const newest = useNewestAnswer(reader, live ? words : "")
+  // Once the panel is up for this edit it stays until the edit ends (changeWhenView `shown`): never a flash.
+  const shownRef = useRef(false)
+  const preview = live
+    ? changeWhenView({ view, stale: newest && !newest.current ? newest.result : undefined, shown: shownRef.current })
+    : ({ kind: "none" } as const)
+  shownRef.current = preview.kind !== "none"
+  const shimmer = useDelayedTrue(preview.kind === "reading" || (preview.kind === "model" && !preview.fresh), SHIMMER_DELAY_MS)
+  const savable = preview.kind === "model" && preview.fresh
+
+  const restore = () => {
+    dirty.current = false
+    setText(schedule.whenText)
+    readerRef.current.cancelQueued()
+    readerRef.current.reset()
+  }
+
   const save = useMutation({
     mutationFn: (input: UpdateScheduleInput) => api.updateSchedule(input),
-    onSuccess: () => {
-      setReading(null)
+    onSuccess: (_view, input) => {
+      dirty.current = false
+      setText(input.whenText ?? schedule.whenText)
+      readerRef.current.reset()
       invalidateSchedules(queryClient)
     },
     onError: (error) => showToast(`Could not save: ${(error as Error).message.slice(0, 100)}`),
   })
-  const current = reading && reading.text === text.trim() ? reading.result : undefined
-  const changed = text.trim() !== schedule.whenText
-  const read = () => {
-    const words = text.trim()
-    if (!words || interpret.isPending) return
-    interpret.mutate(words)
-  }
+
+  /** Enter and Save: only a reading of exactly these words is saved. */
   const commit = () => {
-    if (!current?.ok) return
-    save.mutate({
-      id: schedule.id,
-      revision: schedule.revision,
-      whenText: current.whenText,
-      rrule: current.rrule,
-      dtstart: current.dtstart,
-      tz: current.tz,
-      condition: current.condition ?? null,
-    })
+    if (!live || save.isPending) return
+    if (preview.kind === "model" && preview.fresh) {
+      const r = preview.result
+      save.mutate({ id: schedule.id, revision: schedule.revision, whenText: r.whenText, rrule: r.rrule, dtstart: r.dtstart, tz: r.tz, condition: r.condition ?? null })
+      return
+    }
+    // Being read: wait for it. Anything else — not asked yet, failed, past the budget — is read now.
+    if (view.status === "reading") {
+      setShake((n) => n + 1)
+      return
+    }
+    if (view.status !== "answered") readerRef.current.request(words, { explicit: true })
   }
+
   return (
     <section className="flex flex-col gap-1.5">
       <h3 className={LABEL}>When</h3>
-      <div className="flex items-center gap-1.5">
-        <input
-          data-schedule-when
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && !e.nativeEvent.isComposing) {
-              e.preventDefault()
-              if (current?.ok) commit()
-              else read()
-            }
-            if (e.key === "Escape" && (changed || reading)) {
-              // Claimed: the first Escape puts the words back, the next closes the drawer.
-              e.preventDefault()
-              e.stopPropagation()
-              setText(schedule.whenText)
-              setReading(null)
-            }
-          }}
-          aria-label="When it runs"
-          className="min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-fg outline-none placeholder:text-muted focus:border-border-strong"
-        />
-        {changed && !current?.ok && (
-          <button type="button" data-schedule-when-read className={BUTTON} disabled={interpret.isPending || !text.trim()} onClick={read}>
-            {interpret.isPending ? "Reading…" : "Change when"}
-          </button>
-        )}
-      </div>
-      {current && (
-        <div data-schedule-when-preview className="flex flex-wrap items-start gap-x-3 gap-y-1.5 rounded-lg border border-border bg-panel-2 px-3 py-2">
-          <div className="min-w-0 flex-1">
-            {current.ok ? (
-              <>
-                <p className="text-[13px] leading-5 text-fg">{current.preview.echo}</p>
-                {current.preview.nextLine && <p className="text-[12px] leading-5 text-muted">{current.preview.nextLine}</p>}
-              </>
-            ) : (
-              <p className="text-[12px] leading-5 text-fg/85">{current.error}</p>
-            )}
-          </div>
-          {current.ok && (
-            <div className="flex shrink-0 items-center gap-1.5">
-              <button type="button" className={BUTTON} onClick={() => { setText(schedule.whenText); setReading(null) }}>
-                Cancel
-              </button>
-              <button type="button" data-schedule-when-save className={PRIMARY} disabled={save.isPending} onClick={commit}>
+      <input
+        data-schedule-when
+        value={text}
+        onChange={(e) => {
+          const value = e.target.value
+          dirty.current = true
+          const native = e.nativeEvent as InputEvent
+          scheduler.current!.changed(value, classifyEdit(text, value, e.target.selectionStart ?? value.length, native.inputType))
+          setText(value)
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+            e.preventDefault()
+            commit()
+          }
+          if (e.key === "Escape" && changed) {
+            // Claimed: the first Escape puts the words back, the next closes the drawer.
+            e.preventDefault()
+            e.stopPropagation()
+            restore()
+          }
+        }}
+        aria-label="When it runs"
+        spellCheck={false}
+        className="min-w-0 rounded-md border border-border bg-bg px-2.5 py-1.5 text-[13px] text-fg outline-none placeholder:text-muted focus:border-border-strong"
+      />
+      {live && preview.kind !== "none" && (
+        // One 20px line rhythm, no gaps: the preview's lines and a refusal are one paragraph's worth of lines.
+        <div data-schedule-when-preview={preview.kind === "model" && !preview.fresh ? "updating" : preview.kind} role="status" className="flex flex-col rounded-lg border border-border bg-panel-2 px-3 py-2">
+          {preview.kind === "model" && (
+            <SchedulePreview
+              spec={{ title: schedule.title, rrule: preview.result.rrule, dtstart: preview.result.dtstart, tz: preview.result.tz, condition: preview.result.condition ?? null }}
+              nowMs={nowMs}
+              viewerTz={viewerTz}
+              updating={!preview.fresh && shimmer}
+            />
+          )}
+          {preview.kind === "reading" && (
+            <p data-schedule-when-reading className="text-[13px] leading-5">
+              <span className={shimmer ? "shimmer-text" : "text-muted"}>Reading when it runs…</span>
+            </p>
+          )}
+          {preview.kind === "copy" && <p data-schedule-when-refusal className="text-pretty text-[12px] leading-5 text-fg/85">{preview.copy}</p>}
+          <div className="mt-2 flex items-center justify-end gap-1.5">
+            <button type="button" className={BUTTON} onMouseDown={(e) => e.preventDefault()} onClick={restore}>
+              Cancel
+            </button>
+            {preview.kind !== "copy" && (
+              <button
+                key={shake}
+                type="button"
+                data-schedule-when-save
+                className={`${PRIMARY} ${shake > 0 ? "kbd-shake" : ""}`}
+                disabled={!savable || save.isPending}
+                title={savable ? "Save (Enter)" : "Still reading"}
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={commit}
+              >
                 {save.isPending ? "Saving…" : "Save"}
               </button>
-            </div>
-          )}
+            )}
+          </div>
         </div>
       )}
     </section>
   )
+}
+
+/** A reading being replaced, or the first one being read, shimmers only after this long, so a fast answer never
+ *  flashes it. */
+const SHIMMER_DELAY_MS = 250
+
+/** True once `on` has held for `ms` — a wait long enough to be worth showing motion for. */
+function useDelayedTrue(on: boolean, ms: number): boolean {
+  const [late, setLate] = useState(false)
+  useEffect(() => {
+    if (!on) {
+      setLate(false)
+      return
+    }
+    const t = setTimeout(() => setLate(true), ms)
+    return () => clearTimeout(t)
+  }, [on, ms])
+  return on && late
 }
 
 /** The saved prompt, edited verbatim — no model ever rewrites it. A prompt change reaches the next run

@@ -5,7 +5,7 @@ import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput
 import { rpc } from "../api/rpc.ts"
 import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
-import { Composer } from "./Composer.tsx"
+import { Composer, composerExcludeRuns } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
 import { EditorLine } from "./EditorLine.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
@@ -19,8 +19,9 @@ import { MakeDefaultButton } from "./MakeDefaultButton.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { dispatchProfileGroups } from "../lib/dispatchPreferences.ts"
 import { useDispatchProfile, useDraftDispatchPick } from "../hooks/useDispatchProfile.ts"
-import { handleDialogEscape } from "../lib/selectOverlay.ts"
-import { draftKey, draftStore, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { focusedEscapeClaim, handleDialogEscape, registerEscapeClaim } from "../lib/selectOverlay.ts"
+import { draftKey, draftStore, mergeIntoDraft, useDraft, useProjectDir } from "../lib/drafts.ts"
+import { clearDispatchDraft } from "../lib/scheduleDraftState.ts"
 import type { ComposerContextItem } from "../lib/composerContext.ts"
 import { outgoingMessage } from "../lib/editorContext.ts"
 import { restoreContextItems, stagedItems, takeContextItems, useStagedContextSources, useStagedContextTokens } from "../lib/stagedContext.ts"
@@ -28,7 +29,9 @@ import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
-import { useScheduleMode } from "./ScheduleComposer.tsx"
+import { phoneLayout } from "../lib/mobile.ts"
+import { useLiveSchedule } from "./ScheduleComposer.tsx"
+import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
@@ -105,7 +108,7 @@ function PromptForm({
   const boardDir = useProjectDir()
   const projectDir = dirs ? dirs.projectDir : boardDir
   // Queue and modal are the same semantic new-thread composer.
-  const [prompt, setPrompt, clearPrompt] = useDraft(draftKey.dispatch(projectDir))
+  const [prompt, setPrompt] = useDraft(draftKey.dispatch(projectDir))
   const promptKey = draftKey.dispatch(projectDir)
   const submittedDraftRef = useRef("")
   // SELECTED CONTEXT in a new thread's prompt — a selection sent from an editor window lands here as an
@@ -123,6 +126,20 @@ function PromptForm({
   const pickState = useDraftDispatchPick(pickKey)
   const [pick, setPick] = pickState
   const submittedPickRef = useRef(pick)
+  // What was said about the draft's schedule ("not a schedule", an Undo) is part of the draft too
+  // (lib/scheduleDraftState.ts): a submit that fails puts it back with the words.
+  const scheduleKey = draftKey.dispatchSchedule(projectDir)
+  const submittedScheduleRef = useRef("")
+  /** A failed submit's words back into a still-empty box — and, in the same commit, what was said about their
+   *  schedule. Without it the strip and ↻ came back over words the human had said were not a schedule (or had
+   *  just undone), and the retry Enter created it (fix round 2026-10-06, H). */
+  const restoreSubmitted = (prompt: string) => {
+    if (draftStore.get(promptKey)) return
+    const schedule = submittedScheduleRef.current
+    draftStore.setMany({ [promptKey]: prompt, ...(schedule && !draftStore.get(scheduleKey) ? { [scheduleKey]: schedule } : {}) })
+  }
+  // A file on its way into the box: a held Enter waits for no answer while it uploads (ScheduleComposer.tsx).
+  const [uploading, setUploading] = useState(false)
   const { resolved, defaultResolved, picked, codexList, claudeList, acpList, loadError: profileLoadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
 
   // Per-provider LOCAL credential presence, polled so the submit gate has a fresh value without a
@@ -154,7 +171,7 @@ function PromptForm({
     onError: (e, input) => {
       // A submit clears before the RPC starts. Restore only into a still-empty field so retry is
       // effortless without overwriting text typed during the failed request.
-      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
+      restoreSubmitted(submittedDraftRef.current || input.prompt)
       // Its chips come back with it, or the restored token would be bare text with nothing behind it.
       restoreContextItems(promptKey, submittedContextRef.current)
       submittedContextRef.current = []
@@ -189,7 +206,7 @@ function PromptForm({
       showToast("Lazy thread added", { link: { label: "Open", slug: res.slug, project: res.project } })
     },
     onError: (e, input) => {
-      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
+      restoreSubmitted(submittedDraftRef.current || input.prompt)
       restoreContextItems(promptKey, submittedContextRef.current)
       submittedContextRef.current = []
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
@@ -198,6 +215,9 @@ function PromptForm({
   })
 
   function submitLazy() {
+    // A schedule being created from these words owns them until they leave the box: saving them lazily
+    // too would make the same words two things.
+    if (schedule.creating) return
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: CreateLazyThreadInput = {
       // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
@@ -215,9 +235,9 @@ function PromptForm({
     }
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
+    submittedScheduleRef.current = draftStore.get(scheduleKey)
     submittedContextRef.current = takeContextItems(promptKey)
-    clearPrompt()
-    setPick(undefined)
+    clearDispatchDraft(projectDir)
     saveLazy.mutate(input)
   }
 
@@ -227,45 +247,102 @@ function PromptForm({
   function runDispatch(input: DispatchInput) {
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
+    submittedScheduleRef.current = draftStore.get(scheduleKey)
     // Taken here, not in submit: a submit the sign-in gate holds keeps its draft, and so its chips.
     submittedContextRef.current = takeContextItems(promptKey)
-    clearPrompt()
-    setPick(undefined)
+    // The prompt, its pick and what was said about its schedule in ONE commit (lib/scheduleDraftState.ts):
+    // no subscriber ever renders this text with another draft's dismissal, or the reverse.
+    clearDispatchDraft(projectDir)
     setPendingDispatch(input.prompt)
     dispatch.mutate(input)
   }
 
-  // SCHEDULE MODE (plans/scheduled-threads.md §3, ScheduleComposer.tsx): the same text, read for WHEN it
-  // should run and saved as a schedule on this box's project and profile, instead of started now. The text
-  // it reads is the prompt as a lazy save would write it — the chips, never the editor block — because a
-  // schedule's prompt is sent hours or weeks later, like a lazy thread's.
-  const schedule = useScheduleMode({
-    draftKey: promptKey,
-    text: prompt.trim() ? outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim() : "",
-    prose: prompt,
+  // THE SCHEDULE IN THE WORDS (plans/schedule-live-reading.md, ScheduleComposer.tsx): there is no schedule button
+  // and no mode. A prompt with a schedule word in it is read by the model as it is typed; when the words ask for
+  // the work to repeat, a strip under the box says what will run when, the send wears ↻, and Enter creates the
+  // schedule instead of starting the thread. It reads the PROSE the box shows (what every span indexes), never
+  // the code, chips, mentions or commands in it; what it would save is the prompt as a lazy save writes it — the
+  // chips, never the editor block — because a schedule's prompt is sent hours or weeks later, like a lazy thread's.
+  const rootRef = useRef<HTMLDivElement>(null)
+  const { prose: promptProse, attachments: promptAttachments } = useMemo(() => splitComposerValue(prompt), [prompt])
+  const scheduleExclude = useMemo(() => composerExcludeRuns(promptProse, contextTokens), [promptProse, contextTokens])
+  const schedule = useLiveSchedule({
+    // What the human said about the draft's schedule ("not a schedule") is part of the draft, under its sibling
+    // key: it survives a remount and a reload, and the page box and the `c` dialog over it — one draft — agree.
+    draftKey: draftKey.dispatchSchedule(projectDir),
+    prose: promptProse,
+    exclude: scheduleExclude,
+    promptOf: (cut) => {
+      const value = joinComposerValue(cut, promptAttachments.map((a) => a.path))
+      return value.trim() ? outgoingMessage(expandedPrompt(value), stagedItems(promptKey), projectDir, false).trim() : ""
+    },
     profile: resolved
       ? { model: resolved.model, backend: resolved.backend, effort: (resolved.effort || undefined) as CreateScheduleInput["effort"] }
       : undefined,
-    blocked: savingSettings || !!parseAccountAlias(prompt),
-    onCreated: () => {
-      takeContextItems(promptKey)
-      clearPrompt()
-      setPick(undefined)
+    uploading,
+    startNow,
+    onCreated: (submittedProse) => {
+      // The draft became the schedule: the prompt, its chips and its pick leave the box in one commit. Words
+      // typed after Enter (during the mark's wash) stay; Undo puts the rest back exactly.
+      const { prose: now, attachments } = splitComposerValue(draftStore.get(promptKey))
+      const after = now === submittedProse ? "" : now.startsWith(submittedProse) ? now.slice(submittedProse.length).trimStart() : now
+      const taken = joinComposerValue(submittedProse, attachments.map((a) => a.path))
+      const items = takeContextItems(promptKey)
+      const pickRaw = draftStore.get(pickKey)
+      clearDispatchDraft(projectDir)
+      if (after.trim()) draftStore.set(promptKey, after)
       onDispatched?.()
+      return () => {
+        mergeIntoDraft(promptKey, taken)
+        restoreContextItems(promptKey, items)
+        if (pickRaw && !draftStore.get(pickKey)) draftStore.set(pickKey, pickRaw)
+      }
+    },
+    focus: () => {
+      // This box, or — once the `c` dialog that created it has closed — the page's box on the same draft.
+      requestAnimationFrame(() => {
+        const el = rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")
+          ?? document.querySelector<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')
+        if (!el) {
+          // A PHONE has no box on its page: it lives in the New thread sheet, which closed when the schedule was
+          // made. Undo opens it again, on the words it put back and their line — it changed nothing on screen
+          // until the human happened to tap New thread (fix round 2026-10-06, F3).
+          if (phoneLayout()) store.phoneNewThread = { focus: true }
+          return
+        }
+        el.focus({ preventScroll: true })
+        el.setSelectionRange(el.value.length, el.value.length)
+      })
     },
   })
 
+  // ESCAPE IN THE `c` DIALOG IS THE SCHEDULE'S FIRST. Radix closes a dialog on Escape at the document's capture
+  // phase, before the box below ever sees the key, so the box's own `onEscape` never ran there: one Escape
+  // threw the dialog away with a schedule on screen. This claim is asked first (lib/selectOverlay.ts) and takes
+  // the key only while the schedule has something to do with it (a strip to dismiss, a held Enter to cancel)
+  // AND focus is inside THIS box — the page box under the dialog shares the draft, but not the key. The next
+  // Escape closes the dialog as before. On the page itself there is no dialog and `onEscape` is the whole story.
+  const escapeScheduleRef = useRef(schedule.onEscape)
+  escapeScheduleRef.current = schedule.onEscape
+  // An open slash or mention menu in this box, or an IME composing, owns the key before the schedule does: the
+  // claim PASSES it on, so the dialog stays and the box's own handler closes the menu.
+  useEffect(() => registerEscapeClaim(focusedEscapeClaim(() => rootRef.current, (event) => {
+    if (event?.isComposing || rootRef.current?.querySelector("[data-slash-menu], [data-mention-menu]")) return "pass"
+    return escapeScheduleRef.current()
+  })), [])
+
+  // ENTER — and the send button, and ⌘↵, which is Enter here — is the one submit. The account aliases are
+  // settled first, as before; then the words decide (ScheduleComposer.tsx, lib/scheduleIntent.ts `submitStep`):
+  // a schedule in them is created, anything else starts the thread through `startNow`, and words with a
+  // schedule word the model has not answered for yet hold the send until it does.
   function submit() {
-    if (schedule.on) {
-      schedule.submit()
-      return
-    }
     if (!prompt.trim() || !resolved || savingSettings) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
     // invoke the sign-in / sign-out flow for the SELECTED backend and never become prompt text.
     const alias = parseAccountAlias(prompt)
     if (alias) {
-      clearPrompt()
+      // The text was an account action, not this thread: the pick it is about to sign in to stays.
+      clearDispatchDraft(projectDir, { keepPick: true })
       if (resolved.backend === "acp") {
         showToast("An ACP agent signs in through its own CLI — Frizz holds no account for it")
         return
@@ -278,6 +355,12 @@ function PromptForm({
       }
       return
     }
+    schedule.submit()
+  }
+
+  /** Start the thread now: what Enter has always done, and still does for words that are not a schedule. */
+  function startNow() {
+    if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     if (!resolved.modelAvailable) {
       showToast("Saved model is unavailable — choose a model before starting the thread")
       return
@@ -379,7 +462,7 @@ function PromptForm({
   }, [resolved, defaultResolved, picked, codexList, claudeList, acpList, profileLoadError, choose, chooseAcpModel, makeDefault, target])
 
   return (
-    <div className="w-full flex flex-col gap-3">
+    <div ref={rootRef} className="w-full flex flex-col gap-3">
       <Composer
         surface="newComposer"
         autoFocus={autoFocus}
@@ -387,15 +470,17 @@ function PromptForm({
         onChange={setPrompt}
         onSubmit={submit}
         onSaveLazy={submitLazy}
-        onSchedule={schedule.toggle}
-        schedule={schedule.glyph}
-        highlight={schedule.highlight}
-        onEscape={schedule.escape}
+        marks={schedule.marks}
+        onInputEvent={schedule.onInputEvent}
+        onEscape={schedule.onEscape}
+        sendGlyph={schedule.sendGlyph}
+        sendTitle={schedule.sendTitle}
+        sendPending={schedule.sendPending}
         contextTokens={contextTokens}
         contextSources={contextSources}
         header={<EditorContextBar box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
         aside={<EditorLine box={{ key: promptKey, projectDir, surface: "newComposer" }} />}
-        placeholder={schedule.on ? "What to do, and when it runs…" : "Describe the task…"}
+        placeholder="Describe the task…"
         mentionCandidates={mentions}
         fileMentions={embedFileMentions(projectDir)}
         slashSuggest={slashSuggest}
@@ -403,10 +488,24 @@ function PromptForm({
         minHeight={96}
         maxHeight={340}
         busy={dispatch.isPending || saveLazy.isPending || savingSettings}
+        onUploadingChange={setUploading}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />
-      {schedule.panel}
+      {/* THE ONE SLOT under the box: the schedule strip, or a line about the schedule (ScheduleComposer.tsx).
+          Pulled up by the column's own gap so it hangs from the box's bottom edge; its row opens from 0fr, so
+          the list below slides rather than jumping, and folds the same way. Always mounted: the live region
+          in it must exist before the line it announces. */}
+      <div
+        data-schedule-slot-wrap
+        data-open={schedule.slotOpen || undefined}
+        className={`-mt-3 grid transition-[grid-template-rows] duration-[140ms] ease-out motion-reduce:transition-none ${schedule.slotOpen ? "grid-rows-[1fr] delay-[60ms]" : "grid-rows-[0fr]"}`}
+      >
+        {/* A slot folding away is a picture of what WAS: it stays mounted for its fold with the handlers of
+            the state it was drawn in, so it is inert while it folds — no press, no focus, nothing read out. */}
+        <div className="min-h-0 overflow-hidden" inert={!schedule.slotOpen}>{schedule.slot}</div>
+        <span className="sr-only" role="status" aria-live="polite">{schedule.announcement}</span>
+      </div>
       {dispatch.isError && (
         <span className="px-0.5 text-[11px] text-danger truncate">{(dispatch.error as Error).message}</span>
       )}

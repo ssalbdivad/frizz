@@ -79,9 +79,10 @@ export interface ScheduleEchoSpec {
   condition?: string | null
 }
 
-/** The day half of `formatOccurrence`: "Mon Oct 12". */
-function formatOccurrenceDay(ms: number, tz: string): string {
-  const full = formatOccurrence(ms, tz)
+/** The day half of `formatOccurrence`: "Mon Oct 12", or "Sat Jan 2, 2027" in another year — only the
+ *  last comma segment (the time) goes. */
+function formatOccurrenceDay(ms: number, tz: string, nowMs?: number): string {
+  const full = formatOccurrence(ms, tz, nowMs)
   const comma = full.lastIndexOf(",")
   return comma > 0 ? full.slice(0, comma) : full
 }
@@ -97,26 +98,32 @@ export function scheduleEcho(
   const checked = checkSchedule({ rrule: spec.rrule, dtstart: spec.dtstart, tz: spec.tz }, nowMs, preview)
   if (!checked.ok) return checked
   const { compiled, next, perDay } = checked.value
-  return { ok: true, value: { ...echoOf(spec, compiled, next, perDay, viewerTz), compiled } }
+  return { ok: true, value: { ...echoOf(spec, compiled, next, perDay, viewerTz, nowMs), compiled } }
 }
 
-/** The echo of an already-compiled schedule (a stored one), from its next occurrences. */
+/** The echo of an already-compiled schedule (a stored one), from its next occurrences. `nowMs` puts the
+ *  year on a run that is not in this year. */
 export function echoOf(
   spec: Pick<ScheduleEchoSpec, "title" | "tz" | "condition">,
   compiled: CompiledSchedule,
   next: readonly number[],
   perDay: number | undefined,
   viewerTz?: string,
+  nowMs?: number,
 ): ScheduleEcho {
   const zone = viewerTz && viewerTz !== spec.tz ? ` ${cityOfZone(spec.tz)} time` : ""
-  const describe = `${describeSchedule(compiled)}${zone}`
+  const describe = `${describeSchedule(compiled, nowMs)}${zone}`
   const condition = spec.condition?.trim()
   const echo = [spec.title.trim(), describe, ...(condition ? [condition] : []), ...(perDay ? [`${perDay} runs a day`] : [])].join(" · ")
-  const day = perDay ? formatOccurrence : formatOccurrenceDay
+  // A date alone names a run only while no two runs share a day. `perDay` counts the 24h from the FIRST run,
+  // so "every Monday at 8am and 5pm" asked on a Monday afternoon counts one (5pm, then next Monday 8am) and
+  // read "Next: Mon Oct 5 · Mon Oct 12 · Mon Oct 12" until the times were added whenever a day repeats.
+  const days = next.map((ms) => formatOccurrenceDay(ms, spec.tz, nowMs))
+  const day = perDay || new Set(days).size < days.length ? formatOccurrence : formatOccurrenceDay
   return {
     describe,
     echo,
-    nextLine: next.length ? `Next: ${next.map((ms) => day(ms, spec.tz)).join(" · ")}` : "",
+    nextLine: next.length ? `Next: ${next.map((ms) => day(ms, spec.tz, nowMs)).join(" · ")}` : "",
     upcoming: next.map((ms) => new Date(ms).toISOString()),
     ...(perDay ? { perDay } : {}),
   }
@@ -369,6 +376,10 @@ export const CreateScheduleInput = z.object({
   model: ScheduleFields.model,
   effort: ScheduleFields.effort.optional(),
   backend: ScheduleFields.backend.optional(),
+  /** The title is the browser's provisional one (`provisionalScheduleTitle`) — the model named no task — so
+   *  the server may rename it once through the thread namer, only while nobody has touched the row since
+   *  (plans/schedule-live-reading.md). */
+  titleAuto: z.literal(true).optional(),
 }).strict()
 export type CreateScheduleInput = z.infer<typeof CreateScheduleInput>
 

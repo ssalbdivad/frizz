@@ -7,6 +7,8 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { Hono } from "hono"
+import { mountRouter } from "@frizz/rpc/server"
 import { parseScheduledRunPrompt, type BoardSnapshot, type ThreadView } from "@frizz/shared"
 import { createDispatcher } from "./dispatch.ts"
 import { createRouter } from "./router.ts"
@@ -38,7 +40,7 @@ const WEEKLY = {
   effort: "low" as const,
 }
 
-function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootGraceMs" | "startCap" | "owner">> & { nowMs?: number } = {}) {
+function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootGraceMs" | "startCap" | "owner" | "nameFor" | "log">> & { nowMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-schedules-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "schedules", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -91,6 +93,8 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
     postBootGraceMs: opts.postBootGraceMs ?? 0,
     startCap: opts.startCap ?? createStartCap(2),
     ...(opts.owner ? { owner: opts.owner } : {}),
+    ...(opts.nameFor ? { nameFor: opts.nameFor } : {}),
+    ...(opts.log ? { log: opts.log } : {}),
   })
   refOf = (row) => service.threadRef(row)
   const tailer: Tailer = {
@@ -107,6 +111,7 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
   return {
     storage, service, router: createRouter(ctx), spawned, readings,
     at: (ms: number) => { clock = ms },
+    now: () => clock,
     tick: async () => { service.evalDue(clock); await service.drain() },
     failWith: (f: (() => Error | undefined) | undefined) => { fail = f },
     signOut: () => { preflight = "signed-out" },
@@ -363,7 +368,7 @@ test("failed starts are recorded, retried never, and pause the schedule after th
   }
 })
 
-test("the human's acts on the next run: done skips it, a snooze moves it, Wake now runs it", async () => {
+test("the human's acts on the next run: done skips it, a snooze moves it, Wake now runs it", async (t) => {
   const h = harness()
   try {
     const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
@@ -378,7 +383,15 @@ test("the human's acts on the next run: done skips it, a snooze moves it, Wake n
     assert.equal(tomorrow.occurrenceAt, new Date(MON_9AM + 86_400_000).toISOString())
     // Snooze it to 2pm tomorrow = move this occurrence: nothing at 9, a start at 2.
     const twoPm = new Date(MON_9AM + 86_400_000 + 5 * 3_600_000).toISOString()
-    await h.router.setThreadSnooze.handler({ input: { slug: tomorrow.slug, sessionId: tomorrow.sessionId, until: twoPm } as never })
+    // The router refuses a snooze time in the past by the WALL clock, and this schedule runs on the harness's.
+    // Unpinned, this call compared Tue Oct 6 2pm UTC against the real date and started failing the moment the
+    // real date passed it (2026-10-06 10am New York) — so the wall clock reads the harness's for this call.
+    const wall = t.mock.method(Date, "now", h.now)
+    try {
+      await h.router.setThreadSnooze.handler({ input: { slug: tomorrow.slug, sessionId: tomorrow.sessionId, until: twoPm } as never })
+    } finally {
+      wall.mock.restore()
+    }
     got = h.service.get(view.id)
     assert.equal(got.schedule.nextRun!.moved, true)
     h.at(MON_9AM + 86_400_000 + 1000)
@@ -633,6 +646,142 @@ test("Mark as done then Undo before the next pass leaves the next run at its tim
     h.at(NEXT_MON_9AM + 1000)
     await h.tick()
     assert.equal(h.spawned.length, 1, "it runs at its occurrence")
+  } finally {
+    h.close()
+  }
+})
+
+// ---- the provisional title's rename (plans/schedule-live-reading.md, "Title compare-and-set") ------------------
+
+/** A namer whose answers the test releases by hand, recording what it was asked. */
+function heldNamer() {
+  const asked: { source: string; exceptSlug?: string }[] = []
+  const answers: { resolve: (name: string) => void; reject: (error: Error) => void }[] = []
+  const nameFor = (source: string, exceptSlug?: string) => {
+    asked.push({ source, ...(exceptSlug !== undefined ? { exceptSlug } : {}) })
+    return new Promise<string>((resolve, reject) => answers.push({ resolve, reject }))
+  }
+  return { nameFor, asked, answers }
+}
+/** Let the rename's continuation run (it is fire-and-forget off `create`). */
+const settle = () => new Promise((r) => setImmediate(r))
+
+test("titleAuto: the namer's name lands when nothing changed, and the pending run's title follows", async () => {
+  const namer = heldNamer()
+  const h = harness({ nameFor: namer.nameFor })
+  try {
+    const view = h.service.create({ ...WEEKLY, titleAuto: true })
+    assert.equal(view.title, "Triage issues", "create answers with the provisional title at once")
+    const slug = view.nextRun!.slug
+    assert.deepEqual(namer.asked, [{ source: WEEKLY.prompt, exceptSlug: slug }], "named from the prompt, not counting its own run")
+    namer.answers[0]!.resolve("Issue triage")
+    await settle()
+    const after = h.service.get(view.id).schedule
+    assert.equal(after.title, "Issue triage")
+    assert.equal(after.echo, "Issue triage · every Monday at 9am")
+    assert.equal(h.storage.getSession(slug)!.title, "Issue triage", "the pending run carries the new name")
+    assert.equal(after.nextRun!.slug, slug, "the same pending run, not a new one")
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto: a human rename before the namer answers wins", async () => {
+  const namer = heldNamer()
+  const h = harness({ nameFor: namer.nameFor })
+  try {
+    const view = h.service.create({ ...WEEKLY, titleAuto: true })
+    const renamed = h.service.update({ id: view.id, revision: view.revision, title: "Inbox sweep" })
+    namer.answers[0]!.resolve("Issue triage")
+    await settle()
+    assert.equal(h.service.get(view.id).schedule.title, "Inbox sweep")
+    assert.equal(h.service.get(view.id).schedule.revision, renamed.revision, "the namer wrote nothing")
+    assert.equal(h.storage.getSession(view.nextRun!.slug)!.title, "Inbox sweep", "the pending run follows the human")
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto: any other edit before the answer also keeps the title (compare-and-set on the revision)", async () => {
+  const namer = heldNamer()
+  const h = harness({ nameFor: namer.nameFor })
+  try {
+    const view = h.service.create({ ...WEEKLY, titleAuto: true })
+    // Same title, new rule: the title compare alone would pass; the revision does not.
+    h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am" })
+    namer.answers[0]!.resolve("Issue triage")
+    await settle()
+    assert.equal(h.service.get(view.id).schedule.title, "Triage issues")
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto: a deleted schedule, a failed namer and an unusable name all leave things as they are", async () => {
+  const namer = heldNamer()
+  const logged: string[] = []
+  const h = harness({ nameFor: namer.nameFor, log: (m) => logged.push(m) })
+  try {
+    const gone = h.service.create({ ...WEEKLY, titleAuto: true })
+    h.service.remove(gone.id)
+    namer.answers[0]!.resolve("Issue triage")
+    const failed = h.service.create({ ...WEEKLY, titleAuto: true })
+    namer.answers[1]!.reject(new Error("Claude did not answer within 60s"))
+    const long = h.service.create({ ...WEEKLY, titleAuto: true })
+    namer.answers[2]!.resolve("Triage of every new issue")
+    await settle()
+    assert.equal(h.storage.listSchedules().length, 2, "the deleted one stays deleted")
+    assert.equal(h.service.get(failed.id).schedule.title, "Triage issues")
+    assert.equal(h.service.get(long.id).schedule.title, "Triage issues")
+    assert.equal(h.service.get(long.id).schedule.revision, long.revision)
+    assert.ok(logged.some((m) => /naming schedule .* failed; it keeps "Triage issues": Claude did not answer/.test(m)), logged.join("\n"))
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto with no namer (FRIZZ_THREAD_NAMER=0) keeps the provisional title; without titleAuto the namer is never asked", async () => {
+  const off = harness()
+  const namer = heldNamer()
+  const on = harness({ nameFor: namer.nameFor })
+  try {
+    const kept = off.service.create({ ...WEEKLY, titleAuto: true })
+    await settle()
+    assert.equal(off.service.get(kept.id).schedule.title, "Triage issues")
+    assert.equal(off.service.get(kept.id).schedule.revision, kept.revision)
+    on.service.create(WEEKLY)
+    await settle()
+    assert.equal(namer.asked.length, 0, "a human-typed title is never renamed")
+  } finally {
+    off.close()
+    on.close()
+  }
+})
+
+// ---- the create over the wire ---------------------------------------------------------------------------------
+
+test("createSchedule over the wire: a provisional title is accepted, and a field the schema does not know is refused", async () => {
+  const h = harness()
+  try {
+    const app = new Hono()
+    mountRouter(app, "/_frizz/rpc", h.router)
+    const post = async (input: object) => {
+      const response = await app.request("http://localhost/_frizz/rpc/createSchedule", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(input),
+      })
+      return { status: response.status, json: await response.json() as { error?: string; result?: { id: string; title: string } } }
+    }
+    const made = await post({ ...WEEKLY, titleAuto: true })
+    assert.equal(made.status, 200)
+    assert.match(made.json.result!.id, /^sch_/)
+    assert.equal(made.json.result!.title, "Triage issues")
+    // The retired local grammar's `source` (it never reached main): the strict schema refuses it outright
+    // rather than creating a rule nothing re-read.
+    const old = await post({ ...WEEKLY, source: { kind: "local", grammar: 4 } })
+    assert.equal(old.status, 400)
+    assert.equal(h.storage.listSchedules().length, 1)
   } finally {
     h.close()
   }

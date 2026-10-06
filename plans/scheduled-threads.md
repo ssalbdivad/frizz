@@ -66,16 +66,18 @@ ends the chain. "While I'm at the keyboard" is refused honestly: Frizz has no pr
 
 ## 3. Creating and changing a schedule (rev)
 
-**The prompt box gets a schedule mode**, beside the lazy-thread button (a button and a chord). In
-schedule mode, submitting sends the text to ONE server interpreter — a one-shot model call
-(`claude-oneshot.ts`, the completer the namer uses) given the current local time and zone. It returns
-the exact schedule phrase it found in the text (a substring), the rule, the start, an optional
-condition and a two-word title. **It does not rewrite the prompt:** the saved prompt is the typed text
-with that phrase removed, verbatim. The box shows the echo ("Triage issues · every Monday at 9am · Next:
-Mon Oct 12 · Mon Oct 19 · Mon Oct 26") with Create schedule / Esc. The project and the model/effort are
-the box's own picks, snapshotted onto the schedule. When the typed text STARTS with a recurrence phrase
-("every …", "each …", "weekdays …", "daily …"), the schedule button lights as a hint; Enter still
-dispatches normally — "every time the build fails, fix it" is a dispatch, not a schedule.
+**The prompt box reads its own words for a schedule** (rev 2026-10-06, `plans/schedule-live-reading.md`). There is
+no schedule button, mode or chord. Text that holds a schedule word (`every`, `morning`, a weekday, …) goes, as it
+is typed, to ONE server interpreter: a one-shot model call (`claude-oneshot.ts`, the completer the namer uses)
+given the current local time and zone. It decides whether the words ask for the work to REPEAT. If they do, it
+returns the exact schedule phrase it found in the text (a substring), the rule, the start, an optional condition
+and a two-word title. **It does not rewrite the prompt:** the saved prompt is the typed text with that phrase
+removed, verbatim.
+
+A schedule reading shows under the box ("Every Monday at 9am · next Mon Oct 12, in 6d", "Each run: triage new
+issues") and turns the send glyph to ↻. Enter creates it, and × or Esc says it is not a schedule. "Every time the
+build fails, fix it" holds a schedule word and is read, but the model answers that it is not a schedule, so Enter
+dispatches it. The project and the model/effort are the box's own picks, snapshotted onto the schedule.
 
 **Any worker can PROPOSE a schedule** with the `schedule` MCP tool — the mid-thread "great, do this every
 Monday" case. It submits the rule it interpreted, the human's words in `when`, the prompt, a title,
@@ -86,9 +88,10 @@ recommended option after 10m). A worker may refine its own proposal (`update`), 
 schedule it may only `skip_next`, `move_next` and `pause` — the per-occurrence moves a scheduled run
 legitimately needs ("nothing to do until the release; move the next run to Thursday").
 
-**Editing** lives on the schedule (its drawer): "Change when" re-interprets plain words against the
-stored words, rule and condition, re-echoes, and Save commits; the prompt is a plain text area edited
-verbatim; Pause/Resume, Run now, Delete.
+**Editing** lives on the schedule (its drawer). "Change when" interprets plain words as they are typed,
+against the stored words, rule and condition. It re-echoes, and Save commits only a reading of exactly the
+words in the field. The prompt is a plain text area, edited verbatim. The drawer also has Pause/Resume, Run
+now and Delete.
 
 Both creation paths end in the same server validation and the same echo, built by
 `describeSchedule` + `formatOccurrence`.
@@ -191,7 +194,7 @@ Both tables join `STORAGE_TABLES` (import + purge) and the isolation test. Caps:
 
 ## 8. UI
 
-- **Prompt box schedule mode** (§3).
+- **The prompt box reads a schedule out of its words** (§3, `plans/schedule-live-reading.md`).
 - **A fourth count on the project row** — schedules, with a repeat glyph — toggling the project's
   schedules IN PLACE like Snoozed/Done/External. Row: title · short rule · right column next run
   ("in 3h") or "Paused" / "Proposed". The count takes the warning tone when a schedule was paused by
@@ -209,3 +212,78 @@ Both tables join `STORAGE_TABLES` (import + purge) and the isolation test. Caps:
 Waking a sleeping machine; a presence gate; a per-run wall-clock budget; worktree isolation by default
 (the prompt can ask for one); a worker creating schedules in another project; one-off schedules
 (`COUNT=1` is allowed, but "tomorrow at 8, do X" is better as a lazy thread snoozed until 8).
+
+## 10. Live reading
+
+**As built (2026-10-06): the model reads, and the words decide.** The prompt box reads a schedule out of its words as
+they are typed. A closed list of schedule words (`packages/shared/src/schedule-trigger.ts`) gates a model read
+(`interpretSchedule`). A schedule reading then shows under the box until Enter creates it, or × says it is not one.
+The design, as built, is `plans/schedule-live-reading.md`. Which model reads, and how well, is measured by the kept
+benchmark `scripts/schedule-extract-eval.ts`.
+
+### The local grammar it replaced (the record)
+
+From 2026-10-05 to 2026-10-06 the box read schedule phrases with no model, through a local grammar
+(`packages/shared/src/schedule-phrase.ts`, with `schedule-phrase.corpus.ts`, `schedule-phrase.test.ts` and
+`scripts/schedule-phrase-history.ts`). It offered the reading, and Tab entered a schedule mode. **It was replaced on
+the maintainer's direction, 2026-10-06:** *"there should not be a dedicated schedule this button. it should
+determine intent from the standard prompt submission … run a lightweight agent to extract a schedule from the
+text"*. **The last commit carrying it is 7e0b68b5**, with the spec it was built to
+(`git show 7e0b68b5:plans/schedule-live-reading.md`). Its conclusion:
+
+- **Coverage was ≈84% at best.** About 84% of schedules read with no model call (range ~69–89%). The grammar's own
+  author measured this on his own corpus, so it is an upper bound: real shorthand reaches the model more often.
+- **It never offered falsely on real prompts:** 0 offers over 1,296 of the maintainer's past prompts, at its first
+  version (2026-10-05) and again at its last (v4).
+- **It kept breaking.** Three break-it rounds found **12, then 8, then 11** substantive issues, most of them exact
+  readings that were silently wrong. Round 2 found seven more ways, each a new member of a class round 1 had closed
+  with a list. Round 3 found nine more classes (21 findings), most of them a word of time AWAY from the phrase: a zone
+  at the end, a bound a sentence later, a count before it. No list of the words beside a phrase reaches those. v4
+  closed round 3's majors (0 of 124 reads exact and wrong, against 114 at v3), but the class stayed open-ended.
+- What carried over: deciding whether words ask for a schedule is a reading of intent, and the model makes it. The
+  browser keeps the parts it can do exactly: the trigger gate, finding and cutting the phrase (`schedule-text.ts`),
+  and the next runs from a rule. The benchmark's positives began as the grammar corpus's exact readings, each
+  hand-checked.
+
+The two measurements below are the grammar's last, kept as they were taken. The files they name are deleted.
+
+**The agreement experiment (2026-10-05, one time; the harness is deleted).** The grammar against the real
+interpreter (`createScheduleInterpreter` over `createClaudeOneShot`, Sonnet, at the spec's clock Mon Oct 5 2026
+14:32 New York) on every text the grammar reads `exact` in the mode: 196 texts, one model run each. The
+interpreter refused 41 phrase-only texts for having no task (its own rule, `What should each run do?`); those ran
+again with `, check CI` appended. Each disagreement was classified by hand.
+
+| Outcome | Texts |
+|---|---|
+| Same RRULE and DTSTART | 151 |
+| Same next 12 runs, different text (COUNT's position, an explicit `INTERVAL=1`, `MONTHLY;INTERVAL=3` for a quarter, a past DTSTART on a rule with no interval, `BYSETPOS=2,4` for the 2nd and 4th Wednesday, `YEARLY;COUNT=1` for a date) | 29 |
+| What the text leaves open: a part the grammar marks assumed (`nightly` 9pm vs midnight, `afternoon` 2pm vs 3pm, `at 6` 6pm vs 6am, `every month` and `every other month` on the 1st vs the 5th, `every other week`'s phase) | 6 |
+| What the text leaves open: an interval's anchor (`every 4 hours` at 15:00 vs 16:00; `every other day` from tomorrow vs from this morning's passed 9am, where the probe corpus's author agreed with Sonnet and the grammar's first-run anchor is the documented choice) | 2 |
+| **Model slips** — `Friday at 3pm` read as every Friday (×2); today's remaining runs dropped (`weekdays at 9am and 5pm`, `every 2 hours on weekdays from 9 to 5`, both started tomorrow); `every two weeks on Monday at 10` anchored on this morning's passed 10am, first run Oct 19 (the corpus expected Oct 12) | 5 |
+| **Grammar bugs, fixed and pinned** — `every day this week` dropped its bound (Sonnet: no schedule); `have it done by Friday every week` dropped `by Friday` and assumed Monday (Sonnet: Fridays); `stop at 5pm today` read a time box as a one-off (Sonnet: no schedule). Each is now a cue, so in the mode the model reads it; none of the three was offered in the box | 3 |
+
+180 of 196 (92%) agree on every run; 186 agree once the parts the grammar flags as assumed are set aside. The
+phrase spans agree on 193 of 194 readings (the one: Sonnet took `runs every hour` where the grammar took `every
+hour`, in a question about a cron job). Strength: one run per text, one time of day, and a corpus written by the
+grammar's author, so an upper bound on agreement; Sonnet's run-to-run variance was not measured. Both readers also
+read mid-text dispatches as schedules in the mode (`list every Friday release from the changelog`); the box keeps
+those dark, and the mode is entered only on purpose.
+
+**The temporal residue (fix round 3, 2026-10-06; grammar v4).** A third break-it pass found nine classes of exact
+readings that were silently wrong. Most were a word of time away from the phrase: a zone at the end of the text, a
+bound a sentence later, a count before it. No list of the words beside a phrase reaches those, so an exact reading
+now passes one more gate. If any word of a closed class of time words is left in the text it would save as the task,
+the reading is a cue. It keeps its core only when those words can only narrow it (§3.1, fix round 3, of
+`git show 7e0b68b5:plans/schedule-live-reading.md`). *Measured*, v3 against v4, both scopes:
+
+| Set | Exact in v3 | Now a cue | Offers in the box | Exact offers now cue offers |
+|---|---|---|---|---|
+| Probe corpus, 133 texts | 172 | 6, 4 of them with the core | 98 → 98 | 3 |
+| Pinned cases, 297 texts | 339 | 6 | 205 → 205 | 3 |
+| 26 realistic requests | 39 | 2 | 25 → 25 | 1 |
+| History, 1,296 prompts | 4, all mid-text | 2 | 0 → 0 | 0 |
+
+- No offer went dark.
+- Every demotion in the corpora is unnecessary: a word of time that is the task's own (`… summarize overnight Sentry
+  errors`, `… what shipped this week`, `… what the agents did today`). Each costs one model read in the mode.
+- Round 3's majors: 0 of 124 reads (both scopes) are exact and wrong, against 114 in v3.

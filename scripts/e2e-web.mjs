@@ -55,6 +55,8 @@ const NEEDS_REAL_STACK = [
   "packages/web/src/components/ui/Menu.e2e.test.ts",
   "packages/web/src/components/fullscreenEscape.e2e.test.ts",
   "packages/web/src/components/fullscreenOpsInRail.e2e.test.ts",
+  // Steps the real picker through ≥3 projects with icons, which only an `adhoc-stack.mjs` serves.
+  "packages/web/src/components/projectPickerIcon.e2e.test.ts",
 ];
 
 const args = process.argv.slice(2);

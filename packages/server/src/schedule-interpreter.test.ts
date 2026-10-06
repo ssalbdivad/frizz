@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY } from "@frizz/shared"
+import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY, cutPhrase, locatePhrase } from "@frizz/shared"
 import type { ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
-import { createScheduleInterpreter, cutPhrase, interpreterSystemPrompt, locatePhrase } from "./schedule-interpreter.ts"
+import { createScheduleInterpreter, interpreterClock, interpreterSystemPrompt } from "./schedule-interpreter.ts"
 import type { ThreadScheduleRow } from "./schedule-store.ts"
 
 // The interpreter's VALIDATION around the model (schedule-interpreter.ts): the model is scripted here, so
@@ -35,9 +35,37 @@ const monday = (extra: Record<string, unknown> = {}) => JSON.stringify({
   ...extra,
 })
 
-test("the system prompt states the current local time and zone the rule is read in", () => {
-  const system = interpreterSystemPrompt(NOW, TZ)
-  assert.match(system, /Monday, October 5, 2026, 2:32pm \(2026-10-05T14:32\) in the America\/New_York time zone/)
+test("the clock and the zone ride in the user message, so the system prompt is the same for every read", async () => {
+  // A static system prompt is what lets the completer start the next read's CLI ahead of time (its options,
+  // the system prompt among them, are fixed when it starts) and lets a caching model reuse the prefix.
+  const { interpreter, requests } = scripted(monday(), monday())
+  await interpreter.interpret({ text: "every Monday at 9am triage", tz: TZ })
+  await interpreter.interpret({ text: "every Monday at 9am triage", tz: "Asia/Tokyo" })
+  assert.equal(requests[0]!.system, interpreterSystemPrompt())
+  assert.equal(requests[1]!.system, requests[0]!.system)
+  assert.doesNotMatch(requests[0]!.system, /2026-10-05T14:32|America\/New_York/)
+  assert.match(requests[0]!.prompt, /^Now: Monday, October 5, 2026, 2:32pm \(2026-10-05T14:32\) in the America\/New_York time zone\./)
+  assert.match(requests[1]!.prompt, /^Now: Tuesday, October 6, 2026, 3:32am \(2026-10-06T03:32\) in the Asia\/Tokyo time zone\./)
+  assert.match(interpreterClock(NOW, TZ), /local wall-clock time in that zone/)
+})
+
+test("the system prompt teaches intent before rules: time words alone are not a schedule", () => {
+  const system = interpreterSystemPrompt()
+  assert.ok(system.indexOf("DECIDE FIRST") < system.indexOf("rrule: one RFC 5545"), "intent comes before the rule grammar")
+  for (const kind of [/describe the past, a deadline/, /pick out what the task covers, once/, /software the task builds/, /one later time and no repetition/, /tie the repeat to an event/, /inside quotes or code/]) {
+    assert.match(system, kind)
+  }
+  // The first run is today's slot when one is still ahead: without this line both models started rules a
+  // day or a week late (scripts/schedule-extract-eval.ts, 2026-10-06).
+  assert.match(system, /Today counts: at 2:32pm on a Monday, "daily at 3pm" first runs today at 3pm/)
+})
+
+test("change when tells the model the text IS a schedule", async () => {
+  const existing = { title: "Triage", when_text: "every Monday at 9am", rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", condition: null } as unknown as ThreadScheduleRow
+  const { interpreter, requests } = scripted(JSON.stringify({ phrase: "mornings", rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-06T09:00", condition: null, title: "x" }))
+  await interpreter.interpret({ text: "mornings", tz: TZ, existing })
+  assert.match(requests[0]!.prompt, /so the TEXT is a schedule: answer no_schedule only if it names no time and no repetition/)
+  assert.match(requests[0]!.prompt, /Now: Monday, October 5, 2026/)
 })
 
 test("an accepted answer cuts the phrase out of the prompt and nothing else, and previews the rule", async () => {
@@ -61,12 +89,26 @@ test("a fenced or chatty answer still parses", async () => {
   assert.equal(r.prompt, "triage new issues")
 })
 
-test("a bad answer is retried ONCE with the reason, then the human gets the not-found copy", async () => {
+test("a bad answer is retried ONCE with the reason, then the read FAILED — never \"no schedule\" (finding D)", async () => {
+  // Since the box acts on the answer, "couldn't find a schedule" means Enter starts the thread at once, and it is
+  // cached for 10m as the model's verdict. An answer that could not be USED is no verdict on the words: it is a
+  // read that failed, which the box says ("Couldn't check for a schedule") before the next Enter starts it.
   const { interpreter, requests } = scripted("not json", "still not json")
   const r = await interpreter.interpret({ text: "every Monday at 9am triage", tz: TZ })
-  assert.deepEqual(r, { ok: false, error: SCHEDULE_NOT_FOUND_COPY })
+  assert.equal(r.ok, false)
+  assert.match(!r.ok ? r.error : "", /^Couldn't read that just now\b/)
   assert.equal(requests.length, 2)
   assert.match(requests[1]!.prompt, /Your previous answer was:\nnot json\nIt was rejected: it was not one JSON object\./)
+  // The same for each way an answer is unusable twice: cut off, no time of day, a phrase not in the words.
+  for (const [text, answer] of [
+    ["every Monday at 9am triage new issues", '{"phrase": "every Monday at 9am", "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYM'],
+    ["every Monday triage new issues", monday({ phrase: "every Monday", rrule: "FREQ=WEEKLY;BYDAY=MO" })],
+    ["every  Monday at 9am triage new issues", monday()],
+  ] as const) {
+    const twice = scripted(answer, answer)
+    const unusable = await twice.interpreter.interpret({ text, tz: TZ })
+    assert.match(!unusable.ok ? unusable.error : "", /^Couldn't read that just now\b/, text)
+  }
 })
 
 test("a rule with no time of day is sent back, and the second answer is used", async () => {
@@ -144,7 +186,7 @@ test("the preview names the schedule's zone when the viewer reads it from anothe
 test("locatePhrase and cutPhrase tidy only the seam", () => {
   assert.deepEqual(locatePhrase("Triage, every Monday at 9am.", "every monday at 9am"), { start: 8, end: 27 })
   assert.equal(locatePhrase("abc", "  "), undefined)
-  assert.equal(cutPhrase("Triage new issues, every Monday at 9am.", 19, 38), "Triage new issues.")
-  assert.equal(cutPhrase("every Monday at 9am — triage new  issues", 0, 19), "triage new  issues")
-  assert.equal(cutPhrase("Look at CI every Monday at 9am and post it", 11, 30), "Look at CI and post it")
+  assert.equal(cutPhrase("Triage new issues, every Monday at 9am.", { start: 19, end: 38 }), "Triage new issues.")
+  assert.equal(cutPhrase("every Monday at 9am — triage new  issues", { start: 0, end: 19 }), "triage new  issues")
+  assert.equal(cutPhrase("Look at CI every Monday at 9am and post it", { start: 11, end: 30 }), "Look at CI and post it")
 })

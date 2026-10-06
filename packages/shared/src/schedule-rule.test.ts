@@ -1,9 +1,11 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { scheduleEcho } from "./schedules.ts"
 import {
   checkSchedule,
   compileSchedule,
   describeSchedule,
+  describeScheduleParts,
   formatOccurrence,
   occurrencesAfter,
   occurrencesBetween,
@@ -249,4 +251,126 @@ test("a rarely-firing hourly rule stays fast", () => {
   const runs = occurrencesAfter(c, c.dtstartMs, 3)
   assert.ok(performance.now() - started < 50, "under 50ms")
   assert.deepEqual(runs.map((ms) => new Date(ms).toISOString().slice(0, 13)), ["2028-02-29T08", "2032-02-29T08", "2036-02-29T08"])
+})
+
+// ---- the echo fixes the live reading depends on (plans/schedule-live-reading.md §3.5) ----------------------
+
+const SPEC_NOW = Date.parse("2026-10-05T14:32:00-04:00") // Mon Oct 5 2026, 2:32pm New York
+
+test("§3.5.1 a dense rule counts every run of its first day, not the 60 it samples", () => {
+  const perDay = (rrule: string) => {
+    const r = checkSchedule({ rrule, dtstart: "2026-10-05T00:00", tz: NY }, SPEC_NOW)
+    assert.ok(r.ok, rrule)
+    return r.ok ? r.value.perDay : undefined
+  }
+  assert.equal(perDay("FREQ=HOURLY;BYMINUTE=0,15,30,45"), 96) // was 60
+  assert.equal(perDay("FREQ=HOURLY;BYMINUTE=0,20,40"), 72) // was 60
+  assert.equal(perDay("FREQ=HOURLY;BYMINUTE=0,30"), 48)
+  assert.equal(perDay("FREQ=HOURLY;BYMINUTE=0"), 24)
+  assert.equal(perDay("FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0"), undefined)
+  const echo = scheduleEcho({ title: "Check deploy", rrule: "FREQ=HOURLY;BYMINUTE=0,15,30,45", dtstart: "2026-10-05T14:45", tz: NY }, SPEC_NOW, NY)
+  assert.ok(echo.ok)
+  if (echo.ok) assert.equal(echo.value.echo, "Check deploy · every 15 minutes · 96 runs a day")
+})
+
+test("§3.5.2 a run in another year says its year; this year's do not", () => {
+  const jan2 = Date.parse("2027-01-02T14:00:00Z")
+  assert.equal(formatOccurrence(jan2, NY), "Sat Jan 2, 9am")
+  assert.equal(formatOccurrence(jan2, NY, SPEC_NOW), "Sat Jan 2, 2027, 9am")
+  assert.equal(formatOccurrence(Date.parse("2026-10-12T13:00:00Z"), NY, SPEC_NOW), "Mon Oct 12, 9am")
+  const echo = scheduleEcho({ title: "SSL renewals", rrule: "FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=2;BYHOUR=9;BYMINUTE=0", dtstart: "2027-01-02T09:00", tz: NY }, SPEC_NOW, NY)
+  assert.ok(echo.ok)
+  if (echo.ok) assert.equal(echo.value.nextLine, "Next: Sat Jan 2, 2027 · Sun Jan 2, 2028 · Tue Jan 2, 2029")
+  // A one-off next year says it too.
+  assert.equal(describeSchedule(compiled("FREQ=DAILY;COUNT=1;BYHOUR=9;BYMINUTE=0", "2027-01-04T09:00"), SPEC_NOW), "once, Mon Jan 4, 2027, 9am")
+  // In the zone: 11pm Dec 31 in New York is already next year in UTC, and is still this year here.
+  assert.equal(formatOccurrence(Date.parse("2027-01-01T04:00:00Z"), NY, Date.parse("2026-12-30T12:00:00Z")), "Thu Dec 31, 11pm")
+})
+
+test("the next line names each run: a day two runs share gets its times, though the rule is not 'more than once a day'", () => {
+  // Asked on Monday at 2:32pm: 5pm today, then next Monday's 8am and 5pm — one run in the first 24h, so no
+  // perDay, but two of the three dates are the same day.
+  const echo = scheduleEcho({ title: "Standup notes", rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=8,17;BYMINUTE=0", dtstart: "2026-10-05T17:00", tz: NY }, SPEC_NOW, NY)
+  assert.ok(echo.ok)
+  if (echo.ok) {
+    assert.equal(echo.value.perDay, undefined)
+    assert.equal(echo.value.nextLine, "Next: Mon Oct 5, 5pm · Mon Oct 12, 8am · Mon Oct 12, 5pm")
+  }
+  // Distinct days keep the date alone.
+  const weekly = scheduleEcho({ title: "Triage", rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", tz: NY }, SPEC_NOW, NY)
+  if (weekly.ok) assert.equal(weekly.value.nextLine, "Next: Mon Oct 12 · Mon Oct 19 · Mon Oct 26")
+})
+
+test("§3.5.3 calendar quarters read as quarters, and only when the months match the end the day counts from", () => {
+  const say = (rrule: string) => describeSchedule(compiled(rrule))
+  assert.equal(say("FREQ=YEARLY;BYMONTH=3,6,9,12;BYDAY=-1FR;BYHOUR=9;BYMINUTE=0"), "on the last Friday of every quarter at 9am")
+  assert.equal(say("FREQ=YEARLY;BYMONTH=1,4,7,10;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0"), "on the 1st of every quarter at 9am")
+  assert.equal(say("FREQ=YEARLY;BYMONTH=3,6,9,12;BYMONTHDAY=-1;BYHOUR=17;BYMINUTE=0"), "on the last day of every quarter at 5pm")
+  assert.equal(say("FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0"), "on the first weekday of every quarter at 9am")
+  assert.equal(say("FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=1MO;BYHOUR=9;BYMINUTE=0"), "on the first Monday of every quarter at 9am")
+  // The last Friday of the quarter's FIRST month is not "of every quarter": the raw rule, not a lie.
+  assert.match(say("FREQ=YEARLY;BYMONTH=1,4,7,10;BYDAY=-1FR;BYHOUR=9;BYMINUTE=0"), /^on the rule /)
+  // BYSETPOS under YEARLY picks one position in the whole year.
+  assert.match(say("FREQ=YEARLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0"), /^on the rule /)
+  // And the quarter months are what fires: the last Fridays of Dec, Mar, Jun.
+  assert.deepEqual(next("FREQ=YEARLY;BYMONTH=3,6,9,12;BYDAY=-1FR;BYHOUR=9;BYMINUTE=0", { dtstart: "2026-10-05T00:00", n: 3 }), ["2026-12-25T09:00", "2027-03-26T09:00", "2027-06-25T09:00"])
+  assert.deepEqual(next("FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0", { dtstart: "2026-10-05T00:00", n: 3 }), ["2027-01-01T09:00", "2027-04-01T09:00", "2027-07-01T09:00"])
+})
+
+test("a month filter over a daily or weekly rule reads in words, never as the raw rule (fix round 1, model-raw-rrule-echo)", () => {
+  // What the model wrote for "every Friday except in December": the panel echoed `on the rule FREQ=WEEKLY;…`.
+  const say = (rrule: string) => describeSchedule(compiled(rrule))
+  assert.equal(say("FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0"), "every Friday at 9am, except in December")
+  assert.equal(say("FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,9,10,11,12;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0"), "every weekday at 9am, except in July and August")
+  assert.equal(say("FREQ=DAILY;BYMONTH=3,4,5,6,7,8,9,10;BYHOUR=7;BYMINUTE=0"), "every day at 7am, from March to October")
+  assert.equal(say("FREQ=DAILY;BYMONTH=11,12,1,2;BYHOUR=7;BYMINUTE=0"), "every day at 7am, from November to February")
+  assert.equal(say("FREQ=WEEKLY;INTERVAL=2;BYMONTH=1,4,7;BYDAY=FR;BYHOUR=16;BYMINUTE=0"), "every other week on Friday at 4pm, in January, April and July")
+  assert.equal(say("FREQ=WEEKLY;BYMONTH=12;BYDAY=FR;BYHOUR=16;BYMINUTE=0;COUNT=3"), "every Friday at 4pm, in December, 3 times")
+  // A set the words would have to list at length stays the rule: the next runs are the confirmation.
+  assert.match(say("FREQ=WEEKLY;BYMONTH=1,3,5,7,9;BYDAY=FR;BYHOUR=9;BYMINUTE=0"), /^on the rule /)
+  // And what fires is what it says.
+  assert.deepEqual(next("FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0", { dtstart: "2026-11-20T00:00", n: 3 }), ["2026-11-20T09:00", "2026-11-27T09:00", "2027-01-01T09:00"])
+})
+
+test("§3.5.4 an even minute step from :00 reads as an interval", () => {
+  const say = (rrule: string) => describeSchedule(compiled(rrule))
+  assert.equal(say("FREQ=HOURLY;BYMINUTE=0,15,30,45"), "every 15 minutes")
+  assert.equal(say("FREQ=HOURLY;BYMINUTE=0,20,40"), "every 20 minutes")
+  assert.equal(say("FREQ=HOURLY;BYMINUTE=0,30"), "every 30 minutes")
+  assert.equal(say("FREQ=HOURLY;BYMINUTE=0,15,30,45;BYDAY=MO,TU,WE,TH,FR"), "every 15 minutes on weekdays")
+  // Not an even step that fills the hour, or not from :00: the marks.
+  assert.equal(say("FREQ=HOURLY;BYMINUTE=0,15"), "every hour at :00, :15")
+  assert.equal(say("FREQ=HOURLY;BYMINUTE=15,45"), "every hour at :15, :45")
+  // A window keeps its hours.
+  assert.equal(say("FREQ=HOURLY;BYHOUR=9,10,11;BYMINUTE=0,30"), "every hour at :00, :30 from 9am to 11:30am")
+})
+
+test("describeScheduleParts joins to describeSchedule, and types each part", () => {
+  const rules = [
+    "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+    "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=16;BYMINUTE=0",
+    "FREQ=DAILY;BYHOUR=9,17;BYMINUTE=0",
+    "FREQ=DAILY;INTERVAL=3",
+    "FREQ=MONTHLY;BYMONTHDAY=1,15",
+    "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=10;BYMINUTE=0",
+    "FREQ=HOURLY;INTERVAL=2;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,11,13,15,17;BYMINUTE=0",
+    "FREQ=HOURLY;BYMINUTE=0,15,30,45",
+    "FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=2;BYHOUR=9;BYMINUTE=0",
+    "FREQ=WEEKLY;COUNT=4;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+    "FREQ=DAILY;UNTIL=20261030;BYHOUR=9;BYMINUTE=0",
+    "FREQ=DAILY;COUNT=1;BYHOUR=8;BYMINUTE=0",
+    "FREQ=YEARLY;BYDAY=20MO",
+  ]
+  for (const rrule of rules) {
+    const c = compiled(rrule)
+    assert.equal(describeScheduleParts(c).map((p) => p.text).join(""), describeSchedule(c), rrule)
+  }
+  const kinds = (rrule: string, dtstart?: string) => describeScheduleParts(compiled(rrule, dtstart)).map((p) => `${p.kind}:${p.text}`)
+  assert.deepEqual(kinds("FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0"), ["lead:every ", "days:Monday", "lead: at ", "time:9am"])
+  assert.deepEqual(kinds("FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=16;BYMINUTE=0"), ["interval:every other week", "lead: on ", "days:Friday", "lead: at ", "time:4pm"])
+  assert.deepEqual(kinds("FREQ=DAILY;BYHOUR=9,17;BYMINUTE=0"), ["interval:every day", "lead: at ", "time:9am", "lead: and ", "time:5pm"])
+  assert.deepEqual(kinds("FREQ=MONTHLY;BYMONTHDAY=1,15;BYHOUR=9;BYMINUTE=0"), ["lead:on ", "days:the 1st and 15th", "lead: of ", "interval:every month", "lead: at ", "time:9am"])
+  assert.deepEqual(kinds("FREQ=WEEKLY;COUNT=4;BYDAY=MO;BYHOUR=9;BYMINUTE=0"), ["lead:every ", "days:Monday", "lead: at ", "time:9am", "lead:, ", "bound:4 times"])
+  assert.deepEqual(kinds("FREQ=DAILY;COUNT=1;BYHOUR=8;BYMINUTE=0", "2026-10-06T08:00"), ["lead:once, ", "days:Tue Oct 6", "lead:, ", "time:8am"])
+  assert.deepEqual(kinds("FREQ=YEARLY;BYDAY=20MO"), ["lead:on the rule FREQ=YEARLY;BYDAY=20MO"])
 })

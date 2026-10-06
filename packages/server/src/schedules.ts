@@ -115,6 +115,10 @@ export interface ScheduleServiceDeps {
   postBootGraceMs?: number
   startCap?: StartCap
   log?: (message: string) => void
+  /** The THREAD NAMER's `name` (thread-names.ts): one or two words for `source` from the model, held to
+   *  the project's open-thread names other than `exceptSlug`. What renames a `titleAuto` create. Absent
+   *  (FRIZZ_THREAD_NAMER=0, or no model) ⇒ such a schedule keeps its provisional title. */
+  nameFor?: (source: string, exceptSlug?: string) => Promise<string>
 }
 
 export interface ScheduleService {
@@ -827,6 +831,46 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     return storage.getSchedule(row.id)!
   }
 
+  // ---- the provisional title's rename (plans/schedule-live-reading.md) --------------------------------------
+  //
+  // A schedule made in the prompt box from a reading the model gave no title arrives titled by
+  // `provisionalScheduleTitle` (the cut prompt's verb and head noun, "Triage issues") with `titleAuto: true`.
+  // Once it exists, the thread namer names it the way it names a dispatch — same completer (Haiku), same
+  // `namingRequest`, same uniqueness against the project's open threads — and the name is written through
+  // `applyUpdate`, so the pending next run's title follows exactly as it does for a human rename.
+  //
+  // COMPARE-AND-SET, so a human always wins: the write happens only if the row's `revision` AND `title`
+  // are what `create` left. Anything that touched the row while the model answered (a rename, a rule edit,
+  // a pause, even a scheduler pass) means the provisional title stands. The check and the write are one
+  // synchronous span (applyUpdate runs no awaits), so nothing can land between them in this process.
+  // A namer failure is logged and costs nothing: the provisional title already satisfies threadNameProblem.
+
+  function autoTitle(created: ThreadScheduleRow): void {
+    const nameFor = deps.nameFor
+    if (!nameFor) return
+    void (async () => {
+      let name: string
+      try {
+        name = (await nameFor(created.prompt, created.next_slug ?? undefined)).trim()
+      } catch (error) {
+        log(`naming schedule ${created.id} failed; it keeps "${created.title}": ${error instanceof Error ? error.message : String(error)}`)
+        return
+      }
+      try {
+        const sch = storage.getSchedule(created.id)
+        if (!sch) return
+        if (sch.revision !== created.revision || sch.title !== created.title) {
+          log(`schedule ${created.id} changed before its name arrived; it keeps "${sch.title}" over "${name}"`)
+          return
+        }
+        if (!name || name === sch.title || titleProblem(name)) return
+        applyUpdate(sch.id, { title: name }, sch.revision)
+      } catch (error) {
+        log(`renaming schedule ${created.id} failed: ${error instanceof Error ? error.message : String(error)}`)
+      }
+    })()
+  }
+
   /** Apply edited fields; re-point the pending next run at the result (§6 "Edits"). */
   function applyUpdate(id: string, patch: Partial<Spec>, expectedRevision?: number): ThreadScheduleRow {
     const nowMs = now()
@@ -1004,6 +1048,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
         tz: input.tz ?? viewerZone(), condition: input.condition ?? null, model: input.model,
         effort: input.effort ?? null, backend: input.backend ?? "claude",
       }, "active", createdBy)
+      if (input.titleAuto) autoTitle(sch)
       return view(sch)
     },
     update(input) {

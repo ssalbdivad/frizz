@@ -63,13 +63,28 @@ export class DraftStore {
   getSnapshot = (): DraftSnapshot => this.snapshot
   subscribe = (listener: Listener) => { this.listeners.add(listener); return () => this.listeners.delete(listener) }
   get(key: string): string { return this.snapshot.entries[key]?.value ?? "" }
-  set(key: string, value: string): void {
+  set(key: string, value: string): void { this.setMany({ [key]: value }) }
+  // Several values in ONE commit and so ONE notify ("" deletes, as `set` does): a draft that moves keys with
+  // its siblings (lib/stagedContext.ts carryDraft) lands whole, never as text without what was said about it.
+  setMany(values: Readonly<Record<string, string>>): void {
     const entries = { ...this.snapshot.entries }
-    if (!value) delete entries[key]
-    else entries[key] = { value, touchedAt: Date.now() }
+    const now = Date.now()
+    for (const [key, value] of Object.entries(values)) {
+      if (!value) delete entries[key]
+      else entries[key] = { value, touchedAt: now }
+    }
     this.commit({ version: DRAFT_SCHEMA_VERSION, entries })
   }
-  clear(key: string): void { if (this.snapshot.entries[key]) this.commit({ version: DRAFT_SCHEMA_VERSION, entries: Object.fromEntries(Object.entries(this.snapshot.entries).filter(([candidate]) => candidate !== key)) }) }
+  clear(key: string): void { this.clearMany([key]) }
+  // Several keys in ONE commit and so ONE notify. A draft that spans keys (a new thread's prompt, its
+  // profile pick and its schedule dismissal, lib/scheduleDraftState.ts) must never be observed
+  // half-cleared: a subscriber rendering between two single-key clears saw one draft's text with
+  // another's state.
+  clearMany(keys: readonly string[]): void {
+    if (!keys.some((key) => this.snapshot.entries[key])) return
+    const drop = new Set(keys)
+    this.commit({ version: DRAFT_SCHEMA_VERSION, entries: Object.fromEntries(Object.entries(this.snapshot.entries).filter(([candidate]) => !drop.has(candidate))) })
+  }
   private commit(next: DraftSnapshot): void {
     this.snapshot = next
     // A too-large value remains in this tab's memory and subscribers see it immediately. `bounded`
@@ -104,6 +119,11 @@ export const draftKey = {
   // The profile picked for that same prompt (useDraftDispatchPick): `{backend, model, effort}` as JSON,
   // one small non-secret record, kept and cleared with the prompt it belongs to.
   dispatchProfile: (projectDir: string | undefined) => `dispatch-profile:${projectDraftScope(projectDir)}:new`,
+  // What the human said about that same prompt's SCHEDULE (lib/scheduleDraftState.ts): `{v, dismissed,
+  // undone}` as JSON — "not a schedule", or an Undo — so what Enter does with the draft lives and dies with
+  // the draft: across a remount and a same-tab reload, and cleared in the same commit as the prompt
+  // (clearDispatchDraft). Absent means nothing dismissed.
+  dispatchSchedule: (projectDir: string | undefined) => `dispatch-schedule:${projectDraftScope(projectDir)}:new`,
   // A thread's "Spinoff" dialog (SpinoffDialog) — the instructions for the new thread, one per thread.
   spinoff: (projectDir: string | undefined, slug: string) => `spinoff:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // A finished terminal's next line (TerminalFollowUp) — one per terminal.

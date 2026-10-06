@@ -1,0 +1,4463 @@
+{
+ "about": "scripts/schedule-extract-eval.ts reads this. Every positive is graded on its next 5 runs after `now` in its zone (`tz`, else the file's). `rule`/`dtstart` are the expectation the runs were computed from, re-checked on every load; `alt` lists other defensible readings (with why). Hand-checked 2026-10-06.",
+ "now": "2026-10-05T14:32:00-04:00",
+ "tz": "America/New_York",
+ "existing": {
+  "title": "Issue triage",
+  "when_text": "every Monday at 9am",
+  "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+  "dtstart": "2026-10-12T09:00",
+  "condition": null
+ },
+ "positives": [
+  {
+   "id": "p001",
+   "text": "weekdays at 8:30 summarize PRs",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=30",
+   "dtstart": "2026-10-06T08:30",
+   "runs": [
+    "2026-10-06T08:30",
+    "2026-10-07T08:30",
+    "2026-10-08T08:30",
+    "2026-10-09T08:30",
+    "2026-10-12T08:30"
+   ],
+   "phrase": "weekdays at 8:30",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p002",
+   "text": "daily at 6pm check CI",
+   "rule": "FREQ=DAILY;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T18:00",
+    "2026-10-07T18:00",
+    "2026-10-08T18:00",
+    "2026-10-09T18:00"
+   ],
+   "phrase": "daily at 6pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p003",
+   "text": "triage new issues every Monday at 9am",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p004",
+   "text": "Every weekday at 9, post a standup summary of yesterday's merged PRs in #eng",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "Every weekday at 9",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p005",
+   "text": "every day at 7am check that the nightly build passed",
+   "rule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
+   "dtstart": "2026-10-06T07:00",
+   "runs": [
+    "2026-10-06T07:00",
+    "2026-10-07T07:00",
+    "2026-10-08T07:00",
+    "2026-10-09T07:00",
+    "2026-10-10T07:00"
+   ],
+   "phrase": "every day at 7am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p006",
+   "text": "On Mondays and Thursdays at 10am, review open dependabot PRs",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-08T10:00",
+   "runs": [
+    "2026-10-08T10:00",
+    "2026-10-12T10:00",
+    "2026-10-15T10:00",
+    "2026-10-19T10:00",
+    "2026-10-22T10:00"
+   ],
+   "phrase": "On Mondays and Thursdays at 10am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p007",
+   "text": "every Sunday night clean up stale branches",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=21;BYMINUTE=0",
+   "dtstart": "2026-10-11T21:00",
+   "runs": [
+    "2026-10-11T21:00",
+    "2026-10-18T21:00",
+    "2026-10-25T21:00",
+    "2026-11-01T21:00",
+    "2026-11-08T21:00"
+   ],
+   "phrase": "every Sunday night",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p008",
+   "text": "weekends at noon check the uptime dashboard",
+   "rule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-10T12:00",
+   "runs": [
+    "2026-10-10T12:00",
+    "2026-10-11T12:00",
+    "2026-10-17T12:00",
+    "2026-10-18T12:00",
+    "2026-10-24T12:00"
+   ],
+   "phrase": "weekends at noon",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p009",
+   "text": "every Tuesday check for flaky tests",
+   "rule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-13T09:00",
+    "2026-10-20T09:00",
+    "2026-10-27T09:00",
+    "2026-11-03T09:00"
+   ],
+   "phrase": "every Tuesday",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p010",
+   "text": "daily: run the e2e suite against staging",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "daily",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p011",
+   "text": "run the e2e suite against staging nightly",
+   "rule": "FREQ=DAILY;BYHOUR=21;BYMINUTE=0",
+   "dtstart": "2026-10-05T21:00",
+   "runs": [
+    "2026-10-05T21:00",
+    "2026-10-06T21:00",
+    "2026-10-07T21:00",
+    "2026-10-08T21:00",
+    "2026-10-09T21:00"
+   ],
+   "phrase": "nightly",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p012",
+   "text": "Every weekday morning, check if any PRs are waiting on my review",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "Every weekday morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p013",
+   "text": "Mondays 9am: update the roadmap doc from Linear",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "Mondays 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p014",
+   "text": "every wednesday at 2:30pm run the load test and post results",
+   "rule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=14;BYMINUTE=30",
+   "dtstart": "2026-10-07T14:30",
+   "runs": [
+    "2026-10-07T14:30",
+    "2026-10-14T14:30",
+    "2026-10-21T14:30",
+    "2026-10-28T14:30",
+    "2026-11-04T14:30"
+   ],
+   "phrase": "every wednesday at 2:30pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p015",
+   "text": "each Friday afternoon draft the weekly changelog",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-09T14:00",
+   "runs": [
+    "2026-10-09T14:00",
+    "2026-10-16T14:00",
+    "2026-10-23T14:00",
+    "2026-10-30T14:00",
+    "2026-11-06T14:00"
+   ],
+   "phrase": "each Friday afternoon",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p016",
+   "text": "every day at 17:00 check the error budget",
+   "rule": "FREQ=DAILY;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-05T17:00",
+   "runs": [
+    "2026-10-05T17:00",
+    "2026-10-06T17:00",
+    "2026-10-07T17:00",
+    "2026-10-08T17:00",
+    "2026-10-09T17:00"
+   ],
+   "phrase": "every day at 17:00",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p017",
+   "text": "Check for new CVEs in our dependencies every morning at 8.",
+   "rule": "FREQ=DAILY;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-06T08:00",
+   "runs": [
+    "2026-10-06T08:00",
+    "2026-10-07T08:00",
+    "2026-10-08T08:00",
+    "2026-10-09T08:00",
+    "2026-10-10T08:00"
+   ],
+   "phrase": "every morning at 8",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p018",
+   "text": "at 9am every weekday, triage the support inbox",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "at 9am every weekday",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p019",
+   "text": "every Mon, Wed and Fri at 10 run the smoke tests",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-07T10:00",
+   "runs": [
+    "2026-10-07T10:00",
+    "2026-10-09T10:00",
+    "2026-10-12T10:00",
+    "2026-10-14T10:00",
+    "2026-10-16T10:00"
+   ],
+   "phrase": "every Mon, Wed and Fri at 10",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p020",
+   "text": "Every Thursday at 3 remind me to prep for the planning meeting",
+   "rule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-08T15:00",
+   "runs": [
+    "2026-10-08T15:00",
+    "2026-10-15T15:00",
+    "2026-10-22T15:00",
+    "2026-10-29T15:00",
+    "2026-11-05T15:00"
+   ],
+   "phrase": "Every Thursday at 3",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p021",
+   "text": "weekdays at 9am and 5pm sync the issue tracker",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,17;BYMINUTE=0",
+   "dtstart": "2026-10-05T17:00",
+   "runs": [
+    "2026-10-05T17:00",
+    "2026-10-06T09:00",
+    "2026-10-06T17:00",
+    "2026-10-07T09:00",
+    "2026-10-07T17:00"
+   ],
+   "phrase": "weekdays at 9am and 5pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p022",
+   "text": "every saturday morning run a full dependency audit",
+   "rule": "FREQ=WEEKLY;BYDAY=SA;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-10T09:00",
+   "runs": [
+    "2026-10-10T09:00",
+    "2026-10-17T09:00",
+    "2026-10-24T09:00",
+    "2026-10-31T09:00",
+    "2026-11-07T09:00"
+   ],
+   "phrase": "every saturday morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p023",
+   "text": "hourly, check whether the deploy queue is stuck",
+   "rule": "FREQ=HOURLY;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T16:00",
+    "2026-10-05T17:00",
+    "2026-10-05T18:00",
+    "2026-10-05T19:00"
+   ],
+   "phrase": "hourly",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p024",
+   "text": "every hour check the status page",
+   "rule": "FREQ=HOURLY;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T16:00",
+    "2026-10-05T17:00",
+    "2026-10-05T18:00",
+    "2026-10-05T19:00"
+   ],
+   "phrase": "every hour",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p025",
+   "text": "every day at midnight rotate the logs",
+   "rule": "FREQ=DAILY;BYHOUR=0;BYMINUTE=0",
+   "dtstart": "2026-10-06T00:00",
+   "runs": [
+    "2026-10-06T00:00",
+    "2026-10-07T00:00",
+    "2026-10-08T00:00",
+    "2026-10-09T00:00",
+    "2026-10-10T00:00"
+   ],
+   "phrase": "every day at midnight",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p026",
+   "text": "every weekday at 8:45am summarize new Slack threads in #incidents",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=45",
+   "dtstart": "2026-10-06T08:45",
+   "runs": [
+    "2026-10-06T08:45",
+    "2026-10-07T08:45",
+    "2026-10-08T08:45",
+    "2026-10-09T08:45",
+    "2026-10-12T08:45"
+   ],
+   "phrase": "every weekday at 8:45am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p027",
+   "text": "every Friday at 5pm close stale issues",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-09T17:00",
+   "runs": [
+    "2026-10-09T17:00",
+    "2026-10-16T17:00",
+    "2026-10-23T17:00",
+    "2026-10-30T17:00",
+    "2026-11-06T17:00"
+   ],
+   "phrase": "every Friday at 5pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p028",
+   "text": "Each morning, give me a summary of new GitHub notifications",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "Each morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p029",
+   "text": "every Monday morning plan the week from the open issues",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p030",
+   "text": "daily at 9:15 post the CI flake report",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=15",
+   "dtstart": "2026-10-06T09:15",
+   "runs": [
+    "2026-10-06T09:15",
+    "2026-10-07T09:15",
+    "2026-10-08T09:15",
+    "2026-10-09T09:15",
+    "2026-10-10T09:15"
+   ],
+   "phrase": "daily at 9:15",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p031",
+   "text": "Tuesdays at 11am review the on-call handoff notes",
+   "rule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=11;BYMINUTE=0",
+   "dtstart": "2026-10-06T11:00",
+   "runs": [
+    "2026-10-06T11:00",
+    "2026-10-13T11:00",
+    "2026-10-20T11:00",
+    "2026-10-27T11:00",
+    "2026-11-03T11:00"
+   ],
+   "phrase": "Tuesdays at 11am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p032",
+   "text": "every night at 11pm back up the database",
+   "rule": "FREQ=DAILY;BYHOUR=23;BYMINUTE=0",
+   "dtstart": "2026-10-05T23:00",
+   "runs": [
+    "2026-10-05T23:00",
+    "2026-10-06T23:00",
+    "2026-10-07T23:00",
+    "2026-10-08T23:00",
+    "2026-10-09T23:00"
+   ],
+   "phrase": "every night at 11pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p033",
+   "text": "Every weekday at noon check that staging matches main",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-06T12:00",
+   "runs": [
+    "2026-10-06T12:00",
+    "2026-10-07T12:00",
+    "2026-10-08T12:00",
+    "2026-10-09T12:00",
+    "2026-10-12T12:00"
+   ],
+   "phrase": "Every weekday at noon",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p034",
+   "text": "every Sunday at 8pm prepare Monday's standup notes",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=20;BYMINUTE=0",
+   "dtstart": "2026-10-11T20:00",
+   "runs": [
+    "2026-10-11T20:00",
+    "2026-10-18T20:00",
+    "2026-10-25T20:00",
+    "2026-11-01T20:00",
+    "2026-11-08T20:00"
+   ],
+   "phrase": "every Sunday at 8pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p035",
+   "text": "every day at 10am and 4pm check for new support tickets",
+   "rule": "FREQ=DAILY;BYHOUR=10,16;BYMINUTE=0",
+   "dtstart": "2026-10-05T16:00",
+   "runs": [
+    "2026-10-05T16:00",
+    "2026-10-06T10:00",
+    "2026-10-06T16:00",
+    "2026-10-07T10:00",
+    "2026-10-07T16:00"
+   ],
+   "phrase": "every day at 10am and 4pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p036",
+   "text": "every weekend morning summarize the week's incidents",
+   "rule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-10T09:00",
+   "runs": [
+    "2026-10-10T09:00",
+    "2026-10-11T09:00",
+    "2026-10-17T09:00",
+    "2026-10-18T09:00",
+    "2026-10-24T09:00"
+   ],
+   "phrase": "every weekend morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p037",
+   "text": "on weekdays at 7:30 check the overnight batch jobs",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=7;BYMINUTE=30",
+   "dtstart": "2026-10-06T07:30",
+   "runs": [
+    "2026-10-06T07:30",
+    "2026-10-07T07:30",
+    "2026-10-08T07:30",
+    "2026-10-09T07:30",
+    "2026-10-12T07:30"
+   ],
+   "phrase": "on weekdays at 7:30",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p038",
+   "text": "every Wed at 1pm refresh the analytics dashboard",
+   "rule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=13;BYMINUTE=0",
+   "dtstart": "2026-10-07T13:00",
+   "runs": [
+    "2026-10-07T13:00",
+    "2026-10-14T13:00",
+    "2026-10-21T13:00",
+    "2026-10-28T13:00",
+    "2026-11-04T13:00"
+   ],
+   "phrase": "every Wed at 1pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p039",
+   "text": "Every day, pull the latest translations and open a PR",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "Every day",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p040",
+   "text": "each weekday at 9 check the release checklist",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "each weekday at 9",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p041",
+   "text": "every other Friday at 4 write the changelog",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-09T16:00",
+   "runs": [
+    "2026-10-09T16:00",
+    "2026-10-23T16:00",
+    "2026-11-06T16:00",
+    "2026-11-20T16:00",
+    "2026-12-04T16:00"
+   ],
+   "phrase": "every other Friday at 4",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p042",
+   "text": "first weekday of the month at 10 bump deps",
+   "rule": "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-11-02T10:00",
+   "runs": [
+    "2026-11-02T10:00",
+    "2026-12-01T10:00",
+    "2027-01-01T10:00",
+    "2027-02-01T10:00",
+    "2027-03-01T10:00"
+   ],
+   "phrase": "first weekday of the month at 10",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p043",
+   "text": "every 2 hours on weekdays from 9 to 5 check CI",
+   "rule": "FREQ=HOURLY;INTERVAL=2;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,11,13,15,17;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T17:00",
+    "2026-10-06T09:00",
+    "2026-10-06T11:00",
+    "2026-10-06T13:00"
+   ],
+   "phrase": "every 2 hours on weekdays from 9 to 5",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p044",
+   "text": "on the 1st and 15th review billing",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1,15;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-15T09:00",
+   "runs": [
+    "2026-10-15T09:00",
+    "2026-11-01T09:00",
+    "2026-11-15T09:00",
+    "2026-12-01T09:00",
+    "2026-12-15T09:00"
+   ],
+   "phrase": "on the 1st and 15th",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p045",
+   "text": "every 3 days at 9am rebase the long-lived feature branch",
+   "rule": "FREQ=DAILY;INTERVAL=3;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00",
+    "2026-10-15T09:00",
+    "2026-10-18T09:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=DAILY;INTERVAL=3;BYHOUR=9;BYMINUTE=0",
+     "dtstart": "2026-10-08T09:00",
+     "runs": [
+      "2026-10-08T09:00",
+      "2026-10-11T09:00",
+      "2026-10-14T09:00",
+      "2026-10-17T09:00",
+      "2026-10-20T09:00"
+     ],
+     "why": "Today's slot has passed; anchoring the interval on today instead of the next run is the other defensible phase."
+    }
+   ],
+   "phrase": "every 3 days at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p046",
+   "text": "every two weeks on Monday at 10 groom the backlog",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-12T10:00",
+   "runs": [
+    "2026-10-12T10:00",
+    "2026-10-26T10:00",
+    "2026-11-09T10:00",
+    "2026-11-23T10:00",
+    "2026-12-07T10:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=10;BYMINUTE=0",
+     "dtstart": "2026-10-19T10:00",
+     "runs": [
+      "2026-10-19T10:00",
+      "2026-11-02T10:00",
+      "2026-11-16T10:00",
+      "2026-11-30T10:00",
+      "2026-12-14T10:00"
+     ],
+     "why": "Today's slot has passed; anchoring the interval on today instead of the next run is the other defensible phase."
+    }
+   ],
+   "phrase": "every two weeks on Monday at 10",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p047",
+   "text": "on the last day of every month at 5pm write the monthly report",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=-1;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-31T17:00",
+   "runs": [
+    "2026-10-31T17:00",
+    "2026-11-30T17:00",
+    "2026-12-31T17:00",
+    "2027-01-31T17:00",
+    "2027-02-28T17:00"
+   ],
+   "phrase": "on the last day of every month at 5pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p048",
+   "text": "the first Monday of every month at 9am, review the quarterly OKRs",
+   "rule": "FREQ=MONTHLY;BYDAY=1MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-02T09:00",
+   "runs": [
+    "2026-11-02T09:00",
+    "2026-12-07T09:00",
+    "2027-01-04T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ],
+   "phrase": "the first Monday of every month at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p049",
+   "text": "every 15 minutes check if the deploy finished",
+   "rule": "FREQ=HOURLY;BYMINUTE=0,15,30,45",
+   "dtstart": "2026-10-05T14:45",
+   "runs": [
+    "2026-10-05T14:45",
+    "2026-10-05T15:00",
+    "2026-10-05T15:15",
+    "2026-10-05T15:30",
+    "2026-10-05T15:45"
+   ],
+   "phrase": "every 15 minutes",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p050",
+   "text": "every 4 hours check the queue depth",
+   "rule": "FREQ=HOURLY;INTERVAL=4;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T19:00",
+    "2026-10-05T23:00",
+    "2026-10-06T03:00",
+    "2026-10-06T07:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=4;BYMINUTE=0",
+     "dtstart": "2026-10-05T16:00",
+     "runs": [
+      "2026-10-05T16:00",
+      "2026-10-05T20:00",
+      "2026-10-06T00:00",
+      "2026-10-06T04:00",
+      "2026-10-06T08:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    },
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=4;BYMINUTE=0",
+     "dtstart": "2026-10-05T17:00",
+     "runs": [
+      "2026-10-05T17:00",
+      "2026-10-05T21:00",
+      "2026-10-06T01:00",
+      "2026-10-06T05:00",
+      "2026-10-06T09:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    }
+   ],
+   "phrase": "every 4 hours",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p051",
+   "text": "weekly on Fridays at 3pm post the metrics digest",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-09T15:00",
+   "runs": [
+    "2026-10-09T15:00",
+    "2026-10-16T15:00",
+    "2026-10-23T15:00",
+    "2026-10-30T15:00",
+    "2026-11-06T15:00"
+   ],
+   "phrase": "weekly on Fridays at 3pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p052",
+   "text": "every Monday at 9am for the next 4 weeks, check the migration dashboards",
+   "rule": "FREQ=WEEKLY;COUNT=4;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00"
+   ],
+   "phrase": "every Monday at 9am for the next 4 weeks",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p053",
+   "text": "daily at 9am until Oct 30 check the beta signup numbers",
+   "rule": "FREQ=DAILY;UNTIL=20261030;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "daily at 9am until Oct 30",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p054",
+   "text": "starting next Monday, every weekday at 9 triage the support queue",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-13T09:00",
+    "2026-10-14T09:00",
+    "2026-10-15T09:00",
+    "2026-10-16T09:00"
+   ],
+   "phrase": "starting next Monday, every weekday at 9",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p055",
+   "text": "on the 15th of every month check the billing reconciliation job",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-15T09:00",
+   "runs": [
+    "2026-10-15T09:00",
+    "2026-11-15T09:00",
+    "2026-12-15T09:00",
+    "2027-01-15T09:00",
+    "2027-02-15T09:00"
+   ],
+   "phrase": "on the 15th of every month",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p056",
+   "text": "monthly on the 1st at 10am rotate the API keys",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-11-01T10:00",
+   "runs": [
+    "2026-11-01T10:00",
+    "2026-12-01T10:00",
+    "2027-01-01T10:00",
+    "2027-02-01T10:00",
+    "2027-03-01T10:00"
+   ],
+   "phrase": "monthly on the 1st at 10am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p057",
+   "text": "every other day at 8am prune old preview deployments",
+   "rule": "FREQ=DAILY;INTERVAL=2;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-06T08:00",
+   "runs": [
+    "2026-10-06T08:00",
+    "2026-10-08T08:00",
+    "2026-10-10T08:00",
+    "2026-10-12T08:00",
+    "2026-10-14T08:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=DAILY;INTERVAL=2;BYHOUR=8;BYMINUTE=0",
+     "dtstart": "2026-10-07T08:00",
+     "runs": [
+      "2026-10-07T08:00",
+      "2026-10-09T08:00",
+      "2026-10-11T08:00",
+      "2026-10-13T08:00",
+      "2026-10-15T08:00"
+     ],
+     "why": "Today's slot has passed; anchoring the interval on today instead of the next run is the other defensible phase."
+    }
+   ],
+   "phrase": "every other day at 8am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p058",
+   "text": "the last Friday of the month at 4pm, write the retro doc",
+   "rule": "FREQ=MONTHLY;BYDAY=-1FR;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-30T16:00",
+   "runs": [
+    "2026-10-30T16:00",
+    "2026-11-27T16:00",
+    "2026-12-25T16:00",
+    "2027-01-29T16:00",
+    "2027-02-26T16:00"
+   ],
+   "phrase": "the last Friday of the month at 4pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p059",
+   "text": "check the SSL certificate renewals every year on January 2",
+   "rule": "FREQ=YEARLY;BYMONTH=1;BYMONTHDAY=2;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2027-01-02T09:00",
+   "runs": [
+    "2027-01-02T09:00",
+    "2028-01-02T09:00",
+    "2029-01-02T09:00",
+    "2030-01-02T09:00",
+    "2031-01-02T09:00"
+   ],
+   "phrase": "every year on January 2",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p060",
+   "text": "every 6 hours sync the mirror repo",
+   "rule": "FREQ=HOURLY;INTERVAL=6;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T21:00",
+    "2026-10-06T03:00",
+    "2026-10-06T09:00",
+    "2026-10-06T15:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=6;BYMINUTE=0",
+     "dtstart": "2026-10-05T18:00",
+     "runs": [
+      "2026-10-05T18:00",
+      "2026-10-06T00:00",
+      "2026-10-06T06:00",
+      "2026-10-06T12:00",
+      "2026-10-06T18:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    }
+   ],
+   "phrase": "every 6 hours",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p061",
+   "text": "every weekday at 9am for 2 weeks run the onboarding check",
+   "rule": "FREQ=WEEKLY;COUNT=10;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "every weekday at 9am for 2 weeks",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p062",
+   "text": "every Monday and Wednesday at 9am starting Oct 12, check the experiment results",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-14T09:00",
+    "2026-10-19T09:00",
+    "2026-10-21T09:00",
+    "2026-10-26T09:00"
+   ],
+   "phrase": "every Monday and Wednesday at 9am starting Oct 12",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p063",
+   "text": "every month on the 5th at 2pm generate the invoice summary",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=5;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-11-05T14:00",
+   "runs": [
+    "2026-11-05T14:00",
+    "2026-12-05T14:00",
+    "2027-01-05T14:00",
+    "2027-02-05T14:00",
+    "2027-03-05T14:00"
+   ],
+   "phrase": "every month on the 5th at 2pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p064",
+   "text": "every 2nd Tuesday of the month at 11 review security alerts",
+   "rule": "FREQ=MONTHLY;BYDAY=2TU;BYHOUR=11;BYMINUTE=0",
+   "dtstart": "2026-10-13T11:00",
+   "runs": [
+    "2026-10-13T11:00",
+    "2026-11-10T11:00",
+    "2026-12-08T11:00",
+    "2027-01-12T11:00",
+    "2027-02-09T11:00"
+   ],
+   "phrase": "every 2nd Tuesday of the month at 11",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p065",
+   "text": "the 1st of every month at 9am, archive last month's threads",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-01T09:00",
+   "runs": [
+    "2026-11-01T09:00",
+    "2026-12-01T09:00",
+    "2027-01-01T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ],
+   "phrase": "the 1st of every month at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p066",
+   "text": "Mon-Fri at 8am summarize Dependabot alerts",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-06T08:00",
+   "runs": [
+    "2026-10-06T08:00",
+    "2026-10-07T08:00",
+    "2026-10-08T08:00",
+    "2026-10-09T08:00",
+    "2026-10-12T08:00"
+   ],
+   "phrase": "Mon-Fri at 8am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p067",
+   "text": "every weekday at 6 check the overnight data pipeline",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T18:00",
+    "2026-10-07T18:00",
+    "2026-10-08T18:00",
+    "2026-10-09T18:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=6;BYMINUTE=0",
+     "dtstart": "2026-10-06T06:00",
+     "runs": [
+      "2026-10-06T06:00",
+      "2026-10-07T06:00",
+      "2026-10-08T06:00",
+      "2026-10-09T06:00",
+      "2026-10-12T06:00"
+     ],
+     "why": "A bare 6 is pm by the work-hours rule, but an overnight pipeline reads as 6am."
+    }
+   ],
+   "phrase": "every weekday at 6",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p068",
+   "text": "every 2 weeks on Thursday at 2pm do the sprint review prep",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=TH;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-08T14:00",
+   "runs": [
+    "2026-10-08T14:00",
+    "2026-10-22T14:00",
+    "2026-11-05T14:00",
+    "2026-11-19T14:00",
+    "2026-12-03T14:00"
+   ],
+   "phrase": "every 2 weeks on Thursday at 2pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p069",
+   "text": "once a week check for outdated GitHub Actions versions",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "once a week",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p070",
+   "text": "every last workday of the month at 4 run payroll checks",
+   "rule": "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-30T16:00",
+   "runs": [
+    "2026-10-30T16:00",
+    "2026-11-30T16:00",
+    "2026-12-31T16:00",
+    "2027-01-29T16:00",
+    "2027-02-26T16:00"
+   ],
+   "phrase": "every last workday of the month at 4",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p071",
+   "text": "first thing every Monday, clear out the review queue",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "first thing every Monday",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p072",
+   "text": "every Monday and every Thursday at 9 review dependabot",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-08T09:00",
+   "runs": [
+    "2026-10-08T09:00",
+    "2026-10-12T09:00",
+    "2026-10-15T09:00",
+    "2026-10-19T09:00",
+    "2026-10-22T09:00"
+   ],
+   "phrase": "every Monday and every Thursday at 9",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p073",
+   "text": "every 2nd and 4th Wednesday at 3pm cut the release",
+   "rule": "FREQ=MONTHLY;BYDAY=2WE,4WE;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-14T15:00",
+   "runs": [
+    "2026-10-14T15:00",
+    "2026-10-28T15:00",
+    "2026-11-11T15:00",
+    "2026-11-25T15:00",
+    "2026-12-09T15:00"
+   ],
+   "phrase": "every 2nd and 4th Wednesday at 3pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p074",
+   "text": "last Friday of every quarter write the quarterly review",
+   "rule": "FREQ=YEARLY;BYMONTH=3,6,9,12;BYDAY=-1FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-12-25T09:00",
+   "runs": [
+    "2026-12-25T09:00",
+    "2027-03-26T09:00",
+    "2027-06-25T09:00",
+    "2027-09-24T09:00",
+    "2027-12-31T09:00"
+   ],
+   "phrase": "last Friday of every quarter",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p075",
+   "text": "Every weekday at 8:30 summarize CI",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=30",
+   "dtstart": "2026-10-06T08:30",
+   "runs": [
+    "2026-10-06T08:30",
+    "2026-10-07T08:30",
+    "2026-10-08T08:30",
+    "2026-10-09T08:30",
+    "2026-10-12T08:30"
+   ],
+   "phrase": "Every weekday at 8:30",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p076",
+   "text": "each morning check the release branch",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "each morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p077",
+   "text": "every 2 hours look at main",
+   "rule": "FREQ=HOURLY;INTERVAL=2;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T17:00",
+    "2026-10-05T19:00",
+    "2026-10-05T21:00",
+    "2026-10-05T23:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=2;BYMINUTE=0",
+     "dtstart": "2026-10-05T16:00",
+     "runs": [
+      "2026-10-05T16:00",
+      "2026-10-05T18:00",
+      "2026-10-05T20:00",
+      "2026-10-05T22:00",
+      "2026-10-06T00:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    }
+   ],
+   "phrase": "every 2 hours",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p078",
+   "text": "every other Friday bump deps",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-09T09:00",
+   "runs": [
+    "2026-10-09T09:00",
+    "2026-10-23T09:00",
+    "2026-11-06T09:00",
+    "2026-11-20T09:00",
+    "2026-12-04T09:00"
+   ],
+   "phrase": "every other Friday",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p079",
+   "text": "every first weekday of the month bump deps",
+   "rule": "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-02T09:00",
+   "runs": [
+    "2026-11-02T09:00",
+    "2026-12-01T09:00",
+    "2027-01-01T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ],
+   "phrase": "every first weekday of the month",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p080",
+   "text": "every day at 10am write release notes",
+   "rule": "FREQ=DAILY;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-06T10:00",
+   "runs": [
+    "2026-10-06T10:00",
+    "2026-10-07T10:00",
+    "2026-10-08T10:00",
+    "2026-10-09T10:00",
+    "2026-10-10T10:00"
+   ],
+   "phrase": "every day at 10am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p081",
+   "text": "  daily: read the error log",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "daily",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p082",
+   "text": "weekdays at 9 triage",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "weekdays at 9",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p083",
+   "text": "on Mondays triage issues",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "on Mondays",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p084",
+   "text": "on weekdays at 6pm summarize",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T18:00",
+    "2026-10-07T18:00",
+    "2026-10-08T18:00",
+    "2026-10-09T18:00"
+   ],
+   "phrase": "on weekdays at 6pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p085",
+   "text": "Mondays at 9am triage",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "Mondays at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p086",
+   "text": "Thursdays, run the flaky test sweep",
+   "rule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-08T09:00",
+   "runs": [
+    "2026-10-08T09:00",
+    "2026-10-15T09:00",
+    "2026-10-22T09:00",
+    "2026-10-29T09:00",
+    "2026-11-05T09:00"
+   ],
+   "phrase": "Thursdays",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p087",
+   "text": "once a week clean up worktrees",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "once a week",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p088",
+   "text": "at 9am every day triage",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "at 9am every day",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p089",
+   "text": "on the last Friday of every month at 5pm write the report",
+   "rule": "FREQ=MONTHLY;BYDAY=-1FR;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-30T17:00",
+   "runs": [
+    "2026-10-30T17:00",
+    "2026-11-27T17:00",
+    "2026-12-25T17:00",
+    "2027-01-29T17:00",
+    "2027-02-26T17:00"
+   ],
+   "phrase": "on the last Friday of every month at 5pm",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p090",
+   "text": "every Thursday at 3 prep the planning notes",
+   "rule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-08T15:00",
+   "runs": [
+    "2026-10-08T15:00",
+    "2026-10-15T15:00",
+    "2026-10-22T15:00",
+    "2026-10-29T15:00",
+    "2026-11-05T15:00"
+   ],
+   "phrase": "every Thursday at 3",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p091",
+   "text": "quarterly on the first weekday, review access",
+   "rule": "FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2027-01-01T09:00",
+   "runs": [
+    "2027-01-01T09:00",
+    "2027-04-01T09:00",
+    "2027-07-01T09:00",
+    "2027-10-01T09:00",
+    "2028-01-03T09:00"
+   ],
+   "phrase": "quarterly on the first weekday",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p092",
+   "text": "see the doc.\n\nevery Monday at 9am triage new issues",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "mid",
+   "source": "corpus"
+  },
+  {
+   "id": "p093",
+   "text": "post the standup notes. every Monday at 9am",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p094",
+   "text": "every Monday at 9am. Then post the notes",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p095",
+   "text": "check CI every day at 5 p.m.",
+   "rule": "FREQ=DAILY;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-05T17:00",
+   "runs": [
+    "2026-10-05T17:00",
+    "2026-10-06T17:00",
+    "2026-10-07T17:00",
+    "2026-10-08T17:00",
+    "2026-10-09T17:00"
+   ],
+   "phrase": "every day at 5 p.m.",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p096",
+   "text": "every day at 9 a.m. check CI",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "every day at 9 a.m.",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p097",
+   "text": "Ping me every morning at 9am.",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "every morning at 9am",
+   "where": "end",
+   "source": "corpus"
+  },
+  {
+   "id": "p098",
+   "text": "- every Monday at 9am triage new issues",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p099",
+   "text": "(every Monday at 9am) triage new issues",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p100",
+   "text": "first day of every quarter, review access",
+   "rule": "FREQ=YEARLY;BYMONTH=1,4,7,10;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2027-01-01T09:00",
+   "runs": [
+    "2027-01-01T09:00",
+    "2027-04-01T09:00",
+    "2027-07-01T09:00",
+    "2027-10-01T09:00",
+    "2028-01-01T09:00"
+   ],
+   "phrase": "first day of every quarter",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p101",
+   "text": "the first weekday of each quarter at 10am plan the roadmap",
+   "rule": "FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2027-01-01T10:00",
+   "runs": [
+    "2027-01-01T10:00",
+    "2027-04-01T10:00",
+    "2027-07-01T10:00",
+    "2027-10-01T10:00",
+    "2028-01-03T10:00"
+   ],
+   "phrase": "the first weekday of each quarter at 10am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p102",
+   "text": "every 20 minutes poll the queue",
+   "rule": "FREQ=HOURLY;BYMINUTE=0,20,40",
+   "dtstart": "2026-10-05T14:40",
+   "runs": [
+    "2026-10-05T14:40",
+    "2026-10-05T15:00",
+    "2026-10-05T15:20",
+    "2026-10-05T15:40",
+    "2026-10-05T16:00"
+   ],
+   "phrase": "every 20 minutes",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p103",
+   "text": "every 30 minutes check the queue",
+   "rule": "FREQ=HOURLY;BYMINUTE=0,30",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T15:30",
+    "2026-10-05T16:00",
+    "2026-10-05T16:30",
+    "2026-10-05T17:00"
+   ],
+   "phrase": "every 30 minutes",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p104",
+   "text": "every Friday EOD write the weekly summary",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-09T17:00",
+   "runs": [
+    "2026-10-09T17:00",
+    "2026-10-16T17:00",
+    "2026-10-23T17:00",
+    "2026-10-30T17:00",
+    "2026-11-06T17:00"
+   ],
+   "phrase": "every Friday EOD",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p105",
+   "text": "every 3 months on the 1st rotate keys",
+   "rule": "FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-01T09:00",
+   "runs": [
+    "2026-11-01T09:00",
+    "2027-02-01T09:00",
+    "2027-05-01T09:00",
+    "2027-08-01T09:00",
+    "2027-11-01T09:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=MONTHLY;INTERVAL=3;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+     "dtstart": "2027-01-01T09:00",
+     "runs": [
+      "2027-01-01T09:00",
+      "2027-04-01T09:00",
+      "2027-07-01T09:00",
+      "2027-10-01T09:00",
+      "2028-01-01T09:00"
+     ],
+     "why": "Anchored on this month's 1st, which has passed."
+    }
+   ],
+   "phrase": "every 3 months on the 1st",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p106",
+   "text": "from Monday to Friday at 9am, triage",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "from Monday to Friday at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p107",
+   "text": "Monday through Friday at 9am triage",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "Monday through Friday at 9am",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p108",
+   "text": "Monday mornings, plan the week",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "Monday mornings",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p109",
+   "text": "weekday evenings check the deploy queue",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T18:00",
+    "2026-10-07T18:00",
+    "2026-10-08T18:00",
+    "2026-10-09T18:00"
+   ],
+   "phrase": "weekday evenings",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p110",
+   "text": "every fortnight on Tuesday, review the roadmap",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=TU;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-20T09:00",
+    "2026-11-03T09:00",
+    "2026-11-17T09:00",
+    "2026-12-01T09:00"
+   ],
+   "phrase": "every fortnight on Tuesday",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p111",
+   "text": "every weekday at 9am for 2 weeks starting Oct 12, run the check",
+   "rule": "FREQ=WEEKLY;COUNT=10;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-13T09:00",
+    "2026-10-14T09:00",
+    "2026-10-15T09:00",
+    "2026-10-16T09:00"
+   ],
+   "phrase": "every weekday at 9am for 2 weeks starting Oct 12",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p112",
+   "text": "every Monday at 9 in the morning triage",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9 in the morning",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p113",
+   "text": "every day at 9 o'clock check CI",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "every day at 9 o'clock",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p114",
+   "text": "every evening at 7 summarize the day",
+   "rule": "FREQ=DAILY;BYHOUR=19;BYMINUTE=0",
+   "dtstart": "2026-10-05T19:00",
+   "runs": [
+    "2026-10-05T19:00",
+    "2026-10-06T19:00",
+    "2026-10-07T19:00",
+    "2026-10-08T19:00",
+    "2026-10-09T19:00"
+   ],
+   "phrase": "every evening at 7",
+   "where": "start",
+   "source": "corpus"
+  },
+  {
+   "id": "p115",
+   "text": "@alice every Monday at 9am triage",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "mid",
+   "source": "corpus"
+  },
+  {
+   "id": "p116",
+   "text": "every weekday at 9am post the overnight build summary to #eng",
+   "tz": "Europe/London",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "every weekday at 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p117",
+   "text": "every Monday at 10am review the dependency dashboard",
+   "tz": "Asia/Tokyo",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-12T10:00",
+   "runs": [
+    "2026-10-12T10:00",
+    "2026-10-19T10:00",
+    "2026-10-26T10:00",
+    "2026-11-02T10:00",
+    "2026-11-09T10:00"
+   ],
+   "phrase": "every Monday at 10am",
+   "where": "start",
+   "source": "hand",
+   "note": "In Tokyo it is already Tuesday."
+  },
+  {
+   "id": "p118",
+   "text": "daily at noon, check the error budget and post it in #sre",
+   "tz": "America/Los_Angeles",
+   "rule": "FREQ=DAILY;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-05T12:00",
+   "runs": [
+    "2026-10-05T12:00",
+    "2026-10-06T12:00",
+    "2026-10-07T12:00",
+    "2026-10-08T12:00",
+    "2026-10-09T12:00"
+   ],
+   "phrase": "daily at noon",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p119",
+   "text": "every weekday at 9am Pacific, check the deploy queue",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-06T12:00",
+   "runs": [
+    "2026-10-06T12:00",
+    "2026-10-07T12:00",
+    "2026-10-08T12:00",
+    "2026-10-09T12:00",
+    "2026-10-12T12:00"
+   ],
+   "phrase": "every weekday at 9am Pacific",
+   "where": "start",
+   "source": "hand",
+   "note": "9am Pacific is noon in New York; both zones change clocks on Nov 1."
+  },
+  {
+   "id": "p120",
+   "text": "every Monday at 8am Central, triage new issues in the mobile repo",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 8am Central",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p121",
+   "text": "nightly at 23:00 UTC, rebuild the search index",
+   "tz": "UTC",
+   "rule": "FREQ=DAILY;BYHOUR=23;BYMINUTE=0",
+   "dtstart": "2026-10-05T23:00",
+   "runs": [
+    "2026-10-05T23:00",
+    "2026-10-06T23:00",
+    "2026-10-07T23:00",
+    "2026-10-08T23:00",
+    "2026-10-09T23:00"
+   ],
+   "phrase": "nightly at 23:00 UTC",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p122",
+   "text": "every Friday at 17:30, summarize the week's merged PRs for the team",
+   "tz": "Europe/Berlin",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=17;BYMINUTE=30",
+   "dtstart": "2026-10-09T17:30",
+   "runs": [
+    "2026-10-09T17:30",
+    "2026-10-16T17:30",
+    "2026-10-23T17:30",
+    "2026-10-30T17:30",
+    "2026-11-06T17:30"
+   ],
+   "phrase": "every Friday at 17:30",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p123",
+   "text": "every day at 10am IST check the payments reconciliation",
+   "tz": "Asia/Kolkata",
+   "rule": "FREQ=DAILY;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-06T10:00",
+   "runs": [
+    "2026-10-06T10:00",
+    "2026-10-07T10:00",
+    "2026-10-08T10:00",
+    "2026-10-09T10:00",
+    "2026-10-10T10:00"
+   ],
+   "phrase": "every day at 10am IST",
+   "where": "start",
+   "source": "hand",
+   "note": "In Kolkata it is already 00:02 Tuesday."
+  },
+  {
+   "id": "p124",
+   "text": "every Monday unless it's a holiday post the digest",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "condition": true,
+   "phrase": "every Monday unless it's a holiday",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p125",
+   "text": "every weekday at 9am except holidays triage the inbox",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "condition": true,
+   "phrase": "every weekday at 9am except holidays",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p126",
+   "text": "every morning, if there are new issues, label them",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "every morning",
+   "where": "start",
+   "source": "hand",
+   "note": "The if may be a condition or stay in the task; either keeps the runs."
+  },
+  {
+   "id": "p127",
+   "text": "every weekday at 8am, only if CI on main is red, open an issue listing the failing jobs",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-06T08:00",
+   "runs": [
+    "2026-10-06T08:00",
+    "2026-10-07T08:00",
+    "2026-10-08T08:00",
+    "2026-10-09T08:00",
+    "2026-10-12T08:00"
+   ],
+   "condition": true,
+   "phrase": "every weekday at 8am, only if CI on main is red",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p128",
+   "text": "Every Friday at 4pm, if anything merged this week, draft the changelog entry",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-09T16:00",
+   "runs": [
+    "2026-10-09T16:00",
+    "2026-10-16T16:00",
+    "2026-10-23T16:00",
+    "2026-10-30T16:00",
+    "2026-11-06T16:00"
+   ],
+   "phrase": "Every Friday at 4pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p129",
+   "text": "on weekdays at 7am, unless it's a US holiday, check the overnight batch jobs",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=7;BYMINUTE=0",
+   "dtstart": "2026-10-06T07:00",
+   "runs": [
+    "2026-10-06T07:00",
+    "2026-10-07T07:00",
+    "2026-10-08T07:00",
+    "2026-10-09T07:00",
+    "2026-10-12T07:00"
+   ],
+   "condition": true,
+   "phrase": "on weekdays at 7am, unless it's a US holiday",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p130",
+   "text": "every other Monday at 10am, prep the sprint planning doc",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-12T10:00",
+   "runs": [
+    "2026-10-12T10:00",
+    "2026-10-26T10:00",
+    "2026-11-09T10:00",
+    "2026-11-23T10:00",
+    "2026-12-07T10:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=10;BYMINUTE=0",
+     "dtstart": "2026-10-19T10:00",
+     "runs": [
+      "2026-10-19T10:00",
+      "2026-11-02T10:00",
+      "2026-11-16T10:00",
+      "2026-11-30T10:00",
+      "2026-12-14T10:00"
+     ],
+     "why": "Today's slot has passed; anchoring the interval on today instead of the next run is the other defensible phase."
+    }
+   ],
+   "phrase": "every other Monday at 10am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p131",
+   "text": "every other Wednesday at 3pm starting Oct 14, groom the backlog",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=WE;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-14T15:00",
+   "runs": [
+    "2026-10-14T15:00",
+    "2026-10-28T15:00",
+    "2026-11-11T15:00",
+    "2026-11-25T15:00",
+    "2026-12-09T15:00"
+   ],
+   "phrase": "every other Wednesday at 3pm starting Oct 14",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p132",
+   "text": "every 3 hours from 8am to 8pm check the support queue",
+   "rule": "FREQ=HOURLY;INTERVAL=3;BYHOUR=8,11,14,17,20;BYMINUTE=0",
+   "dtstart": "2026-10-05T17:00",
+   "runs": [
+    "2026-10-05T17:00",
+    "2026-10-05T20:00",
+    "2026-10-06T08:00",
+    "2026-10-06T11:00",
+    "2026-10-06T14:00"
+   ],
+   "phrase": "every 3 hours from 8am to 8pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p133",
+   "text": "every 30 minutes during business hours on weekdays, check the incident channel",
+   "rule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0,30",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T15:30",
+    "2026-10-05T16:00",
+    "2026-10-05T16:30",
+    "2026-10-06T09:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16,17;BYMINUTE=0,30",
+     "dtstart": "2026-10-05T15:00",
+     "runs": [
+      "2026-10-05T15:00",
+      "2026-10-05T15:30",
+      "2026-10-05T16:00",
+      "2026-10-05T16:30",
+      "2026-10-05T17:00"
+     ],
+     "why": "Whether 5pm itself is inside business hours."
+    }
+   ],
+   "phrase": "every 30 minutes during business hours on weekdays",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p134",
+   "text": "every 2 days at 7am rotate the staging credentials",
+   "rule": "FREQ=DAILY;INTERVAL=2;BYHOUR=7;BYMINUTE=0",
+   "dtstart": "2026-10-06T07:00",
+   "runs": [
+    "2026-10-06T07:00",
+    "2026-10-08T07:00",
+    "2026-10-10T07:00",
+    "2026-10-12T07:00",
+    "2026-10-14T07:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=DAILY;INTERVAL=2;BYHOUR=7;BYMINUTE=0",
+     "dtstart": "2026-10-07T07:00",
+     "runs": [
+      "2026-10-07T07:00",
+      "2026-10-09T07:00",
+      "2026-10-11T07:00",
+      "2026-10-13T07:00",
+      "2026-10-15T07:00"
+     ],
+     "why": "Today's slot has passed; anchoring the interval on today instead of the next run is the other defensible phase."
+    }
+   ],
+   "phrase": "every 2 days at 7am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p135",
+   "text": "every 3 weeks on Thursday at 11am, run the disaster recovery drill",
+   "rule": "FREQ=WEEKLY;INTERVAL=3;BYDAY=TH;BYHOUR=11;BYMINUTE=0",
+   "dtstart": "2026-10-08T11:00",
+   "runs": [
+    "2026-10-08T11:00",
+    "2026-10-29T11:00",
+    "2026-11-19T11:00",
+    "2026-12-10T11:00",
+    "2026-12-31T11:00"
+   ],
+   "phrase": "every 3 weeks on Thursday at 11am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p136",
+   "text": "every 6 months on the 1st, rotate the signing keys",
+   "rule": "FREQ=MONTHLY;INTERVAL=6;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-01T09:00",
+   "runs": [
+    "2026-11-01T09:00",
+    "2027-05-01T09:00",
+    "2027-11-01T09:00",
+    "2028-05-01T09:00",
+    "2028-11-01T09:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=MONTHLY;INTERVAL=6;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+     "dtstart": "2027-04-01T09:00",
+     "runs": [
+      "2027-04-01T09:00",
+      "2027-10-01T09:00",
+      "2028-04-01T09:00",
+      "2028-10-01T09:00",
+      "2029-04-01T09:00"
+     ],
+     "why": "Anchored on this month's 1st, which has passed."
+    }
+   ],
+   "phrase": "every 6 months on the 1st",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p137",
+   "text": "on the second Tuesday of each month at 1pm, review the security advisories",
+   "rule": "FREQ=MONTHLY;BYDAY=2TU;BYHOUR=13;BYMINUTE=0",
+   "dtstart": "2026-10-13T13:00",
+   "runs": [
+    "2026-10-13T13:00",
+    "2026-11-10T13:00",
+    "2026-12-08T13:00",
+    "2027-01-12T13:00",
+    "2027-02-09T13:00"
+   ],
+   "phrase": "on the second Tuesday of each month at 1pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p138",
+   "text": "the first Friday of every month at 10am, draft the investor update",
+   "rule": "FREQ=MONTHLY;BYDAY=1FR;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-11-06T10:00",
+   "runs": [
+    "2026-11-06T10:00",
+    "2026-12-04T10:00",
+    "2027-01-01T10:00",
+    "2027-02-05T10:00",
+    "2027-03-05T10:00"
+   ],
+   "phrase": "the first Friday of every month at 10am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p139",
+   "text": "on the 2nd and 4th Monday of the month at 9am, run the backlog review",
+   "rule": "FREQ=MONTHLY;BYDAY=2MO,4MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-26T09:00",
+    "2026-11-09T09:00",
+    "2026-11-23T09:00",
+    "2026-12-14T09:00"
+   ],
+   "phrase": "on the 2nd and 4th Monday of the month at 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p140",
+   "text": "last Monday of every month, 9am, plan next month's sprints",
+   "rule": "FREQ=MONTHLY;BYDAY=-1MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-26T09:00",
+   "runs": [
+    "2026-10-26T09:00",
+    "2026-11-30T09:00",
+    "2026-12-28T09:00",
+    "2027-01-25T09:00",
+    "2027-02-22T09:00"
+   ],
+   "phrase": "last Monday of every month, 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p141",
+   "text": "on the third Wednesday of every month at 2pm, prep the release train",
+   "rule": "FREQ=MONTHLY;BYDAY=3WE;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-21T14:00",
+   "runs": [
+    "2026-10-21T14:00",
+    "2026-11-18T14:00",
+    "2026-12-16T14:00",
+    "2027-01-20T14:00",
+    "2027-02-17T14:00"
+   ],
+   "phrase": "on the third Wednesday of every month at 2pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p142",
+   "text": "on the last business day of each month at 5pm, export the billing report",
+   "rule": "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-30T17:00",
+   "runs": [
+    "2026-10-30T17:00",
+    "2026-11-30T17:00",
+    "2026-12-31T17:00",
+    "2027-01-29T17:00",
+    "2027-02-26T17:00"
+   ],
+   "phrase": "on the last business day of each month at 5pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p143",
+   "text": "first business day of every month, reconcile the invoices",
+   "rule": "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-02T09:00",
+   "runs": [
+    "2026-11-02T09:00",
+    "2026-12-01T09:00",
+    "2027-01-01T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ],
+   "phrase": "first business day of every month",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p144",
+   "text": "every weekday at 9am and 4pm, sync the issue tracker with Linear",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,16;BYMINUTE=0",
+   "dtstart": "2026-10-05T16:00",
+   "runs": [
+    "2026-10-05T16:00",
+    "2026-10-06T09:00",
+    "2026-10-06T16:00",
+    "2026-10-07T09:00",
+    "2026-10-07T16:00"
+   ],
+   "phrase": "every weekday at 9am and 4pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p145",
+   "text": "at 8am, noon and 6pm every day, check the on-call pager queue",
+   "rule": "FREQ=DAILY;BYHOUR=8,12,18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T08:00",
+    "2026-10-06T12:00",
+    "2026-10-06T18:00",
+    "2026-10-07T08:00"
+   ],
+   "phrase": "at 8am, noon and 6pm every day",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p146",
+   "text": "twice a day, at 10 and 4, check for new support tickets",
+   "rule": "FREQ=DAILY;BYHOUR=10,16;BYMINUTE=0",
+   "dtstart": "2026-10-05T16:00",
+   "runs": [
+    "2026-10-05T16:00",
+    "2026-10-06T10:00",
+    "2026-10-06T16:00",
+    "2026-10-07T10:00",
+    "2026-10-07T16:00"
+   ],
+   "phrase": "twice a day, at 10 and 4",
+   "where": "start",
+   "source": "hand",
+   "note": "No trigger word: the box never asks."
+  },
+  {
+   "id": "p147",
+   "text": "every day at 6am and 6pm, sync the CRM export",
+   "rule": "FREQ=DAILY;BYHOUR=6,18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T06:00",
+    "2026-10-06T18:00",
+    "2026-10-07T06:00",
+    "2026-10-07T18:00"
+   ],
+   "phrase": "every day at 6am and 6pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p148",
+   "text": "every day at 9am for the next 10 days, check the beta signups",
+   "rule": "FREQ=DAILY;COUNT=10;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "every day at 9am for the next 10 days",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p149",
+   "text": "every Friday at 3pm until the end of the year, post the release train status",
+   "rule": "FREQ=WEEKLY;UNTIL=20261231;BYDAY=FR;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-09T15:00",
+   "runs": [
+    "2026-10-09T15:00",
+    "2026-10-16T15:00",
+    "2026-10-23T15:00",
+    "2026-10-30T15:00",
+    "2026-11-06T15:00"
+   ],
+   "phrase": "every Friday at 3pm until the end of the year",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p150",
+   "text": "until christmas, every morning check the holiday traffic dashboard",
+   "rule": "FREQ=DAILY;UNTIL=20261225;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ],
+   "phrase": "until christmas, every morning",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p151",
+   "text": "for three weeks, every weekday at 10am, check the migration error rate",
+   "rule": "FREQ=WEEKLY;COUNT=15;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-06T10:00",
+   "runs": [
+    "2026-10-06T10:00",
+    "2026-10-07T10:00",
+    "2026-10-08T10:00",
+    "2026-10-09T10:00",
+    "2026-10-12T10:00"
+   ],
+   "phrase": "for three weeks, every weekday at 10am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p152",
+   "text": "every Monday at 9am for 3 weeks, check the experiment's conversion numbers",
+   "rule": "FREQ=WEEKLY;COUNT=3;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00"
+   ],
+   "phrase": "every Monday at 9am for 3 weeks",
+   "where": "start",
+   "source": "hand",
+   "note": "Three runs, not five."
+  },
+  {
+   "id": "p153",
+   "text": "starting November, on the 1st of each month at 9am, archive done threads older than 30 days",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-01T09:00",
+   "runs": [
+    "2026-11-01T09:00",
+    "2026-12-01T09:00",
+    "2027-01-01T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ],
+   "phrase": "starting November, on the 1st of each month at 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p154",
+   "text": "beginning next week, every Tuesday and Thursday at 11am, review open PRs",
+   "rule": "FREQ=WEEKLY;BYDAY=TU,TH;BYHOUR=11;BYMINUTE=0",
+   "dtstart": "2026-10-13T11:00",
+   "runs": [
+    "2026-10-13T11:00",
+    "2026-10-15T11:00",
+    "2026-10-20T11:00",
+    "2026-10-22T11:00",
+    "2026-10-27T11:00"
+   ],
+   "phrase": "beginning next week, every Tuesday and Thursday at 11am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p155",
+   "text": "from Oct 19, weekdays at 8:30 check the overnight batch jobs",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=30",
+   "dtstart": "2026-10-19T08:30",
+   "runs": [
+    "2026-10-19T08:30",
+    "2026-10-20T08:30",
+    "2026-10-21T08:30",
+    "2026-10-22T08:30",
+    "2026-10-23T08:30"
+   ],
+   "phrase": "from Oct 19, weekdays at 8:30",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p156",
+   "text": "Look through the open issues labelled bug every Monday at 9am and post a short triage summary in #eng with links.",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "every Monday at 9am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p157",
+   "text": "Please go through Dependabot PRs every weekday morning, merge the green patch bumps, and leave a comment on the rest explaining what's blocking.",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ],
+   "phrase": "every weekday morning",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p158",
+   "text": "Can you check the Sentry dashboard each evening at 6 and open issues for any new error groups with more than 50 events?",
+   "rule": "FREQ=DAILY;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T18:00",
+    "2026-10-07T18:00",
+    "2026-10-08T18:00",
+    "2026-10-09T18:00"
+   ],
+   "phrase": "each evening at 6",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p159",
+   "text": "I want you to rebase the long-running `feature/search` branch onto main every night at 1am and tell me if there are conflicts.",
+   "rule": "FREQ=DAILY;BYHOUR=1;BYMINUTE=0",
+   "dtstart": "2026-10-06T01:00",
+   "runs": [
+    "2026-10-06T01:00",
+    "2026-10-07T01:00",
+    "2026-10-08T01:00",
+    "2026-10-09T01:00",
+    "2026-10-10T01:00"
+   ],
+   "phrase": "every night at 1am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p160",
+   "text": "Review the docs site for broken links on the first Monday of every month at 10am and fix what you can.",
+   "rule": "FREQ=MONTHLY;BYDAY=1MO;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-11-02T10:00",
+   "runs": [
+    "2026-11-02T10:00",
+    "2026-12-07T10:00",
+    "2027-01-04T10:00",
+    "2027-02-01T10:00",
+    "2027-03-01T10:00"
+   ],
+   "phrase": "on the first Monday of every month at 10am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p161",
+   "text": "Hey — on Fridays at 4pm, go through this week's merged PRs and draft the changelog entry in CHANGELOG.md.",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-09T16:00",
+   "runs": [
+    "2026-10-09T16:00",
+    "2026-10-16T16:00",
+    "2026-10-23T16:00",
+    "2026-10-30T16:00",
+    "2026-11-06T16:00"
+   ],
+   "phrase": "on Fridays at 4pm",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p162",
+   "text": "Summarize the #support channel into the shared doc every weekday at 5:30pm, grouping by product area.",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=17;BYMINUTE=30",
+   "dtstart": "2026-10-05T17:30",
+   "runs": [
+    "2026-10-05T17:30",
+    "2026-10-06T17:30",
+    "2026-10-07T17:30",
+    "2026-10-08T17:30",
+    "2026-10-09T17:30"
+   ],
+   "phrase": "every weekday at 5:30pm",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p163",
+   "text": "Check our npm package download stats weekly on Mondays at 8am and note any big drops.",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-12T08:00",
+   "runs": [
+    "2026-10-12T08:00",
+    "2026-10-19T08:00",
+    "2026-10-26T08:00",
+    "2026-11-02T08:00",
+    "2026-11-09T08:00"
+   ],
+   "phrase": "weekly on Mondays at 8am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p164",
+   "text": "For the analytics repo, every Tuesday at 2pm, bump the minor deps, run the tests, and open one PR with whatever passes.",
+   "rule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-06T14:00",
+   "runs": [
+    "2026-10-06T14:00",
+    "2026-10-13T14:00",
+    "2026-10-20T14:00",
+    "2026-10-27T14:00",
+    "2026-11-03T14:00"
+   ],
+   "phrase": "every Tuesday at 2pm",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p165",
+   "text": "Run the full e2e suite against staging and report failures nightly at 2am",
+   "rule": "FREQ=DAILY;BYHOUR=2;BYMINUTE=0",
+   "dtstart": "2026-10-06T02:00",
+   "runs": [
+    "2026-10-06T02:00",
+    "2026-10-07T02:00",
+    "2026-10-08T02:00",
+    "2026-10-09T02:00",
+    "2026-10-10T02:00"
+   ],
+   "phrase": "nightly at 2am",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p166",
+   "text": "Prune merged branches older than 30 days every Sunday at 11pm",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=23;BYMINUTE=0",
+   "dtstart": "2026-10-11T23:00",
+   "runs": [
+    "2026-10-11T23:00",
+    "2026-10-18T23:00",
+    "2026-10-25T23:00",
+    "2026-11-01T23:00",
+    "2026-11-08T23:00"
+   ],
+   "phrase": "every Sunday at 11pm",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p167",
+   "text": "Post a digest of new GitHub discussions to Slack every Tuesday and Thursday at noon",
+   "rule": "FREQ=WEEKLY;BYDAY=TU,TH;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-06T12:00",
+   "runs": [
+    "2026-10-06T12:00",
+    "2026-10-08T12:00",
+    "2026-10-13T12:00",
+    "2026-10-15T12:00",
+    "2026-10-20T12:00"
+   ],
+   "phrase": "every Tuesday and Thursday at noon",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p168",
+   "text": "Refresh the cached exchange rates every 6 hours",
+   "rule": "FREQ=HOURLY;INTERVAL=6;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T21:00",
+    "2026-10-06T03:00",
+    "2026-10-06T09:00",
+    "2026-10-06T15:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=6;BYMINUTE=0",
+     "dtstart": "2026-10-05T18:00",
+     "runs": [
+      "2026-10-05T18:00",
+      "2026-10-06T00:00",
+      "2026-10-06T06:00",
+      "2026-10-06T12:00",
+      "2026-10-06T18:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    }
+   ],
+   "phrase": "every 6 hours",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p169",
+   "text": "Back up the analytics database to S3 every day at 3:15am.",
+   "rule": "FREQ=DAILY;BYHOUR=3;BYMINUTE=15",
+   "dtstart": "2026-10-06T03:15",
+   "runs": [
+    "2026-10-06T03:15",
+    "2026-10-07T03:15",
+    "2026-10-08T03:15",
+    "2026-10-09T03:15",
+    "2026-10-10T03:15"
+   ],
+   "phrase": "every day at 3:15am",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p170",
+   "text": "Ping the status page and tell me if it's down — hourly, on the half hour.",
+   "rule": "FREQ=HOURLY;BYMINUTE=30",
+   "dtstart": "2026-10-05T15:30",
+   "runs": [
+    "2026-10-05T15:30",
+    "2026-10-05T16:30",
+    "2026-10-05T17:30",
+    "2026-10-05T18:30",
+    "2026-10-05T19:30"
+   ],
+   "phrase": "hourly, on the half hour",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p171",
+   "text": "List stale PRs (no activity in 2 weeks) and ping their authors every Wednesday",
+   "rule": "FREQ=WEEKLY;BYDAY=WE;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-07T09:00",
+   "runs": [
+    "2026-10-07T09:00",
+    "2026-10-14T09:00",
+    "2026-10-21T09:00",
+    "2026-10-28T09:00",
+    "2026-11-04T09:00"
+   ],
+   "phrase": "every Wednesday",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p172",
+   "text": "Mondays and Wednesdays at 9, check the experiment dashboards",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,WE;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-07T09:00",
+   "runs": [
+    "2026-10-07T09:00",
+    "2026-10-12T09:00",
+    "2026-10-14T09:00",
+    "2026-10-19T09:00",
+    "2026-10-21T09:00"
+   ],
+   "phrase": "Mondays and Wednesdays at 9",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p173",
+   "text": "every weekday except Friday at 10am post the build health",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-06T10:00",
+   "runs": [
+    "2026-10-06T10:00",
+    "2026-10-07T10:00",
+    "2026-10-08T10:00",
+    "2026-10-12T10:00",
+    "2026-10-13T10:00"
+   ],
+   "phrase": "every weekday except Friday at 10am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p174",
+   "text": "Tuesday and Thursday afternoons, run the sync",
+   "rule": "FREQ=WEEKLY;BYDAY=TU,TH;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-06T14:00",
+   "runs": [
+    "2026-10-06T14:00",
+    "2026-10-08T14:00",
+    "2026-10-13T14:00",
+    "2026-10-15T14:00",
+    "2026-10-20T14:00"
+   ],
+   "phrase": "Tuesday and Thursday afternoons",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p175",
+   "text": "Saturday and Sunday mornings, run the full dependency audit",
+   "rule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-10T09:00",
+   "runs": [
+    "2026-10-10T09:00",
+    "2026-10-11T09:00",
+    "2026-10-17T09:00",
+    "2026-10-18T09:00",
+    "2026-10-24T09:00"
+   ],
+   "phrase": "Saturday and Sunday mornings",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p176",
+   "text": "every January 1st and July 1st review billing",
+   "rule": "FREQ=YEARLY;BYMONTH=1,7;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2027-01-01T09:00",
+   "runs": [
+    "2027-01-01T09:00",
+    "2027-07-01T09:00",
+    "2028-01-01T09:00",
+    "2028-07-01T09:00",
+    "2029-01-01T09:00"
+   ],
+   "phrase": "every January 1st and July 1st",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p177",
+   "text": "each Monday at 7:45am, summarize the weekend's on-call pages",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=7;BYMINUTE=45",
+   "dtstart": "2026-10-12T07:45",
+   "runs": [
+    "2026-10-12T07:45",
+    "2026-10-19T07:45",
+    "2026-10-26T07:45",
+    "2026-11-02T07:45",
+    "2026-11-09T07:45"
+   ],
+   "phrase": "each Monday at 7:45am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p178",
+   "text": "every Thursday at 4:30pm, prep the demo notes for Friday's all-hands",
+   "rule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=16;BYMINUTE=30",
+   "dtstart": "2026-10-08T16:30",
+   "runs": [
+    "2026-10-08T16:30",
+    "2026-10-15T16:30",
+    "2026-10-22T16:30",
+    "2026-10-29T16:30",
+    "2026-11-05T16:30"
+   ],
+   "phrase": "every Thursday at 4:30pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p179",
+   "text": "at 11:59pm on the last day of each month, snapshot the usage metrics",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=-1;BYHOUR=23;BYMINUTE=59",
+   "dtstart": "2026-10-31T23:59",
+   "runs": [
+    "2026-10-31T23:59",
+    "2026-11-30T23:59",
+    "2026-12-31T23:59",
+    "2027-01-31T23:59",
+    "2027-02-28T23:59"
+   ],
+   "phrase": "at 11:59pm on the last day of each month",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p180",
+   "text": "every Sunday evening, plan the week's priorities from my open issues",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-11T18:00",
+   "runs": [
+    "2026-10-11T18:00",
+    "2026-10-18T18:00",
+    "2026-10-25T18:00",
+    "2026-11-01T18:00",
+    "2026-11-08T18:00"
+   ],
+   "phrase": "every Sunday evening",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p181",
+   "text": "every weekend at 10am check that the backups ran",
+   "rule": "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-10T10:00",
+   "runs": [
+    "2026-10-10T10:00",
+    "2026-10-11T10:00",
+    "2026-10-17T10:00",
+    "2026-10-18T10:00",
+    "2026-10-24T10:00"
+   ],
+   "phrase": "every weekend at 10am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p182",
+   "text": "fortnightly on Monday at 9am, review the roadmap",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-26T09:00",
+    "2026-11-09T09:00",
+    "2026-11-23T09:00",
+    "2026-12-07T09:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+     "dtstart": "2026-10-19T09:00",
+     "runs": [
+      "2026-10-19T09:00",
+      "2026-11-02T09:00",
+      "2026-11-16T09:00",
+      "2026-11-30T09:00",
+      "2026-12-14T09:00"
+     ],
+     "why": "Today's slot has passed; anchoring the interval on today instead of the next run is the other defensible phase."
+    }
+   ],
+   "phrase": "fortnightly on Monday at 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p183",
+   "text": "every Monday, Wednesday and Friday at 7am, check the overnight data pipeline",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=7;BYMINUTE=0",
+   "dtstart": "2026-10-07T07:00",
+   "runs": [
+    "2026-10-07T07:00",
+    "2026-10-09T07:00",
+    "2026-10-12T07:00",
+    "2026-10-14T07:00",
+    "2026-10-16T07:00"
+   ],
+   "phrase": "every Monday, Wednesday and Friday at 7am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p184",
+   "text": "at noon on weekdays, post the deploy window reminder",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-06T12:00",
+   "runs": [
+    "2026-10-06T12:00",
+    "2026-10-07T12:00",
+    "2026-10-08T12:00",
+    "2026-10-09T12:00",
+    "2026-10-12T12:00"
+   ],
+   "phrase": "at noon on weekdays",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p185",
+   "text": "every morning at 7:30 except weekends, check the overnight alerts",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=7;BYMINUTE=30",
+   "dtstart": "2026-10-06T07:30",
+   "runs": [
+    "2026-10-06T07:30",
+    "2026-10-07T07:30",
+    "2026-10-08T07:30",
+    "2026-10-09T07:30",
+    "2026-10-12T07:30"
+   ],
+   "phrase": "every morning at 7:30 except weekends",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p186",
+   "text": "each quarter on the first Monday at 10am, run the access review",
+   "rule": "FREQ=MONTHLY;BYMONTH=1,4,7,10;BYDAY=1MO;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2027-01-04T10:00",
+   "runs": [
+    "2027-01-04T10:00",
+    "2027-04-05T10:00",
+    "2027-07-05T10:00",
+    "2027-10-04T10:00",
+    "2028-01-03T10:00"
+   ],
+   "phrase": "each quarter on the first Monday at 10am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p187",
+   "text": "every year on March 31 at 9am, renew the domain certificates",
+   "rule": "FREQ=YEARLY;BYMONTH=3;BYMONTHDAY=-1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2027-03-31T09:00",
+   "runs": [
+    "2027-03-31T09:00",
+    "2028-03-31T09:00",
+    "2029-03-31T09:00",
+    "2030-03-31T09:00",
+    "2031-03-31T09:00"
+   ],
+   "phrase": "every year on March 31 at 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p188",
+   "text": "every year on Halloween, swap the site banner to the spooky theme",
+   "rule": "FREQ=YEARLY;BYMONTH=10;BYMONTHDAY=-1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-31T09:00",
+   "runs": [
+    "2026-10-31T09:00",
+    "2027-10-31T09:00",
+    "2028-10-31T09:00",
+    "2029-10-31T09:00",
+    "2030-10-31T09:00"
+   ],
+   "phrase": "every year on Halloween",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p189",
+   "text": "Every Monday at 9am:\n1. Pull the list of open PRs older than a week\n2. Ping each author in Slack\n3. Post a summary in #eng",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-12T09:00",
+   "runs": [
+    "2026-10-12T09:00",
+    "2026-10-19T09:00",
+    "2026-10-26T09:00",
+    "2026-11-02T09:00",
+    "2026-11-09T09:00"
+   ],
+   "phrase": "Every Monday at 9am",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p190",
+   "text": "Context: our staging env drifts from prod.\n\nEvery night at 3am, diff the staging and prod configs and open a PR if they differ.",
+   "rule": "FREQ=DAILY;BYHOUR=3;BYMINUTE=0",
+   "dtstart": "2026-10-06T03:00",
+   "runs": [
+    "2026-10-06T03:00",
+    "2026-10-07T03:00",
+    "2026-10-08T03:00",
+    "2026-10-09T03:00",
+    "2026-10-10T03:00"
+   ],
+   "phrase": "Every night at 3am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p191",
+   "text": "Goal: keep the docs in sync with the API.\nTask: compare openapi.yaml to the docs pages and open a PR with fixes.\nWhen: weekly on Thursdays at 10am.",
+   "rule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-08T10:00",
+   "runs": [
+    "2026-10-08T10:00",
+    "2026-10-15T10:00",
+    "2026-10-22T10:00",
+    "2026-10-29T10:00",
+    "2026-11-05T10:00"
+   ],
+   "phrase": "weekly on Thursdays at 10am",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p192",
+   "text": "every morning at 8, go through the threads I left rested overnight and summarize what each one needs from me",
+   "rule": "FREQ=DAILY;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-06T08:00",
+   "runs": [
+    "2026-10-06T08:00",
+    "2026-10-07T08:00",
+    "2026-10-08T08:00",
+    "2026-10-09T08:00",
+    "2026-10-10T08:00"
+   ],
+   "phrase": "every morning at 8",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p193",
+   "text": "Each weekday at 6pm, write a short status of what the agents finished today",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-05T18:00",
+   "runs": [
+    "2026-10-05T18:00",
+    "2026-10-06T18:00",
+    "2026-10-07T18:00",
+    "2026-10-08T18:00",
+    "2026-10-09T18:00"
+   ],
+   "phrase": "Each weekday at 6pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p194",
+   "text": "On Sundays at 9pm, prune worktrees under .frizz/worktrees that belong to done threads",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=21;BYMINUTE=0",
+   "dtstart": "2026-10-11T21:00",
+   "runs": [
+    "2026-10-11T21:00",
+    "2026-10-18T21:00",
+    "2026-10-25T21:00",
+    "2026-11-01T21:00",
+    "2026-11-08T21:00"
+   ],
+   "phrase": "On Sundays at 9pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p195",
+   "text": "every hour between 9am and 6pm on weekdays, check if CI on main is red and tell me",
+   "rule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16,17,18;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T16:00",
+    "2026-10-05T17:00",
+    "2026-10-05T18:00",
+    "2026-10-06T09:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16,17;BYMINUTE=0",
+     "dtstart": "2026-10-05T15:00",
+     "runs": [
+      "2026-10-05T15:00",
+      "2026-10-05T16:00",
+      "2026-10-05T17:00",
+      "2026-10-06T09:00",
+      "2026-10-06T10:00"
+     ],
+     "why": "Whether the 6pm end is itself a run."
+    }
+   ],
+   "phrase": "every hour between 9am and 6pm on weekdays",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p196",
+   "text": "weekdays at 4:45pm, remind me in a new thread to write tomorrow's plan",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=16;BYMINUTE=45",
+   "dtstart": "2026-10-05T16:45",
+   "runs": [
+    "2026-10-05T16:45",
+    "2026-10-06T16:45",
+    "2026-10-07T16:45",
+    "2026-10-08T16:45",
+    "2026-10-09T16:45"
+   ],
+   "phrase": "weekdays at 4:45pm",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p197",
+   "text": "every day at 12:30, summarize the lunch-hour deploys",
+   "rule": "FREQ=DAILY;BYHOUR=12;BYMINUTE=30",
+   "dtstart": "2026-10-06T12:30",
+   "runs": [
+    "2026-10-06T12:30",
+    "2026-10-07T12:30",
+    "2026-10-08T12:30",
+    "2026-10-09T12:30",
+    "2026-10-10T12:30"
+   ],
+   "phrase": "every day at 12:30",
+   "where": "start",
+   "source": "hand"
+  },
+  {
+   "id": "p198",
+   "text": "Go through the #feedback channel and file GitHub issues for any bug reports, every weekday at 4pm",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-05T16:00",
+   "runs": [
+    "2026-10-05T16:00",
+    "2026-10-06T16:00",
+    "2026-10-07T16:00",
+    "2026-10-08T16:00",
+    "2026-10-09T16:00"
+   ],
+   "phrase": "every weekday at 4pm",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p199",
+   "text": "Check that preview deployments older than a week have been deleted, on Saturdays",
+   "rule": "FREQ=WEEKLY;BYDAY=SA;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-10T09:00",
+   "runs": [
+    "2026-10-10T09:00",
+    "2026-10-17T09:00",
+    "2026-10-24T09:00",
+    "2026-10-31T09:00",
+    "2026-11-07T09:00"
+   ],
+   "phrase": "on Saturdays",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p200",
+   "text": "Write a summary of what changed in the arktype repo since the last one — weekly, Friday mornings",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-09T09:00",
+   "runs": [
+    "2026-10-09T09:00",
+    "2026-10-16T09:00",
+    "2026-10-23T09:00",
+    "2026-10-30T09:00",
+    "2026-11-06T09:00"
+   ],
+   "phrase": "weekly, Friday mornings",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p201",
+   "text": "Rerun the benchmark suite on main and compare it with last week's numbers every Sunday night",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=21;BYMINUTE=0",
+   "dtstart": "2026-10-11T21:00",
+   "runs": [
+    "2026-10-11T21:00",
+    "2026-10-18T21:00",
+    "2026-10-25T21:00",
+    "2026-11-01T21:00",
+    "2026-11-08T21:00"
+   ],
+   "phrase": "every Sunday night",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p202",
+   "text": "Look at the open Dependabot alerts and open PRs for the critical ones on the first of every month",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-01T09:00",
+   "runs": [
+    "2026-11-01T09:00",
+    "2026-12-01T09:00",
+    "2027-01-01T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ],
+   "phrase": "on the first of every month",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p203",
+   "text": "Scan the error logs for new exception types and report them to me each afternoon",
+   "rule": "FREQ=DAILY;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-06T14:00",
+   "runs": [
+    "2026-10-06T14:00",
+    "2026-10-07T14:00",
+    "2026-10-08T14:00",
+    "2026-10-09T14:00",
+    "2026-10-10T14:00"
+   ],
+   "phrase": "each afternoon",
+   "where": "end",
+   "source": "hand",
+   "note": "Today's 2pm has passed."
+  },
+  {
+   "id": "p204",
+   "text": "Draft the weekly newsletter from the merged PRs and the release notes, Thursdays at 2pm",
+   "rule": "FREQ=WEEKLY;BYDAY=TH;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-08T14:00",
+   "runs": [
+    "2026-10-08T14:00",
+    "2026-10-15T14:00",
+    "2026-10-22T14:00",
+    "2026-10-29T14:00",
+    "2026-11-05T14:00"
+   ],
+   "phrase": "Thursdays at 2pm",
+   "where": "end",
+   "source": "hand",
+   "note": "\"weekly newsletter\" is the task's subject, not the schedule."
+  },
+  {
+   "id": "p205",
+   "text": "Summarize the on-call handoff and post it in #oncall at 9:30 every Monday",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=30",
+   "dtstart": "2026-10-12T09:30",
+   "runs": [
+    "2026-10-12T09:30",
+    "2026-10-19T09:30",
+    "2026-10-26T09:30",
+    "2026-11-02T09:30",
+    "2026-11-09T09:30"
+   ],
+   "phrase": "at 9:30 every Monday",
+   "where": "end",
+   "source": "hand"
+  },
+  {
+   "id": "p206",
+   "text": "Pull the latest metrics from Grafana every Friday at 11am and put a short summary in the team doc, with a chart if anything moved more than 10%.",
+   "rule": "FREQ=WEEKLY;BYDAY=FR;BYHOUR=11;BYMINUTE=0",
+   "dtstart": "2026-10-09T11:00",
+   "runs": [
+    "2026-10-09T11:00",
+    "2026-10-16T11:00",
+    "2026-10-23T11:00",
+    "2026-10-30T11:00",
+    "2026-11-06T11:00"
+   ],
+   "phrase": "every Friday at 11am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p207",
+   "text": "Hey, can you nightly at 1am regenerate the API client from openapi.yaml and open a PR if it changed?",
+   "rule": "FREQ=DAILY;BYHOUR=1;BYMINUTE=0",
+   "dtstart": "2026-10-06T01:00",
+   "runs": [
+    "2026-10-06T01:00",
+    "2026-10-07T01:00",
+    "2026-10-08T01:00",
+    "2026-10-09T01:00",
+    "2026-10-10T01:00"
+   ],
+   "phrase": "nightly at 1am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p208",
+   "text": "For the docs repo — on weekday mornings at 8, check every link in the changelog and fix the dead ones.",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=0",
+   "dtstart": "2026-10-06T08:00",
+   "runs": [
+    "2026-10-06T08:00",
+    "2026-10-07T08:00",
+    "2026-10-08T08:00",
+    "2026-10-09T08:00",
+    "2026-10-12T08:00"
+   ],
+   "phrase": "on weekday mornings at 8",
+   "where": "mid",
+   "source": "hand",
+   "note": "\"every link\" is a set the task covers."
+  },
+  {
+   "id": "p209",
+   "text": "Check each of the three staging environments every 2 hours on weekdays from 8 to 6 and tell me if any is down",
+   "rule": "FREQ=HOURLY;INTERVAL=2;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8,10,12,14,16,18;BYMINUTE=0",
+   "dtstart": "2026-10-05T16:00",
+   "runs": [
+    "2026-10-05T16:00",
+    "2026-10-05T18:00",
+    "2026-10-06T08:00",
+    "2026-10-06T10:00",
+    "2026-10-06T12:00"
+   ],
+   "phrase": "every 2 hours on weekdays from 8 to 6",
+   "where": "mid",
+   "source": "hand",
+   "note": "\"each of the three\" is a set the task covers."
+  },
+  {
+   "id": "p210",
+   "text": "Go through the support inbox each Monday and Thursday at 9am, tag what you can, and escalate the rest to me",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-08T09:00",
+   "runs": [
+    "2026-10-08T09:00",
+    "2026-10-12T09:00",
+    "2026-10-15T09:00",
+    "2026-10-19T09:00",
+    "2026-10-22T09:00"
+   ],
+   "phrase": "each Monday and Thursday at 9am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p211",
+   "text": "Please, every evening around 7, write me a short digest of what the agents did today and what they need from me.",
+   "rule": "FREQ=DAILY;BYHOUR=19;BYMINUTE=0",
+   "dtstart": "2026-10-05T19:00",
+   "runs": [
+    "2026-10-05T19:00",
+    "2026-10-06T19:00",
+    "2026-10-07T19:00",
+    "2026-10-08T19:00",
+    "2026-10-09T19:00"
+   ],
+   "phrase": "every evening around 7",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p212",
+   "text": "Run `pnpm audit` in all our repos on the 15th of every month at 10am and open issues for high-severity findings",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-15T10:00",
+   "runs": [
+    "2026-10-15T10:00",
+    "2026-11-15T10:00",
+    "2026-12-15T10:00",
+    "2027-01-15T10:00",
+    "2027-02-15T10:00"
+   ],
+   "phrase": "on the 15th of every month at 10am",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p213",
+   "text": "Watch the PR queue: twice a week, Tuesday and Friday at 3pm, ping reviewers on PRs waiting more than 2 days.",
+   "rule": "FREQ=WEEKLY;BYDAY=TU,FR;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-06T15:00",
+   "runs": [
+    "2026-10-06T15:00",
+    "2026-10-09T15:00",
+    "2026-10-13T15:00",
+    "2026-10-16T15:00",
+    "2026-10-20T15:00"
+   ],
+   "phrase": "twice a week, Tuesday and Friday at 3pm",
+   "where": "mid",
+   "source": "hand"
+  },
+  {
+   "id": "p214",
+   "text": "on the 1st and 15th of every month at noon, send the contractor invoices reminder",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1,15;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-15T12:00",
+   "runs": [
+    "2026-10-15T12:00",
+    "2026-11-01T12:00",
+    "2026-11-15T12:00",
+    "2026-12-01T12:00",
+    "2026-12-15T12:00"
+   ],
+   "phrase": "on the 1st and 15th of every month at noon",
+   "where": "start",
+   "source": "hand"
+  }
+ ],
+ "field": [
+  {
+   "id": "f001",
+   "text": "every Tuesday at 10am",
+   "rule": "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-06T10:00",
+   "runs": [
+    "2026-10-06T10:00",
+    "2026-10-13T10:00",
+    "2026-10-20T10:00",
+    "2026-10-27T10:00",
+    "2026-11-03T10:00"
+   ]
+  },
+  {
+   "id": "f002",
+   "text": "weekdays at 8:30",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=30",
+   "dtstart": "2026-10-06T08:30",
+   "runs": [
+    "2026-10-06T08:30",
+    "2026-10-07T08:30",
+    "2026-10-08T08:30",
+    "2026-10-09T08:30",
+    "2026-10-12T08:30"
+   ]
+  },
+  {
+   "id": "f003",
+   "text": "Tuesdays and Fridays at 3pm",
+   "rule": "FREQ=WEEKLY;BYDAY=TU,FR;BYHOUR=15;BYMINUTE=0",
+   "dtstart": "2026-10-06T15:00",
+   "runs": [
+    "2026-10-06T15:00",
+    "2026-10-09T15:00",
+    "2026-10-13T15:00",
+    "2026-10-16T15:00",
+    "2026-10-20T15:00"
+   ]
+  },
+  {
+   "id": "f004",
+   "text": "the first Monday of every month",
+   "rule": "FREQ=MONTHLY;BYDAY=1MO;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-11-02T09:00",
+   "runs": [
+    "2026-11-02T09:00",
+    "2026-12-07T09:00",
+    "2027-01-04T09:00",
+    "2027-02-01T09:00",
+    "2027-03-01T09:00"
+   ]
+  },
+  {
+   "id": "f005",
+   "text": "every other Friday at 4pm",
+   "rule": "FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=16;BYMINUTE=0",
+   "dtstart": "2026-10-09T16:00",
+   "runs": [
+    "2026-10-09T16:00",
+    "2026-10-23T16:00",
+    "2026-11-06T16:00",
+    "2026-11-20T16:00",
+    "2026-12-04T16:00"
+   ]
+  },
+  {
+   "id": "f006",
+   "text": "every day at noon except weekends",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-06T12:00",
+   "runs": [
+    "2026-10-06T12:00",
+    "2026-10-07T12:00",
+    "2026-10-08T12:00",
+    "2026-10-09T12:00",
+    "2026-10-12T12:00"
+   ]
+  },
+  {
+   "id": "f007",
+   "text": "hourly between 9 and 5 on weekdays",
+   "rule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16,17;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T16:00",
+    "2026-10-05T17:00",
+    "2026-10-06T09:00",
+    "2026-10-06T10:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,10,11,12,13,14,15,16;BYMINUTE=0",
+     "dtstart": "2026-10-05T15:00",
+     "runs": [
+      "2026-10-05T15:00",
+      "2026-10-05T16:00",
+      "2026-10-06T09:00",
+      "2026-10-06T10:00",
+      "2026-10-06T11:00"
+     ],
+     "why": "Whether the 5pm end is itself a run."
+    }
+   ]
+  },
+  {
+   "id": "f008",
+   "text": "Mondays and Thursdays at 10",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=10;BYMINUTE=0",
+   "dtstart": "2026-10-08T10:00",
+   "runs": [
+    "2026-10-08T10:00",
+    "2026-10-12T10:00",
+    "2026-10-15T10:00",
+    "2026-10-19T10:00",
+    "2026-10-22T10:00"
+   ]
+  },
+  {
+   "id": "f009",
+   "text": "at 7am every day",
+   "rule": "FREQ=DAILY;BYHOUR=7;BYMINUTE=0",
+   "dtstart": "2026-10-06T07:00",
+   "runs": [
+    "2026-10-06T07:00",
+    "2026-10-07T07:00",
+    "2026-10-08T07:00",
+    "2026-10-09T07:00",
+    "2026-10-10T07:00"
+   ]
+  },
+  {
+   "id": "f010",
+   "text": "every weekday morning",
+   "rule": "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ]
+  },
+  {
+   "id": "f011",
+   "text": "on the 15th of each month at 2pm",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=14;BYMINUTE=0",
+   "dtstart": "2026-10-15T14:00",
+   "runs": [
+    "2026-10-15T14:00",
+    "2026-11-15T14:00",
+    "2026-12-15T14:00",
+    "2027-01-15T14:00",
+    "2027-02-15T14:00"
+   ]
+  },
+  {
+   "id": "f012",
+   "text": "nightly at 2am",
+   "rule": "FREQ=DAILY;BYHOUR=2;BYMINUTE=0",
+   "dtstart": "2026-10-06T02:00",
+   "runs": [
+    "2026-10-06T02:00",
+    "2026-10-07T02:00",
+    "2026-10-08T02:00",
+    "2026-10-09T02:00",
+    "2026-10-10T02:00"
+   ]
+  },
+  {
+   "id": "f013",
+   "text": "every Sunday evening",
+   "rule": "FREQ=WEEKLY;BYDAY=SU;BYHOUR=18;BYMINUTE=0",
+   "dtstart": "2026-10-11T18:00",
+   "runs": [
+    "2026-10-11T18:00",
+    "2026-10-18T18:00",
+    "2026-10-25T18:00",
+    "2026-11-01T18:00",
+    "2026-11-08T18:00"
+   ]
+  },
+  {
+   "id": "f014",
+   "text": "last business day of the month at 5pm",
+   "rule": "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=-1;BYHOUR=17;BYMINUTE=0",
+   "dtstart": "2026-10-30T17:00",
+   "runs": [
+    "2026-10-30T17:00",
+    "2026-11-30T17:00",
+    "2026-12-31T17:00",
+    "2027-01-29T17:00",
+    "2027-02-26T17:00"
+   ]
+  },
+  {
+   "id": "f015",
+   "text": "mornings",
+   "rule": "FREQ=DAILY;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-10T09:00"
+   ]
+  },
+  {
+   "id": "f016",
+   "text": "every 2 hours from 8 to 6 on weekdays",
+   "rule": "FREQ=HOURLY;INTERVAL=2;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8,10,12,14,16,18;BYMINUTE=0",
+   "dtstart": "2026-10-05T16:00",
+   "runs": [
+    "2026-10-05T16:00",
+    "2026-10-05T18:00",
+    "2026-10-06T08:00",
+    "2026-10-06T10:00",
+    "2026-10-06T12:00"
+   ]
+  },
+  {
+   "id": "f017",
+   "text": "Mondays at 9am Pacific",
+   "rule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=12;BYMINUTE=0",
+   "dtstart": "2026-10-12T12:00",
+   "runs": [
+    "2026-10-12T12:00",
+    "2026-10-19T12:00",
+    "2026-10-26T12:00",
+    "2026-11-02T12:00",
+    "2026-11-09T12:00"
+   ]
+  },
+  {
+   "id": "f018",
+   "text": "every weekday at 9am until Halloween",
+   "rule": "FREQ=WEEKLY;UNTIL=20261031;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-06T09:00",
+   "runs": [
+    "2026-10-06T09:00",
+    "2026-10-07T09:00",
+    "2026-10-08T09:00",
+    "2026-10-09T09:00",
+    "2026-10-12T09:00"
+   ]
+  },
+  {
+   "id": "f019",
+   "text": "twice a month on the 1st and 15th",
+   "rule": "FREQ=MONTHLY;BYMONTHDAY=1,15;BYHOUR=9;BYMINUTE=0",
+   "dtstart": "2026-10-15T09:00",
+   "runs": [
+    "2026-10-15T09:00",
+    "2026-11-01T09:00",
+    "2026-11-15T09:00",
+    "2026-12-01T09:00",
+    "2026-12-15T09:00"
+   ]
+  },
+  {
+   "id": "f020",
+   "text": "every 4 hours",
+   "rule": "FREQ=HOURLY;INTERVAL=4;BYMINUTE=0",
+   "dtstart": "2026-10-05T15:00",
+   "runs": [
+    "2026-10-05T15:00",
+    "2026-10-05T19:00",
+    "2026-10-05T23:00",
+    "2026-10-06T03:00",
+    "2026-10-06T07:00"
+   ],
+   "alt": [
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=4;BYMINUTE=0",
+     "dtstart": "2026-10-05T16:00",
+     "runs": [
+      "2026-10-05T16:00",
+      "2026-10-05T20:00",
+      "2026-10-06T00:00",
+      "2026-10-06T04:00",
+      "2026-10-06T08:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    },
+    {
+     "rule": "FREQ=HOURLY;INTERVAL=4;BYMINUTE=0",
+     "dtstart": "2026-10-05T17:00",
+     "runs": [
+      "2026-10-05T17:00",
+      "2026-10-05T21:00",
+      "2026-10-06T01:00",
+      "2026-10-06T05:00",
+      "2026-10-06T09:00"
+     ],
+     "why": "A bare every-N-hours names no phase; the midnight-aligned grid (and 9am, the default time) are defensible too."
+    }
+   ]
+  }
+ ],
+ "oneOffs": [
+  {
+   "id": "o001",
+   "text": "Friday at 3pm deploy the release branch"
+  },
+  {
+   "id": "o002",
+   "text": "this afternoon at 3 rerun the flaky tests"
+  },
+  {
+   "id": "o003",
+   "text": "on Monday at 10am run the data backfill"
+  },
+  {
+   "id": "o004",
+   "text": "next Tuesday morning, write the quarterly report draft"
+  },
+  {
+   "id": "o005",
+   "text": "tonight at midnight, run the full reindex"
+  },
+  {
+   "id": "o006",
+   "text": "Saturday at noon, upgrade the staging database"
+  },
+  {
+   "id": "o007",
+   "text": "this evening at 6, post the release announcement"
+  },
+  {
+   "id": "o008",
+   "text": "tomorrow morning summarize the incidents"
+  },
+  {
+   "id": "o009",
+   "text": "on Thursday, cut the 2.4 release"
+  },
+  {
+   "id": "o010",
+   "text": "remind me Wednesday at 2pm to review the hiring rubric"
+  }
+ ],
+ "negatives": [
+  {
+   "id": "n001",
+   "text": "fix the bug from this morning in the login flow",
+   "kind": "past or present"
+  },
+  {
+   "id": "n002",
+   "text": "why did the nightly build fail?",
+   "kind": "past or present"
+  },
+  {
+   "id": "n003",
+   "text": "the weekly report is wrong — the totals don't match the dashboard",
+   "kind": "past or present"
+  },
+  {
+   "id": "n004",
+   "text": "Monday's deploy broke the auth callback, find out what changed",
+   "kind": "past or present"
+  },
+  {
+   "id": "n005",
+   "text": "the build broke last night after the dependency bump; bisect it",
+   "kind": "past or present"
+  },
+  {
+   "id": "n006",
+   "text": "what happened in #incidents this morning?",
+   "kind": "past or present"
+  },
+  {
+   "id": "n007",
+   "text": "look at the hourly metrics and tell me if anything is off",
+   "kind": "past or present"
+  },
+  {
+   "id": "n008",
+   "text": "I pushed a fix on Friday but the tests are still red, take a look",
+   "kind": "past or present"
+  },
+  {
+   "id": "n009",
+   "text": "the daily standup bot posted twice today, figure out why",
+   "kind": "past or present"
+  },
+  {
+   "id": "n010",
+   "text": "this afternoon the API latency spiked — check the traces from 2pm to 3pm",
+   "kind": "past or present"
+  },
+  {
+   "id": "n011",
+   "text": "compare this week's error rate to the weekly average from last month",
+   "kind": "past or present"
+  },
+  {
+   "id": "n012",
+   "text": "the cron that runs every hour stopped firing on Sunday; why?",
+   "kind": "past or present"
+  },
+  {
+   "id": "n013",
+   "text": "find the commit that made the nightly e2e run take 40m instead of 15m",
+   "kind": "past or present"
+  },
+  {
+   "id": "n014",
+   "text": "read yesterday evening's on-call notes and tell me what's still open",
+   "kind": "past or present"
+  },
+  {
+   "id": "n015",
+   "text": "Saturday's traffic spike looks like a bot; check the access logs",
+   "kind": "past or present"
+  },
+  {
+   "id": "n016",
+   "text": "summarize every PR merged this week",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n017",
+   "text": "add a license header to every file in src/",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n018",
+   "text": "for each failing test in the CI log, open an issue with the stack trace",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n019",
+   "text": "go through every open PR and label the ones that touch the database",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n020",
+   "text": "make sure each package in the monorepo has a README",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n021",
+   "text": "rename every occurrence of `userId` to `accountId` in the API layer",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n022",
+   "text": "every component in packages/web should use the new Button; migrate the stragglers",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n023",
+   "text": "check each of the five benchmarks and report which regressed",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n024",
+   "text": "Review each PR opened since Monday and leave comments",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n025",
+   "text": "list every Friday release from the changelog",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n026",
+   "text": "each test file should clean up its temp dirs; fix the ones that don't",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n027",
+   "text": "every one of the tests is flaky on Windows — investigate",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n028",
+   "text": "write a function that returns every other element",
+   "kind": "a set, covered once"
+  },
+  {
+   "id": "n029",
+   "text": "add a GitHub Action that runs the tests every Monday at 9am",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n030",
+   "text": "change the nightly CI workflow to run at 3am instead of 2am",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n031",
+   "text": "write a cron job that backs up the database every night",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n032",
+   "text": "make the digest email go out weekly instead of daily",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n033",
+   "text": "add a 'daily' option to the report frequency dropdown",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n034",
+   "text": "refactor the scheduler so every Monday at 9am isn't parsed as UTC",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n035",
+   "text": "the report should go out weekly",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n036",
+   "text": "add a setting so users can pick morning or evening for their reminder",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n037",
+   "text": "implement monthly billing cycles in the subscription service",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n038",
+   "text": "write a test for the 'every other Friday' recurrence",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n039",
+   "text": "add dark mode that switches on automatically at night",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n040",
+   "text": "why does the job run every hour instead of every day?",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n041",
+   "text": "how often does the nightly job run, and where is that configured?",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n042",
+   "text": "document the weekly release process in RELEASING.md",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n043",
+   "text": "set up Dependabot to open PRs weekly on Mondays",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n044",
+   "text": "make the cache expire at midnight every day",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n045",
+   "text": "the backups that run every Sunday at 2am are failing — fix them",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n046",
+   "text": "why is the 'every Monday at 9am' schedule showing the wrong next run?",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n047",
+   "text": "Each morning standup takes too long, write a bot that summarizes it",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n048",
+   "text": "a script I will run each morning to clean my downloads — write it in bash",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n049",
+   "text": "every PR needs a changelog entry; add a CI check for that",
+   "kind": "software that runs on a schedule"
+  },
+  {
+   "id": "n050",
+   "text": "finish the migration by Friday",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n051",
+   "text": "I need the slides ready before Monday's demo",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n052",
+   "text": "the release is Thursday; make sure the changelog is complete",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n053",
+   "text": "remind me what we decided on Tuesday about the pricing page",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n054",
+   "text": "we ship on Monday morning, so freeze main after this PR lands",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n055",
+   "text": "I'll be out Friday — wrap up the migration and leave notes",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n056",
+   "text": "keep working on it until Monday morning, then summarize",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n057",
+   "text": "let's pick this up tomorrow morning; for now just commit what you have",
+   "kind": "a deadline"
+  },
+  {
+   "id": "n058",
+   "text": "every time the build fails, fix it",
+   "kind": "an event, not the clock"
+  },
+  {
+   "id": "n059",
+   "text": "whenever a PR is opened on a weekday, review it",
+   "kind": "an event, not the clock"
+  },
+  {
+   "id": "n060",
+   "text": "after each deploy, run the smoke tests",
+   "kind": "an event, not the clock"
+  },
+  {
+   "id": "n061",
+   "text": "each time someone files a bug with the 'crash' label, triage it",
+   "kind": "an event, not the clock"
+  },
+  {
+   "id": "n062",
+   "text": "the weekend on-call rotation page shows the wrong names",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n063",
+   "text": "add a 'good morning' greeting to the dashboard header",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n064",
+   "text": "fix the timezone bug where midnight shows as 24:00",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n065",
+   "text": "the 'Weekdays only' checkbox doesn't save",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n066",
+   "text": "noon UTC is rendering as 12 AM in the scheduler UI",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n067",
+   "text": "make the quarterly revenue chart start on the fiscal quarter",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n068",
+   "text": "the annually billed plans are showing a monthly price",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n069",
+   "text": "explain how the biweekly payroll export is computed",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n070",
+   "text": "rename the nightly channel to canary in the release scripts",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n071",
+   "text": "Sunday is showing as the first day of the week in the calendar; make it Monday",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n072",
+   "text": "write a blog post about our move from weekly to daily releases",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n073",
+   "text": "the hourly rate field rounds incorrectly",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n074",
+   "text": "make the evening theme less blue",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n075",
+   "text": "the Tuesday cohort's retention dropped; dig into the funnel",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n076",
+   "text": "add the yearly plan to the pricing page",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n077",
+   "text": "fix the daily build",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n078",
+   "text": "make the weekly digest email render on mobile",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n079",
+   "text": "the monthly invoice PDF is missing the VAT line",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n080",
+   "text": "parse 'every weekday at 9' correctly in the natural-language date picker",
+   "kind": "a thing named with a time word"
+  },
+  {
+   "id": "n081",
+   "text": "good morning! what's the status of the auth refactor?",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n082",
+   "text": "keep going until the tests pass, I'll check back this evening",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n083",
+   "text": "Thanks, that worked. Now do the same for the weekend report",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n084",
+   "text": "while I'm out this afternoon, fix the tests",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n085",
+   "text": "each night the disk fills up on the build box — find what's writing to /tmp",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n086",
+   "text": "every morning I have to log in to the dashboard again; fix the session expiry",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n087",
+   "text": "the fortnightly sprint review deck is missing last sprint's velocity — add it",
+   "kind": "a reply or a recurring problem"
+  },
+  {
+   "id": "n088",
+   "text": "is noon a good time to cut the release? check the traffic graphs",
+   "kind": "a reply or a recurring problem"
+  }
+ ]
+}

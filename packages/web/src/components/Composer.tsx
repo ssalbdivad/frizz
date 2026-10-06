@@ -6,9 +6,9 @@ import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
-import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -19,6 +19,7 @@ import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveM
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
 import { inSkippedCard, whenCardRendered } from "../lib/cardVisibility.ts"
+import type { BoxInputEvent } from "../lib/scheduleReadScheduler.ts"
 
 // The shared prompt composer (the pattern the user called "perfect"): ONE rounded bordered box
 // holding a borderless auto-growing textarea plus a small round accent send button hovering INSIDE
@@ -109,6 +110,58 @@ const FILE_QUERY_DEBOUNCE_MS = 60
 // over the colour beside it — every pill's edge was drawn in --color-inset (#090b10 in dark, nearly
 // the box's own fill) and never showed. Measured on the computed box-shadow, 2026-10-01.
 const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring inset-ring-fg/[0.14]"
+
+/**
+ * A run of the PROSE marked behind its own words — the schedule the box read in them
+ * (plans/schedule-live-reading.md). Painted in the highlight layer behind the textarea, so a mark is zero-layout
+ * like every backdrop decoration; its whole look is `[data-composer-mark]` in styles.css, in one place:
+ *
+ *   pending   a faint dotted underline on a schedule word, fading in late, while the model reads the words
+ *   accepted  the accent fill — the words Enter turns into WHEN
+ *   wash      the fill washing bright and back as the schedule is created
+ *
+ * `key` is the run's identity across renders: a mark that keeps its key keeps its element, so it never replays
+ * its entrance — a phrase that extends just grows, and a tone change plays the new tone's own entrance.
+ */
+export type ComposerMarkTone = "pending" | "accepted" | "wash"
+export type ComposerMark = { start: number; end: number; tone: ComposerMarkTone; key?: string }
+
+/**
+ * The runs of the prose where a schedule word never makes the box read for a schedule
+ * (`hasScheduleTrigger`): what the backdrop paints as something other than prose — fenced code, the staged ⌘I
+ * context tokens — plus every `@mention` and `/command` token, resolved or not. A superset of what the backdrop
+ * tints is the safe side: an excluded run only ever costs a read. (Quotes, inline code and a leading `/command`
+ * the trigger skips on its own.)
+ */
+export function composerExcludeRuns(prose: string, contextTokens: readonly string[] = []): { start: number; end: number }[] {
+  const out: { start: number; end: number }[] = []
+  for (const run of scanInputFences(prose) ?? []) if (run.kind !== "prose") out.push({ start: run.start, end: run.end })
+  let at = 0
+  for (const run of splitProseByTokens(prose, contextTokens)) {
+    if (run.token) out.push({ start: at, end: at + run.text.length })
+    at += run.text.length
+  }
+  for (const m of prose.matchAll(/(^|[\s(])([@/][^\s]+)/g)) {
+    const start = m.index + m[1]!.length
+    out.push({ start, end: start + m[2]!.length })
+  }
+  return out
+}
+
+/** The marks that fit the prose, in order, overlaps clipped — a mark over words that are gone draws nothing. */
+export function fittedMarks(marks: readonly ComposerMark[] | undefined, length: number): ComposerMark[] {
+  if (!marks?.length) return []
+  const out: ComposerMark[] = []
+  let at = 0
+  for (const m of [...marks].sort((a, b) => a.start - b.start)) {
+    const start = Math.max(m.start, at)
+    const end = Math.min(m.end, length)
+    if (end <= start) continue
+    out.push({ ...m, start, end })
+    at = end
+  }
+  return out
+}
 
 // THE PHONE LAYOUTS (below the 700px breakpoint; the caller decides, with useIsMobile). Same draft,
 // same attachment intake, same keyboard rules, same send — only the shell around the textarea differs.
@@ -204,10 +257,12 @@ export function Composer({
   onInterruptSubmit,
   onPushQueued,
   onSaveLazy,
-  onSchedule,
-  schedule,
-  highlight,
+  marks,
+  onInputEvent,
   onEscape,
+  sendGlyph = "send",
+  sendTitle,
+  sendPending = false,
   attachBase,
   phone,
   onUploadingChange,
@@ -301,20 +356,27 @@ export function Composer({
   // snail glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
   // starting one. (A footer text hint did this job until 2026-10-01; the maintainer wanted it gone.)
   onSaveLazy?: () => void
-  // SCHEDULE IT — the new-thread box only, and only beside `onSaveLazy` (plans/scheduled-threads.md §3).
-  // ⌘/Ctrl-Option-Enter, or the repeat glyph left of the snail, asks the caller to read the text for WHEN
-  // it should run instead of starting it now. The caller owns the mode; `schedule` says how the glyph reads:
-  // `hint` lights it because the text opens with a recurrence phrase (lib/scheduleHint.ts) — Enter still
-  // dispatches — and `on` is the mode itself, where Enter is the caller's schedule step.
-  onSchedule?: () => void
-  schedule?: "off" | "hint" | "on"
-  // A span of the PROSE to mark behind the text — the schedule phrase the server found in it, so the
-  // human sees which words became WHEN and that the rest is the prompt, verbatim. Offsets into the prose
-  // the box shows; a span that no longer fits it (the text was edited) draws nothing.
-  highlight?: { start: number; end: number }
-  // Escape, before the box's own blur. Return true to claim it: the schedule mode leaves itself on the
-  // first Escape and keeps the caret, rather than climbing out of the box with the mode still on.
+  // Runs of the PROSE marked behind the text (ComposerMark): the schedule the box read in it, so the human sees
+  // which words are WHEN and that the rest is the prompt, verbatim. Offsets into the prose the box shows; a mark
+  // that no longer fits it draws nothing.
+  marks?: readonly ComposerMark[]
+  // What the textarea just did — an edit (with its caret, its input type and whether an IME is composing), the
+  // end of a composition, a blur — for a caller that reads the words at the end of each one
+  // (lib/scheduleReadScheduler.ts). Called before the edit's own onChange.
+  onInputEvent?: (event: BoxInputEvent) => void
+  // Escape, before the box's own blur. Return true to claim it: the new-thread box's schedule strip goes away
+  // ("not a schedule") on the first Escape and keeps the caret, rather than the box being left with it on.
   onEscape?: () => boolean
+  // WHAT ENTER DOES, ON THE BUTTON THAT DOES IT. `schedule` while the caller has read a schedule in the words:
+  // Send wears the repeat glyph and says "Create schedule", because Enter and a click create it and start
+  // nothing. The glyph and Enter's act never disagree.
+  sendGlyph?: "send" | "schedule"
+  // The send button's title, when the caller knows better than the default — a phone, which has no Enter to name,
+  // or a send that is being held (`sendPending`), which says what it is waiting for.
+  sendTitle?: string
+  // The caller is holding the send — checking the words for a schedule, or creating one — while the text stays
+  // live (unlike `busy`): the button spins.
+  sendPending?: boolean
   // WHICH PROJECT AN ATTACHMENT IS UPLOADED TO, when it is not the page's. Omitted, `apiBase()` — the
   // page project, which in a drawer or on /full is the thread's own. The cross-project page's queue
   // card shows a thread of ANY project while the page is focused on one, so it passes the thread's
@@ -612,11 +674,10 @@ export function Composer({
     return paintsText || hasToken ? { segments: out, paintsText } : null
   }, [prose, stagedTokens, allMentions, slashItems, opensAt])
   const backdropSegments = backdrop?.segments
-  // The schedule phrase, marked behind its own words (the `highlight` prop). Only while the span still
-  // fits the prose: an edit makes the caller's reading stale, and a mark over the wrong words is worse
-  // than none.
-  const highlightRun = highlight && highlight.start >= 0 && highlight.end > highlight.start && highlight.end <= prose.length ? highlight : undefined
-  const mirrored = backdropSegments !== undefined || highlightRun !== undefined
+  // The schedule phrase, marked behind its own words (the `marks` prop) — only the marks that still fit the
+  // prose: a mark over the wrong words is worse than none.
+  const markRuns = useMemo(() => fittedMarks(marks, prose.length), [marks, prose.length])
+  const mirrored = backdropSegments !== undefined || markRuns.length > 0
 
   // The mirror rides the textarea's own scroll position (a textarea at maxHeight scrolls its
   // content; the backdrop must pan with it or the pills detach from their tokens).
@@ -816,9 +877,6 @@ export function Composer({
   const hasContent = value.trim().length > 0
   const interruptChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⏎" : "Ctrl+Enter"), [])
   const lazyChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
-  const scheduleChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⌥⏎" : "Ctrl+Alt+Enter"), [])
-  // The schedule glyph rides only beside the snail (the new-thread box), one 28px slot further left.
-  const scheduleSlot = onSaveLazy !== undefined && onSchedule !== undefined
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
@@ -829,17 +887,13 @@ export function Composer({
   // one slot left, so the reserve and the left-hand offsets all follow it. The Goal (`railLead`, the
   // thread composer only) sits beyond the paperclip on the plain rail; the two never share a box — no
   // surface passes both — so the lead's offsets are the plain rail's.
-  const railReserve = scheduleSlot
-    ? railAction ? RAIL_SCHEDULE_RESERVE_WITH_ACTION : RAIL_SCHEDULE_RESERVE_PLAIN
-    : onSaveLazy
-      ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
-      : railAction && railLead ? RAIL_RESERVE_WITH_BOTH : railAction || railLead ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
-  const railActionOffset = scheduleSlot ? RAIL_SCHEDULE_ACTION_OFFSET : onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
-  const paperclipOffset = scheduleSlot
-    ? railAction ? RAIL_SCHEDULE_PAPERCLIP_OFFSET : RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET
-    : onSaveLazy
-      ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
-      : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
+  const railReserve = onSaveLazy
+    ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
+    : railAction && railLead ? RAIL_RESERVE_WITH_BOTH : railAction || railLead ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
+  const railActionOffset = onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
+  const paperclipOffset = onSaveLazy
+    ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
+    : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
     const el = e.currentTarget
@@ -924,12 +978,6 @@ export function Composer({
       e.preventDefault()
       e.stopPropagation()
       onSaveLazy()
-      return
-    }
-    if (onSchedule && shouldScheduleComposerEnter(keyboardEvent)) {
-      e.preventDefault()
-      e.stopPropagation()
-      if (!busy && !uploading) onSchedule()
       return
     }
     // ⌘/Ctrl-Enter — the FORCED send. With a worker mid-turn it preempts what the worker is doing so
@@ -1362,17 +1410,19 @@ export function Composer({
           any drift between them detaches every pill from its token. */}
       {header}
       <div className="relative">
-        {highlightRun && (
+        {markRuns.length > 0 && (
           <div
             ref={highlightRef}
             aria-hidden
             data-composer-highlight-backdrop
             className={`pointer-events-none absolute inset-0 select-none overflow-hidden whitespace-pre-wrap [overflow-wrap:break-word] px-3.5 ${footer ? "py-2.5 pb-3" : `py-2.5 ${railReserve}`} text-[13px] leading-relaxed text-transparent`}
           >
-            {prose.slice(0, highlightRun.start)}
-            {/* Zero-layout like the context pill: the side pad is bought back by the negative margin. */}
-            <mark data-composer-highlight className="rounded-[3px] bg-accent/15 py-px -mx-px px-px text-transparent">{prose.slice(highlightRun.start, highlightRun.end)}</mark>
-            {prose.slice(highlightRun.end)}
+            {markRuns.map((m, i) => (
+              // Zero-layout like the context pill: every tone's side pad is bought back by its negative
+              // margin, and its vertical pad never moves an inline box (styles.css `[data-composer-mark]`).
+              <MarkRun key={m.key ?? `${m.tone}:${m.start}`} prose={prose} mark={m} from={i === 0 ? 0 : markRuns[i - 1]!.end} />
+            ))}
+            {prose.slice(markRuns[markRuns.length - 1]!.end)}
             {prose.endsWith("\n") && " "}
           </div>
         )}
@@ -1407,11 +1457,19 @@ export function Composer({
           autoFocus={autoFocus}
           disabled={busy}
           onChange={(e) => {
+            if (onInputEvent) {
+              const native = e.nativeEvent as InputEvent
+              onInputEvent({ type: "edit", prose: e.target.value, caret: e.target.selectionStart, inputType: native.inputType, composing: native.isComposing === true })
+            }
             setProse(e.target.value)
             trackCaret(e.target)
           }}
+          onCompositionEnd={onInputEvent ? (e) => onInputEvent({ type: "compositionend", prose: e.currentTarget.value, caret: e.currentTarget.selectionStart }) : undefined}
           onSelect={mentionCandidates || slashSuggest || fileMentions ? (e) => trackCaret(e.currentTarget) : undefined}
-          onBlur={mentionCandidates || slashSuggest || fileMentions ? () => setCaret(null) : undefined}
+          onBlur={mentionCandidates || slashSuggest || fileMentions || onInputEvent ? () => {
+            setCaret(null)
+            onInputEvent?.({ type: "blur" })
+          } : undefined}
           onKeyDown={onKeyDown}
           onPaste={(e) => {
             // Any file item claims the whole paste (preventDefault) — deliberately. An image paste
@@ -1505,27 +1563,6 @@ export function Composer({
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
-      {/* SCHEDULE IT, left of the snail: the third way out of the new-thread box (plans/scheduled-threads.md
-          §3). Muted at rest like the snail; LIT — the text's own ink, not the accent, which means "wants
-          you" — while the text opens with a recurrence phrase, and pressed (the hover square held) in
-          schedule mode. Never disabled on an empty box: there it turns the mode on, to type into. */}
-      {scheduleSlot && (
-        <button
-          type="button"
-          data-composer-schedule={schedule ?? "off"}
-          onMouseDown={(e) => e.preventDefault()}
-          onClick={onSchedule}
-          disabled={busy || uploading}
-          aria-pressed={schedule === "on"}
-          title={schedule === "on" ? `Schedule mode — Esc to leave (${scheduleChord})` : schedule === "hint" ? `Schedule this? ${scheduleChord}` : `Schedule it, to run on a repeat (${scheduleChord})`}
-          aria-label={schedule === "on" ? "Leave schedule mode" : "Schedule"}
-          className={`icon-hover-outline absolute bottom-2 ${RAIL_SCHEDULE_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50 ${
-            schedule === "on" ? "bg-panel-2 text-fg" : schedule === "hint" ? "text-fg" : "text-muted"
-          }`}
-        >
-          <Repeat size={15} strokeWidth={2} />
-        </button>
-      )}
       {/* SAVE AS A LAZY THREAD, beside Send so the act is discoverable without its chord. Muted like the
           paperclip: it is the secondary submit, and Send stays the one filled button. */}
       {onSaveLazy && (
@@ -1551,8 +1588,11 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title={`Send (Enter · ${interruptChord} sends now)`}
-        aria-label="Send"
+        title={sendTitle ?? (sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`)}
+        aria-label={sendGlyph === "schedule" ? "Create schedule" : "Send"}
+        aria-busy={sendPending || undefined}
+        data-composer-send={sendGlyph}
+        data-composer-send-pending={sendPending || undefined}
         // Never `transition-all`: it animates box-shadow, which holds the hover edge back (styles.css).
         className={`icon-hover-outline absolute bottom-2 ${RAIL_SEND_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg transition-[color,background-color,opacity,scale] ${
           // Primary actions use neutral contrast; the accent marks focus.
@@ -1561,9 +1601,29 @@ export function Composer({
             : "bg-panel-2 text-muted"
         }`}
       >
-        {busy ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : <ArrowUp size={14} strokeWidth={2.5} />}
+        {busy || sendPending ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : (
+          // BOTH glyphs, stacked, so the swap is a 120ms cross-fade on the same pixels rather than one icon
+          // popping for another; same size and stroke, so neither moves the rail's measured rhythm. Measured
+          // 2026-10-06 (composer-icons-fixture ?send=schedule, geometry): one 1.46px pen, ↑ ink 9.62², ↻ ink
+          // 11.96×13.12, each centred to 0.00px in the 28px square — ↻ is the bigger mark by its drawing, not
+          // its placement.
+          <span aria-hidden className="grid place-items-center">
+            <ArrowUp size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-0" : "opacity-100"}`} />
+            <Repeat size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-100" : "opacity-0"}`} />
+          </span>
+        )}
       </button>
     </div>
+  )
+}
+
+/** One marked run and the plain text before it. A component so each mark keeps its element by key. */
+function MarkRun({ prose, mark, from }: { prose: string; mark: ComposerMark; from: number }) {
+  return (
+    <>
+      {prose.slice(from, mark.start)}
+      <mark data-composer-highlight data-composer-mark={mark.tone}>{prose.slice(mark.start, mark.end)}</mark>
+    </>
   )
 }
 

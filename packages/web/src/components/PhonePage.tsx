@@ -30,9 +30,16 @@ import { shortPath } from "./ProjectActions.tsx"
 
 // THE PHONE'S PAGE — a header, three text tabs, ONE list, and a "New thread" button. A fourth tab,
 // Schedules, joins the three while the view has any (plans/scheduled-threads.md §8): the desktop's project
-// row lists them as its fourth quiet count, and here they are the list's fourth band. There is no schedule
-// mode in the phone's prompt box — a schedule is made on the desktop, or proposed by a worker — so the
-// phone reads, runs, pauses, turns on and deletes them (PhoneScheduleSheet.tsx).
+// row lists them as its fourth quiet count, and here they are the list's fourth band, where the phone reads,
+// runs, pauses, turns on and deletes them (PhoneScheduleSheet.tsx). A schedule can also be MADE here: the New
+// thread sheet (PhoneNewThread, below) holds the desktop's own prompt box, so `every weekday at 9 …` typed on the
+// go becomes a schedule the same way it does at a desk (plans/schedule-live-reading.md): the model reads words
+// with a schedule word in them, a schedule shows as a strip under the box, and the send button wears the repeat
+// glyph while sending creates it. What a phone draws differently is ScheduleComposer.tsx's under
+// `useIsMobile()`: the strip is a TAP ROW (`↻ Every Monday at 9am · in 6d   ×`, the × a 32px hit square) and its
+// lines name the send button, never a key. Its Escape goes through `handleDialogEscape`, so a hardware
+// keyboard's first Escape dismisses the strip before it closes the sheet. Only the thread reply bar
+// (ThreadComposerBox, `layout: "bar"`) has no schedules.
 //
 // Upstream's phone board (colinhacks/frizz MobileBoard.tsx, its 2026-09-30 redesign: 6754e72a "the phone
 // board gets a header, text tabs and one line per row", 39db08a6 "the projects page is a plain list on a
