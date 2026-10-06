@@ -1,5 +1,10 @@
-// A QUEUE CARD'S LIVE WORK — every sub-agent and Workflow the thread has running, in one column under its
-// reply box, WHATEVER THE WORKER IS DOING, with the card's terminals hung under them in the same column.
+// A QUEUE CARD'S LIVE WORK — every sub-agent and Workflow the thread has running, in one column, WHATEVER
+// THE WORKER IS DOING, with the card's terminals hung under them in the same column.
+//
+// IN THE OPS PANEL since 2026-10-06. The column hung under the card's reply box until the box docked to
+// the bottom of the screen (upstream's queue dock, 199adf2c): a dock cannot carry a column of rows, so the
+// rows fold into one line of counts above it (QueueOpsSummary) and this column is what its hover panel
+// shows. The rows are unchanged — same component, same order, same drill-in and ×.
 //
 // Until 2026-09-29 a card named its children only inside AwaitingSubAgentsCard, which is drawn in place of
 // the worker's ```awaiting fence — at rest, with that fence, and no question open. Anything else drew
@@ -58,30 +63,24 @@ export function QueueChildOps({ project, thread, api, agents = true, after, onOp
     else onOpenThread()
   }
   return (
-    // The drawer's geometry (ThreadComposerBox): the reply box above ends in `pb-3`, which `-mt-3` hands
-    // back so the column hangs `pt-1.5` off the prompt box exactly as the drawer's does, and
-    // `.ops-column-optical-inset` puts the last row's baseline 12px off the footer's hairline.
-    <div className="-mt-3 shrink-0 px-5 pb-3" data-queue-ops={thread.id}>
-      <div className="ops-column-optical-inset">
-        <div className="flex flex-col gap-0.5 px-1 pt-1.5">
-          {children.map((agent, i) => (
-            <ChildOpRow
-              key={agent.id ?? `a${i}`}
-              kind={agent.workflow ? "WORKFLOW" : "AGENT"}
-              label={subAgentName(agent.label)}
-              state={agent.state}
-              density="sheet"
-              depth={agent.depth}
-              startedAt={agent.startedAt}
-              parentSlug={thread.id}
-              onOpen={agent.id ? () => openChild({ id: agent.id!, label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
-              onDismiss={childOpDismisser(thread.id, agent, "AGENT", api)}
-              title={agent.phase ? `${agent.phase} › ${agent.label}` : undefined}
-            />
-          ))}
-          {after}
-        </div>
-      </div>
+    // The strip's own 2px pitch, nothing around it: the panel (QueueOpsSummary) carries the padding.
+    <div className="flex min-w-0 flex-col gap-0.5" data-queue-ops={thread.id}>
+      {children.map((agent, i) => (
+        <ChildOpRow
+          key={agent.id ?? `a${i}`}
+          kind={agent.workflow ? "WORKFLOW" : "AGENT"}
+          label={subAgentName(agent.label)}
+          state={agent.state}
+          density="sheet"
+          depth={agent.depth}
+          startedAt={agent.startedAt}
+          parentSlug={thread.id}
+          onOpen={agent.id ? () => openChild({ id: agent.id!, label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
+          onDismiss={childOpDismisser(thread.id, agent, "AGENT", api)}
+          title={agent.phase ? `${agent.phase} › ${agent.label}` : undefined}
+        />
+      ))}
+      {after}
     </div>
   )
 }

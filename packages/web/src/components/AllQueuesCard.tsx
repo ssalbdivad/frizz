@@ -17,7 +17,7 @@
 // card's own project explicitly (see the provider stack at the bottom). The board's queue card could not
 // be reused here for exactly that reason: it read its project from the address bar, the store and the
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
-import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
+import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, CheckCheck, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -45,7 +45,7 @@ import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { drawnHeight, observeCardSlot, whenCardRendered } from "../lib/cardVisibility.ts"
 import { IN_PLACE_OPEN_STATE, openThread, showToast, store } from "../store.ts"
 import { crossProjectHref, innerPath, projectSlug } from "../lib/base-path.ts"
-import { LimitPauseNotice, QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
+import { GithubWatchRows, LimitPauseNotice, QueueDismissContext, TerminalNetCard } from "./ChatView.tsx"
 import { isLimitPaused } from "../lib/limitPause.ts"
 import { useCopyTerminalCommand } from "./ExternalTerminalCommand.tsx"
 import { registeredDoneBody, showsRegisteredDoneCard } from "../lib/registeredDone.ts"
@@ -69,6 +69,10 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { QueueChildOps } from "./QueueChildOps.tsx"
+import { QueueOpsSummary } from "./QueueOpsSummary.tsx"
+import { ThreadLinks } from "./ThreadLinks.tsx"
+import { queueOpsCounts } from "../lib/queueOpsCounts.ts"
+import { trackQueueDock } from "../lib/queueDockInset.ts"
 import { ThreadLifecycleActions } from "./ThreadLifecycle.tsx"
 import { RecurringPromptControl } from "./RecurringPromptControl.tsx"
 import { ContextFact, GoalLoopFact } from "./ThreadHeaderFacts.tsx"
@@ -76,7 +80,7 @@ import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, T
 import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
 import { Tooltip } from "./Tooltip.tsx"
-import { BLOCK_RADIUS, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 /**
  * WHOSE CARD THIS IS, on its meta line — in All projects the page's one queue holds every project's
@@ -364,6 +368,38 @@ function CardArticle({
     void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
   }
   const answeringScope = useMemo(() => ({ api, projectDir: project.projectDir, projectId: project.id }), [api, project.projectDir, project.id])
+  const key = threadKey(project.id, thread.id)
+
+  // THE DOCK'S STICKY RANGE STOPS AT THE HEADER (upstream 01953049, on its board card). The dock's
+  // containing block is the whole card, and `bottom-0` alone let it rise to the card's top edge: a card
+  // coming in from the bottom of the screen showed its prompt box over its own header. Sticky keeps the
+  // MARGIN box inside its containing block, so a top margin of the header's height holds the dock's border
+  // box below the header, and the block before the dock hands that height back with a negative bottom
+  // margin so nothing moves in flow. Measured rather than assumed — a long project chip or a status line
+  // can wrap — and read off the observer's own entry, never `getBoundingClientRect()`: a card far from the
+  // screen is skipped (lib/cardVisibility.ts), and measuring inside one lays it out on the spot. A skipped
+  // card reports 0, which is not its height, so it keeps the last reading.
+  const rootRef = useRef<HTMLElement>(null)
+  const headerRef = useRef<HTMLElement>(null)
+  const dockRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    const header = headerRef.current
+    const root = rootRef.current
+    if (!header || !root || typeof ResizeObserver === "undefined") return
+    const observer = new ResizeObserver((entries) => {
+      const height = entries[entries.length - 1]?.borderBoxSize?.[0]?.blockSize ?? 0
+      if (height > 0) root.style.setProperty("--queue-card-header-h", `${height}px`)
+    })
+    observer.observe(header)
+    return () => observer.disconnect()
+  }, [])
+  // The band the docks cover at the bottom of the screen, for the page's scroll padding and the toaster
+  // (lib/queueDockInset.ts). Only a BUILT card has a dock: a stand-in (CardStandIn) draws none.
+  useEffect(() => {
+    const dock = dockRef.current
+    if (!dock || typeof ResizeObserver === "undefined") return
+    return trackQueueDock(key, dock)
+  }, [key])
 
   // A terminal row on the card — in the strip, or the caption over a prompt's screen — opens the thread,
   // then that terminal's drawer over it when the thread's project is the one in focus (the drawer stack is
@@ -382,11 +418,12 @@ function CardArticle({
 
   return (
     <article
+      ref={rootRef}
       data-xq-card-root
       aria-label={displayTitle(thread)}
       className={`frizz-card-body flex min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
     >
-      <header className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
+      <header ref={headerRef} className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
         {chip && <ProjectMark project={project} onChoose={onChoose} />}
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
@@ -491,6 +528,10 @@ function CardArticle({
       <QueueDismissContext.Provider value={dismiss}>
       <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
       <ProjectLinkScope project={project}>
+        {/* Everything between the header and the dock, in ONE block whose negative bottom margin hands back
+            the dock's header-height top margin (see `--queue-card-header-h` above). Empty for a lazy
+            thread, which still needs the hand-back. */}
+        <div className="flex min-w-0 flex-col mb-[calc(-1*var(--queue-card-header-h,0px))]">
         {/* A lazy thread has no conversation, handoff or process to show: its note is the box below. */}
         {thread.lazyPrompt === undefined && (
         <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
@@ -588,34 +629,62 @@ function CardArticle({
         {owedQuestions.length > 0 && (
           <RegisteredQuestionStack key={handoff.data?.at ?? ""} thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
         )}
+        </div>
       </ProjectLinkScope>
 
       <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-        {/* A LAZY THREAD's box is its note, and sending it starts the agent (LazyThreadBox). */}
-        {thread.lazyPrompt !== undefined
-          ? <LazyThreadBox thread={thread} surface="queueComposer" className="shrink-0 px-5 pt-5 pb-3" />
-          : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
-        {/* EVERYTHING IT HAS RUNNING, in the drawer's one column (QueueChildOps): its sub-agents and
-            Workflows as AGENT / FLOW rows — the awaiting card's to list while it is drawn — then every
-            terminal on the thread, yours and the agent's, as the drawer's TERM strip (ThreadTerminals.tsx),
-            on one label column. The strip owns every process row, so a shell is drawn once. A shell with
-            no budget runs until someone stops it, so the card it rests on is where it must be seen.
-            A TERM row opens the thread, then its terminal over it
-            when the thread's project is the one in focus (the drawer stack is that project's). The strip
-            is gated on the rows it will draw, so a card whose only shell has finished — or whose only
-            terminal is the prompt shown above with its own row — draws no empty inset. */}
-        <QueueChildOps
-          project={project}
-          thread={thread}
-          api={api}
-          agents={!drawsSubAgentWait}
-          onOpenThread={() => openInPlace(project, thread.id, displayTitle(thread))}
-          after={cardProcesses(thread, Date.now()).length > 0 ? (
-            <div data-queue-processes={thread.id} className="min-w-0">
-              <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
+        {/* THE DOCK (upstream 199adf2c, ported 2026-10-06): the prompt box holds to the bottom of the
+            screen while any of the card is above it, so a reply never means scrolling to the card's end
+            (maintainer 2026-10-01: "have the prompt box be sticky at the bottom of the queue page the same
+            way that it is on the full screen view"). Its top margin is the header's height, handed back by
+            the block above, so it never rises over its own header. The rule and the upward shade are always
+            drawn, docked or not — the shade is what separates it from the text scrolling under it, and a
+            rule that came and went would move the box by a pixel. The bottom corners are the card's arc
+            one pixel in (BLOCK_RADIUS_INNER_BOTTOM): the card has no overflow clip, so a square-cornered
+            dock would paint through its rounded border.
+
+            NOTHING ABOVE IT MAY CLIP OR SCROLL. Sticky resolves against the nearest scroll container, so an
+            `overflow: hidden` on the card or its slot would take the dock's stickiness away — upstream hit
+            exactly that with the exit pin of its board card (fixed there with `overflow: clip`). This card
+            has no such pin; the slot's `content-visibility: auto` only applies to cards far off screen,
+            whose docks are off screen with them.
+
+            LIVE WORK FOLDS INTO ONE LINE OF COUNTS above the box (QueueOpsSummary), the real rows one
+            hover away. Those rows are the ones the ops column under the reply box drew until now —
+            AGENT and WORKFLOW rows (QueueChildOps), then the TERM strip of every live process, the
+            agent's shells and your terminals (ThreadTerminals ThreadProcessStrip) — plus upstream's PR
+            and issue watchers and the thread's saved files and links. All of them read the CARD's
+            project, never the page's board. */}
+        <div
+          ref={dockRef}
+          data-queue-dock={thread.id}
+          // A lazy card has nothing between its header and the dock, so the dock can never leave the header's
+          // bottom edge — and the header's own rule is already there; a second would draw a 2px line.
+          className={`sticky bottom-0 z-10 mt-[var(--queue-card-header-h,0px)] shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} ${thread.lazyPrompt !== undefined ? "" : "border-t border-border/60"} bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
+        >
+          <QueueOpsSummary counts={queueOpsCounts(thread, { agents: !drawsSubAgentWait })}>
+            <div data-queue-card-ops={thread.id} className="flex min-w-0 flex-col gap-0.5">
+              <QueueChildOps
+                project={project}
+                thread={thread}
+                api={api}
+                agents={!drawsSubAgentWait}
+                onOpenThread={() => openInPlace(project, thread.id, displayTitle(thread))}
+                after={cardProcesses(thread, Date.now()).length > 0 ? (
+                  <div data-queue-processes={thread.id} className="min-w-0">
+                    <ThreadProcessStrip thread={thread} surface="card" onOpen={openProcess} />
+                  </div>
+                ) : null}
+              />
+              <GithubWatchRows watches={(thread.watches ?? []).filter((watch) => watch.kind === "github")} />
+              <ThreadLinks links={thread.links ?? []} scope={projectMarkdownScope(project)} />
             </div>
-          ) : null}
-        />
+          </QueueOpsSummary>
+          {/* A LAZY THREAD's box is its note, and sending it starts the agent (LazyThreadBox). */}
+          {thread.lazyPrompt !== undefined
+            ? <LazyThreadBox thread={thread} surface="queueComposer" className="min-w-0" />
+            : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
+        </div>
       </ThreadProjectScope>
       </RegisteredAnsweringProvider>
       </QueueDismissContext.Provider>
@@ -1041,7 +1110,7 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
     deliver()
   }
   return (
-    <div className="shrink-0 px-5 pb-3 pt-0">
+    <div className="min-w-0">
       <Composer
         surface="queueComposer"
         contextTokens={contextTokens}

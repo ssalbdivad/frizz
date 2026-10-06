@@ -2,6 +2,7 @@ import { ExternalLink, FileText } from "lucide-react"
 import type { ThreadLinkView } from "@frizz/shared"
 import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS } from "../lib/childOps.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
+import type { MarkdownScope } from "../lib/useMarkdown.ts"
 
 // The activity-row grammar, without a liveness marker or a trailing open icon — and the SAME grammar,
 // column for column: a File/Link row renders under the ⤷ AGENT / ⤷ SHELL rows and the eye runs down one
@@ -33,7 +34,9 @@ const ICON_SLOT = `${CHILD_MARK_SLOT_CLASS} -mt-[1em] self-baseline`
 // whichever font is resolved. Measured ink-to-cap residual: 0px in sans and mono, desktop and 390px.
 const ICON = "h-[1em] w-[1em] shrink-0 translate-y-[calc(0.5em_-_0.5cap)] text-muted-45"
 
-export function ThreadLinks({ links }: { links: readonly ThreadLinkView[] }) {
+/** `scope` opens a file through the thread's OWN project — the cross-project queue card's panel passes it,
+ *  since on that page the default (the page's project) is usually not the card's. */
+export function ThreadLinks({ links, scope }: { links: readonly ThreadLinkView[]; scope?: MarkdownScope }) {
   if (!links.length) return null
   return (
     <div data-thread-links aria-label="Registered links" className="mt-2 flex min-w-0 flex-col gap-0.5 border-t border-border pt-1.5">
@@ -55,7 +58,7 @@ export function ThreadLinks({ links }: { links: readonly ThreadLinkView[] }) {
         return isUrl ? (
           <a key={link.id} data-thread-link={link.id} href={link.target} target="_blank" rel="noopener noreferrer" title={link.target} className={ROW} onClick={(event) => event.stopPropagation()}>{content}</a>
         ) : (
-          <button key={link.id} data-thread-link={link.id} type="button" title={link.target} className={`${ROW} cursor-pointer`} onClick={(event) => { event.stopPropagation(); openLocalPath(link.target) }}>{content}</button>
+          <button key={link.id} data-thread-link={link.id} type="button" title={link.target} className={`${ROW} cursor-pointer`} onClick={(event) => { event.stopPropagation(); openLocalPath(link.target, null, scope) }}>{content}</button>
         )
       })}
     </div>

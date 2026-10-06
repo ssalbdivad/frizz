@@ -16,15 +16,26 @@ function publish(): void {
   else document.documentElement.style.removeProperty("--queue-dock-inset")
 }
 
-export function trackQueueDock(slug: string, dock: HTMLElement): () => void {
-  const observer = new ResizeObserver(() => {
-    heights.set(slug, dock.getBoundingClientRect().height)
+//
+// KEYED BY THE CARD, not the slug: on the cross-project page two projects can each queue a thread of the
+// same slug (AllQueuesCard passes lib/allQueues threadKey).
+//
+// THE SIZE IS THE OBSERVER'S OWN READING, never `getBoundingClientRect()`: the cross-project queue skips
+// cards far from the screen (lib/cardVisibility.ts, `content-visibility: auto`), and measuring an element
+// inside a skipped card makes the browser lay that card out on the spot — the exact cost the skipping
+// exists to avoid. The entry's border box is the same fractional height for a drawn card; a skipped one
+// reports 0, and a dock nobody can see covers nothing, so it leaves the reading until it is drawn again.
+export function trackQueueDock(key: string, dock: HTMLElement): () => void {
+  const observer = new ResizeObserver((entries) => {
+    const height = entries[entries.length - 1]?.borderBoxSize?.[0]?.blockSize ?? 0
+    if (height > 0) heights.set(key, height)
+    else heights.delete(key)
     publish()
   })
   observer.observe(dock)
   return () => {
     observer.disconnect()
-    heights.delete(slug)
+    heights.delete(key)
     publish()
   }
 }
