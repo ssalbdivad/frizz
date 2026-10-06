@@ -24,32 +24,63 @@ import { GoalMark } from "./RecurringPromptControl.tsx"
 //
 // `empty:hidden`: a thread with no timestamp and no reading draws nothing, and must not leave the line's
 // 2px top margin behind.
+//
+// ONE ROW, AND A FACT THAT DOES NOT FIT IS DROPPED WHOLE (FACTS_LINE_CLASS, below). The line used to be a
+// plain nowrap row, where the context dial never shrank and everything before it did: at a 420px queue card
+// "acme-api · Ready 37m ago · ◔ 74% context" read "s · L. · ◔ 74% context", and narrower still the time went
+// to nothing and the line opened on a bare "·" (2026-10-06).
 export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadView; lead?: ReactNode; children?: ReactNode }) {
   const lazy = thread.lazyPrompt !== undefined
   return (
-    <div data-thread-header-facts className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11px] leading-tight text-muted-75 empty:hidden">
-      {lead}
-      <LastActive
-        // A lazy thread has never been active: its time is when it was written down (the queue card's word too).
-        at={lazy ? thread.spawnedAt : lastActiveLabelAt(thread)}
-        {...(lazy ? { label: "Added" } : {})}
-        fallbackAt={thread.spawnedAt}
-        lead={lead ? <FactSep /> : undefined}
-        className="min-w-0 truncate"
-      />
-      <ContextFact thread={thread} lead={<FactSep />} />
-      <GoalLoopFact thread={thread} lead={<FactSep />} />
+    <div data-thread-header-facts className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75 empty:hidden`}>
+      {lead && <Fact give>{lead}</Fact>}
+      <Fact>
+        <LastActive
+          // A lazy thread has never been active: its time is when it was written down (the queue card's word too).
+          at={lazy ? thread.spawnedAt : lastActiveLabelAt(thread)}
+          {...(lazy ? { label: "Added" } : {})}
+          fallbackAt={thread.spawnedAt}
+          lead={<FactSep />}
+          className="min-w-0 truncate"
+        />
+      </Fact>
+      <Fact><ContextFact thread={thread} lead={<FactSep />} /></Fact>
+      <Fact><GoalLoopFact thread={thread} lead={<FactSep />} /></Fact>
       {children}
     </div>
   )
 }
 
-/** The line's separator. It shows only where it SEPARATES — after a fact that rendered, never first in the
- *  line and never after another separator — so every reading can carry one as its `lead` without
- *  knowing what precedes it (LastActive draws nothing for a thread with no timestamp at all, and a band
- *  stamp nothing for a thread with no band). */
+/**
+ * A HEADER FACTS LINE: one row of facts in priority order, left to right, where a fact that does not fit is
+ * DROPPED WHOLE — with its separator — rather than squeezed. Each fact is a `Fact` group holding its own
+ * leading `FactSep`; the row wraps, is exactly one line tall (`h-[1lh]`, 13.75px at the line's 11px
+ * leading-tight — measured equal to the old nowrap row), and clips, so a group that would not fit wraps onto
+ * a second row nobody sees. A wrapped group takes every group after it along, so the row always shows a
+ * prefix of the facts, never one with a hole in it. `gap-y-4` puts that hidden row far outside the 3px clip
+ * margin, which is there for focus rings and the chip's hover underline.
+ *
+ * A group that should TRUNCATE rather than drop (`give`: the project chip, the band stamp, the live status
+ * line — each ends in an ellipsis of its own) claims only 2.5em while the row decides what fits, then grows
+ * back to its own width (`max-w-max`) out of whatever room is left.
+ *
+ * `items-baseline`, for the cap-band glyphs on this line (the context ring, the goal mark, a checkout
+ * glyph): each stands on the baseline and lifts itself by `0.5em - 0.5cap`, which needs a baseline to
+ * stand on.
+ */
+export const FACTS_LINE_CLASS = "flex h-[1lh] min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-4 overflow-clip [overflow-clip-margin:3px]"
+
+/** One fact on a facts line, with its own leading separator inside it (FACTS_LINE_CLASS). Empty — the fact
+ *  had nothing to say — it takes no room and no gap. */
+export function Fact({ give = false, children }: { give?: boolean; children?: ReactNode }) {
+  return <span data-fact className={give ? "flex min-w-0 max-w-max grow basis-[2.5em] items-baseline gap-1.5 empty:hidden" : "flex min-w-0 items-baseline gap-1.5 empty:hidden"}>{children}</span>
+}
+
+/** The line's separator, the first thing inside its `Fact`. It shows only where it SEPARATES — when a fact
+ *  that rendered comes before its own — so the line never opens on a "·", whichever facts are empty: a
+ *  thread with no timestamp draws no time, a thread with no band no stamp. */
 export function FactSep() {
-  return <span aria-hidden data-fact-sep className="hidden shrink-0 opacity-60 [:not([data-fact-sep])+&]:inline">·</span>
+  return <span aria-hidden data-fact-sep className="hidden shrink-0 opacity-60 [[data-fact]:not(:empty)~[data-fact]>&]:inline">·</span>
 }
 
 /** The context dial and its percent (ContextMeter), only when the thread has a reading. */

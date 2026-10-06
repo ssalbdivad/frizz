@@ -66,7 +66,7 @@ import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { MobileThreadHeader } from "./MobileThreadHeader.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
 import { ThreadLifecycleActions, StateButton } from "./ThreadLifecycle.tsx"
-import { FactSep, ThreadHeaderFacts } from "./ThreadHeaderFacts.tsx"
+import { Fact, FactSep, ThreadHeaderFacts } from "./ThreadHeaderFacts.tsx"
 import { ThreadTitle } from "./ThreadTitle.tsx"
 import { ThreadStatusLine } from "./ThreadStatusLine.tsx"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
@@ -1803,10 +1803,11 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
               works, a spinoff's parent and the live status line. */}
           <ThreadHeaderFacts thread={thread} lead={<ThreadBandStamp thread={thread} />}>
             {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
-            <ThreadCheckoutToken checkout={thread.checkout} homeDir={board?.homeDir} lead={<FactSep />} />
+            <Fact><ThreadCheckoutToken checkout={thread.checkout} homeDir={board?.homeDir} lead={<FactSep />} /></Fact>
             {/* A spinoff child's way back, ahead of the status line that takes the rest of the row. */}
-            <SpinoffOf thread={thread} lead={<FactSep />} />
-            <ThreadStatusLine thread={thread} lead={<FactSep />} />
+            <Fact><SpinoffOf thread={thread} lead={<FactSep />} /></Fact>
+            {/* The live status truncates rather than drops: it is what the thread is doing now. */}
+            <Fact give><ThreadStatusLine thread={thread} lead={<FactSep />} /></Fact>
           </ThreadHeaderFacts>
         </div>
       </div>
