@@ -5615,7 +5615,8 @@ export function createRouter(ctx: AppContext) {
      * OPEN THREADS, NOT JUST QUEUED ONES. The page draws each project's Running and Snoozed rows beside
      * its queue, the way the project's own rail does, so it needs them — and banding is the client's
      * job, done with the same pure `groups.ts` functions the rail uses, so the two cannot disagree about
-     * which band a thread is in. Done rows are a COUNT: that band grows without bound.
+     * which band a thread is in. Done rows are a COUNT: that band grows without bound. The pinned ones
+     * are not — the Pinned band lists every pinned thread whatever its state, so they ride along whole.
      *
      * The slug, name and directory come from each board's own snapshot — the same values that project's
      * page is stamped with — so an action this page takes is addressed exactly as that board would be.
@@ -5632,19 +5633,28 @@ export function createRouter(ctx: AppContext) {
             // the one asking even when the tenant map did not hand it over.
             const schedules = (tenant ?? (project.id === ctx.project.id ? ctx : undefined))?.schedules?.summary()
             const done: ThreadView[] = []
+            const pinnedDone: ThreadView[] = []
             const threads = snapshot.threads.filter((thread) => {
               // A thread's terminals ride its row (`terminals`), so the session rows are the whole list.
               if (thread.kind !== "session" || thread.foreign) return false
               // Archived is Done unless its worker is still running: shared `sectionOf` lifts that row into
               // Running until it rests (Colin 2026-07-10), so it travels with the open threads and the
-              // client bands it with the same function. Every other archived row is a Done count.
+              // client bands it with the same function. A PINNED Done thread is the exception the pin makes:
+              // the pin outranks Done (web groups.ts `sectionThreads`), so it is a Pinned row, greyed, and
+              // rides along whole. Read out before the Done count, it was dropped with the rest of Done, and
+              // on All projects a pinned thread finished in any project but the page's had no row at all
+              // until that project's board was read (plans/upstream-superset.md §2, "the pinned-Done hole").
               if (sectionOf(thread) === "inactive") {
                 done.push(thread)
+                if (typeof thread.pinnedAt === "string") pinnedDone.push(thread)
                 return false
               }
               return true
             })
-            const doneCount = done.length
+            // The Done BAND's count, as the project's own board draws it: without the pinned ones, which
+            // that board files under Pinned. Counting them here made the count drop the moment the
+            // board was read.
+            const doneCount = done.length - pinnedDone.length
             out.push({
               projectId: project.id,
               projectSlug: snapshot.projectSlug ?? project.id,
@@ -5654,6 +5664,7 @@ export function createRouter(ctx: AppContext) {
               githubRepo: snapshot.githubRepo,
               threads,
               doneCount,
+              ...(pinnedDone.length > 0 ? { pinnedDone } : {}),
               recentDone: recentDoneThreads(done),
               ...(schedules ? { schedules } : {}),
             })

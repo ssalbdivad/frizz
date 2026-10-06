@@ -73,9 +73,11 @@ export function pinOverlayQueues(
     const queued = apply(project.queued)
     const running = apply(project.running)
     const snoozed = apply(project.snoozed)
-    if (queued === project.queued && running === project.running && snoozed === project.snoozed) return
+    // A pinned Done row unpins from its hover strip like any other (lib/listBands.ts lists it).
+    const pinnedDone = apply(project.pinnedDone)
+    if (queued === project.queued && running === project.running && snoozed === project.snoozed && pinnedDone === project.pinnedDone) return
     if (out === projects) out = [...projects]
-    out[index] = { ...project, queued, running, snoozed }
+    out[index] = { ...project, queued, running, snoozed, pinnedDone }
   })
   return out
 }

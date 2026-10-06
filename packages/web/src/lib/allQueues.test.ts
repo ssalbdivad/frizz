@@ -151,6 +151,25 @@ test("an archived row whose worker is still running is listed under Running; one
   assert.equal(project!.doneCount, 6)
 })
 
+test("a PINNED Done thread is a Pinned row, never a number in Done — from the poll and from the live board", () => {
+  // The poll sends it apart (server router.ts projectsQueues `pinnedDone`), outside its Done count.
+  const [polled] = queuesProjects([card("a")], [queue("a", [], {
+    doneCount: 3,
+    pinnedDone: [thread("later-pin", { state: "archived", pinnedAt: "2026-10-02T00:00:00.000Z" }), thread("first-pin", { state: "archived", pinnedAt: "2026-10-01T00:00:00.000Z" })],
+  })])
+  assert.deepEqual(polled!.pinnedDone.map((t) => t.id), ["first-pin", "later-pin"], "oldest pin first, the shelf's own order")
+  assert.equal(polled!.doneCount, 3)
+  // The focused project's live board sends every thread, archived ones included (liveQueue).
+  const live = liveQueue([queue("a", [], { doneCount: 9 })], {
+    projectSlug: "a",
+    threads: [thread("open"), thread("done-pin", { state: "archived", archived: true, pinnedAt: "2026-10-01T00:00:00.000Z" }), thread("done", { state: "archived", archived: true })],
+  }, "a")
+  const [focused] = queuesProjects([card("a")], [live!])
+  assert.deepEqual(focused!.pinnedDone.map((t) => t.id), ["done-pin"])
+  assert.equal(focused!.doneCount, 1, "only the unpinned Done thread is counted")
+  assert.deepEqual([...focused!.queued, ...focused!.running, ...focused!.snoozed].map((t) => t.id), ["open"])
+})
+
 test("a thread's terminals ride its row: one at a prompt queues the thread, and no terminal rows on its own", () => {
   const terminal = (id: string, over: Partial<NonNullable<ThreadView["terminals"]>[number]> = {}) => ({ id, command: "npm publish", cwd: "/repo", state: "running" as const, runId: 1, startedAt: "2026-09-29T09:00:00.000Z", ...over })
   const [project] = queuesProjects([card("a")], [queue("a", [

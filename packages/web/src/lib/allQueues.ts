@@ -1,5 +1,5 @@
 import type { AwaitingHint, BoardSnapshot, ProjectCard, ProjectQueue, ProjectSchedules, RegisteredQuestionView, ThreadView } from "@frizz/shared"
-import { orderByInteraction, orderQueue, queued, sectionOf, type QueueDirection } from "../groups.ts"
+import { isPinned, orderByInteraction, orderQueue, queued, sectionOf, type QueueDirection } from "../groups.ts"
 import { crossProjectHref } from "./base-path.ts"
 import { splitFenceBlocks } from "./fenceBlocks.ts"
 import { splitQuestionBlocks, type QuestionKind } from "./questionBlocks.ts"
@@ -33,6 +33,9 @@ export interface QueuesProject {
   queued: ThreadView[]
   running: ThreadView[]
   snoozed: ThreadView[]
+  /** Its PINNED Done threads, oldest pin first: the pin outranks Done, so they row under Pinned, greyed,
+   *  like the project's own board files them (groups.ts sectionThreads) — and are not in `doneCount`. */
+  pinnedDone: ThreadView[]
   doneCount: number
   /** Its schedules' count, and whether one wants the human (paused by Frizz, or a proposal to turn on) —
    *  the row's fourth quiet count. Absent when it has none. */
@@ -123,8 +126,15 @@ export function queuesProjects(
       queued: orderQueue(threads.filter(queued), direction),
       running: orderByInteraction(threads.filter((t) => !queued(t) && sectionOf(t) === "active")),
       snoozed: orderByInteraction(threads.filter((t) => !queued(t) && sectionOf(t) === "snoozed")),
-      // The server counts archived rows itself; any that still arrive (an older server) are Done too.
-      doneCount: (queue?.doneCount ?? 0) + threads.filter((t) => sectionOf(t) === "inactive").length,
+      // THE PINNED-DONE HOLE, closed on both of the reads that reach here. The poll sends a pinned Done
+      // thread whole, apart from its Done count (server router.ts `projectsQueues`); the focused project's
+      // live board (`liveQueue`) sends every thread, archived ones included. Either way it is a Pinned
+      // row, never a number in Done — read off the threads alone, it was counted as Done and drawn nowhere.
+      pinnedDone: [...(queue?.pinnedDone ?? []), ...threads.filter((t) => isPinned(t) && sectionOf(t) === "inactive")]
+        .sort((a, b) => (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "") || a.id.localeCompare(b.id)),
+      // The server counts archived rows itself; any that still arrive (an older server, the live board)
+      // are Done too — all but the pinned ones, which are rows above.
+      doneCount: (queue?.doneCount ?? 0) + threads.filter((t) => !isPinned(t) && sectionOf(t) === "inactive").length,
       ...(queue?.schedules && queue.schedules.count > 0 ? { schedules: queue.schedules } : {}),
     }
   }
@@ -243,9 +253,11 @@ export interface HandoffParts {
  * A handoff, split the way the board's card draws it: the prose, the ```question fences, and each
  * ```done / ```awaiting fence as its own card.
  *
- * A ```question fence goes one of three ways. An EMPTY `qst_…` marker draws nothing (it placed a
- * registered card mid-handoff until 2026-09-28; every surface now draws open questions at the bottom, and
- * this card at its tail), so the marker is dropped (left in, it renders as an empty code block mid-prose). A fence that STANDS FOR a registered question — names its id, or restates
+ * A ```question fence goes one of three ways. An EMPTY `qst_…` marker is dropped from the prose: it
+ * places its registered card, which the drawer and this card's transcript view draw where the marker
+ * sits, but the handoff view's prose is clamped, so there the marker only decides WHICH rest the card is
+ * drawn at the end of (lib/queueCardQuestions.ts handoffQuestionSlots). Left in, it would render as an
+ * empty code block mid-prose. A fence that STANDS FOR a registered question — names its id, or restates
  * it — is dropped for the same reason: its registered card is the one that can be answered. Anything else
  * is a question the worker wrote as a fence, which on a legacy thread is its live ask, so it is KEPT, and
  * drawn read-only — answering it is one level down, on the thread's own board.

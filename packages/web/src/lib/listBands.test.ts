@@ -25,8 +25,8 @@ const ready = (id: string, over: Partial<ThreadView> = {}) =>
   }) as unknown as ThreadView
 const running = (id: string) => ready(id, { runtime: "running", needsYou: false, lastUserAt: new Date(NOW - 120_000).toISOString() })
 
-const project = (id: string, queued: ThreadView[], working: ThreadView[] = []) =>
-  ({ id, slug: id, name: id, queued, running: working, snoozed: [], doneCount: 0 }) as unknown as QueuesProject
+const project = (id: string, queued: ThreadView[], working: ThreadView[] = [], pinnedDone: ThreadView[] = []) =>
+  ({ id, slug: id, name: id, queued, running: working, snoozed: [], pinnedDone, doneCount: 0 }) as unknown as QueuesProject
 const shown = () => false
 const ids = (threads: readonly ThreadView[]) => threads.map((t) => t.id)
 
@@ -95,4 +95,17 @@ test("with nothing recorded, the bands are the poll's", () => {
   const bands = loudBands(p, shown, listOverlay("alpha", true, {}, {}, NOW))
   assert.equal(bands.ready[0], p.queued[0])
   assert.equal(bands.working[0], p.running[0])
+})
+
+test("a pinned thread that is Done is still a Pinned row — the pin outranks Done, in every project", () => {
+  // The pinned-Done hole: pins were read from the open lists alone, so a pinned thread finished in a
+  // project the page was not on had no row on All projects.
+  const shelved = ready("shelved", { state: "archived", needsYou: false, pinnedAt: new Date(NOW - 900_000).toISOString() })
+  const open = ready("open-pin", { pinnedAt: new Date(NOW - 300_000).toISOString() })
+  const bands = loudBands(project("beta", [open], [running("build")], [shelved]), shown, listOverlay("beta", false, {}, {}, NOW))
+  assert.deepEqual(ids(bands.pinned), ["shelved", "open-pin"], "oldest pin first, whatever the state")
+  assert.equal(bands.pinned[0]!.state, "archived", "drawn as Done (greyed by its row), not reopened")
+  assert.deepEqual(ids(bands.ready), [])
+  assert.deepEqual([...bands.carded], ["open-pin"], "a Done pin has no card to tie to")
+  assert.equal(bands.rows, 3, "it counts as a row, so a project whose only pin is Done still lists it")
 })

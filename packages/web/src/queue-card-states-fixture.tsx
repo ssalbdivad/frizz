@@ -342,6 +342,7 @@ function Queue() {
     queued,
     running: [],
     snoozed: [],
+    pinnedDone: [],
     doneCount: 0,
   }), [queued])
   const leaving = useLeavingCards([project], readAt)

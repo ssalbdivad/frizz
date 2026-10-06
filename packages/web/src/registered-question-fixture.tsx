@@ -271,6 +271,7 @@ const project: QueuesProject = {
   queued: [thread],
   running: [],
   snoozed: [],
+  pinnedDone: [],
   doneCount: 0,
 }
 

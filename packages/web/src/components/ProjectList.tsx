@@ -592,7 +592,7 @@ function ProjectGroupRows({
   // once, where the poll puts it.
   const held = useListHold()
   const target = [
-    { id: "pinned", items: [...loud.pinned, ...quiet.pinnedDone] },
+    { id: "pinned", items: loud.pinned },
     { id: "ready", items: loud.ready },
     { id: "working", items: loud.working },
     { id: "snoozed", items: quiet.snoozed },
@@ -606,7 +606,7 @@ function ProjectGroupRows({
     keyOf: (t) => t.id,
     frozen: held,
     moved,
-    live: (slug) => [...project.queued, ...project.running, ...project.snoozed, ...(board?.threads ?? [])].find((t) => t.id === slug),
+    live: (slug) => [...project.queued, ...project.running, ...project.snoozed, ...project.pinnedDone, ...(board?.threads ?? [])].find((t) => t.id === slug),
   })
   drawnBands.current = bands
   // The band each thread is in NOW: a held row is drawn in its old place but as what it is — a rest time if
@@ -697,9 +697,6 @@ const QUIET_BANDS: readonly QuietBandKey[] = ["snoozed", "done", "external", "sc
 type ListBand = "pinned" | "ready" | "working" | QuietBandKey
 
 interface QuietBands {
-  /** Pinned threads that are Done: still on the shelf (the pin outranks Done), so listed loud — but only
-   *  the board knows them, since the poll carries open threads alone. */
-  pinnedDone: ThreadView[]
   snoozed: ThreadView[]
   /** Undefined until the project's board has been read — the COUNT is the poll's, and known at once. */
   done: ThreadView[] | undefined
@@ -713,17 +710,15 @@ interface QuietBands {
 
 /**
  * What the project row keeps quiet: its Snoozed rows (from the poll, so always current), its Done rows and
- * its External sessions (from its board). Pinned rows are listed loud whatever their state, so none of
- * them is counted twice.
+ * its External sessions (from its board). Pinned rows are listed loud whatever their state — a pinned Done
+ * one included, which the poll carries (lib/listBands.ts) — so none of them is counted twice.
  */
 function quietBands(project: QueuesProject, board: BoardSnapshot | null | undefined): QuietBands {
   const snoozed = project.snoozed.filter((t) => !isPinned(t))
   const schedules = { schedules: project.schedules?.count ?? 0, schedulesAttention: project.schedules?.attention ?? false }
-  if (!board) return { pinnedDone: [], snoozed, done: undefined, doneCount: project.doneCount, external: [], ...schedules }
-  const sections = sectionThreads(board.threads)
-  const done = sections.inactive
-  const pinnedDone = sections.pinned.filter((t) => t.state === "archived")
-  return { pinnedDone, snoozed, done, doneCount: done.length, external: externalThreads(board.threads), ...schedules }
+  if (!board) return { snoozed, done: undefined, doneCount: project.doneCount, external: [], ...schedules }
+  const done = sectionThreads(board.threads).inactive
+  return { snoozed, done, doneCount: done.length, external: externalThreads(board.threads), ...schedules }
 }
 
 /** How many rows a quiet band holds. */

@@ -196,7 +196,7 @@ function Queue() {
   const project: QueuesProject = useMemo(() => ({
     id: "fixture-frizz", slug: "frizz", name: "frizz", card: undefined, open: true, stale: false,
     projectDir: "/fixture/frizz", homeDir: "/fixture", githubRepo: undefined,
-    queued: [CHILD, LONG_CHILD], running: [BUSY], snoozed: [], doneCount: 0,
+    queued: [CHILD, LONG_CHILD], running: [BUSY], snoozed: [], pinnedDone: [], doneCount: 0,
   }), [])
   return (
     <section data-fixture-panel="queue" className="flex flex-col gap-1.5">

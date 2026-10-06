@@ -81,6 +81,31 @@ test("carries each project's most recently rested Done threads, newest first and
   assert.deepEqual(alpha!.recentDone?.map((t) => t.id), Array.from({ length: 20 }, (_, i) => `done-${24 - i}`))
 })
 
+test("a PINNED Done thread rides along whole, outside the Done count, so every project's Pinned band can row it", async () => {
+  // The pinned-Done hole (plans/upstream-superset.md §2): the archived filter ran before anything looked
+  // at the pin, so a pinned thread finished in a project the page was not on had no row on All projects.
+  const router = harness(() => [
+    {
+      project: project("a"),
+      board: board([
+        session("open-pin", { pinnedAt: "2026-10-01T00:00:00.000Z", needsYou: true }),
+        session("done-pin", { state: "archived", pinnedAt: "2026-10-02T00:00:00.000Z" }),
+        session("done-plain", { state: "archived" }),
+        // A foreign session never rows, pinned field or not.
+        session("foreign-pin", { state: "archived", foreign: true, pinnedAt: "2026-10-03T00:00:00.000Z" }),
+      ]),
+    },
+    { project: project("b"), board: board([session("done", { state: "archived" })]) },
+  ])
+  const [alpha, beta] = await router.projectsQueues.handler({ input: undefined })
+  assert.deepEqual(alpha!.threads.map((t) => t.id), ["open-pin"], "open threads are unchanged: a Done one never joins them")
+  assert.deepEqual(alpha!.pinnedDone?.map((t) => t.id), ["done-pin"])
+  assert.equal(alpha!.doneCount, 1, "the Done band's count, as the project's own board files it: the pinned one is under Pinned")
+  assert.deepEqual(alpha!.recentDone?.map((t) => t.id).sort(), ["done-pin", "done-plain"], "the typeahead still offers every Done thread")
+  assert.equal(beta!.pinnedDone, undefined, "absent when there are none")
+  assert.equal(beta!.doneCount, 1)
+})
+
 test("without a tenant map (a test context, a one-project server) it answers for its own project alone", async () => {
   const router = harness(undefined, { project: project("solo"), board: board([session("x", { needsYou: true })], { projectSlug: "solo" }) })
   const queues = await router.projectsQueues.handler({ input: undefined })

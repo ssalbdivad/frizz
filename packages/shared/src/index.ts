@@ -7471,7 +7471,9 @@ export type ProjectPickResult = z.infer<typeof ProjectPickResult>
  * `threads` is every OPEN session thread — the Queue, Running, Snoozed and Pinned rows the project's own
  * rail draws, plus any ARCHIVED one whose worker is still running (sectionOf lifts it into Running until
  * it comes to rest). Every other archived thread is Done, which grows without bound (553 rows on one real
- * board), so it is `doneCount` here. A thread's
+ * board), so it is `doneCount` here — except a PINNED Done thread, which is `pinnedDone` and not counted:
+ * the pin outranks Done, so the rail rows it under Pinned, greyed, and its Done band never holds it (web
+ * groups.ts `sectionThreads`). A thread's
  * TERMINALS ride its row (`ThreadView.terminals`), and one waiting at a prompt queues that thread.
  * Foreign sessions (a project's own terminals) are left out; they are read-only and never queue. The
  * client bands every row with the same pure `groups.ts` functions the rail uses.
@@ -7488,6 +7490,11 @@ export const ProjectQueue = z.object({
   githubRepo: z.string().optional(),
   threads: z.array(ThreadView),
   doneCount: z.number().int().nonnegative(),
+  /** The Done threads that are PINNED, whole: the Pinned band lists them whatever their state, and they
+   *  are few by construction (a pin is the human's shelf), so they ride the poll rather than wait for the
+   *  project's board — a pinned Done thread in a project nobody had opened was rowless on All projects
+   *  until it was. Absent when there are none; never in `doneCount`. */
+  pinnedDone: z.array(ThreadView).optional(),
   /** The most recently rested Done threads, newest first, capped (`RECENT_DONE_THREADS`) — what the
    *  All projects `@` typeahead offers after the open ones (web lib/threadMentions.ts). Never drawn as
    *  rows: this page's Done band is still `doneCount`. */

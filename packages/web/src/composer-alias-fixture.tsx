@@ -119,6 +119,7 @@ const project: QueuesProject = {
   queued: [thread],
   running: [],
   snoozed: [],
+  pinnedDone: [],
   doneCount: 0,
 }
 // The card reads the thread's handoff — the human's last ask and the worker's answer to it — never the
