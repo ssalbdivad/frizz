@@ -2047,17 +2047,6 @@ function blankText(m: ChatMessage, text: string, staleAwaiting?: boolean, cardOw
   const drawsNothing = (body: string) => m.fenceRefused || cardOwned || !body.trim()
   return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting" && drawsNothing(s.body))
 }
-// Would this message render anything under `textOnly` (tool bands dropped)? Mirrors messageRendersNothing
-// but counts ONLY text parts — the queue card's in-place transcript uses it to decide whether a run's
-// first/last agent message that is pure batched tool calls (no prose) contributes a visible row, or folds
-// entirely into the run's divider. Upstream's, restored 2026-10-06 with that transcript; `cardOwned` is the
-// fork's third draws-nothing reason (the resting card states the last message's fence), as in
-// messageRendersNothing.
-export function messageHasRenderableText(m: ChatMessage, staleAwaiting?: boolean, cardOwned?: boolean): boolean {
-  if (m.kind === "event" || m.kind === "reasoning" || m.role === "user") return false
-  if (m.parts && m.parts.length > 0) return m.parts.some((p) => p.kind === "text" && !blankText(m, p.text, staleAwaiting, cardOwned))
-  return typeof m.text === "string" && !blankText(m, m.text, staleAwaiting, cardOwned)
-}
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
 // — the LIVE continuation of the very meta column that the reasoning rows and tool bands form above
 // it — so it joins their tight run rather than breaking to STEP whenever the last rendered message ends
@@ -3698,7 +3687,7 @@ function UserBubble({ text, rawText, queued, deliveryUnconfirmed, deliveryFailed
 // NO `thread` PROP. It was passed for the spinoff card alone, and a thread object is new on every board
 // tick, so it re-rendered every row of a running thread's transcript many times a minute for the sake of
 // one card. The spinoff cards read the board themselves (Spinoff.tsx useTranscriptThread).
-export const Message = memo(function Message({ m, answering, dense, paired, textOnly, showSendButton, staleAwaiting, shadowedBy, placed, settledPlaced, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; textOnly?: boolean; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placed?: readonly RegisteredQuestionView[]; settledPlaced?: readonly SettledQuestion[]; restingCardShown?: boolean }) {
+export const Message = memo(function Message({ m, answering, dense, paired, showSendButton, staleAwaiting, shadowedBy, placed, settledPlaced, restingCardShown }: { m: ChatMessage; answering?: MessageAnswering; dense?: boolean; paired?: PairedAnswer[] | null; showSendButton?: boolean; staleAwaiting?: boolean; shadowedBy?: readonly RegisteredQuestionView[]; placed?: readonly RegisteredQuestionView[]; settledPlaced?: readonly SettledQuestion[]; restingCardShown?: boolean }) {
   // ANSWERING ON A PHONE happens in a sheet, one question at a time (MobileAnswerSheet) — the cards in
   // the transcript stay READ-ONLY there, so the questions are still visible in the context that
   // produced them but a 44pt-thumb answer never has to land on a 24pt chip inside a scrolling message.
@@ -3943,10 +3932,6 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
     // seam withMessageSpacers erases across messages. Order is preserved; only invisible parts go.
     normalizeParts(m.parts).forEach((part, pi) => {
       if (part.kind === "tools") {
-        // textOnly (the queue card's in-place transcript, a run's opening and closing prose): the batched
-        // tool band is dropped so only the agent's prose remains — its calls live inside the run's fold
-        // divider instead (QueueCardTranscript, lib/queueCollapse). Upstream's, restored 2026-10-06.
-        if (textOnly) return
         const collapsed = toolBands[pi] ?? []
         if (collapsed.length) push(<ToolCalls key={`t${pi}`} tools={collapsed} slots={toolSlots[pi]} dense={dense} at={m.at} />, toolBandEdges(collapsed))
       } else {
@@ -3956,7 +3941,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, text
   } else {
     // LEGACY fallback (a pre-restart server ships no `parts`): the old flat layout — tool band first,
     // then all prose. Degrades to today's (order-lossy) rendering until the server bounce.
-    const collapsed = textOnly ? [] : toolBands[0] ?? []
+    const collapsed = toolBands[0] ?? []
     if (collapsed.length > 0) push(<ToolCalls key="tools" tools={collapsed} slots={toolSlots[0]} dense={dense} at={m.at} />, toolBandEdges(collapsed))
     renderText(m.text, "leg")
   }

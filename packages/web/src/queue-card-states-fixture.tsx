@@ -54,11 +54,6 @@ import "./styles.css"
 //                              draws "Rested without a sign-off". The second card's question is its newest
 //                              rest's own: under the handoff, no rested card. Both read their transcript
 //                              through the card's project (threadTranscript).
-//   ?case=long                 the first card's thread ran 22 rounds against the human's last message, after
-//                              four earlier ones: "Show earlier messages" opens its transcript IN the card,
-//                              one round back, with the middle rounds folded behind "N more rounds"; "Load
-//                              earlier messages" pages back one turn per press (threadTranscriptEarlier),
-//                              and the header's collapse folds the card to its header.
 //   ?case=facts                a card whose header facts line carries a context reading (narrow-width check).
 //     &chip=1                  …led by its project, as on a page showing All projects.
 //   ?case=facts-matrix         one card per combination of facts in facts-fixture-cases.ts (a context reading,
@@ -174,37 +169,6 @@ const NEW_QUESTION: RegisteredQuestionView = {
   spec: { kind: "question", header: "Retries", question: "Keep the retry wrapper on the auth suite?", options: [{ label: "Drop it", description: "The race is fixed at the source.", recommended: true }, { label: "Keep it for a week" }] },
 }
 
-// `?case=long`: four earlier rounds, the human's last message, then 22 rounds — a run of tool calls and
-// the prose it rested on, a CI wake, and so on — ending on a final rest. Every message has a source id,
-// which the transcript's windowing and its scroll anchor key on.
-const LONG_FIRST = "First pass is in: the dual-read path is wired and the unit tests pass."
-const LONG_FINAL = "All 22 rounds are green. The new key is live in every region and the old one is retired."
-const LONG_ROUNDS = 22
-const LONG_EARLIER = 4
-const LONG_HUMAN_AGO = 200
-const tools = (n: number, round: number) => Array.from({ length: n }, (_, i) => ({ name: "Bash", detail: `nub run test --shard ${round}.${i + 1}`, status: "completed" as const }))
-const worked = (text: string, minAgo: number, round: number, toolCount: number) =>
-  ({ ...said("assistant", text, minAgo), tools: tools(toolCount, round), parts: [{ kind: "tools", tools: tools(toolCount, round) }, { kind: "text", text }] }) as TranscriptMessage
-const rested = (minAgo: number) => ({ role: "assistant", kind: "event", boundary: "rest", text: "Agent rested", at: ago(minAgo), tools: [], parts: [] }) as unknown as TranscriptMessage
-const LONG_THREAD: TranscriptMessage[] = (() => {
-  const out: TranscriptMessage[] = []
-  for (let k = 1; k <= LONG_EARLIER; k++) {
-    const t = 400 - k * 40
-    out.push(said("user", `Earlier ask ${k}: check the signing service's key cache.`, t))
-    out.push(worked(`Earlier answer ${k}: the cache holds keys for 10m, so a rotation needs a dual-read window.`, t - 5, k, 2))
-    out.push(rested(t - 6))
-  }
-  out.push(said("user", ASKED, LONG_HUMAN_AGO))
-  for (let r = 1; r <= LONG_ROUNDS; r++) {
-    const t = LONG_HUMAN_AGO - r * 8
-    if (r > 1) out.push(said("user", `CI finished on main: run ${r - 1} passed.`, t + 1, { wake: true }))
-    out.push(worked(r === 1 ? LONG_FIRST : r === LONG_ROUNDS ? LONG_FINAL : `Round ${r}: rotated shard ${r}, the dual-read window holds.`, r === LONG_ROUNDS ? 1 : t, r, 3))
-    out.push(rested(r === LONG_ROUNDS ? 0.5 : t - 0.5))
-  }
-  return out.map((m, i) => ({ ...m, sourceId: `src-${String(i).padStart(3, "0")}` }))
-})()
-const LONG_HUMAN = LONG_THREAD.findIndex((m) => m.role === "user" && m.text === ASKED)
-
 // Long enough to clamp (AllQueuesCard ClampedBody, 188px).
 const LONG = Array.from({ length: 14 }, (_, i) => `Paragraph ${i + 1} of a long handoff: what changed, why, and what is left to check before this can be marked done.`).join("\n\n")
 
@@ -256,16 +220,6 @@ function scenario(): Scenario {
         transcript: (id) => (id === "rotate-key"
           ? [said("user", ASKED, 30), said("assistant", ROLLOUT_ASK, 25), said("user", "CI finished on main: all checks passed.", 3, { wake: true }), said("assistant", BARE_REST, 2)]
           : [said("user", "Find out why the auth suite flakes.", 20), said("assistant", CI_ASK, 5)]),
-      }
-    case "long":
-      return {
-        threads: [
-          thread("rotate-key", "Rotate the signing key without downtime", { lastAssistantAt: ago(1) }),
-          thread("flaky-ci", "Deflake the auth integration suite"),
-        ],
-        text: (id) => (id === "rotate-key" ? LONG_FINAL : "Found the race; the fix is in, 50 green runs."),
-        handoff: (id) => (id === "rotate-key" ? { answer: LONG_FIRST, at: ago(1), askedAt: ago(LONG_HUMAN_AGO) } : {}),
-        transcript: (id) => (id === "rotate-key" ? LONG_THREAD.slice(LONG_HUMAN) : [said("user", ASKED, 30), said("assistant", "Found the race; the fix is in, 50 green runs.", 5)]),
       }
     case "registered-done":
       return {
@@ -390,17 +344,7 @@ window.fetch = async (input, init) => {
   }
   if (rpc === "threadTranscript" && transcriptOf) {
     const messages = transcriptOf(body.slug ?? "")
-    // `long` serves its latest window from the human's last message, with the rest behind a cursor.
-    const earlier = CASE === "long" && body.slug === "rotate-key"
-    return json({ messages, beforeCursor: earlier ? `at${LONG_HUMAN}` : null, hasEarlier: earlier, reachedTurnBoundary: true, transcriptKey: `fixture-${body.slug}` })
-  }
-  // One turn per earlier page, as the server cuts them: back to the previous human message.
-  if (rpc === "threadTranscriptEarlier") {
-    const end = Number(/^at(\d+)$/.exec((body as { cursor?: string }).cursor ?? "")?.[1] ?? 0)
-    let start = end - 1
-    while (start > 0 && LONG_THREAD[start]!.role !== "user") start--
-    start = Math.max(0, start)
-    return json({ messages: LONG_THREAD.slice(start, end), beforeCursor: start > 0 ? `at${start}` : null, hasEarlier: start > 0, reachedTurnBoundary: true, transcriptKey: `fixture-${body.slug}` })
+    return json({ messages, beforeCursor: null, hasEarlier: false, reachedTurnBoundary: true, transcriptKey: `fixture-${body.slug}` })
   }
   if (rpc === "threadSettledQuestions") return json({ questions: [] })
   // A reply steers the thread back to work, and the next poll drops it from the queue. After the fade, not

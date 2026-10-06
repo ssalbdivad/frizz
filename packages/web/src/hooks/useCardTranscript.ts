@@ -2,10 +2,10 @@
 //
 // The card opens on the handoff (AllQueuesCard handoffQuery), which is two messages the server cuts for it
 // and the reason a page of every project's queue is cheap to draw. It reads the transcript itself only when
-// it needs one:
-//   • to place its open questions at the rest each was asked at (lib/queueCardQuestions.ts), which the
-//     handoff cannot say — the rests between the human's turn and the newest one are not in it;
-//   • to show the transcript in place, once the human asks for it (QueueCardTranscript).
+// it needs one: to place its open questions at the rest each was asked at (lib/queueCardQuestions.ts),
+// which the handoff cannot say — the rests between the human's turn and the newest one are not in it.
+// (Reading back through the thread is the drawer's job, one click away: AllQueuesCard "Show earlier
+// messages".)
 //
 // NOT the drawer's cache entry (`["transcript", slug]`, hooks.ts useTranscript). That one is the PAGE's:
 // hashed under the page's project scope, kept live by transcript-live.ts through the page's socket, and read

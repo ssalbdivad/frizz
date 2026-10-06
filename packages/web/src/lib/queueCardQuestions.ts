@@ -27,8 +27,8 @@
 //
 // A MARKER PLACES A CARD AT ITS REST'S END on this view, not mid-prose. The handoff's prose is clamped
 // behind "Show more" (AllQueuesCard ClampedBody), and a question drawn inside the clamp is an ask the human
-// cannot see without a click; the transcript opened in place honours the marker's exact slot. The marker
-// still decides WHICH rest the card belongs to, which is the part that moves it.
+// cannot see without a click; the drawer honours the marker's exact slot. The marker still decides WHICH
+// rest the card belongs to, which is the part that moves it.
 //
 // An answered question owes nothing, so it is never hoisted ABOVE (upstream draws a settled card only
 // inside its window), and the answering state's own greyed copy of a question just sent from this card is
@@ -37,7 +37,7 @@ import type { RegisteredQuestionView } from "@frizz/shared"
 import { type AnchorMessage, questionsByAnchor, restEnd } from "./questionAnchor.ts"
 import { lastHumanTurnIndex, type HumanTurnLike } from "./messagePresentation.ts"
 import { placedFrom, placeQuestions, questionsAtCurrentRest } from "./questionShadow.ts"
-import { settledQuestionPositions, type SettledPlacement, type SettledPositionable } from "./settledQuestions.ts"
+import { settledQuestionPositions, type SettledPositionable } from "./settledQuestions.ts"
 
 export type HandoffSlot = "above" | "between" | "tail"
 
@@ -96,47 +96,4 @@ export function handoffQuestionSlots<Q extends Pick<RegisteredQuestionView, "id"
   placedSettled.sort((a, b) => a.at - b.at)
   for (const { slot, group } of placedSettled) (slot === "tail" ? slots.settledTail : slots.settledBetween).push(...group)
   return slots
-}
-
-export interface TranscriptQuestionGroups<Q, S> {
-  /** Open questions by the message index they flush after — a rest older than the window flushes first. */
-  byAnchor: Map<number, Q[]>
-  /** The newest rest's: under the whole transcript, where the card's stack always stood. */
-  tail: Q[]
-  /** Placed by a marker INSIDE a drawn message (Message `placed`). */
-  placed: Map<number, Q[]>
-  /** Answered ones: anchored (only inside the window — an answered card owes nothing, so it is never hoisted
-   *  above it) and placed inside a message. */
-  settled: SettledPlacement<S>
-  here: boolean
-}
-
-/**
- * The same questions on the card's TRANSCRIPT view (QueueCardTranscript), which draws every message from
- * `base` on: upstream's QueueCard grouping (TodosView questionAnchors), with the fork's readers. Unlike the
- * handoff view a marker here places its card at its exact slot in the message, since nothing is clamped.
- * A marker in a message above the window gives the card back to its anchor (placedFrom), which flushes
- * first, above the window.
- */
-export function transcriptQuestionGroups<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string; keptAt?: string }, S extends SettledPositionable>(
-  messages: readonly Message[],
-  open: readonly Q[],
-  settled: readonly S[],
-  base: number,
-): TranscriptQuestionGroups<Q, S> {
-  const placement = placedFrom(placeQuestions(messages, open), base)
-  const tailAnchor = messages.length - 1
-  const byAnchor = new Map<number, Q[]>()
-  const tail: Q[] = []
-  const unplaced = open.filter((q) => !placement.placedIds.has(q.id))
-  for (const [anchor, group] of questionsByAnchor(messages, unplaced)) {
-    if (anchor >= tailAnchor) {
-      tail.push(...group)
-      continue
-    }
-    byAnchor.set(anchor, [...(byAnchor.get(anchor) ?? []), ...group])
-  }
-  const answered = settledQuestionPositions(messages, settled)
-  const anchored = new Map([...answered.anchored].filter(([anchor]) => anchor >= base))
-  return { byAnchor, tail, placed: placement.placed, settled: { placed: answered.placed, anchored }, here: questionsAtCurrentRest(messages, open) }
 }
