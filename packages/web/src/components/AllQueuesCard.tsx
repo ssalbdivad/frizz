@@ -435,12 +435,14 @@ function CardArticle({
             {thread.schedule && <ScheduleMark schedule={thread.schedule} size="title" className="ml-1.5" />}
           </h3>
           {/* THE FACTS LINE (ThreadHeaderFacts FACTS_LINE_CLASS): one row in priority order, where a fact
-              that does not fit drops whole with its separator. The project chip and the status line
-              truncate instead; the project mark at the card's left already names the project. */}
-          <div className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75`}>
-            {chipNode && <Fact give>{chipNode}</Fact>}
+              that does not fit drops whole with its separator. The project chip leads, so it never drops,
+              and truncates only on a line narrower than its name alone; the project mark at the card's
+              left already names the project. A held card's status and the live status line truncate
+              rather than drop (`give`). */}
+          <div data-facts-line className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75`}>
+            {chipNode && <Fact>{chipNode}</Fact>}
             {status !== undefined ? (
-              <Fact give>
+              <Fact give="5em">
                 <FactSep />
                 <span className="min-w-0 truncate">{status}</span>
               </Fact>
@@ -466,7 +468,7 @@ function CardArticle({
             {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
                 takes the rest of the row. Resolved, addressed and opened in the CARD's project: the
                 page's board names the focused one. */}
-            <Fact>
+            <Fact className="max-w-[40%]">
               <SpinoffOf
                 compact
                 thread={thread}
@@ -477,7 +479,7 @@ function CardArticle({
               />
             </Fact>
             {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
-            <Fact give><ThreadStatusLine thread={thread} lead={<FactSep />} /></Fact>
+            <Fact give="7em"><ThreadStatusLine thread={thread} lead={<FactSep />} /></Fact>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">

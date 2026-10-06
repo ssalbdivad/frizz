@@ -11,6 +11,7 @@ import { useViewportLock } from "./lib/viewportLock.ts"
 import { drawCardNow } from "./lib/cardVisibility.ts"
 import { registerQueueCursor, releaseAutoOpened, useShortcutListener } from "./lib/keyboardRuntime.ts"
 import { store } from "./store.ts"
+import { FACT_CASES } from "./facts-fixture-cases.ts"
 import "./styles.css"
 
 // The page's QUEUE CARD (components/AllQueuesCard.tsx) in the states its own tests used to cover on the
@@ -42,6 +43,10 @@ import "./styles.css"
 //                              Mark as read records it seen (threadSeen), after which the poll drops it.
 //   ?case=facts                a card whose header facts line carries a context reading (narrow-width check).
 //     &chip=1                  …led by its project, as on a page showing All projects.
+//   ?case=facts-matrix         one card per combination of facts in facts-fixture-cases.ts (a context reading,
+//                              a goal loop, a worktree, a spinoff, a long status line), for judging the line's
+//                              drop-whole rule at every width at once. Takes &chip=1 too.
+//   &cardw=<px>                the queue column's width (default 640px, capped at the viewport).
 //   ?case=many&n=<count>       a long queue (default 60 cards), every third handoff long enough to clamp, on
 //                              a page whose board IS the cards' project (so the `@` typeahead has threads to
 //                              offer). Each card sits in a <Profiler> counting its commits on
@@ -162,6 +167,11 @@ function scenario(): Scenario {
     case "facts":
       return {
         threads: [thread("rotate-key", "Rotate the signing key without downtime", { context: { tokens: 148_000, window: 200_000 }, lastAssistantAt: new Date(Date.now() - 37 * 60_000).toISOString() })],
+        text: () => "Both regions verified; the old key is retired.",
+      }
+    case "facts-matrix":
+      return {
+        threads: FACT_CASES.filter((c) => c.id !== "no-band").map((c) => thread(c.id, c.title, { lastAssistantAt: new Date(Date.now() - 37 * 60_000).toISOString(), ...c.extra })),
         text: () => "Both regions verified; the old key is retired.",
       }
     case "many": {
@@ -366,7 +376,7 @@ createRoot(document.getElementById("root")!).render(
     <MemoryRouter>
       <TooltipProvider>
         <div className="min-h-screen bg-bg px-4 py-6 text-sm text-fg">
-          <div data-fixture-queue className="mx-auto w-[640px] max-w-full min-w-0">
+          <div data-fixture-queue className="mx-auto w-[640px] max-w-full min-w-0" style={params.has("cardw") ? { width: `${Number(params.get("cardw"))}px` } : undefined}>
             {CASE === "many" ? <LockedQueue /> : <Queue />}
           </div>
         </div>

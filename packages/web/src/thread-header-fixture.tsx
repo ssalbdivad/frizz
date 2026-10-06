@@ -5,7 +5,13 @@ import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { ThreadHeader } from "./components/ChatView.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
+import { FACT_CASES } from "./facts-fixture-cases.ts"
 import "./styles.css"
+
+// `?facts=1`: one header per combination of facts in facts-fixture-cases.ts — the band stamp or none, a
+// context reading, a goal loop, a worktree, a spinoff, a long status line — for judging the facts line's
+// drop-whole rule (ThreadHeaderFacts FACTS_LINE_CLASS) at every width at once.
+const FACTS = new URLSearchParams(location.search).get("facts") === "1"
 
 const calls: string[] = []
 globalThis.fetch = async (input, init) => {
@@ -59,20 +65,37 @@ const codexThread = {
   crashed: true,
 } as unknown as ThreadView
 
-store.board = { projectDir: "/fixture", threads: [claudeThread, codexThread] } as BoardSnapshot
+const factThreads = FACT_CASES.map((c) => ({ ...base, id: c.id, title: c.title, backend: "claude", runtime: "turn-idle", lastActivityAt: new Date(Date.now() - 37 * 60_000).toISOString(), ...c.extra }) as unknown as ThreadView)
 
-function HeaderFixture({ slug }: { slug: string }) {
+store.board = { projectDir: "/fixture", homeDir: "/fixture", threads: FACTS ? factThreads : [claudeThread, codexThread] } as BoardSnapshot
+
+function HeaderFixture({ slug, body = true }: { slug: string; body?: boolean }) {
   return (
     <RadixTabs.Root value="chat" className="flex min-h-0 flex-1 flex-col">
       <ThreadHeader slug={slug} onStatusApplied={() => {}} onClose={() => {}} />
-      <div className="flex min-h-28 flex-1 items-center justify-center px-5 text-center text-[12px] text-muted">
+      {body && <div className="flex min-h-28 flex-1 items-center justify-center px-5 text-center text-[12px] text-muted">
         Drawer body — title controls remain in the header title line.
-      </div>
+      </div>}
     </RadixTabs.Root>
   )
 }
 
+function FactsFixture() {
+  return (
+    <main className="min-h-screen bg-bg p-4 sm:p-8">
+      <div className="mx-auto grid max-w-[900px] gap-4">
+        {factThreads.map((t) => (
+          <section key={t.id} data-facts-case={t.id} className="overflow-hidden border border-border bg-panel shadow-xl shadow-black/30">
+            <HeaderFixture slug={t.id} body={false} />
+          </section>
+        ))}
+      </div>
+    </main>
+  )
+}
+
 function Fixture() {
+  if (FACTS) return <FactsFixture />
   return (
     <main className="min-h-screen bg-bg p-4 sm:p-8">
       <div className="mx-auto grid max-w-[900px] gap-6">

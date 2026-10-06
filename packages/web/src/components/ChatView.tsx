@@ -1805,9 +1805,9 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
             {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
             <Fact><ThreadCheckoutToken checkout={thread.checkout} homeDir={board?.homeDir} lead={<FactSep />} /></Fact>
             {/* A spinoff child's way back, ahead of the status line that takes the rest of the row. */}
-            <Fact><SpinoffOf thread={thread} lead={<FactSep />} /></Fact>
+            <Fact className="max-w-[50%]"><SpinoffOf thread={thread} lead={<FactSep />} /></Fact>
             {/* The live status truncates rather than drops: it is what the thread is doing now. */}
-            <Fact give><ThreadStatusLine thread={thread} lead={<FactSep />} /></Fact>
+            <Fact give="7em"><ThreadStatusLine thread={thread} lead={<FactSep />} /></Fact>
           </ThreadHeaderFacts>
         </div>
       </div>

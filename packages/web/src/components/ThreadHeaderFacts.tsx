@@ -22,8 +22,9 @@ import { GoalMark } from "./RecurringPromptControl.tsx"
 // grow with a reading of varying width, so the reading — a fact about how far the thread has got, not a
 // control — reads here, led by the same mark so it still names whose count it is.
 //
-// `empty:hidden`: a thread with no timestamp and no reading draws nothing, and must not leave the line's
-// 2px top margin behind.
+// Hidden when no fact rendered: a thread with no timestamp and no reading draws nothing, and must not leave
+// the line's height and 2px top margin behind. The line always holds its `Fact` groups, empty or not, so
+// `:empty` cannot see that; `:has` asks whether any of them drew something.
 //
 // ONE ROW, AND A FACT THAT DOES NOT FIT IS DROPPED WHOLE (FACTS_LINE_CLASS, below). The line used to be a
 // plain nowrap row, where the context dial never shrank and everything before it did: at a 420px queue card
@@ -32,8 +33,11 @@ import { GoalMark } from "./RecurringPromptControl.tsx"
 export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadView; lead?: ReactNode; children?: ReactNode }) {
   const lazy = thread.lazyPrompt !== undefined
   return (
-    <div data-thread-header-facts className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75 empty:hidden`}>
-      {lead && <Fact give>{lead}</Fact>}
+    <div data-thread-header-facts data-facts-line className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75 [&:not(:has(>[data-fact]:not(:empty)))]:hidden`}>
+      {/* `self-center`: the band stamp (BandLabel) is an `items-center` inline-flex whose baseline is its
+          glyph's box bottom, so on this baseline row its WORDS rode 2.38px above the time's. Centred like
+          the row it was drawn for, the two baselines match (0.00px, sans 11px, 2026-10-06). */}
+      {lead && <Fact className="self-center">{lead}</Fact>}
       <Fact>
         <LastActive
           // A lazy thread has never been active: its time is when it was written down (the queue card's word too).
@@ -60,9 +64,19 @@ export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadVi
  * prefix of the facts, never one with a hole in it. `gap-y-4` puts that hidden row far outside the 3px clip
  * margin, which is there for focus rings and the chip's hover underline.
  *
- * A group that should TRUNCATE rather than drop (`give`: the project chip, the band stamp, the live status
- * line — each ends in an ellipsis of its own) claims only 2.5em while the row decides what fits, then grows
- * back to its own width (`max-w-max`) out of whatever room is left.
+ * A group that should TRUNCATE rather than drop (`give`: the project chip, a held card's status, the live
+ * status line — each ends in an ellipsis of its own) claims only its `give` width while the row decides what
+ * fits, then grows back toward its own width (`max-w-max`) out of whatever room is left. The `give` is the
+ * narrowest the group may READ at, so it covers the parts that never shrink — the separator, and the status
+ * line's elapsed clock (up to `2h 35m`) — plus a few letters: a group squeezed under them would draw its
+ * separator and clock beside an empty ellipsis, which is the "squeezed to nothing" this line exists to stop
+ * (measured 2026-10-06 at a 2.5em give: the status text drew 0px at a 560px drawer, leaving "· 4m").
+ * A group whose content cannot truncate — the band stamp, a context dial — never takes a `give`: squeezed,
+ * it would paint over its neighbour.
+ *
+ * A cap on a fact (`className="max-w-[50%]"`, the spinoff's) goes on the `Fact`, where a percentage is a
+ * share of the LINE. Inside a fact it is a share of the fact's own width, which is the content's width —
+ * so it truncated a spinoff handle at half its length with the whole row free.
  *
  * `items-baseline`, for the cap-band glyphs on this line (the context ring, the goal mark, a checkout
  * glyph): each stands on the baseline and lifts itself by `0.5em - 0.5cap`, which needs a baseline to
@@ -71,9 +85,18 @@ export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadVi
 export const FACTS_LINE_CLASS = "flex h-[1lh] min-w-0 flex-wrap items-baseline gap-x-1.5 gap-y-4 overflow-clip [overflow-clip-margin:3px]"
 
 /** One fact on a facts line, with its own leading separator inside it (FACTS_LINE_CLASS). Empty — the fact
- *  had nothing to say — it takes no room and no gap. */
-export function Fact({ give = false, children }: { give?: boolean; children?: ReactNode }) {
-  return <span data-fact className={give ? "flex min-w-0 max-w-max grow basis-[2.5em] items-baseline gap-1.5 empty:hidden" : "flex min-w-0 items-baseline gap-1.5 empty:hidden"}>{children}</span>
+ *  had nothing to say — it takes no room and no gap. `give`: it truncates down to that width rather than
+ *  dropping (see FACTS_LINE_CLASS for what the width must cover). */
+export function Fact({ give, className = "", children }: { give?: `${number}em`; className?: string; children?: ReactNode }) {
+  return (
+    <span
+      data-fact
+      className={`flex min-w-0 items-baseline gap-1.5 empty:hidden ${give ? "max-w-max grow" : ""} ${className}`}
+      style={give ? { flexBasis: give } : undefined}
+    >
+      {children}
+    </span>
+  )
 }
 
 /** The line's separator, the first thing inside its `Fact`. It shows only where it SEPARATES — when a fact
