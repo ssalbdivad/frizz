@@ -324,24 +324,46 @@ export function useModelReader(deps: ModelReaderDeps, opts: { share?: string } =
 
 const WORD_CHAR = /[\p{L}\p{N}'’]/u
 
-/** The word touching a span on one side ("" at the text's edge or across punctuation). */
-function neighbour(text: string, span: Span, side: "before" | "after"): string {
-  if (side === "before") {
-    const m = /([\p{L}\p{N}'’]+)[^\S\n]*$/u.exec(text.slice(0, span.start))
-    return m && m.index + m[0].length === span.start ? m[1]!.toLowerCase() : ""
-  }
-  const m = /^[^\S\n]*([\p{L}\p{N}'’]+)/u.exec(text.slice(span.end))
-  return m ? m[1]!.toLowerCase() : ""
+/**
+ * What stands next to a span on one side: the nearest WORD, and the PUNCTUATION between it and the span
+ * (whitespace dropped; a run of line breaks kept as one, since a new paragraph is punctuation too). Both are
+ * "" at the text's edge. The word is lowercased: a capital is not a change of meaning.
+ */
+function neighbour(text: string, span: Span, side: "before" | "after"): { word: string; seam: string } {
+  const m = side === "before"
+    ? /([\p{L}\p{N}'’]+)?([^\p{L}\p{N}'’]*)$/u.exec(text.slice(0, span.start))!
+    : /^([^\p{L}\p{N}'’]*)([\p{L}\p{N}'’]+)?/u.exec(text.slice(span.end))!
+  const [seam, word] = side === "before" ? [m[2] ?? "", m[1] ?? ""] : [m[1] ?? "", m[2] ?? ""]
+  return { word: word.toLowerCase(), seam: seam.replace(/[^\S\n]+/g, "").replace(/\n+/g, "\n") }
+}
+
+/** One side of the phrase is as it was read: the same nearest word, across the same punctuation. With no
+ *  word on that side then or now, the punctuation is a sentence's own end (`…holiday.`), or a clause not yet
+ *  continued (`…holiday,` before its next word is typed): nothing there reads with the phrase yet. */
+function sameSide(now: { word: string; seam: string }, was: { word: string; seam: string }): boolean {
+  if (!now.word && !was.word) return true
+  return now.word === was.word && now.seam === was.seam
 }
 
 /**
  * Carry a model reading forward to the prose as it is now (§4.2): valid while its phrase is still there —
- * located near where it was (`near`, else where the model found it) — and NOTHING TOUCHES IT. The phrase must
- * sit on word boundaries, and the word right before it and right after it must be the ones it had when it
- * was read: typing after "every Monday unless it's a holiday" (", or a weekend") changes what it means
- * without changing the phrase's own characters, so it drops the reading, while an edit further into the
- * task keeps it. Returns the phrase's new span and the prompt re-cut from the prose with the shared
- * `cutPhrase` — byte-for-byte what the server would save — or undefined when the reading no longer holds.
+ * located near where it was (`near`, else where the model found it) — and NOTHING TOUCHES IT. Returns the
+ * phrase's new span and the prompt re-cut from the prose with the shared `cutPhrase` — byte-for-byte what the
+ * server would save — or undefined when the reading no longer holds.
+ *
+ * "Touches", exactly (fix round 3, relocate-blind-behind-punctuation): an edit touches the phrase when it
+ * changes any character of the phrase, the punctuation between the phrase and the nearest word on either
+ * side (whitespace aside), or that nearest word itself — on a side where a word stands now or stood when it
+ * was read. Everything past that word is the task's, and an edit there keeps the reading.
+ *
+ * Why the word ACROSS punctuation counts: the model read the whole text, and a clause runs on past a comma.
+ * Typing `, or a weekend` after "every day unless it's a holiday" changes what it means without changing a
+ * character of the phrase; so does a new sentence right after it (`Skip weekends too.`), and so does a
+ * qualifier before it (`Except weekends, every day …`). Until fix round 3 the word was looked for across
+ * whitespace only, so behind a comma both sides read "" whatever was typed there: the reading stood, no second
+ * read went out, and the schedule was created without the added clause, with its words left in the task.
+ * The check cannot tell a qualifier from a greeting (`Hey, every day …`), and a word typed into the task's
+ * FIRST word (`post` → `send`) drops it too: the price of both is one more read, never a wrong schedule.
  */
 export function relocateModelReading(
   prose: string,
@@ -353,7 +375,7 @@ export function relocateModelReading(
   if (!span) return undefined
   if ((span.start > 0 && WORD_CHAR.test(prose[span.start - 1]!)) || (span.end < prose.length && WORD_CHAR.test(prose[span.end]!))) return undefined
   const was = { start: result.phraseStart, end: result.phraseEnd }
-  if (neighbour(prose, span, "before") !== neighbour(read.text, was, "before")) return undefined
-  if (neighbour(prose, span, "after") !== neighbour(read.text, was, "after")) return undefined
+  if (!sameSide(neighbour(prose, span, "before"), neighbour(read.text, was, "before"))) return undefined
+  if (!sameSide(neighbour(prose, span, "after"), neighbour(read.text, was, "after"))) return undefined
   return { span, prompt: cutPhrase(prose, span) }
 }

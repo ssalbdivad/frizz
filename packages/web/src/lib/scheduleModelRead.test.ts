@@ -208,10 +208,55 @@ test("a model reading belongs to its phrase: a task-only edit keeps it and re-cu
     span: { start: 0, end: 34 },
     prompt: "post the weekly digest",
   })
-  // Text typed BEFORE the phrase moves it; it is found near where it was.
-  const moved = relocateModelReading("Hey, every Monday unless it's a holiday post the digest", { text: read, result })
-  assert.deepEqual(moved?.span, { start: 5, end: 39 })
-  assert.equal(moved?.prompt, "Hey post the digest", "cutPhrase tidies the seam the phrase leaves")
+  // Text typed BEFORE the phrase, short of the word next to it, moves it; it is found near where it was.
+  const noted = "Team: every Monday unless it's a holiday post the digest"
+  const moved = relocateModelReading("Weekly team: every Monday unless it's a holiday post the digest", { text: noted, result: ok(noted, "every Monday unless it's a holiday") })
+  assert.deepEqual(moved?.span, { start: 13, end: 47 })
+  assert.equal(moved?.prompt, "Weekly team post the digest", "cutPhrase tidies the seam the phrase leaves")
+})
+
+// Fix round 3 (relocate-blind-behind-punctuation): the neighbour check read "" across punctuation on both
+// sides, so with a comma after the phrase ANY words typed after the comma passed — `, or a weekend,` extended
+// the condition the model had read, no second read went out, and the created schedule fired on weekends with
+// "or a weekend, post the digest" as its task. Driven on the fixture. "Touches", made exact: an edit touches
+// the phrase when it changes any character of the phrase, the PUNCTUATION between the phrase and the nearest
+// word on either side (whitespace aside), or that nearest WORD itself — on a side where a word stands now or
+// stood when it was read. Everything past that word is the task's.
+test("touching the phrase, made exact: an edit that continues its clause drops the reading, past punctuation too", () => {
+  const P = "every day unless it's a holiday"
+  const drops: [read: string, now: string, why: string][] = [
+    [`${P}, post the digest`, `${P}, or a weekend, post the digest`, "words after a comma that continues its clause"],
+    [`${P}. Post the digest.`, `${P}. Skip weekends too. Post the digest.`, "a new sentence right after it"],
+    [`${P} post the digest`, `Except weekends, ${P} post the digest`, "a qualifier before it, across a comma"],
+    [`${P} post the digest`, `Hey, ${P} post the digest`, "any word typed right before it: the reading cannot tell a greeting from a qualifier"],
+    [`post the digest ${P}`, `post the digest ${P}, or a weekend`, "words appended after its last word, across a comma"],
+    [`post the digest ${P}`, `post the digest ${P} or a weekend`, "words appended directly after its last word"],
+    [`${P}, post the digest`, `${P} post the digest`, "the punctuation at its seam changed"],
+    [`${P}, post the digest`, `${P}, opost the digest`, "a key typed into the word next to it (the first key of `or`)"],
+  ]
+  for (const [read, now, why] of drops) {
+    assert.equal(relocateModelReading(now, { text: read, result: ok(read, P) }), undefined, `${why}: ${JSON.stringify(now)}`)
+  }
+})
+
+test("touching the phrase, made exact: an edit to the task alone keeps the reading, re-cut", () => {
+  const P = "every day unless it's a holiday"
+  const keeps: [read: string, now: string, prompt: string, why: string][] = [
+    [`${P}, post the digest`, `${P}, post the weekly digest`, "post the weekly digest", "a word inside the task, after the comma"],
+    // (The shared cutPhrase keeps a full stop at the seam; the prompt is always its cut, byte for byte.)
+    [`${P}. Post the digest.`, `${P}. Post the digest to #eng.`, ". Post the digest to #eng.", "the end of the task's sentence"],
+    [`${P}, post the digest`, `${P}, post the digest. Then ping me.`, "post the digest. Then ping me.", "a sentence after the task's first word"],
+    [`post the digest ${P}`, `post the weekly digest ${P}`, "post the weekly digest", "a task before it, short of the word next to it"],
+    [`post the digest ${P}`, `post the digest ${P}.`, "post the digest.", "a full stop with no word after it: nothing continues the clause"],
+    [`post the digest ${P}`, `post the digest ${P},`, "post the digest", "a comma with no word after it YET (the next word decides)"],
+    [`${P}, post the digest`, `${P},  post the digest`, "post the digest", "whitespace at the seam is not punctuation"],
+  ]
+  for (const [read, now, prompt, why] of keeps) {
+    const at = relocateModelReading(now, { text: read, result: ok(read, P) })
+    assert.ok(at, `${why}: ${JSON.stringify(now)} keeps the reading`)
+    assert.equal(now.slice(at.span.start, at.span.end), P)
+    assert.equal(at.prompt, prompt, why)
+  }
 })
 
 test("a model reading is dropped by an edit that touches its phrase", () => {
