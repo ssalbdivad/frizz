@@ -2887,6 +2887,12 @@ export interface AskedOption {
   /** Marks the one option the worker recommends. At most one per question — a second is refused, since
    *  "recommended" means nothing if it is on two of three choices. */
   recommended?: boolean
+  /** Taking this option acts OUTSIDE this machine — files an issue, posts a comment, merges, pushes,
+   *  publishes, spends — usually under the human's name. Frizz's unanswered-question default never takes
+   *  such an option (recommendedDefaultAnswer): the maintainer, 2026-10-06, after a TS 7 migration
+   *  thread asked whether to file an upstream issue under their account and the 10m default was on
+   *  course to file it — "an issue shouldn't be opened from me unless I actually answer". */
+  external?: boolean
   /** RETIRED 2026-09-01 (it revealed markdown under the option only once picked — detail that should
    *  inform a choice arrived after the choice; maintainer: "you should just be rendering it as part of
    *  the answer before I click on it"). Still ACCEPTED, never refused: stored rows and in-flight
@@ -2932,6 +2938,7 @@ const AskedOptionSchema: z.ZodType<AskedOption> = z.lazy(() => z.object({
   // body — a diff, a drafted comment, a table — and a real diff exceeds 4000.
   description: z.string().trim().max(20000).optional(),
   recommended: z.boolean().optional(),
+  external: z.boolean().optional(),
   preview: z.string().max(4000).optional(),
   // No count cap, like `options` (2026-09-03); the tree is bounded by ASK_MAX_DEPTH instead.
   followUps: z.array(AskedQuestionSchema).optional(),
@@ -3017,6 +3024,10 @@ export const RegisteredQuestionView = z.object({
    *  will not: the thread is still working, the question has nothing to take, it was typed past, or the
    *  human turned the default off with the countdown's ×. The card counts down to it. */
   defaultsAt: z.string().optional(),
+  /** The label the default will pick, present beside `defaultsAt` only when it is NOT the recommended
+   *  option — the recommendation acts outside this machine, so the default falls back (see
+   *  recommendedDefaultAnswer) and the countdown names what it will actually take. */
+  defaultsTo: z.string().optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
@@ -3107,22 +3118,43 @@ export type HoldQuestionDefaultResult = z.infer<typeof HoldQuestionDefaultResult
  *  wake and by the human on the settled card, so neither mistakes Frizz's default for the human's pick. */
 export const DEFAULTED_ANSWER_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS / 60_000}m, so Frizz took the recommended option`
 
+/** The `text` when the recommended option acts outside this machine, so the default took the first
+ *  option that does not. The worker reads it as "the human never approved the external act" — the
+ *  recommendation is still theirs to put to the human later, never something to do anyway. */
+export const DEFAULTED_FALLBACK_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS / 60_000}m. The recommended option acts outside this machine, so Frizz took the first option that does not; the human has not approved the recommended one`
+
+/** The option Frizz's default takes on one question node, or undefined when it takes none: the
+ *  recommended option when it stays on this machine, else the FIRST option that does — the worker
+ *  orders options by preference, so that is the least-blocking safe one. No recommendation, or every
+ *  option `external`, takes nothing. */
+function defaultOption(node: AskedQuestion): { option: AskedOption; fallback: boolean } | undefined {
+  if (node.kind !== "question") return undefined
+  const recommended = node.options?.find((o) => o.recommended)
+  if (!recommended) return undefined
+  if (!recommended.external) return { option: recommended, fallback: false }
+  const safe = node.options?.find((o) => !o.external)
+  return safe ? { option: safe, fallback: true } : undefined
+}
+
 /** The answer Frizz gives an unanswered question on the human's behalf, or undefined when it has none to
  *  give: a free-text or `multi` question (no single pick to take), one with no option marked
- *  `recommended`, and a `danger` question — the irreversible call stays the human's however long it
- *  waits. Follow-ups under the taken option take their own recommendation, or go out with nothing
- *  chosen, the same shape the card sends for a live follow-up the human left blank. */
+ *  `recommended`, a `danger` question — the irreversible call stays the human's however long it
+ *  waits — and one whose every option is `external`. A recommendation marked `external` is never taken:
+ *  the default falls back to the first option that stays on this machine (defaultOption). Follow-ups
+ *  under the taken option follow the same rule, or go out with nothing chosen, the same shape the card
+ *  sends for a live follow-up the human left blank. */
 export function recommendedDefaultAnswer(questionId: string, spec: AskedQuestion): QuestionAnswer | undefined {
   if (spec.danger) return undefined
   const build = (node: AskedQuestion, root: boolean): QuestionAnswer | undefined => {
-    const taken = node.kind === "question" ? node.options?.find((o) => o.recommended) : undefined
+    const pick = defaultOption(node)
+    const taken = pick?.option
     if (!taken && root) return undefined
     const followUps = (taken?.followUps ?? []).flatMap((child) => build(child, false) ?? [])
     return {
       questionId,
       question: node.question,
       chosen: taken ? [taken.label] : [],
-      ...(root ? { text: DEFAULTED_ANSWER_NOTE } : {}),
+      ...(root ? { text: pick?.fallback ? DEFAULTED_FALLBACK_NOTE : DEFAULTED_ANSWER_NOTE } : {}),
       ...(followUps.length > 0 ? { followUps } : {}),
     }
   }

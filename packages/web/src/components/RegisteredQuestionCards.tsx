@@ -510,7 +510,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
   const a = given ?? shared
   if (!a || !a.slug) return null
   // On the phone thread page the card is a reading surface; the sheet answers it (PhoneQuestionCards).
-  const countdown = q.defaultsAt ? <DefaultCountdown at={q.defaultsAt} onCancel={() => a.cancelDefault(q.id)} /> : null
+  const countdown = q.defaultsAt ? <DefaultCountdown at={q.defaultsAt} to={q.defaultsTo} onCancel={() => a.cancelDefault(q.id)} /> : null
   if (phone) return <>
     <CompactQuestionList questions={[q]} />
     {countdown}
@@ -594,7 +594,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
  *  the dismiss, and a second × beside it would read as the same control. Minutes only, on the page's
  *  30s clock (a ticking seconds digit would pull the eye off the question it sits under); `<1m` for the
  *  last minute, as the shell-budget reading spells it. Its × turns the default off for this question. */
-function DefaultCountdown({ at, onCancel }: { at: string; onCancel: () => void }) {
+function DefaultCountdown({ at, to, onCancel }: { at: string; to?: string; onCancel: () => void }) {
   const now = useNowMs()
   const left = Date.parse(at) - now
   const reading = left < 60_000 ? "<1m" : `${Math.ceil(left / 60_000)}m`
@@ -605,7 +605,15 @@ function DefaultCountdown({ at, onCancel }: { at: string; onCancel: () => void }
     // 20px hit area. Vertically `items-center` lands the ink 0.50px from the cap band's centre — left alone.
     <div data-question-default className="flex items-center px-4 text-[12px] leading-4 text-muted-70">
       {/* Short enough to stay on one line beside its × in a 380px card; the tooltip says the rest. */}
-      <span title="Unless it is answered first">Picks the recommended option in {reading}</span>
+      {/* `to` names a FALLBACK: the recommendation acts outside this machine, so the default takes the
+          first option that does not, and the countdown must not claim it takes the recommendation. */}
+      {to ? (
+        <span className="min-w-0 truncate" title={`Unless it is answered first. The recommended option is never picked for the human: it acts outside this machine.`}>
+          Picks “{to}” in {reading}
+        </span>
+      ) : (
+        <span title="Unless it is answered first">Picks the recommended option in {reading}</span>
+      )}
       <button
         type="button"
         data-cancel-question-default

@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import {
   ANSWER_CONTINUATION_INDENT,
   DEFAULTED_ANSWER_NOTE,
+  DEFAULTED_FALLBACK_NOTE,
   QUESTION_DEFAULT_AFTER_MS,
   QUESTION_DEFAULT_ENGAGED_GRACE_MS,
   questionDefaultAtMs,
@@ -99,4 +100,27 @@ test("recommendedDefaultAnswer: takes the single recommendation, its follow-ups'
   assert.equal(recommendedDefaultAnswer("q", { ...spec, kind: "multi" }), undefined)
   assert.equal(recommendedDefaultAnswer("q", { question: "Q", kind: "question" }), undefined)
   assert.equal(recommendedDefaultAnswer("q", { question: "Q", kind: "question", options: [{ label: "A" }] }), undefined)
+})
+
+test("recommendedDefaultAnswer: never takes an external option — falls back to the first local one, or waits", () => {
+  const spec = { question: "File the repro upstream?", kind: "question" as const, options: [
+    { label: "File it", recommended: true, external: true },
+    { label: "Post a comment instead", external: true },
+    { label: "Keep it in the handoff" },
+    { label: "Drop it" },
+  ] }
+  assert.deepEqual(recommendedDefaultAnswer("q", spec), {
+    questionId: "q", question: spec.question, chosen: ["Keep it in the handoff"], text: DEFAULTED_FALLBACK_NOTE,
+  })
+  const allExternal = { ...spec, options: spec.options.slice(0, 2) }
+  assert.equal(recommendedDefaultAnswer("q", allExternal), undefined, "nothing local to take: it waits for the human")
+  // A follow-up under the taken option follows the same rule, and goes out blank when all of it is external.
+  const nested = { question: "Q", kind: "question" as const, options: [{ label: "A", recommended: true, followUps: [
+    { question: "F1", kind: "question" as const, options: [{ label: "push", recommended: true, external: true }, { label: "local" }] },
+    { question: "F2", kind: "question" as const, options: [{ label: "publish", recommended: true, external: true }] },
+  ] }] }
+  assert.deepEqual(recommendedDefaultAnswer("q", nested)?.followUps, [
+    { questionId: "q", question: "F1", chosen: ["local"] },
+    { questionId: "q", question: "F2", chosen: [] },
+  ])
 })
