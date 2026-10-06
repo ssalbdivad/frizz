@@ -1124,6 +1124,15 @@ test("break 2: a zone said after the clock is a zone cue, whatever its spelling"
     }
   }
   assert.deepEqual(failures, [])
+  // No core: the interpreter writes "9am NZT" as this box's wall clock (Sunday 4pm here), which a Monday-9am
+  // core could never hold, so a faithful answer would be the disagree state (§4.3).
+  const nzt = read("every Monday at 9am NZT triage new issues", "anywhere")
+  assert.ok(nzt.kind === "cue" && !nzt.core, summarizeReading("every Monday at 9am NZT triage new issues", nzt))
+  assert.equal(readingsConsistent({ rrule: "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-12T09:00", tz: NY, assumed: [] }, { rrule: "FREQ=WEEKLY;BYDAY=SU;BYHOUR=16;BYMINUTE=0", dtstart: "2026-10-11T16:00", tz: NY }, SPEC_NOW), false, "why: the core would refuse the right answer")
+  for (const text of ["every Monday at 9am Berlin time triage new issues", "every Monday at 9am -0500 triage new issues", "Berlin time, every Monday at 9am triage new issues"]) {
+    const r = read(text, "anywhere")
+    assert.ok(r.kind === "cue" && r.why === "zone" && !r.core, `${text}: ${summarizeReading(text, r)}`)
+  }
   // A lowercase word that only spells an abbreviation is the task's verb.
   for (const text of ["every morning cat the error log and summarize it", "every Monday at 9am eat the backlog"]) {
     assert.equal(read(text, "edges").kind, "exact", `${text}: ${line(text, "edges")}`)

@@ -1817,7 +1817,7 @@ function judge(p: Prep, ctx: Ctx, c: Candidate, cands: Candidate[], region: Span
   const condition = firstOutside(STRONG_CONDITION, m, 0)
   if (condition) return asCue(trimSpan(p, clauseOf(p, condition)), "condition")
   const zone = firstOutside(ZONE_ANYWHERE, m, 0)
-  if (zone) return asCue(zone, "zone")
+  if (zone) return asCue(zone, "zone", false)
   // A second rule adds runs, so no core is shown (fix round 2, as for a conjoined one in `touching`).
   const second = cands.find((k) => k !== c && outside(k))
   if (second) return asCue({ start: second.start, end: second.end }, "compound", false)
@@ -1897,10 +1897,12 @@ function touching(p: Prep, region: Span, span: Span): Touch | undefined {
   const offset = ZONE_OFFSET_BARE.exec(after)
   if (offset) {
     const lead = /^[\s,;:(\[]*/.exec(offset[0])![0].length
-    return { unread: { start: span.end + lead, end: span.end + offset[0].length }, why: "zone" }
+    return { unread: { start: span.end + lead, end: span.end + offset[0].length }, why: "zone", noCore: true }
   }
   const zone = ZONE_AFTER.exec(after) ?? ZONE_ABBR_UPPER.exec(p.text.slice(span.end, region.end))
-  if (zone) return hit(zone, "zone")
+  // A zone moves every run, so no core is shown (fix round 2): the interpreter writes the zone's 9am as this
+  // box's wall clock, which no core at 9am here could ever hold (§4.3). The MOD path ("9 PT") had none already.
+  if (zone) return hit(zone, "zone", { noCore: true })
   const approx = APPROX_AFTER.exec(after)
   if (approx) return hit(approx, approx[1] ? "unsupported" : "vague")
   const clock = CLOCK_AFTER.exec(after)
@@ -1979,7 +1981,7 @@ function touching(p: Prep, region: Span, span: Span): Touch | undefined {
     const original = p.text.slice(region.start + cut + 1, region.start + trimmed.length)
     const zoneBefore = ZONE_AFTER.test(clause) || ZONE_ANYWHERE.test(clause) || ZONE_OFFSET_BARE.test(clause) || ZONE_ABBR_UPPER.test(original)
     if (zoneBefore || new RegExp(`\\b${CAL_WORD}`).test(clause)) {
-      return { unread: trimSpan(p, { start: region.start + cut + 1, end: region.start + trimmed.length }), why: zoneBefore ? "zone" : "leftover" }
+      return { unread: trimSpan(p, { start: region.start + cut + 1, end: region.start + trimmed.length }), why: zoneBefore ? "zone" : "leftover", ...(zoneBefore ? { noCore: true as const } : {}) }
     }
   }
   return undefined
