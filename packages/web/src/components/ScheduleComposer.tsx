@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ArrowRightToLine, CornerDownLeft, Repeat, X } from "lucide-react"
 import {
@@ -36,6 +36,7 @@ import {
   type ModelReader,
 } from "../lib/scheduleModelRead.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { useIsMobile } from "../lib/mobile.ts"
 import { spanUntil } from "../lib/activityTime.ts"
 import { PreviewDescribe, SOON_MS, browserZone, schedulePreviewModel, type PreviewSegment } from "./SchedulePreview.tsx"
 import type { ComposerMark } from "./Composer.tsx"
@@ -341,6 +342,9 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   const on = mode.on
   const tz = browserZone()
   const nowMs = useNowMs()
+  // THE PHONE (§12): no keys, so the ledge is a TAP ROW and the panel shows no `Esc`. Same rules, same
+  // edges, same publish policy; only what is drawn differs.
+  const phone = useIsMobile()
   const offer = useScheduleOffer({ prose, exclude, mode: on, dismissed: mode.dismissed, tz })
   const reader = useModelReader({
     interpret: (text) => rpc.interpretSchedule({ text, tz }),
@@ -647,8 +651,9 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   const glyph: LiveSchedule["glyph"] = on ? "on" : shownOffer || hintsWithoutOffer(offer.last, effective) ? "hint" : "off"
   let glyphTitle: string | undefined
-  if (shownOffer?.reading.kind === "exact") glyphTitle = `Schedule ${describeRule(shownOffer.reading.rrule, shownOffer.reading.dtstart, tz)} (Tab)`
-  else if (shownOffer?.reading.kind === "cue") glyphTitle = "Schedule this (Tab)"
+  const tabHint = phone ? "" : " (Tab)"
+  if (shownOffer?.reading.kind === "exact") glyphTitle = `Schedule ${describeRule(shownOffer.reading.rrule, shownOffer.reading.dtstart, tz)}${tabHint}`
+  else if (shownOffer?.reading.kind === "cue") glyphTitle = `Schedule this${tabHint}`
 
   // One polite line per offer APPEARANCE, never per refinement (§5.3).
   const [announcement, setAnnouncement] = useState("")
@@ -657,23 +662,28 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     if (!offerShowing || !shownOffer) return
     const r = shownOffer.reading
     const words = r.kind === "exact" ? describeRule(r.rrule, r.dtstart, tz) : r.kind === "cue" ? `“${r.phrase}”` : ""
-    setAnnouncement(r.kind === "ambiguous" ? r.copy : `Schedule suggestion: ${words}. Press Tab to schedule it.`)
+    setAnnouncement(r.kind === "ambiguous" ? r.copy : `Schedule suggestion: ${words}. ${phone ? "Tap Schedule" : "Press Tab"} to schedule it.`)
   }, [offerShowing])
 
   const each = useEachRun(shownOffer, prose, promptOf)
   const ledge = shownOffer ? (
     <ScheduleSlot
       form="ledge"
-      line={<LedgeLine shown={shownOffer} prose={prose} each={each} nowMs={nowMs} tz={tz} onSchedule={() => key("schedule")} onClose={() => key("close")} />}
-      title={each ? `Each run: ${each}` : undefined}
+      phone={phone}
+      line={phone
+        ? <TapRowLine shown={shownOffer} prose={prose} nowMs={nowMs} tz={tz} onSchedule={() => key("schedule")} onClose={() => key("close")} />
+        : <LedgeLine shown={shownOffer} prose={prose} each={each} nowMs={nowMs} tz={tz} onSchedule={() => key("schedule")} onClose={() => key("close")} />}
+      title={each && !phone ? `Each run: ${each}` : undefined}
     />
   ) : null
   const panel = view ? (
     <ScheduleSlot
       form="panel"
+      phone={phone}
       {...panelParts({
         view,
         state,
+        phone,
         nowMs,
         tz,
         notice: notice && notice.prose === prose ? notice.copy : undefined,
@@ -787,6 +797,12 @@ const PANEL_BODY_INSET = "pl-[28px]" // px-2.5 + the 12px glyph + gap-2 − 2: t
 const CLOSE_TRIM = "-ml-[6.5px] -mr-[5.5px]" // ×: 4px padding + 2.5px of viewBox in, and out to the left inset
 // The keycaps at 11px: 2 units of 24 a side for ⇥ (0.92px), 3 for ↵ (1.375px).
 const KEYCAP_TRIM = { tab: "-mx-[0.92px]", enter: "-mx-[1.375px]" } as const
+// THE PHONE'S TAP ROW (TapRowLine), the same law: the pill's border is its ink; the × is a 32px hit square
+// (10px a side around its 12px box, plus 2.5px of viewBox), collapsed onto its ink at both ends, and 4px of it
+// taken off the LAYOUT top and bottom (`-my-1`), so the pill, not the invisible square, sets the row's height:
+// 28 + py-1 = 36px, the pill 4px from either edge (the square set it at 37, the pill 6px down and 3px up).
+const TAP_PILL_GAP = "ml-1" // reading → pill: gap-2 + 4 = 12, the desktop's between-clusters gap
+const TAP_CLOSE_TRIM = "-ml-[8.5px] -mr-[11.5px]" // pill → ×: gap-2 + 12.5 − 8.5 = 12; × → border: 12.5 + 10 − 11.5 = 11
 
 /** The mode's glyph, on its line's cap band (the house lift: the box's bottom on the baseline, then half the
  *  box less half the cap height). `cap` resolves against the glyph's own font, so it carries the size of
@@ -801,6 +817,9 @@ function SlotGlyph({ lead }: { lead: 12 | 13 }) {
 }
 
 const KBD = "font-sans text-[11px] text-muted-70"
+/** A phone's tap target: the button's box stays as drawn, and an invisible layer takes its hit area to at
+ *  least 32px tall (Cancel's 20px line, Create's 28px pill). */
+const TAP_HIT = "relative after:absolute after:inset-x-0 after:top-1/2 after:h-8 after:min-h-full after:-translate-y-1/2 after:content-['']"
 
 /**
  * The ledge's keycaps, ⇥ and ↵, as drawn glyphs rather than characters. As text (11px, the panel's `Esc`
@@ -826,14 +845,16 @@ function KeyCap({ label, icon: Icon, trim }: { label: string; icon: typeof Repea
  * new card. As the LEDGE it is one 28px line that never wraps; as the PANEL the same first line stays put and
  * the rows open beneath it (grid rows 0fr → 1fr), so the list below slides rather than jumps.
  */
-function ScheduleSlot({ form, line, lead = 12, body, title, footer }: { form: "ledge" | "panel"; line: ReactNode; lead?: 12 | 13; body?: ReactNode; title?: string; footer?: ReactNode }) {
+function ScheduleSlot({ form, phone, line, lead = 12, body, title, footer }: { form: "ledge" | "panel"; phone: boolean; line: ReactNode; lead?: 12 | 13; body?: ReactNode; title?: string; footer?: ReactNode }) {
   return (
     <div
       data-schedule-slot={form}
       title={title}
       className={`sched-ledge-in mx-2.5 rounded-b-lg border border-t-0 border-border transition-colors duration-[160ms] motion-reduce:transition-none ${form === "ledge" ? "bg-panel-2/60" : "bg-panel-2"}`}
     >
-      <div data-schedule-line className="flex min-w-0 flex-wrap items-baseline gap-x-2 px-2.5 py-1 text-[12px] leading-5 text-muted">
+      {/* The phone's tap row never wraps: its reading gives way (TapRowLine) and its two buttons keep their
+          size. The desktop's line wraps its actions under a reading with less than 9rem (LedgeLine). */}
+      <div data-schedule-line className={`flex min-w-0 items-baseline gap-x-2 px-2.5 text-[12px] leading-5 text-muted ${phone ? "flex-nowrap py-1" : "flex-wrap py-1"}`}>
         <SlotGlyph lead={lead} />
         {line}
       </div>
@@ -851,33 +872,27 @@ function ScheduleSlot({ form, line, lead = 12, body, title, footer }: { form: "l
   )
 }
 
-/** The offer's line (S1–S3): the reading, then `⇥ Schedule  ↵ Start now  ×`, which never truncate. */
-function LedgeLine({ shown, prose, each, nowMs, tz, onSchedule, onClose }: {
-  shown: Published
-  prose: string
-  each: string
-  nowMs: number
-  tz: string
-  onSchedule: () => void
-  onClose: () => void
-}) {
+/** What an offer's ledge reads (S1–S3): the rule (or a cue's core and its quoted words, or the ambiguous
+ *  word's copy), and for an exact reading its next day and how far off it is — the parts that give way
+ *  first when the row is narrow. */
+function offerReading(shown: Published, prose: string, nowMs: number, tz: string): { reading: ReactNode; next?: string; span: string | null; soon: boolean } {
   const r = shown.reading
   let reading: ReactNode = null
-  let nextNode: ReactNode = null
-  let spanNode: ReactNode = null
+  let next: string | undefined
+  let span: string | null = null
+  let soon = false
   if (r.kind === "exact") {
     const model = schedulePreviewModel({ title: "", rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
     if (model.ok) {
-      const span = model.firstAt ? spanUntil(model.firstAt, nowMs) : null
-      const soon = model.firstAt !== undefined && Date.parse(model.firstAt) - nowMs < SOON_MS
+      span = model.firstAt ? spanUntil(model.firstAt, nowMs) : null
+      soon = model.firstAt !== undefined && Date.parse(model.firstAt) - nowMs < SOON_MS
       reading = (
         <>
           <PreviewDescribe segments={model.describe} capital />
           {model.zone}
         </>
       )
-      if (model.next[0]) nextNode = <span data-schedule-ledge-next className="shrink-0 whitespace-nowrap">{`\u00a0· next ${model.next[0]}`}</span>
-      if (span && model.next[0]) spanNode = <span data-schedule-ledge-span className={`shrink-0 whitespace-nowrap ${soon ? "text-attention" : ""}`}>{`, in ${span}`}</span>
+      next = model.next[0]
     }
   } else if (r.kind === "cue") {
     const quoted = prose.slice(r.unread.start, r.unread.end)
@@ -901,6 +916,23 @@ function LedgeLine({ shown, prose, each, nowMs, tz, onSchedule, onClose }: {
   } else if (r.kind === "ambiguous") {
     reading = r.copy
   }
+  return { reading, ...(next ? { next } : {}), span, soon }
+}
+
+/** The offer's line (S1–S3): the reading, then `⇥ Schedule  ↵ Start now  ×`, which never truncate. */
+function LedgeLine({ shown, prose, each, nowMs, tz, onSchedule, onClose }: {
+  shown: Published
+  prose: string
+  each: string
+  nowMs: number
+  tz: string
+  onSchedule: () => void
+  onClose: () => void
+}) {
+  const r = shown.reading
+  const { reading, next, span, soon } = offerReading(shown, prose, nowMs, tz)
+  const nextNode = next ? <span data-schedule-ledge-next className="shrink-0 whitespace-nowrap">{`\u00a0· next ${next}`}</span> : null
+  const spanNode = span && next ? <span data-schedule-ledge-span className={`shrink-0 whitespace-nowrap ${soon ? "text-attention" : ""}`}>{`, in ${span}`}</span> : null
   return (
     <>
       {/* THE NARROWING ORDER (§5.3) — `Each run` goes first, then `, in 6d`, then `· next Mon Oct 12`, and only
@@ -967,6 +999,109 @@ function LedgeLine({ shown, prose, each, nowMs, tz, onSchedule, onClose }: {
   )
 }
 
+/**
+ * THE PHONE'S TAP ROW (§12): `↻ Every Monday at 9am · in 6d   [Schedule]   ×`. A phone has no keys, so there
+ * are no keycaps, and no `Start now` — the send arrow beside the box IS starting it now, and in the mode the
+ * same button wears the repeat glyph, so the tap that creates is the one that says so (I-5). `Schedule` is a
+ * pill (a word alone does not read as tappable) and `×` a 32px square; both have hit areas of at least
+ * 32px, and neither truncates. No `Each run` segment: there is no room for it, and no hover for its title.
+ *
+ * THE ORDER OF LOSS is `next {day}` first, then `in 6d`, then an ellipsis on the rule — the reverse of the
+ * order they read in for the first step, so the desktop's trick (a wrapping row clipped to one line, which
+ * always drops the LAST segment) cannot do it. The row measures instead: the rule and the two tails it could
+ * wear are laid out invisibly beside it, and it shows the longest that fits. A ResizeObserver re-fits it as
+ * the sheet turns, and every render re-measures (the reading's words change while the box is typed in).
+ */
+function TapRowLine({ shown, prose, nowMs, tz, onSchedule, onClose }: {
+  shown: Published
+  prose: string
+  nowMs: number
+  tz: string
+  onSchedule: () => void
+  onClose: () => void
+}) {
+  const r = shown.reading
+  const { reading, next, span, soon } = offerReading(shown, prose, nowMs, tz)
+  const spanTone = soon ? "text-attention" : ""
+  // The tails, longest first: `· next Mon Oct 12, in 6d`, then `· in 6d`.
+  const tails: ReactNode[] = []
+  if (next) tails.push(<>{`\u00a0· next ${next}`}{span && <span className={spanTone}>{`, in ${span}`}</span>}</>)
+  if (next && span) tails.push(<span className={spanTone}>{`\u00a0· in ${span}`}</span>)
+  const fit = useTailFit(tails.length)
+  const tail = fit.index < tails.length ? tails[fit.index] : null
+  return (
+    <>
+      {r.kind === "ambiguous" ? (
+        // An instruction ("…Say which.") wraps rather than lose the part that says what to do (§5.5).
+        <span data-schedule-ledge-reading className="min-w-0 flex-1 text-pretty">{reading}</span>
+      ) : (
+        <span ref={fit.box} data-schedule-ledge-reading className="relative flex min-w-0 flex-1 overflow-hidden whitespace-nowrap">
+          <span className="min-w-0 truncate">{reading}</span>
+          {tail && <span data-schedule-ledge-tail className="shrink-0">{tail}</span>}
+          <span aria-hidden className="invisible absolute left-0 top-0 whitespace-nowrap">
+            <span ref={fit.rule}>{reading}</span>
+            {tails.map((t, i) => <span key={i} ref={(el) => void (fit.tails.current[i] = el)}>{t}</span>)}
+          </span>
+        </span>
+      )}
+      {r.kind !== "ambiguous" && (
+        <button
+          type="button"
+          data-schedule-accept
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={onSchedule}
+          className={`${TAP_PILL_GAP} relative inline-flex h-7 shrink-0 items-center rounded-full border border-border-strong px-2.5 font-medium text-fg outline-none after:absolute after:inset-x-0 after:-inset-y-[3px] after:content-[''] active:bg-hover focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+        >
+          {/* The hit layer is placed from the PADDING box, inside the 1px border: 26 + 3 + 3 = 32px tall.
+              The word's box is trimmed to its CAP BAND (the house `.frizz-rail-glyph` rule), so `items-center`
+              centres the ink in the pill in any font, and its baseline is still the word's, which the row
+              aligns with the reading's. Centring the line box instead left the frame 0.50px low against the
+              cap band in DejaVu (it depends on the face's ascent and descent, so no constant would carry). */}
+          <span style={{ textBox: "trim-both cap alphabetic" } as CSSProperties}>Schedule</span>
+        </button>
+      )}
+      <button
+        type="button"
+        data-schedule-dismiss
+        aria-label="Not a schedule"
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onClose}
+        className={`${TAP_CLOSE_TRIM} -my-1 flex size-8 shrink-0 translate-y-[calc(6px_-_0.5cap)] items-center justify-center self-baseline rounded-md text-muted outline-none active:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+      >
+        <X size={12} strokeWidth={2} />
+      </button>
+    </>
+  )
+}
+
+/** Which of `count` tails (longest first) fits beside the rule: the index of the first that does, or
+ *  `count` for none. Measured from invisible copies laid out beside the row (TapRowLine). */
+function useTailFit(count: number) {
+  const box = useRef<HTMLSpanElement>(null)
+  const rule = useRef<HTMLSpanElement>(null)
+  const tails = useRef<(HTMLSpanElement | null)[]>([])
+  const [index, setIndex] = useState(0)
+  const measure = () => {
+    const el = box.current
+    if (!el || !rule.current) return
+    const room = el.getBoundingClientRect().width
+    const ruleW = rule.current.getBoundingClientRect().width
+    let i = 0
+    // Half a pixel of slack: subpixel layout rounds the two sides differently.
+    while (i < count && ruleW + (tails.current[i]?.getBoundingClientRect().width ?? Infinity) > room + 0.5) i++
+    setIndex(i)
+  }
+  useLayoutEffect(measure)
+  useLayoutEffect(() => {
+    const el = box.current
+    if (!el) return
+    const ro = new ResizeObserver(() => measure())
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
+  return { box, rule, tails, index }
+}
+
 /** The rule's echo with dim guesses: `{title} · {rule}{zone}{ · condition · N runs a day}`. */
 function EchoLine({ title, segments, zone, tail }: { title?: string; segments: readonly PreviewSegment[]; zone: string; tail: readonly string[] }) {
   return (
@@ -984,17 +1119,23 @@ function NextLine({ next, firstAt, nowMs }: { next: readonly string[]; firstAt?:
   if (next.length === 0) return null
   const span = firstAt ? spanUntil(firstAt, nowMs) : null
   const soon = firstAt !== undefined && Date.parse(firstAt) - nowMs < SOON_MS
+  // A date drops WHOLE when the panel is narrow, the last first — the ledge's narrowing (§5.3 as built), for
+  // the same reason: a wrapping row clipped to one line, so a date that does not fit wraps below the clip and
+  // is gone. Ellipsized, the phone's panel read `Next: Mon Oct 12, in 6d · Mon Oct 1…` at 360px (and `Mon Oc…`
+  // at 420): a date cut in half. Only the first, alone on the line, ever truncates.
   return (
-    <p data-schedule-next className="truncate text-[12px] leading-5 text-muted">
-      {"Next: "}
-      {next[0]}
-      {span && (
-        <>
-          {", "}
-          <span data-soon={soon || undefined} className={soon ? "text-attention" : undefined}>in {span}</span>
-        </>
-      )}
-      {next.slice(1).map((n) => ` · ${n}`).join("")}
+    <p data-schedule-next className="flex h-5 flex-wrap overflow-hidden text-[12px] leading-5 text-muted">
+      <span className="min-w-0 truncate">
+        {"Next: "}
+        {next[0]}
+        {span && (
+          <>
+            {", "}
+            <span data-soon={soon || undefined} className={soon ? "text-attention" : undefined}>in {span}</span>
+          </>
+        )}
+      </span>
+      {next.slice(1).map((n) => <span key={n} className="shrink-0 whitespace-nowrap">{`\u00a0· ${n}`}</span>)}
     </p>
   )
 }
@@ -1012,6 +1153,7 @@ function EachRunLine({ prompt }: { prompt: string }) {
 function panelParts(a: {
   view: ModeView
   state: ScheduleUiState
+  phone: boolean
   nowMs: number
   tz: string
   notice: string | undefined
@@ -1132,9 +1274,10 @@ function panelParts(a: {
           onMouseDown={(e) => e.preventDefault()}
           onClick={a.onCancel}
           // Baseline, not centre: the 11px key and the 12px word box-centred sat 0.28px apart; now 0.
-          className={`flex items-baseline gap-1.5 rounded-md px-1 text-[12px] text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${a.flash ? "kbd-row-flash" : ""}`}
+          // On a phone there is no Esc to name (§12), and the word is the whole button.
+          className={`flex items-baseline gap-1.5 rounded-md px-1 text-[12px] text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${a.phone ? TAP_HIT : ""} ${a.flash ? "kbd-row-flash" : ""}`}
         >
-          <kbd className={KBD}>Esc</kbd>
+          {!a.phone && <kbd className={KBD}>Esc</kbd>}
           <span>Cancel</span>
         </button>
         {create !== "hidden" && (
@@ -1146,7 +1289,7 @@ function panelParts(a: {
             onClick={a.onCreate}
             disabled={create === "disabled" || a.state.name === "creating"}
             title={createTitle}
-            className={`pop-in rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-40 ${a.shake ? "kbd-shake" : ""}`}
+            className={`pop-in rounded-md bg-fg px-2.5 py-1 text-[12px] font-medium text-bg outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-40 ${a.phone ? TAP_HIT : ""} ${a.shake ? "kbd-shake" : ""}`}
           >
             {a.creatingLabel ? "Creating…" : "Create schedule"}
           </button>

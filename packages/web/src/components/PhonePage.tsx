@@ -34,9 +34,13 @@ import { shortPath } from "./ProjectActions.tsx"
 // runs, pauses, turns on and deletes them (PhoneScheduleSheet.tsx). A schedule can also be MADE here: the New
 // thread sheet (PhoneNewThread, below) holds the desktop's own prompt box, repeat glyph and schedule mode
 // included, so `every weekday at 9 …` typed on the go becomes a schedule the same way it does at a desk
-// (plans/schedule-live-reading.md §12). Its Escape goes through `handleDialogEscape`, so a hardware
-// keyboard's first Escape leaves the mode before it closes the sheet. Only the thread reply bar
-// (ThreadComposerBox, `layout: "bar"`) has no schedules.
+// (plans/schedule-live-reading.md §12): the same reading, at the same word boundaries. What a phone draws
+// differently is ScheduleComposer.tsx's under `useIsMobile()`: the ledge under the box is a TAP ROW
+// (`↻ Every Monday at 9am · in 6d  [Schedule]  ×`, no keycaps, no Start now — the send arrow is that), the
+// panel names no Esc, and in the mode the send button wears the repeat glyph, so the tap that creates says
+// it does. Its Escape goes through `handleDialogEscape`, so a hardware keyboard's first Escape leaves the
+// mode before it closes the sheet. Only the thread reply bar (ThreadComposerBox, `layout: "bar"`) has no
+// schedules.
 //
 // Upstream's phone board (colinhacks/frizz MobileBoard.tsx, its 2026-09-30 redesign: 6754e72a "the phone
 // board gets a header, text tabs and one line per row", 39db08a6 "the projects page is a plain list on a
