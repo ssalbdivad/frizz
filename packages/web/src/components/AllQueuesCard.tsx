@@ -65,7 +65,9 @@ import { HeldThreadComposer } from "./HeldThreadBox.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
-import { RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQuestionStack } from "./RegisteredQuestionCards.tsx"
+import { openQuestionsOf, RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, useSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
+import { cardTranscriptQuery, useCardTranscript } from "../hooks/useCardTranscript.ts"
+import { handoffQuestionSlots } from "../lib/queueCardQuestions.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
@@ -281,7 +283,15 @@ export const AllQueuesCard = memo(function AllQueuesCard(props: AllQueuesCardPro
   const slotRef = useCallback((slot: HTMLDivElement | null) => observeCardSlot(
     slot,
     () => setBuilt(true),
-    () => queryClient.prefetchQuery(handoffQuery(latest.current.project, latest.current.thread)),
+    () => {
+      const { project: p, thread: t } = latest.current
+      // …and the transcript its open questions are placed by (cardNeedsTranscript), so they land with the
+      // handoff rather than a round trip after it. One promise, so the prefetch's concurrency counts both.
+      return Promise.all([
+        queryClient.prefetchQuery(handoffQuery(p, t)),
+        cardNeedsTranscript(t) ? queryClient.prefetchQuery(cardTranscriptQuery(p, t)) : undefined,
+      ])
+    },
   ), [queryClient])
   // A card mounted again starts at the height it was last drawn at, not the guess (cardVisibility.ts
   // `drawnHeight`): the inline intrinsic size sizes it while it is skipped, the stand-in while it is near.
@@ -359,10 +369,34 @@ function CardArticle({
   // Is the thread at rest on its own declared wait, so the RESTING card states it (CardAwaiting)? The
   // drawer's predicate, unchanged — except where the sub-agent batch card is already stating the wait.
   const restingShown = showsRestingCard(thread) && !drawsSubAgentWait
-  // THIS CARD IS THE NEWEST HANDOFF, and every CURRENT question rides to the bottom of the newest handoff
-  // (lib/questionAnchor). One the human typed past is set aside — answerable where it was asked until the
-  // worker's next rest withdraws it, unless the worker `keep`s it — so it is not this handoff's ask.
-  const owedQuestions = useMemo(() => questionsOwed(thread.questions), [thread.questions])
+  // EACH QUESTION AT THE REST THAT ASKED IT (upstream e157817a, 22084580). This card is three rests at
+  // most — the one before the human's bubble, the one its `answer` replies with, the newest — and a
+  // question belongs to whichever its rest is, by the drawer's own readers over the thread's transcript
+  // (lib/queueCardQuestions.ts). It drew every open question under the newest rest until 2026-10-06, so an
+  // ask two rests old read as the newest rest's sign-off and hid the rested card that bare rest is owed.
+  // The transcript is read only while a question is open (cardNeedsTranscript); until it lands the
+  // stacks wait rather than drawing at the tail and then moving, and if it cannot be read they fall back
+  // to the tail, where they used to be — never off the card.
+  const needsTranscript = cardNeedsTranscript(thread)
+  const transcript = useCardTranscript(project, thread, needsTranscript)
+  const messages = transcript.data?.messages
+  const settledScope = useMemo(() => ({ api, projectId: project.id }), [api, project.id])
+  // ANSWERED questions keep their rest too (the drawer's SettledQuestionStack, which only ChatView drew).
+  const settledQuestions = useSettledQuestions(thread, { scope: settledScope, enabled: needsTranscript })
+  // The drawer's open set (openQuestionsOf: minus any already drawn settled) decides whether a question is
+  // the newest rest's ending; the card DRAWS only the owed ones. One the human typed past is set aside —
+  // answerable where it was asked, in the drawer, until the worker's next rest withdraws it unless the
+  // worker `keep`s it (which re-asks it at that rest, and it is owed again) — so it holds nothing here.
+  const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
+  const owedQuestions = useMemo(() => questionsOwed(openQuestions), [openQuestions])
+  const slots = useMemo(() => {
+    if (messages) return handoffQuestionSlots(messages, owedQuestions, settledQuestions, openQuestions)
+    if (needsTranscript && !transcript.isError) return null
+    return handoffQuestionSlots([], owedQuestions, [])
+  }, [messages, needsTranscript, transcript.isError, owedQuestions, settledQuestions, openQuestions])
+  // Keyed on the rest: an answered card keeps its slot while the card holds for the worker's turn, and a
+  // NEW handoff — which says what became of it — starts every stack over.
+  const restKey = handoff.data?.at ?? ""
   const placeHref = crossProjectThreadHref(project, thread.id)
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn, hold: onHold }), [onLeave, onReturn, onHold])
   const queryClient = useQueryClient()
@@ -570,6 +604,9 @@ function CardArticle({
           >
             Show earlier messages
           </a>
+          {/* A question from a rest older than the human's bubble, flushed first as upstream's window
+              flushes it — everything below the bubble is newer than it. */}
+          {slots && <RegisteredQuestionStack key={`above-${restKey}`} thread={thread} questions={slots.above} keepAnswered />}
           {/* A scheduled run's first message opens with Frizz's header for the worker; the card shows only the
               saved prompt under it, the human's own words — the title's repeat glyph already says where the
               run came from (ChatView ScheduledRunOpening does the same in the drawer). */}
@@ -583,6 +620,11 @@ function CardArticle({
               <Prose md={answered} />
             </ClampedBody>
           )}
+          {/* A question of a rest between the human's turn and the newest — the one the prose above
+              answered with, or one the handoff skips — under that prose and over the newest. Answered
+              ones first, as the drawer stacks a slot. */}
+          {slots && <CardSettledStack questions={slots.settledBetween} />}
+          {slots && <RegisteredQuestionStack key={`between-${restKey}`} thread={thread} questions={slots.between} keepAnswered />}
           {/* Only the PROSE clamps. The fence card under it is the handoff's ledger — what shipped, or
               what it is waiting on — and the rested notice is its state; both are the glance. */}
           {parts ? (
@@ -656,7 +698,10 @@ function CardArticle({
               paused thread looks the same wherever it is read. Until 2026-10-02 the card drew none: it
               showed whatever line the agent wrote last, and the pause was only a mark on the rail. */}
           {isLimitPaused(thread) && thread.limitPause && <QueueLimitPause project={project} thread={thread} pause={thread.limitPause} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
-          {showsRestedCard(thread, text) && <RestedCard thread={thread} />}
+          {/* The bare rest's card, beside an OLDER question too: only one this rest asked, claimed or kept
+              is its ending (questionsAtCurrentRest). Without the transcript, any open question counts —
+              the reading from before 2026-10-05 (showsRestedCard). */}
+          {showsRestedCard(thread, text, messages ? slots?.here : undefined) && <RestedCard thread={thread} />}
           {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
           {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen under its
               own row, so the answer is typed right here and the row says which terminal is asking. The
@@ -667,11 +712,9 @@ function CardArticle({
         </div>
         )}
 
-        {/* Keyed on the rest: an answered card keeps its slot while the card holds for the worker's
-            turn, and a NEW handoff — which says what became of it — starts the stack over. */}
-        {owedQuestions.length > 0 && (
-          <RegisteredQuestionStack key={handoff.data?.at ?? ""} thread={thread} questions={owedQuestions} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
-        )}
+        {/* The newest rest's questions, under everything it said — the card's stack as it always was. */}
+        {slots && <CardSettledStack questions={slots.settledTail} className="shrink-0 px-5 pb-4 pt-0" />}
+        {slots && <RegisteredQuestionStack key={`tail-${restKey}`} thread={thread} questions={slots.tail} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />}
         </div>
       </ProjectLinkScope>
 
@@ -986,6 +1029,22 @@ function AskedBubble({ text }: { text: string }) {
 function Prose({ md }: { md: string }) {
   const html = useMarkdownHtml(md)
   return <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} />
+}
+
+/** Does the card read its transcript (hooks/useCardTranscript.ts)? While the thread has an open question,
+ *  to place it at its rest — the handoff alone cannot say which rest that is. */
+function cardNeedsTranscript(thread: Pick<ThreadView, "questions">): boolean {
+  return (thread.questions?.length ?? 0) > 0
+}
+
+/** Answered questions at their rest, greyed (the drawer's SettledQuestionStack) — minus any this card's
+ *  answering state sent itself, which its open stack still draws greyed in the very slot it was answered
+ *  in (RegisteredQuestionStack `keepAnswered`), so a card holding for the rest never moves under the
+ *  cursor and never draws one answer twice. */
+function CardSettledStack({ questions, className }: { questions: readonly SettledQuestion[]; className?: string }) {
+  const answering = useContext(RegisteredAnsweringContext)
+  const shown = answering && answering.sent.size > 0 ? questions.filter((q) => !answering.sent.has(q.id)) : questions
+  return <SettledQuestionStack questions={shown} wrap className={className} />
 }
 
 /**

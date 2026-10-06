@@ -186,7 +186,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     // `settledAt`, and on failure it no longer holds them, which brings the open card back.
     onSettled: () => {
       setInFlight((n) => Math.max(0, n - 1))
-      if (slug) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug) })
+      if (slug) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug, scope?.projectId) })
     },
   })
   // THE × TAKES THE QUESTION OFF THE CARD ON CLICK, not on the board read that follows. That read is a
@@ -257,7 +257,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     // list now, and the surface stops drawing the open card for any id that list holds (see
     // withoutSettledQuestions). Waiting for the server instead left a beat where the open card had gone
     // with the board push and the settled one had not arrived — the card blinking out and back.
-    const key = settledQuestionsKey(slug)
+    const key = settledQuestionsKey(slug, scope?.projectId)
     void queryClient.cancelQueries({ queryKey: key })
     const settledAt = new Date().toISOString()
     const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, ...(q.keptAt ? { keptAt: q.keptAt } : {}), settledAt, answer, pending: true }))
@@ -376,19 +376,34 @@ const ENGAGE_PING_MS = 30_000
  *  not yet read back — see lib/settledQuestions. */
 export type SettledQuestion = SettledQuestionView & { pending?: true }
 const NO_SETTLED: readonly SettledQuestion[] = []
-export const settledQuestionsKey = (slug: string) => ["settledQuestions", slug] as const
+/** The cache entry a thread's answered questions live under. A thread of the PAGE's project keys by slug
+ *  (the page's query scope says whose); a thread drawn on another project's queue card names its project
+ *  in the key (`ofProject`, lib/queryKeyScope.ts), since on All projects the page's scope is not the
+ *  card's and two projects' same-named threads would otherwise share one list. The answering state writes
+ *  its optimistic entries through the same function, so the card and its stacks always meet. */
+export const settledQuestionsKey = (slug: string, projectId?: string) =>
+  projectId === undefined ? (["settledQuestions", slug] as const) : (["ofProject", projectId, "settledQuestions", slug] as const)
 
 /** The thread's answered questions. Read per thread rather than off the board (see the shared
  *  SettledQuestionView), and re-read on the one board event that can add to it: a question leaving the
  *  OPEN list — answered here, in another tab, or on the queue card. A withdrawal or a dismissal re-reads
- *  too, and finds nothing new; that costs one indexed SELECT. */
-export function useSettledQuestions(thread: ThreadView | undefined): readonly SettledQuestion[] {
+ *  too, and finds nothing new; that costs one indexed SELECT.
+ *
+ *  `scope` reads them through the thread's own project (the queue card's, like RegisteredAnsweringScope),
+ *  and `enabled: false` holds the read for a surface that has nothing to place them in yet — the queue
+ *  card reads them only once it is reading the transcript they are placed in. Both absent on the drawer. */
+export function useSettledQuestions(
+  thread: ThreadView | undefined,
+  opts: { scope?: { api: Pick<Api, "threadSettledQuestions">; projectId: string }; enabled?: boolean } = {},
+): readonly SettledQuestion[] {
   const slug = thread?.id
+  const { scope, enabled = true } = opts
+  const api = scope?.api ?? rpc
   const queryClient = useQueryClient()
   const query = useQuery({
-    queryKey: settledQuestionsKey(slug ?? ""),
-    queryFn: async (): Promise<SettledQuestion[]> => (await rpc.threadSettledQuestions({ slug: slug! })).questions,
-    enabled: Boolean(slug),
+    queryKey: settledQuestionsKey(slug ?? "", scope?.projectId),
+    queryFn: async (): Promise<SettledQuestion[]> => (await api.threadSettledQuestions({ slug: slug! })).questions,
+    enabled: Boolean(slug) && enabled,
     refetchOnWindowFocus: false,
   })
   const openIds = (thread?.questions ?? []).map((q) => q.id).join(" ")
@@ -398,8 +413,8 @@ export function useSettledQuestions(thread: ThreadView | undefined): readonly Se
     previous.current = openIds
     if (!slug || before === openIds) return
     const now = new Set(openIds.split(" "))
-    if (before.split(" ").some((id) => id && !now.has(id))) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug) })
-  }, [openIds, queryClient, slug])
+    if (before.split(" ").some((id) => id && !now.has(id))) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug, scope?.projectId) })
+  }, [openIds, queryClient, slug, scope?.projectId])
   return query.data ?? NO_SETTLED
 }
 

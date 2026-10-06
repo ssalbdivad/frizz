@@ -2,7 +2,7 @@ import { Profiler, memo, useCallback, useEffect, useMemo, useState, type Compone
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router"
-import { parkExpiredWakeMessage, type BoardSnapshot, type ThreadHandoff, type ThreadView as ThreadViewModel } from "@frizz/shared"
+import { parkExpiredWakeMessage, type BoardSnapshot, type RegisteredQuestionView, type ThreadHandoff, type ThreadView as ThreadViewModel, type TranscriptMessage } from "@frizz/shared"
 import { useLeavingCards } from "./components/AllQueues.tsx"
 import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -48,6 +48,12 @@ import "./styles.css"
 //   ?case=resting              the first card's thread rests on an agent terminal it declared (`shells:`), so
 //                              it draws the RESTING card — the wait row and the event-snooze, which parks it
 //                              through the card's project and takes the card out.
+//   ?case=questions            each card's question at the rest that asked it (upstream e157817a, 22084580). The
+//                              first card's was asked two rests ago, the rest after it is a CI wake's bare
+//                              reply: the question sits under the reply that asked it, and the bare rest
+//                              draws "Rested without a sign-off". The second card's question is its newest
+//                              rest's own: under the handoff, no rested card. Both read their transcript
+//                              through the card's project (threadTranscript).
 //   ?case=facts                a card whose header facts line carries a context reading (narrow-width check).
 //     &chip=1                  …led by its project, as on a page showing All projects.
 //   ?case=facts-matrix         one card per combination of facts in facts-fixture-cases.ts (a context reading,
@@ -144,13 +150,39 @@ const STEPS_FENCE = `I can't publish without an npm session on this machine.\n\n
 // A rest on an agent terminal the worker declared, still running.
 const SHELL_FENCE = "The full suite is running in the background.\n\n```awaiting\nshells: [b1]\nstatus: needs_input\n---\nThe suite takes about ten minutes; the failures so far are all in the auth spec.\n```"
 
+// `?case=questions`: questions at the rest that asked them.
+const T0 = Date.now()
+const ago = (min: number) => new Date(T0 - min * 60_000).toISOString()
+const said = (role: "user" | "assistant", text: string, minAgo: number, extra: Partial<TranscriptMessage> = {}) =>
+  ({ role, text, at: ago(minAgo), tools: [], parts: [{ kind: "text", text }], ...extra }) as TranscriptMessage
+const ROLLOUT_ASK = "Both rollouts are ready to go; the only difference is how long the old key stays readable."
+const BARE_REST = "CI is green on main; nothing else changed."
+const CI_ASK = "Found the race in the token refresh. One call before I land the fix."
+const OLD_QUESTION: RegisteredQuestionView = {
+  id: "qst_rollout0001",
+  askedAt: ago(25),
+  spec: { kind: "question", header: "Rollout", question: "Which rollout do you want?", options: [{ label: "Rotate in place", description: "One step, a short dual-read window.", recommended: true }, { label: "Stage a second key" }] },
+}
+const NEW_QUESTION: RegisteredQuestionView = {
+  id: "qst_retries0002",
+  askedAt: ago(5),
+  spec: { kind: "question", header: "Retries", question: "Keep the retry wrapper on the auth suite?", options: [{ label: "Drop it", description: "The race is fixed at the source.", recommended: true }, { label: "Keep it for a week" }] },
+}
+
 // Long enough to clamp (AllQueuesCard ClampedBody, 188px).
 const LONG = Array.from({ length: 14 }, (_, i) => `Paragraph ${i + 1} of a long handoff: what changed, why, and what is left to check before this can be marked done.`).join("\n\n")
 
 // Under the clamp, and long enough to wrap onto more lines when the column narrows.
 const midHandoff = (id: string) => `A mid-length handoff for ${id}: ${"the change landed, the tests pass, and one follow-up is left for review before it can be marked done. ".repeat(3)}`
 
-interface Scenario { threads: ThreadViewModel[]; text: (id: string) => string }
+interface Scenario {
+  threads: ThreadViewModel[]
+  text: (id: string) => string
+  /** The rest of the handoff (`answer`, …) beyond the newest rest's text, by thread. */
+  handoff?: (id: string) => Partial<ThreadHandoff>
+  /** The thread's transcript, for a card that reads one (hooks/useCardTranscript.ts). */
+  transcript?: (id: string) => TranscriptMessage[]
+}
 function scenario(): Scenario {
   switch (CASE) {
     case "steps":
@@ -176,6 +208,18 @@ function scenario(): Scenario {
           thread("flaky-ci", "Deflake the auth integration suite"),
         ],
         text: (id) => (id === "rotate-key" ? SHELL_FENCE : "Found the race; the fix is in, 50 green runs."),
+      }
+    case "questions":
+      return {
+        threads: [
+          thread("rotate-key", "Rotate the signing key without downtime", { questions: [OLD_QUESTION], lastAssistantAt: ago(2) }),
+          thread("flaky-ci", "Deflake the auth integration suite", { questions: [NEW_QUESTION], lastAssistantAt: ago(5) }),
+        ],
+        text: (id) => (id === "rotate-key" ? BARE_REST : CI_ASK),
+        handoff: (id) => (id === "rotate-key" ? { answer: ROLLOUT_ASK, at: ago(2), askedAt: ago(30) } : { at: ago(5), askedAt: ago(20) }),
+        transcript: (id) => (id === "rotate-key"
+          ? [said("user", ASKED, 30), said("assistant", ROLLOUT_ASK, 25), said("user", "CI finished on main: all checks passed.", 3, { wake: true }), said("assistant", BARE_REST, 2)]
+          : [said("user", "Find out why the auth suite flakes.", 20), said("assistant", CI_ASK, 5)]),
       }
     case "registered-done":
       return {
@@ -246,7 +290,7 @@ function scenario(): Scenario {
       }
   }
 }
-const { threads: THREADS, text: textOf } = scenario()
+const { threads: THREADS, text: textOf, handoff: handoffOf, transcript: transcriptOf } = scenario()
 
 // The page's project, deliberately NOT the card's (see the header) — but for `many`, whose page IS the
 // cards' project, as on a page focused on it.
@@ -295,9 +339,14 @@ window.fetch = async (input, init) => {
   const body = raw ? (JSON.parse(raw) as { slug?: string }) : {}
   if (rpc === "threadHandoff") {
     if (HANDOFF_DELAY) await new Promise((resolve) => setTimeout(resolve, HANDOFF_DELAY))
-    const handoff: ThreadHandoff = { asked: ASKED, askedAt: now, text: textOf(body.slug ?? ""), at: now }
+    const handoff: ThreadHandoff = { asked: ASKED, askedAt: now, text: textOf(body.slug ?? ""), at: now, ...handoffOf?.(body.slug ?? "") }
     return json(handoff)
   }
+  if (rpc === "threadTranscript" && transcriptOf) {
+    const messages = transcriptOf(body.slug ?? "")
+    return json({ messages, beforeCursor: null, hasEarlier: false, reachedTurnBoundary: true, transcriptKey: `fixture-${body.slug}` })
+  }
+  if (rpc === "threadSettledQuestions") return json({ questions: [] })
   // A reply steers the thread back to work, and the next poll drops it from the queue. After the fade, not
   // during it: the page holds a leaving card's slot (and its thread) until the fade ends (AllQueues.tsx
   // stableQueue `keep`), which this fixture does not reproduce — dropping it sooner here would unmount the

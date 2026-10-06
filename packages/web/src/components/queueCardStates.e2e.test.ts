@@ -25,6 +25,10 @@ import test, { after, before } from "node:test"
 //        the card out at once (upstream fe668a8d; the card drew the fence as bare prose until 2026-10-06).
 //   12   a rest on a declared agent terminal draws the resting card, whose event-snooze parks the thread
 //        through the card's project and takes the card out.
+//   13   each question at the rest that asked it (upstream e157817a, 22084580): one asked two rests ago
+//        sits under the reply that asked it, over the newest rest, which is bare and so draws "Reply to
+//        continue" beside the older question; one the newest rest asked sits under it with no such card.
+//        The transcript that places them is read through the CARD's project.
 //   7-9  the terminal net: a frozen native ask and a bare permission prompt — two states the server queues a
 //        thread on without journaling an interaction — draw their card, the copy asks the CARD's project
 //        for the command, and the net stands down when an answerable interaction is journaled (B2).
@@ -349,5 +353,36 @@ test("a rest on a declared agent terminal draws the resting card, and its snooze
   assert.deepEqual(snoozes, ["/_frizz/fixture-card/rpc/snoozeAwaitingBackground"], "the park went to the card's project")
   await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
   assert.equal(await leavingOf(NEIGHBOUR), "false")
+  assert.deepEqual(errors, [])
+})
+
+test("each question sits at the rest that asked it, and a bare newest rest still says so beside an older one", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  await open("case=questions")
+  await page!.waitForSelector(`${FIRST} [data-registered-questions]`)
+  await page!.waitForSelector(`${NEIGHBOUR} [data-registered-questions]`)
+  // Document order of the card's pieces, by what each says.
+  const order = (sel: string, marks: string[]) => page!.$eval(sel, (card, marks) => {
+    const all = [...card.querySelectorAll<HTMLElement>(".md-body, [data-registered-questions], [data-rested-card]")]
+    return all.flatMap((el) => {
+      const said = el.innerText
+      const mark = el.matches("[data-registered-questions]") ? `questions:${said.match(/Which rollout|Keep the retry wrapper/)?.[0] ?? "?"}`
+        : el.matches("[data-rested-card]") ? `rested:${el.getAttribute("data-rested-card")}`
+        : marks.find((m) => said.includes(m))
+      return mark ? [mark] : []
+    })
+  }, marks)
+  assert.deepEqual(
+    await order(FIRST, ["Both rollouts are ready", "CI is green on main"]),
+    ["Both rollouts are ready", "questions:Which rollout", "CI is green on main", "rested:bare"],
+    "asked two rests ago: under the reply that asked it, and the bare rest after it draws its own card",
+  )
+  assert.deepEqual(
+    await order(NEIGHBOUR, ["Found the race"]),
+    ["Found the race", "questions:Keep the retry wrapper"],
+    "the newest rest's own question ends it, under everything it said, with no rested card",
+  )
+  const reads = (await rpcLog()).calls.filter((c) => /\/rpc\/threadTranscript$/.test(c.path)).map((c) => c.path)
+  assert.ok(reads.length >= 2, "each card read its transcript")
+  assert.deepEqual([...new Set(reads)], ["/_frizz/fixture-card/rpc/threadTranscript"], "through the card's project, never the page's")
   assert.deepEqual(errors, [])
 })
