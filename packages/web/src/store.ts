@@ -361,15 +361,55 @@ export function openThread(slug: string): void {
   pushDrawer(t && t.runtime === "none" ? "doc" : "thread", slug)
 }
 
+// A COLD LINK TO A QUEUED THREAD LANDS ON ITS CARD (plans/upstream-superset.md §3, upstream's store.ts
+// resolveRoutedThread). A project's board draws the queue's cards and registers how to land on one
+// (AllQueues.tsx useRoutedLanding); nothing else does — All projects keeps its drawers, a phone and an
+// editor's sidebar draw no cards — so there, and before the board has mounted, the route opens a drawer.
+// "pending": the board cannot say yet whether the thread has a card (its queue is still loading), so the
+// slug stays parked and the board resolves it again once it can.
+export type RoutedLanding = (slug: string) => "landed" | "absent" | "pending"
+let routedLanding: RoutedLanding | null = null
+export function registerRoutedLanding(land: RoutedLanding): () => void {
+  routedLanding = land
+  return () => {
+    if (routedLanding === land) routedLanding = null
+  }
+}
+
+// Whether the page is on an address it arrived at from OUTSIDE this tab's own navigation — a bookmark, a
+// pasted URL, another page's link, a reload of one of those. react-router numbers the entries it writes
+// (`idx` in history.state, lib/router.ts appPushedCurrentEntry): a document loads on 0, and every push
+// counts up from there. A drawer this tab opened was a push, so its entry is above 0 — a reload or a Back
+// onto it reopens the drawer it was, and so does a thread another project's link or a notification opened
+// in place. Only an arrival lands on the card. (Inline rather than imported: lib/router.ts imports this.)
+function arrivedFromOutside(): boolean {
+  if (typeof history === "undefined") return false
+  const idx = (history.state as { idx?: unknown } | null)?.idx
+  return typeof idx !== "number" || idx === 0
+}
+
 // Settle a parked `/thread/<slug>` URL, now that the board can say whose thread it is. A deep link
 // deliberately asks for the CHAT surface even for a session-less thread (unlike openThread's
-// doc-routing), so this pushes the thread layer rather than delegating. `routed` so a cold page paints
-// the sheet already open instead of animating a phantom backdrop in.
+// doc-routing), so this pushes the thread layer rather than delegating — unless it is a cold link to a
+// QUEUED thread on a project's board, which lands on the thread's card instead (registerRoutedLanding),
+// as upstream's board did: the queue is where a waiting thread is read. Every other way of asking for a
+// thread opens its drawer (openThread). `routed` so a cold page paints the sheet already open instead of
+// animating a phantom backdrop in.
 export function resolveRoutedThread(): void {
   const slug = store.routeThreadSlug
   if (!slug || !store.board) return
-  store.routeThreadSlug = null
   const route = resolveThreadRoute(store.board, slug)
+  const opening = store.pendingOpen?.slug === slug && store.pendingOpen.projectSlug === store.board.projectSlug
+  if (route.kind === "found" && routedLanding && !opening && arrivedFromOutside() && !openedInPlace() && store.drawers.every((d) => d.closing)) {
+    const landed = routedLanding(slug)
+    if (landed === "pending") return
+    if (landed === "landed") {
+      // Off the thread's address, back to the board's: the card is the page, not a layer over it.
+      store.routeThreadSlug = null
+      return
+    }
+  }
+  store.routeThreadSlug = null
   // A slug THIS project does not have. Since one server started serving every project that is usually
   // a thread another project has — and `/thread/<slug>` is the exact shape every pre-singleton
   // bookmark and every agent-written cross-reference uses, so it is not a rare typo. Pushing the
@@ -378,13 +418,12 @@ export function resolveRoutedThread(): void {
   // owns the slug and relocates there. Hand it over rather than growing a second copy of that.
   // The frame PendingThreadSheet has been showing for this thread gives way to the real drawer in this
   // same store write, so the real one must paint already open (`routed`) rather than slide in a second time.
-  const pending = store.pendingOpen?.slug === slug && store.pendingOpen.projectSlug === store.board.projectSlug
-  if (pending || route.kind === "missing") store.pendingOpen = null
+  if (opening || route.kind === "missing") store.pendingOpen = null
   if (route.kind === "missing") {
     if (typeof location !== "undefined") location.replace(standaloneThreadHref(slug))
     return
   }
-  pushDrawer("thread", slug, { routed: pending || !openedInPlace() })
+  pushDrawer("thread", slug, { routed: opening || !openedInPlace() })
 }
 
 // Navigation state for a thread opened IN PLACE by a click on the page — the cross-project page opening

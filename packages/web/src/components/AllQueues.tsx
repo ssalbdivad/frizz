@@ -50,7 +50,7 @@ import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
 import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { carryDispatchDraft } from "../lib/scheduleDraftState.ts"
-import { QUEUE_CARD_VIEWPORT_TOP, showToast, slugsInThreadDrawers, store } from "../store.ts"
+import { QUEUE_CARD_VIEWPORT_TOP, registerRoutedLanding, resolveRoutedThread, showToast, slugsInThreadDrawers, store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
@@ -61,6 +61,8 @@ import { useSteeredAt } from "../lib/steering.ts"
 import { pinOverlayQueues, usePinOverrides } from "../lib/optimisticPin.ts"
 import { glideTo, gliding, useViewportLock } from "../lib/viewportLock.ts"
 import { drawCardNow } from "../lib/cardVisibility.ts"
+import { holdQueueCardLanding } from "../lib/queueLandingHold.ts"
+import { pageScrollY } from "../lib/pageScrollLock.ts"
 import { isPageKey, registerQueueCursor, releaseAutoOpened, runThreadCommand, useShortcut } from "../lib/keyboardRuntime.ts"
 import { runExternalOpen } from "../lib/externalOpen.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
@@ -376,6 +378,9 @@ export function AllQueuesPage() {
   const stacked = useStacked()
   const home = homeOf(cards.data)
   const phone = useIsMobile()
+  // A cold link to one of the board's queued threads lands on its card. Not on All projects, whose
+  // threads open as drawers; not on a phone or in an editor's sidebar, which draw no cards.
+  useRoutedLanding(focused && !sidebar && !phone, !loading, focusId, land)
   const chooseView = useChooseView()
   // The list drops a row only with a card being FINISHED. A thread open in a drawer keeps its row, marked
   // open: the card steps aside because the drawer is the same thread, but the list is where the reader
@@ -1283,8 +1288,8 @@ function useStacked(): boolean {
  * keyed by project. (The project board had its own, store.ts scrollToQueueCard, until 2026-09-28.) Returns
  * the scroll offset it landed on (null when the card is gone), which the keyboard's cursor holds on to.
  */
-function useScrollToCard(): (key: string) => number | null {
-  return useCallback((key: string) => {
+function useScrollToCard(): (key: string, cold?: boolean) => number | null {
+  return useCallback((key: string, cold = false) => {
     // Before measuring: a card a key opened, and this row leaves, closes first, and the glide lands on
     // where the card is once it has.
     releaseAutoOpened(key)
@@ -1293,8 +1298,10 @@ function useScrollToCard(): (key: string) => number | null {
     // A card far down the page may not be built yet (lib/cardVisibility.ts): build and draw it first, so
     // what lands is the card, with a root to ring and its real height.
     drawCardNow(slot)
-    // Read again when the glide ends: a card that arrived or left above it meanwhile moved it.
-    const top = glideTo(() => slot.getBoundingClientRect().top + window.scrollY - QUEUE_CARD_VIEWPORT_TOP)
+    // A COLD LINK lands at once, and is held there while the cards above it build and fetch
+    // (lib/queueLandingHold.ts). A row or a key glides, read again when the glide ends: a card that
+    // arrived or left above it meanwhile moved it.
+    const top = cold ? holdCard(key) : glideTo(() => slot.getBoundingClientRect().top + window.scrollY - QUEUE_CARD_VIEWPORT_TOP)
     const root = slot.querySelector<HTMLElement>("[data-xq-card-root]")
     if (!root) return top
     root.removeAttribute("data-queue-flash")
@@ -1305,6 +1312,44 @@ function useScrollToCard(): (key: string) => number | null {
     })
     return top
   }, [])
+}
+
+/** The page offset that lands `key`'s card at the top of the window, or null when it is not on the page. */
+function cardLanding(key: string): number | null {
+  const slot = document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`)
+  return slot ? Math.max(0, slot.getBoundingClientRect().top + pageScrollY() - QUEUE_CARD_VIEWPORT_TOP) : null
+}
+
+/** Land `key`'s card at once and hold it there (lib/queueLandingHold.ts). Returns the offset it landed on. */
+function holdCard(key: string): number {
+  holdQueueCardLanding(() => document.querySelector<HTMLElement>(`[data-xq-card="${CSS.escape(key)}"]`), () => cardLanding(key))
+  return pageScrollY()
+}
+
+/**
+ * A COLD LINK TO A QUEUED THREAD lands on its card (store.ts resolveRoutedThread, upstream's deep link):
+ * `/project/<slug>/thread/<t>` from a bookmark, a pasted URL, another page. The board registers how,
+ * and answers "pending" until its cards are drawn — `known`, the queues read at least once (the project
+ * list alone, which can land first, draws no card) — then settles the slug that waited. A thread with no card here (not queued, or no such card drawn) is
+ * "absent", and the route opens its drawer.
+ */
+function useRoutedLanding(enabled: boolean, known: boolean, projectId: string | undefined, land: (key: string, cold?: boolean) => number | null): void {
+  const latest = useRef({ known, projectId, land })
+  latest.current = { known, projectId, land }
+  useEffect(() => {
+    if (!enabled) return
+    const unregister = registerRoutedLanding((slug) => {
+      const { known, projectId, land } = latest.current
+      if (!known) return "pending"
+      if (projectId === undefined) return "absent"
+      const key = threadKey(projectId, slug)
+      if (!document.querySelector(`[data-xq-card="${CSS.escape(key)}"][data-queue-leaving="false"]:not([data-queue-ghost])`)) return "absent"
+      return land(key, true) === null ? "absent" : "landed"
+    })
+    // The slug that waited while the queue was loading.
+    resolveRoutedThread()
+    return unregister
+  }, [enabled, known])
 }
 
 /**
@@ -1323,15 +1368,17 @@ function useScrollToCard(): (key: string) => number | null {
  * scroll that far — could otherwise never be picked at all. Returns the card being read, which the rail
  * and its connector mark, so they agree with the ring.
  */
-function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => number | null, enabled = true): { active: string | null; land: (key: string) => number | null } {
+function useQueueKeys(activeKey: string | null, scrollToCard: (key: string, cold?: boolean) => number | null, enabled = true): { active: string | null; land: (key: string, cold?: boolean) => number | null } {
   const reading = useRef(activeKey)
   reading.current = activeKey
-  const landing = useRef<{ key: string; y: number; until: number } | null>(null)
+  // `y` is where the landing put the page. A cold landing's is wherever its card stands now: the hold moves
+  // the page with the card while the queue above it builds (lib/queueLandingHold.ts).
+  const landing = useRef<{ key: string; y: () => number; until: number } | null>(null)
   const current = useCallback(() => {
     const held = landing.current
     // A held card that has since been finished or snoozed is not being read any more.
     if (held && document.querySelector(`[data-xq-card="${CSS.escape(held.key)}"][data-queue-leaving="false"]`)) {
-      const reachable = Math.min(held.y, Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
+      const reachable = Math.min(held.y(), Math.max(0, document.documentElement.scrollHeight - window.innerHeight))
       // UNTIL THE GLIDE LANDS, however long it takes. `until` alone (700ms) ran out mid-glide on a long
       // jump — a rail click from the top of the queue to its last card, measured 2026-09-29 — and the
       // failed check below then DROPPED the hold, so the card being read fell back to the scrollspy
@@ -1354,10 +1401,10 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
   // two-project stack, 1440×900 and 1440×1600). Held here, the clicked card is the one being read until
   // the reader scrolls away, exactly as after `j`/`k`. Returns the glide's target (null: no such card),
   // which the row reads to fall back to opening the thread.
-  const land = useCallback((key: string) => {
-    const y = scrollToCard(key)
+  const land = useCallback((key: string, cold = false) => {
+    const y = scrollToCard(key, cold)
     if (y !== null) {
-      landing.current = { key, y, until: performance.now() + 700 }
+      landing.current = { key, y: cold ? () => cardLanding(key) ?? y : () => y, until: performance.now() + 700 }
       setRinged(key)
     }
     return y
@@ -1397,7 +1444,8 @@ function useQueueKeys(activeKey: string | null, scrollToCard: (key: string) => n
       const key = slot?.dataset.xqCard
       if (!key) return
       releaseAutoOpened(key)
-      landing.current = { key, y: window.scrollY, until: 0 }
+      const y = window.scrollY
+      landing.current = { key, y: () => y, until: 0 }
       setRinged(key)
     }
     document.addEventListener("pointerdown", pick)

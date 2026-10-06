@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { BoardSnapshot } from "@frizz/shared"
-import { markDrawerClosing, noteStandaloneThreadRender, resolveRoutedThread, store } from "../store.ts"
+import { markDrawerClosing, noteStandaloneThreadRender, registerRoutedLanding, resolveRoutedThread, store } from "../store.ts"
 import { applyLocation, appPushedCurrentEntry, noteRouterTransition, primeReturnFromFullscreen, primeRoute, startRouter } from "./router.ts"
 
 function resetStore(): void {
@@ -452,4 +452,94 @@ test("appPushedCurrentEntry: only an entry the router pushed above the document'
   assert.equal(appPushedCurrentEntry({ usr: null, key: "c" }), false)
   assert.equal(appPushedCurrentEntry(null), false)
   assert.equal(appPushedCurrentEntry("not-an-object"), false)
+})
+
+// The history entry the page is on, as react-router writes it: `idx` 0 is the entry a document loaded on.
+function withHistoryState(state: unknown, body: () => void): void {
+  const previous = Object.getOwnPropertyDescriptor(globalThis, "history")
+  Object.defineProperty(globalThis, "history", { configurable: true, writable: true, value: { state } })
+  try {
+    body()
+  } finally {
+    if (previous) Object.defineProperty(globalThis, "history", previous)
+    else Reflect.deleteProperty(globalThis, "history")
+  }
+}
+
+// A COLD LINK to a queued thread lands on its card on a project's board (upstream's deep link, plans/
+// upstream-superset.md §3); the board registers how (AllQueues.tsx useRoutedLanding).
+test("a cold link to a thread the board has a card for lands on the card, and leaves the thread's address", () => {
+  const asked: string[] = []
+  const unregister = registerRoutedLanding((slug) => {
+    asked.push(slug)
+    return "landed"
+  })
+  try {
+    withHistoryState({ usr: null, key: "a", idx: 0 }, () => {
+      resetStore()
+      primeRoute("/thread/q-1")
+      boardWith([{ id: "q-1", needsYou: true }])
+      resolveRoutedThread()
+      assert.deepEqual(asked, ["q-1"])
+      assert.equal(store.drawers.length, 0, "no drawer over the card")
+      assert.equal(store.routeThreadSlug, null, "the address goes back to the board's")
+    })
+  } finally {
+    unregister()
+    resetStore()
+  }
+})
+
+test("a thread with no card opens its drawer; a queue still loading keeps the slug parked until it can say", () => {
+  let answer: "landed" | "absent" | "pending" = "pending"
+  const unregister = registerRoutedLanding(() => answer)
+  try {
+    withHistoryState({ idx: 0 }, () => {
+      resetStore()
+      primeRoute("/thread/w-1")
+      boardWith([{ id: "w-1" }])
+      resolveRoutedThread()
+      assert.equal(store.routeThreadSlug, "w-1", "parked while the board's queue is unknown")
+      assert.equal(store.drawers.length, 0)
+      answer = "absent"
+      resolveRoutedThread()
+      assert.deepEqual(store.drawers.map(({ slug, routed }) => ({ slug, routed })), [{ slug: "w-1", routed: true }])
+      assert.equal(store.routeThreadSlug, null)
+    })
+  } finally {
+    unregister()
+    resetStore()
+  }
+})
+
+test("an entry this tab pushed — a drawer it opened, reloaded or gone back to — reopens the drawer, never the card", () => {
+  let asked = 0
+  const unregister = registerRoutedLanding(() => {
+    asked++
+    return "landed"
+  })
+  try {
+    for (const state of [{ usr: null, key: "b", idx: 3 }, { usr: { inPlace: true }, key: "c", idx: 0 }]) {
+      withHistoryState(state, () => {
+        resetStore()
+        primeRoute("/thread/q-1")
+        boardWith([{ id: "q-1", needsYou: true }])
+        resolveRoutedThread()
+        assert.equal(store.drawers[0]?.slug, "q-1", JSON.stringify(state))
+      })
+    }
+    // A drawer already up is the reader's: an address that arrives over it opens a drawer too.
+    withHistoryState({ idx: 0 }, () => {
+      resetStore()
+      primeRoute("/thread/q-1")
+      boardWith([{ id: "q-1", needsYou: true }, { id: "open" }])
+      store.drawers = [{ id: "d1", kind: "thread", slug: "open" }] as typeof store.drawers
+      resolveRoutedThread()
+      assert.equal(store.drawers.at(-1)?.slug, "q-1")
+    })
+    assert.equal(asked, 0)
+  } finally {
+    unregister()
+    resetStore()
+  }
 })
