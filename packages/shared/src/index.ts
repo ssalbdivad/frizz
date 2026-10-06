@@ -3448,6 +3448,9 @@ export const SettledQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
+  /** When the worker last `keep`-ed it — a kept card stood at the rest that kept it, not the one that asked
+   *  it, so the answered card stays there too. */
+  keptAt: z.string().optional(),
   /** When the human sent the answer — what decides which rest the card stood at when it was answered. */
   settledAt: z.string(),
   answer: QuestionAnswerSchema,

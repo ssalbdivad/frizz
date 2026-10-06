@@ -260,7 +260,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const key = settledQuestionsKey(slug)
     void queryClient.cancelQueries({ queryKey: key })
     const settledAt = new Date().toISOString()
-    const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true }))
+    const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, ...(q.keptAt ? { keptAt: q.keptAt } : {}), settledAt, answer, pending: true }))
     queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [...(prev ?? []).filter((s) => !ids.has(s.id)), ...settled])
     setSent((prev) => new Map([...prev, ...settled.map((s) => [s.id, s] as const)]))
     setInFlight((n) => n + 1)

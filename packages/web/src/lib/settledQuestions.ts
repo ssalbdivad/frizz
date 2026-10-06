@@ -22,6 +22,8 @@ import { placeQuestions } from "./questionShadow.ts"
 export interface SettledPositionable {
   id: string
   askedAt: string
+  /** A kept card stood at the rest that kept it (questionsByAnchor), and its answered card stays there. */
+  keptAt?: string
   settledAt: string
   /** Sent from THIS tab and not yet read back from the server. Its `settledAt` is the browser's clock,
    *  which need not agree with the transcript's; the answer was sent against the whole loaded

@@ -2389,7 +2389,14 @@ export function createRouter(ctx: AppContext) {
           const spec = parseQuestionSpec(q.spec)
           const answer = parseStoredAnswer(q.answer)
           if (!spec || !answer) continue
-          questions.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString(), settledAt: new Date(q.settled_at).toISOString(), answer })
+          questions.push({
+            id: q.id,
+            spec,
+            askedAt: new Date(q.asked_at).toISOString(),
+            ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
+            settledAt: new Date(q.settled_at).toISOString(),
+            answer,
+          })
         }
         return { questions }
       },
