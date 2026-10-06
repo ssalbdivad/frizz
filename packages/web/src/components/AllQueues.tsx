@@ -87,9 +87,22 @@ import { PhonePage } from "./PhonePage.tsx"
 import { SidebarPage } from "./SidebarPage.tsx"
 import { embedded, postToHost } from "../lib/embed.ts"
 
-/** How often the page re-reads every project. The rail's badges poll at 5s; this is the page the
- *  operator is looking AT, so it runs a little faster — the read is the servers' cached snapshots. */
+/** How often the page re-reads every project while it is SHOWING every project. The rail's badges poll at
+ *  5s; this is the page the operator is looking AT, so it runs a little faster — the read is the servers'
+ *  cached snapshots. */
 const POLL_MS = 3_000
+/**
+ * How often a project's own board re-reads the OTHER projects (P12, plans/upstream-superset.md §2: the
+ * all-projects poll runs only while All projects is showing). On a project board the page project is
+ * drawn from its live board (`liveQueue`), so the poll is left with what the switcher's menu lists — every
+ * other project's counts, the stand-in for upstream's project rail — and the project the page just LEFT
+ * (useDepartedQueue). A slow cadence rather than a read when the switcher opens: a menu whose counts were
+ * fetched on open would redraw under the pointer a beat after it appeared, and its trigger is the page's
+ * title, opened often in passing. 30s is the rail's own 5s cadence relaxed for counts nobody is watching;
+ * react-query also re-reads when the window regains focus, so a board left in the background is current
+ * the moment it is looked at again. Everything this tab does is invalidated by its own act regardless.
+ */
+const OTHER_PROJECTS_POLL_MS = 30_000
 /** The card's exit fade (styles.css `.frizz-card-slot`, which must stay in step with it). */
 const EXIT_MS = 200
 /**
@@ -135,10 +148,17 @@ const GAP_CLOSERS = ["wheel", "touchmove", "keydown"] as const
 
 export function AllQueuesPage() {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
+  // THE VIEW (lib/pageView.ts): one project, or every project. Focused, the list and the queue are that
+  // project's alone and the prompt box is its; showing All projects, they are every project's.
+  const view = usePageView()
   const queues = useQuery({
     queryKey: ["projectsQueues"],
     queryFn: readProjectsQueues,
-    refetchInterval: POLL_MS,
+    // Only All projects polls every project every few seconds (OTHER_PROJECTS_POLL_MS says why). Another
+    // observer of the same query can still ask for more: Settings' cross-project notifications keep their
+    // own 3s cadence (lib/crossProjectNotify.ts), because a notification is the one reading of other
+    // projects that cannot wait — and only while the human has turned them on.
+    refetchInterval: view.kind === "all" ? POLL_MS : OTHER_PROJECTS_POLL_MS,
   })
   const direction = useSnapshot(prefs).queueOrder
   // The FOCUS — the page project (routes.tsx CrossProjectPage). Its board is live in the store, so it
@@ -159,9 +179,6 @@ export function AllQueuesPage() {
   const projects = useMemo(() => pinOverlayQueues(overlayQueues(base, [live, departed], direction), pinOverrides), [base, live, departed, direction, pinOverrides])
   const focusProject = projects.find((project) => project.slug === focus)
   const runningThreads = useMemo(() => projects.flatMap((project) => project.running), [projects])
-  // THE VIEW (lib/pageView.ts): one project, or every project. Focused, the list and the queue are that
-  // project's alone and the prompt box is its; showing All projects, they are every project's.
-  const view = usePageView()
   const viewed = view.kind === "project" ? projects.find((project) => project.slug === view.slug) : undefined
   // Showing All projects, an `@handle` in agent prose links to any open project's thread.
   const crossProjectMentions = view.kind === "all" ? queues.data : null

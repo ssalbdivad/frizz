@@ -144,7 +144,7 @@ export function ProjectList({
   const collapsed = useCollapsedProjects()
   const openBands = useOpenBands()
   const view = usePageView()
-  useReadAhead(projects)
+  useReadAhead(projects, view.kind === "all")
   const steeredAt = useSteeredAt()
   const archivingAt = useArchivingAt()
   const focus = projectSlug(useLocation().pathname)
@@ -455,11 +455,17 @@ function byOrder<T>(list: readonly T[], ids: readonly string[], idOf: (item: T) 
  * READ EVERY PROJECT'S BOARD AHEAD, once the page is idle, so opening one never waits on a round trip
  * (lib/projectBoards.ts). And when a project's Done count moves in the poll — a thread finished or reopened
  * anywhere — its cached board is stale, so it is dropped; an open project's live query refetches at once.
+ *
+ * ONLY WHILE ALL PROJECTS IS SHOWING (`showingAll`), P12 in plans/upstream-superset.md: Colin's server
+ * opens a project lazily because reading forty boards to draw forty cards is the cost lazy activation
+ * exists to avoid, and a project's own board lists only that project, whose board is already live. Its
+ * rows there need nothing read ahead; a click on another project's row still reads its board under the
+ * pointer (ProjectGroup's `onPointerEnter`).
  */
-function useReadAhead(projects: QueuesProject[]) {
+function useReadAhead(projects: QueuesProject[], showingAll: boolean) {
   const queryClient = useQueryClient()
   const ids = projects.filter((project) => project.open && !project.stale).map((project) => project.id)
-  const signature = ids.join(",")
+  const signature = showingAll ? ids.join(",") : ""
   useEffect(() => {
     if (!signature) return
     const timer = window.setTimeout(() => {

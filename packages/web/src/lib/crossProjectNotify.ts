@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useSyncExternalStore } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { queueUrgency, queuedThread, type ProjectQueue, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
@@ -93,16 +93,35 @@ const capLine = (text: string | undefined): string | undefined =>
 /** The page's poll cadence (AllQueues.tsx POLL_MS). This observer shares its query and cache. */
 const POLL_MS = 3_000
 
+/** Whether the tab is hidden, as React state — a hidden tab is the only one `notify` raises in. */
+function useTabHidden(): boolean {
+  return useSyncExternalStore(
+    (changed) => {
+      document.addEventListener("visibilitychange", changed)
+      return () => document.removeEventListener("visibilitychange", changed)
+    },
+    () => document.hidden,
+  )
+}
+
 /**
  * Mounted once, for the whole app. Shares the `projectsQueues` query the page draws from, and keeps it
  * polling while the tab is HIDDEN when notifications are on — react-query pauses an interval in a hidden
  * tab by default, and a hidden tab is the only one a notification is ever raised in.
+ *
+ * ONLY while hidden. Notifications are on by default, and this observer polled every project every 3s
+ * in a VISIBLE tab too, where `notify` raises nothing — so on a project's own board, which reads the
+ * other projects only every 30s (AllQueues.tsx OTHER_PROJECTS_POLL_MS), the all-projects poll kept its
+ * full cadence through this one observer (P12, plans/upstream-superset.md §2; found 2026-10-06 by
+ * counting the requests). While the tab is visible the page's own poll feeds the cache this reads, so the
+ * sightings stay current; the moment it is hidden this takes over at the page's cadence.
  */
 export function useCrossProjectNotifications(enabled: boolean): void {
+  const hidden = useTabHidden()
   const queues = useQuery({
     queryKey: ["projectsQueues"],
     queryFn: readProjectsQueues,
-    refetchInterval: POLL_MS,
+    refetchInterval: hidden ? POLL_MS : false,
     refetchIntervalInBackground: enabled,
     enabled,
   })
