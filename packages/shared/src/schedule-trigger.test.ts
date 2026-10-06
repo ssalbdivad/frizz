@@ -86,6 +86,31 @@ test("text with no trigger, and empty text, do not fire", () => {
   }
 })
 
+test("a count per unit of time and a range of abbreviated weekdays fire with no listed word", () => {
+  // The benchmark's misses before the phrases existed.
+  for (const text of [
+    "once a week check that the backups restored",
+    "Mon-Fri at 8am post the standup reminder",
+    "twice a day, at 10 and 4, check the queue",
+    "3 times a month audit the billing exports",
+    "2x per week rotate the staging keys",
+    "once an hour poll the status page",
+    "Mon–Thu at 7:30 summarize overnight alerts",
+    "tue thru sat at noon check the canary",
+    "Mon. - Fri. 9am triage",
+  ]) {
+    assert.equal(hasScheduleTrigger(text), true, text)
+  }
+  const [span] = scheduleTriggerSpans("deploy once a week")
+  assert.deepEqual(span, { start: 7, end: 18, word: "once a week" })
+  // Not a count per unit, not a range, or not whole.
+  for (const text of ["do it once and for all", "a week ago it broke", "use the 2x build", "the monitor-fridge sensor", "monday-ish"]) {
+    assert.equal(hasScheduleTrigger(text), text === "monday-ish", text)
+  }
+  // Quoted, it is named rather than asked for.
+  assert.equal(hasScheduleTrigger('the docs say "once a week"'), false)
+})
+
 test("repeated calls do not leak regex state", () => {
   for (let i = 0; i < 5; i++) assert.equal(hasScheduleTrigger("every Monday"), true)
   for (let i = 0; i < 5; i++) assert.equal(hasScheduleTrigger("nothing here"), false)

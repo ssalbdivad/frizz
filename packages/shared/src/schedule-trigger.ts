@@ -12,8 +12,10 @@
 // thread. scripts/schedule-extract-eval.ts measures both directions. On 2026-10-06: it fires on 74 of the
 // maintainer's 1,238 unique past prompts (6.0%) — "each" alone on 50 of them, almost all "for each issue"
 // sets — and typing one of those costs a median 6 reads at 4s a read under the box's single flight (p90 20).
-// It misses 5 of the benchmark's 214 schedule requests: "once a week …" (twice), "Mon-Fri at 8am …", "twice
-// a day, at 10 and 4 …" and "on the 1st and 15th …", which the box dispatches as plain threads.
+// The word list alone missed 5 of the benchmark's 214 schedule requests: "once a week …" (twice), "Mon-Fri at
+// 8am …", "twice a day, at 10 and 4 …" and "on the 1st and 15th …". SCHEDULE_TRIGGER_PHRASES now covers the
+// first four (a count per unit of time, and a range of abbreviated weekdays); "the 1st and 15th" is left out,
+// because a bare ordinal is in far more prompts than schedules and would make the gate fire on most of them.
 //
 // Not read: the runs the box already excludes and passes as `exclude` (fenced code, staged context tokens,
 // @mentions, /commands), plus fenced and inline code, quoted text and a leading /command found here, so a call
@@ -34,9 +36,19 @@ export const SCHEDULE_TRIGGER_WORDS = [
 
 export type ScheduleTriggerWord = (typeof SCHEDULE_TRIGGER_WORDS)[number]
 
+const UNIT = "(?:minute|hour|day|week|month|quarter|year)"
+const DAY_ABBR = "(?:mon|tues?|wed|thu(?:rs?)?|fri|sat|sun)"
+/** Schedule phrasings with no word from the list in them, as regex sources matched whole and case-insensitively:
+ *  a count per unit of time ("once a week", "twice per day", "3 times a month", "2x a week") and a range of
+ *  abbreviated weekdays ("Mon-Fri", "Mon–Thu", "Tue thru Sat"). */
+export const SCHEDULE_TRIGGER_PHRASES = [
+  `(?:once|twice|thrice|\\d+\\s*(?:x|times))\\s+(?:a|an|per)\\s+${UNIT}`,
+  `${DAY_ABBR}\\.?\\s*(?:-|–|—|to|through|thru)\\s*${DAY_ABBR}\\.?`,
+] as const
+
 /** A word: not touching another letter, digit or underscore on either side ("everything", "Mondays2" and
  *  "each_file" are not triggers; "bi-weekly" and "Monday's" are). */
-const TRIGGER_SOURCE = `(?<![\\p{L}\\p{N}_])(?:${[...SCHEDULE_TRIGGER_WORDS].sort((a, b) => b.length - a.length).join("|")})(?![\\p{L}\\p{N}_])`
+const TRIGGER_SOURCE = `(?<![\\p{L}\\p{N}_])(?:${[...[...SCHEDULE_TRIGGER_WORDS].sort((a, b) => b.length - a.length), ...SCHEDULE_TRIGGER_PHRASES].join("|")})(?![\\p{L}\\p{N}_])`
 /** For `test`: not global, so it keeps no `lastIndex` between calls. */
 const TRIGGER_ONE = new RegExp(TRIGGER_SOURCE, "iu")
 /** For `matchAll` only, which iterates a clone and never moves this one's `lastIndex`. */
@@ -74,13 +86,13 @@ function masked(text: string, exclude: readonly { readonly start: number; readon
   return s
 }
 
-/** Where each trigger word sits, in order — for a cue on the word itself while its read is in flight. */
+/** Where each trigger word or phrase sits, in order — for a cue on it while its read is in flight. */
 export function scheduleTriggerSpans(
   text: string,
   exclude: readonly { readonly start: number; readonly end: number }[] = [],
-): { start: number; end: number; word: ScheduleTriggerWord }[] {
+): { start: number; end: number; word: string }[] {
   const s = masked(text, exclude)
-  return [...s.matchAll(TRIGGER_ALL)].map((m) => ({ start: m.index, end: m.index + m[0].length, word: m[0].toLowerCase() as ScheduleTriggerWord }))
+  return [...s.matchAll(TRIGGER_ALL)].map((m) => ({ start: m.index, end: m.index + m[0].length, word: m[0].toLowerCase() }))
 }
 
 /** Whether `text` holds a schedule word outside the runs it never reads. `exclude` is the caller's own
