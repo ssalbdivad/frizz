@@ -268,9 +268,10 @@ export function writeScratchDir(projectDir: string, sessionId: string): string {
 
 // The FIXED worker system prompt for `kind`, compiled in via workerPrompt.ts (single source of truth).
 // Not user-modifiable — project-specific conventions ride FRIZZ.md (frizzConfigBlock), appended
-// separately. Thin adapter kept so existing callers (spawn/adopt/resume builders + tests) are untouched.
-export function loadWorkerPrompt(kind: BackendKind = "claude"): string {
-  return buildWorkerPrompt(kind, { monitorsDir: monitorScriptsDir() })
+// separately. `caps` drops the sections whose feature cannot fire for this worker (workerCapabilities
+// below); omitted, every gated section is left out, which is the contract the goldens pin.
+export function loadWorkerPrompt(kind: BackendKind = "claude", caps: WorkerCapabilities = {}): string {
+  return buildWorkerPrompt(kind, { monitorsDir: monitorScriptsDir(), ...caps })
 }
 
 // WHAT A WORKER IN `dir` CAN REACH RIGHT NOW — the one predicate behind both halves of the gate: the
@@ -873,6 +874,9 @@ export interface DispatchDeps {
   // The Claude session-broker bridge (context.ts). Every claude dispatch runs over it — headless, in a
   // detached daemon, with no terminal and no PTY. Absent ⇒ a claude dispatch fails loudly.
   claudeBroker?: ClaudeAgentBrokerBridge
+  // The server's editor bridge, read for workerCapabilities when a worker starts. Absent (tests, a server
+  // without one) ⇒ no editor, so the contract leaves its editor section out.
+  editors?: Pick<EditorBridge, "editorState">
   // Names (thread-names.ts): mints a fresh thread's 1-2 word, project-unique name once the row exists,
   // and holds a caller's hard-coded title to the same uniqueness rule. Absent (tests) ⇒ the row keeps
   // its dispatch chop / caller title exactly as before, and nothing is minted.
@@ -1090,7 +1094,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             model,
             effort,
             sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
-            baseInstructions: [loadWorkerPrompt("codex"), extraSystemPrompt].filter(Boolean).join("\n\n"),
+            baseInstructions: [loadWorkerPrompt("codex", workerCapabilities(deps.editors, workDir)), extraSystemPrompt].filter(Boolean).join("\n\n"),
             developerInstructions: codexFirstOutputTitleInstructions(deps.threadNamer?.promptNames(slug) ?? []),
             config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId, boardRoot, settings.worktreeDir) },
           })
@@ -1152,7 +1156,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(!bridge ? "The ACP bridge is unavailable; cannot start this thread." : `An ACP dispatch needs an agent: pick one in the composer (model \`acp:<agent>\`), got ${JSON.stringify(model ?? null)}.`)
         }
-        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock, deps.pluginSystemPrompt?.(kind), prompt]
+        const firstPrompt = [loadWorkerPrompt("acp", workerCapabilities(deps.editors, workDir)), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock, deps.pluginSystemPrompt?.(kind), prompt]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: workDir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
@@ -1208,7 +1212,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           throw new Error("Claude session broker is unavailable; cannot start this thread.")
         }
         const appendSystemPrompt = [
-          loadWorkerPrompt("claude"),
+          loadWorkerPrompt("claude", workerCapabilities(deps.editors, workDir)),
           scratchpadOrientation(sessionId, kind, scratchPath),
           frizzConfigBlock(deps.project.dir),
           deadlineBlock,
@@ -1543,7 +1547,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           prompt,
           permissionMode,
           appendSystemPrompt: [
-            loadWorkerPrompt("claude"),
+            loadWorkerPrompt("claude", workerCapabilities(deps.editors, workDir)),
             scratchpadOrientation(sessionId, "claude", workerScratchPath(deps.project, sessionId)),
             frizzConfigBlock(deps.project.dir),
             deps.pluginSystemPrompt?.("claude"),

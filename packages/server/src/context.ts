@@ -39,7 +39,8 @@ import { forkPointOf } from "./fork-point.ts"
 import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
-import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
+import type { WorkerCapabilities } from "./workerPrompt.ts"
+import { createDispatcher, loadWorkerPrompt, workerCapabilities, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
 import { deadlineSection } from "./deadline.ts"
 import { createScheduler, type Scheduler, probeIssueReadable, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
 import {
@@ -530,13 +531,15 @@ export function deliverClaudeBrokerWake(deps: {
   deliveryMessage: string
   /** Retire the live daemon first — see the bridge's followUp contract and needsFreshProcessForLimit. */
   freshProcess?: boolean
+  /** What the worker can reach if this wake cold-resumes it (dispatch.ts workerCapabilities). */
+  capabilities?: WorkerCapabilities
   /** What the project's Frizz plugins add to the system prompt (plugins/project.ts), re-applied on a cold resume. */
   pluginSystemPrompt?: string
 }): Promise<void> {
   const { bridge, slug, cwd, row, settings, deliveryMessage, freshProcess } = deps
   const board = { dir: deps.boardDir ?? cwd, workDir: cwd }
   const appendSystemPrompt = [
-    loadWorkerPrompt("claude"),
+    loadWorkerPrompt("claude", deps.capabilities),
     scratchpadOrientation(row.session_id, "claude", workerScratchPath(board, row.session_id)),
     frizzConfigBlock(board.dir),
     deadlineSection(row),
@@ -1147,6 +1150,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     codexAppServer,
     acpBridge,
     claudeBroker,
+    editors: opts.editors,
     threadNamer,
     // "auto" effort → a level read off the prompt by Haiku, before launch (effort-chooser.ts). Its own
     // completer with a short timeout: it blocks the dispatch, so it must never queue behind the namer's
@@ -1298,6 +1302,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           bridge: claudeBroker,
           slug,
           cwd: workDirOf(project),
+          capabilities: workerCapabilities(opts.editors, workDirOf(project)),
           boardDir: project.dir,
           row,
           settings: getSettings(storage, home),

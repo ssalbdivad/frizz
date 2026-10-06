@@ -889,6 +889,14 @@ board links it to that project.`
 // THE HUMAN'S EDITOR (2026-10-02). One sentence, because the tool's own description carries the rest — but
 // it has to be HERE: a worker's MCP tools are deferred, so a tool it has never heard named is a tool it
 // never searches for, and a worker asked "can you see the highlighted code?" answered that it could not.
+//
+// RENDERED ONLY WHILE AN EDITOR HAS THIS PROJECT OPEN (2026-10-06, plans/upstream-superset.md §5, under
+// Colin's "every token is a cost"). Without one the tool has nothing to read, frizz-mcp does not list it,
+// and this paragraph would name a tool the worker cannot see — on every turn of every worker, most of
+// whose humans never run the extension. The gate is read when the worker's process starts (dispatch, and
+// the cold resume that rebuilds this prompt), the only moment a system prompt can change; the TOOL tracks
+// the editor live (frizz-mcp `notifications/tools/list_changed`), so an editor opened later still reaches
+// the worker as a listed tool with its own description, just without this paragraph.
 const HUMAN_EDITOR = `## The human's editor
 
 When the human points at code they have not pasted — "this", "the selected code", "the error" — call
@@ -1475,7 +1483,7 @@ export interface WorkerCapabilities {
   editor?: boolean
 }
 
-export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitorsDir?: string } = {}): string {
+export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitorsDir?: string } & WorkerCapabilities = {}): string {
   // Claude gets the LEAN list: frizz mechanics + the autonomy anchor, and nothing that merely narrates
   // good engineering. Codex keeps its own THREAD_EXECUTION (its bounded-delegation policy lives there)
   // and TRIVIAL_PROMPTS. See the SIZING note at the top of this file.
@@ -1489,7 +1497,7 @@ export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitors
     SCRATCHPAD[kind],
     BACKEND[kind],
     THREAD_HANDLES,
-    HUMAN_EDITOR,
+    opts.editor ? HUMAN_EDITOR : null,
     SPAWN_THREAD,
     SCHEDULES,
     lean ? null : THREAD_EXECUTION[kind],

@@ -16,6 +16,7 @@ import {
   fallbackTitle,
   scratchpadOrientation,
   createDispatcher,
+  type DispatchDeps,
 } from "./dispatch.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
 import { createCodexBackend } from "./backend/codex.ts"
@@ -34,7 +35,7 @@ function fakePaneIdentity(n = 1): PaneIdentity {
 
 // A dispatcher wired to a tmp project + real storage + a stub board + injected spawn seams. No test in
 // this harness contacts the live project socket or starts a real worker.
-function dispatcherHarness(settings = defaultSettings()) {
+function dispatcherHarness(settings = defaultSettings(), editors?: DispatchDeps["editors"]) {
   const dir = tmp("frizz-dispatch-")
   const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "id", name: "test", label: "o/test", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -81,6 +82,7 @@ function dispatcherHarness(settings = defaultSettings()) {
       },
       releaseSession: () => {},
     } as unknown as ClaudeAgentBrokerBridge,
+    editors,
   })
   return { dir, storage, project, spawned, dispatcher }
 }
@@ -362,6 +364,29 @@ test("build*Command: extraSystemPrompt is appended AFTER the worker norms in the
   const rSys = systemPromptOf(res)
   assert.ok(rSys.startsWith("WORKER"))
   assert.ok(rSys.includes(scratch))
+})
+
+// The contract's editor section rides a dispatch only while an editor window has the project open
+// (dispatch.ts workerCapabilities): the tool it names is listed under the same condition, and without one
+// the paragraph is a cost on every turn for a tool the worker cannot see (plans/upstream-superset.md §5).
+test("dispatch: the editor section rides the contract only while an editor has the project open", async () => {
+  const EDITOR_SECTION = "## The human's editor"
+  const asked: string[] = []
+  let windows: unknown[] = []
+  const h = dispatcherHarness(defaultSettings(), { editorState: (dir) => (asked.push(dir), { windows: windows as never, connected: 1 }) })
+  await h.dispatcher.dispatch({ prompt: "No editor here.", model: "opus", effort: "high" })
+  windows = [{ app: "Visual Studio Code", kind: "vscode", focused: true, folders: [h.dir] }]
+  await h.dispatcher.dispatch({ prompt: "Editor open.", model: "opus", effort: "high" })
+  const [without, withEditor] = h.spawned.map((s) => systemPromptOf(s.cmd))
+  assert.ok(without.startsWith("You are a dispatched worker agent"))
+  assert.ok(!without.includes(EDITOR_SECTION) && !without.includes("mcp__frizz__editor"), "no editor: no section, and the tool goes unnamed")
+  assert.ok(withEditor.includes(EDITOR_SECTION), "an editor on the project: the section is rendered")
+  // Asked about the folder the project's agents work in, once per dispatch.
+  assert.deepEqual(asked, [h.dir, h.dir])
+  // And a dispatcher with no bridge at all renders the contract without it.
+  const bare = dispatcherHarness()
+  await bare.dispatcher.dispatch({ prompt: "No bridge.", model: "opus", effort: "high" })
+  assert.ok(!systemPromptOf(bare.spawned[0].cmd).includes(EDITOR_SECTION))
 })
 
 test("dispatch: creates an EMPTY scratch dir (not a thread file), argv carries it, stores an open row", async () => {

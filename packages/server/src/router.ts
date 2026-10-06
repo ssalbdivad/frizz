@@ -3134,7 +3134,7 @@ export function createRouter(ctx: AppContext) {
           // rejects an id that is still outstanding, so a replay would surface as an error on the
           // operator's send instead of the no-op it should be.
           const appendSystemPrompt = [
-            loadWorkerPrompt("claude"),
+            loadWorkerPrompt("claude", workerCapabilities(ctx.editors, workDir)),
             scratchpadOrientation(row.session_id, "claude", workerScratchPath(ctx.project, row.session_id)),
             frizzConfigBlock(ctx.project.dir),
             deadlineSection(row),
@@ -3470,7 +3470,7 @@ export function createRouter(ctx: AppContext) {
         // The same cold-resume inputs a follow-up carries: a hibernated daemon is resumed to run the
         // command, and it must come back as the worker it was.
         const appendSystemPrompt = [
-          loadWorkerPrompt("claude"),
+          loadWorkerPrompt("claude", workerCapabilities(ctx.editors, workDir)),
           scratchpadOrientation(row.session_id, "claude"),
           frizzConfigBlock(ctx.project.dir),
           deadlineSection(row),

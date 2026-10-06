@@ -147,11 +147,19 @@ test("the contract puts a draft being approved inside the option that sends it",
 
 // A worker asked "can you see the highlighted code?" answered that it could not: its MCP tools are
 // deferred, so `mcp__frizz__editor` reaches it only if the contract names it, with the words that should
-// make it reach for the tool.
-test("every backend's contract names the editor tool, and when to call it", () => {
+// make it reach for the tool. Since 2026-10-06 that holds while an editor has the project open — the only
+// time the tool is listed (frizz-mcp GATED_TOOLS) — and otherwise the contract does not name it at all.
+// The section is the ONLY difference the capability makes: spliced out, the contract is the default one
+// byte for byte, so the goldens (which pin the default) still pin every other word of the gated build.
+test("every backend's contract names the editor tool, and when to call it, only while an editor is open", () => {
   for (const backend of ["claude", "codex", "acp"] as const) {
-    const prompt = buildWorkerPrompt(backend).replace(/\s+/g, " ")
-    assert.match(prompt, /When the human points at code they have not pasted — "this", "the selected code", "the error" — call `mcp__frizz__editor`/)
+    const withEditor = buildWorkerPrompt(backend, { editor: true })
+    const without = buildWorkerPrompt(backend)
+    assert.match(withEditor.replace(/\s+/g, " "), /When the human points at code they have not pasted — "this", "the selected code", "the error" — call `mcp__frizz__editor`/)
+    assert.doesNotMatch(without, /mcp__frizz__editor|## The human's editor/)
+    assert.equal(buildWorkerPrompt(backend, { editor: false }), without)
+    const section = withEditor.slice(withEditor.indexOf("## The human's editor"), withEditor.indexOf("\n\n## ", withEditor.indexOf("## The human's editor")))
+    assert.equal(withEditor.replace(`\n\n${section}`, ""), without)
   }
 })
 
