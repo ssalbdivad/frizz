@@ -1463,6 +1463,18 @@ checks. Depth scales with blast radius and yields to the project's conventions.`
  */
 const MONITORS_DIR_FALLBACK = "<frizz>/cc-worker/skills/gh/scripts"
 
+/**
+ * The features a worker can actually use, read when its process starts. A section about a feature that
+ * cannot fire is not rendered: it is paid for on every turn and names a tool the worker cannot call.
+ * Every field defaults to ABSENT, so the default build (and its golden) is the contract a worker gets
+ * with none of them. Features that are always on — schedules, thread handles, shell budgets — have no
+ * field here and are always rendered.
+ */
+export interface WorkerCapabilities {
+  /** An editor window has this project open (dispatch.ts workerCapabilities), so `mcp__frizz__editor` is listed. */
+  editor?: boolean
+}
+
 export function buildWorkerPrompt(kind: BackendKind = "claude", opts: { monitorsDir?: string } = {}): string {
   // Claude gets the LEAN list: frizz mechanics + the autonomy anchor, and nothing that merely narrates
   // good engineering. Codex keeps its own THREAD_EXECUTION (its bounded-delegation policy lives there)

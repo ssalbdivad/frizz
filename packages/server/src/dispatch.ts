@@ -29,7 +29,8 @@ import { FRIZZ_MCP, WORKER_DISALLOWED_TOOLS, claudeWorkerEnv, frizzMcpEnv } from
 // Re-exported here because this is where callers have always reached for them.
 export { WORKER_MAX_WEB_SEARCHES, WORKER_MAX_SUBAGENTS, WORKER_MAX_CONCURRENT_SUBAGENTS } from "./backend/types.ts"
 import { resolveWorkerPluginDir } from "./worker-plugin-dir.ts"
-import { buildWorkerPrompt } from "./workerPrompt.ts"
+import { buildWorkerPrompt, type WorkerCapabilities } from "./workerPrompt.ts"
+import type { EditorBridge } from "./editor-bridge.ts"
 import { codexSandbox, codexFirstOutputTitleInstructions } from "./backend/codex.ts"
 import { threadNameProblem, type ThreadNamer } from "./thread-names.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
@@ -270,6 +271,17 @@ export function writeScratchDir(projectDir: string, sessionId: string): string {
 // separately. Thin adapter kept so existing callers (spawn/adopt/resume builders + tests) are untouched.
 export function loadWorkerPrompt(kind: BackendKind = "claude"): string {
   return buildWorkerPrompt(kind, { monitorsDir: monitorScriptsDir() })
+}
+
+// WHAT A WORKER IN `dir` CAN REACH RIGHT NOW — the one predicate behind both halves of the gate: the
+// contract sections loadWorkerPrompt renders at a worker's start, and the tools its frizz-mcp lists
+// (router `workerCapabilities`, polled live). `editor`: an editor window has this project open, which is
+// exactly when `mcp__frizz__editor` has something to read (editor-bridge.ts editorState; `also` adds a
+// thread's own checkout outside the project folder, as that tool does). Machine-wide "any editor
+// connected" would list the tool to every project's workers whenever one window is open anywhere, and
+// it would answer them all "none has this project open".
+export function workerCapabilities(editors: Pick<EditorBridge, "editorState"> | undefined, dir: string, also: readonly string[] = []): Required<WorkerCapabilities> {
+  return { editor: (editors?.editorState(dir, also).windows.length ?? 0) > 0 }
 }
 
 // The portable CI/review monitors, which ship inside the worker plugin (`sync-portable-monitors.mjs`

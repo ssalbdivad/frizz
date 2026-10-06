@@ -398,6 +398,9 @@ export interface Api {
   // What the editor windows that have this project open show: file in front, selection, tabs, problems.
   // The workers' `mcp__frizz__editor` reads it; the page does not.
   editorState(input: { slug?: string }): Promise<EditorStateResult>
+  // Which capability-gated tools the workers' frizz MCP server lists (`editor` while a window has this
+  // project open). The worker's MCP server polls it; the page does not.
+  workerCapabilities(input: { slug?: string }): Promise<{ editor: boolean }>
   // What a browser tab shows of the editor beside it: the file in front and its selection's lines, from
   // the window this project's agents' editor tool reads; `text` adds what a click puts in the prompt box.
   editorFront(input: { text?: boolean }): Promise<{ front: EditorFront | null; item?: EditorComposeInput }>
@@ -635,6 +638,7 @@ export const PROCEDURES = {
   reviewInEditor: "mutation",
   composeTake: "mutation",
   editorState: "mutation",
+  workerCapabilities: "mutation",
   editorFront: "query",
   markComplete: "mutation",
   setThreadStatus: "mutation",

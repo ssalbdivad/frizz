@@ -18,6 +18,10 @@ import { SPAWN_THREAD_RESULT_RE } from "./spinoff-edge-recovery.ts"
 interface Rpc {
   send(msg: unknown): void
   next(id: number): Promise<any>
+  /** The next notification (a message with no id) the server sends with this method. */
+  notified(method: string): Promise<any>
+  /** Every notification the server has sent so far, oldest first. */
+  notifications: any[]
   kill(): void
 }
 
@@ -33,6 +37,8 @@ function startServer(env: Record<string, string>, cwd = mkdtempSync(join(tmpdir(
     env: { ...process.env, ...env },
   })
   const pending = new Map<number, (value: any) => void>()
+  const notifications: any[] = []
+  const awaitingNotice: Array<{ method: string; resolve: (value: any) => void }> = []
   let buf = ""
   child.stdout.setEncoding("utf8")
   child.stdout.on("data", (chunk: string) => {
@@ -43,6 +49,12 @@ function startServer(env: Record<string, string>, cwd = mkdtempSync(join(tmpdir(
       buf = buf.slice(nl + 1)
       if (!line) continue
       const msg = JSON.parse(line)
+      if (msg.id === undefined && typeof msg.method === "string") {
+        notifications.push(msg)
+        const at = awaitingNotice.findIndex((w) => w.method === msg.method)
+        if (at >= 0) awaitingNotice.splice(at, 1)[0].resolve(msg)
+        continue
+      }
       pending.get(msg.id)?.(msg)
       pending.delete(msg.id)
     }
@@ -50,6 +62,8 @@ function startServer(env: Record<string, string>, cwd = mkdtempSync(join(tmpdir(
   return {
     send: (msg) => child.stdin.write(JSON.stringify(msg) + "\n"),
     next: (id) => new Promise((resolve) => pending.set(id, resolve)),
+    notified: (method) => new Promise((resolve) => awaitingNotice.push({ method, resolve })),
+    notifications,
     kill: () => child.kill(),
   }
 }
@@ -62,7 +76,11 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // The mounted server NAME (dispatch.ts) is what forms the tool id the worker sees; serverInfo must
     // agree with it, or the two halves of `mcp__frizz__spawn_thread` drift apart.
     assert.equal(init.result.serverInfo.name, FRIZZ_MCP.name)
+    // The list follows the server's capabilities, so the client is told to expect it to change.
+    assert.deepEqual(init.result.capabilities.tools, { listChanged: true })
 
+    // No Frizz answers here, so the capabilities cannot be read and every tool is listed, as before the
+    // list was gated — a server it cannot reach must never cost a worker a tool.
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
@@ -214,6 +232,98 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.match(gone.error.message, /unknown tool: spawn_frizz_thread/)
   } finally {
     rpc.kill()
+  }
+})
+
+// A TOOL IS LISTED ONLY WHILE ITS CAPABILITY EXISTS (plans/upstream-superset.md §5): `editor` while an
+// editor window has this project open. Against a real HTTP server standing in for Frizz's
+// `workerCapabilities`, flipped mid-session the way a human opens and closes VS Code: the first list
+// leaves `editor` out, an editor that appears is announced with `notifications/tools/list_changed` and
+// listed on the re-list, and one that goes is withdrawn only once it has read absent at two polls in a
+// row (a window reloading drops its socket for a moment).
+test("`editor` is listed only while an editor has the project open, and the list follows it live", async () => {
+  let editor = false
+  // Answers served before `editor` is consulted again, one per request: how a single poll is made to read
+  // a value without racing the poll's timer.
+  const once: boolean[] = []
+  const asked: Array<{ url: string; body: unknown }> = []
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      asked.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: { editor: once.length ? once.shift() : editor } }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const POLL_MS = 150
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: "proj", FRIZZ_THREAD: "", FRIZZ_THREAD_SLUG: "caller", FRIZZ_CAPABILITY_POLL_MS: String(POLL_MS) })
+  const names = (list: any) => list.result.tools.map((t: { name: string }) => t.name)
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
+    const first = names(await rpc.next(2))
+    assert.ok(!first.includes("editor"), "no editor has the project open, so the tool is not listed")
+    assert.equal(first.length, 20)
+    // Asked of OUR project, naming the calling thread (a window on its own checkout counts).
+    assert.deepEqual(asked[0], { url: "/_frizz/proj/rpc/workerCapabilities", body: { slug: "caller" } })
+
+    // Polls that read the same answer announce nothing.
+    await new Promise((r) => setTimeout(r, POLL_MS * 3))
+    assert.deepEqual(rpc.notifications, [])
+
+    editor = true
+    await rpc.notified("notifications/tools/list_changed")
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/list" })
+    assert.ok(names(await rpc.next(3)).includes("editor"), "an editor that appears is listed")
+
+    // Gone for ONE poll (a reload): nothing is withdrawn.
+    once.push(false)
+    while (once.length) await new Promise((r) => setTimeout(r, 20))
+    await new Promise((r) => setTimeout(r, POLL_MS * 3))
+    assert.equal(rpc.notifications.length, 1, "a capability absent at a single poll does not change the list")
+
+    // Gone for good: withdrawn after the second absent poll, and the re-list leaves it out.
+    editor = false
+    await rpc.notified("notifications/tools/list_changed")
+    rpc.send({ jsonrpc: "2.0", id: 4, method: "tools/list" })
+    assert.ok(!names(await rpc.next(4)).includes("editor"), "an editor that goes is withdrawn")
+    assert.equal(rpc.notifications.length, 2)
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+// A Frizz from before `workerCapabilities` answers 404: the capability is unknown, not absent, so every
+// tool stays listed — gating must never take a tool away because the server is older than the worker.
+test("a server that cannot report capabilities keeps every tool listed", async () => {
+  const http = createServer((_req, res) => {
+    res.writeHead(404)
+    res.end("not found")
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_PROJECT_ID: "proj", FRIZZ_THREAD_SLUG: "caller", FRIZZ_CAPABILITY_POLL_MS: "100" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
+    const list = await rpc.next(2)
+    assert.ok(list.result.tools.some((t: { name: string }) => t.name === "editor"))
+    assert.equal(list.result.tools.length, 21)
+    await new Promise((r) => setTimeout(r, 400))
+    assert.deepEqual(rpc.notifications, [], "an unreadable report never changes the list")
+  } finally {
+    rpc.kill()
+    http.close()
   }
 })
 

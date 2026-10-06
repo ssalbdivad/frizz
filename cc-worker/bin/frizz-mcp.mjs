@@ -33,7 +33,8 @@
  * that saves a lookup; the filesystem is the truth.
  *
  * Protocol: MCP over stdio = newline-delimited JSON-RPC 2.0. We implement exactly the four methods a
- * client drives (initialize, tools/list, tools/call, ping) plus the initialized notification. Hand-
+ * client drives (initialize, tools/list, tools/call, ping) plus the initialized notification, and send
+ * one notification of our own, `notifications/tools/list_changed` (GATED_TOOLS). Hand-
  * rolled rather than pulling @modelcontextprotocol/sdk: the surface is tiny, it ships as one loose
  * .mjs next to bin/frizz (no build/bundle/resolution concerns), and it matches this repo's own
  * hand-rolled-RPC aesthetic. The server NEVER crashes on a bad tool call: failures come back as an
@@ -1127,6 +1128,107 @@ const DEADLINE = {
 // EXTEND_SHELL is appended after it for the same reason (2026-09-29), EDITOR after KEEP (2026-10-02), and
 // SCHEDULE after EDITOR (2026-10-05), DEADLINE after SCHEDULE (2026-10-06).
 const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR, SCHEDULE, DEADLINE]
+
+// A TOOL IS LISTED ONLY WHILE ITS CAPABILITY EXISTS (2026-10-06, plans/upstream-superset.md §5). Every
+// listed tool is paid for on every turn, and a tool whose feature is absent can only answer "there is
+// nothing here" — the 2026-08-26 browser decision's "a capability nobody asked for, charged per turn, is
+// an opinion" (cc-worker/DECISIONS.md). Tool name → the capability the server reports for it (router
+// `workerCapabilities`, the same predicate that gates the contract's sections, dispatch.ts). Of the
+// fork's tools only `editor` has a feature that can be absent: it reads the human's editor, and most
+// humans never run the extension. Schedules, thread messaging, `keep` and shell budgets are always on.
+//
+// LIVE, NOT ONCE. Claude Code (2.1.287, the SDK's headless path included) re-lists a server that
+// declares `tools.listChanged` when it sends `notifications/tools/list_changed`, and a worker's frizz
+// tools are deferred, so a change costs one "now available" line rather than a rewritten prefix. So the
+// list follows the human: this server asks at the first `tools/list`, then polls and announces each
+// change. A client that ignores the notification keeps the list it read at session start, which is
+// the same moment the contract's sections were chosen, so the two still agree.
+const GATED_TOOLS = /** @type {Record<string, string>} */ ({ [EDITOR.name]: "editor" })
+// How often the poll asks. The bridge drops a window the moment its socket closes, and a window reloading
+// is gone for a few seconds, so a capability must read absent at TWO polls in a row before its tool is
+// withdrawn (CAPABILITY_ABSENT_POLLS); one that appears is listed at once.
+// FRIZZ_CAPABILITY_POLL_MS shortens it for frizz-mcp.test.ts, which would otherwise wait out three polls.
+const CAPABILITY_POLL_MS = Number(process.env.FRIZZ_CAPABILITY_POLL_MS) || 10_000
+const CAPABILITY_ABSENT_POLLS = 2
+// One attempt, briefly: this runs inside the client's `tools/list`, where postToFrizz's restart wait
+// (LOCK_RETRY_MS) would stall the worker's startup. A failed read leaves the list as it was.
+const CAPABILITY_TIMEOUT_MS = 2_000
+
+/** What the last `tools/list` answered under: the server's capability report, `{}` when it could not be
+ * read (every tool listed, as before gating). Undefined until the first `tools/list`.
+ * @type {Record<string, unknown> | undefined} */
+let listedCapabilities
+/** @type {Record<string, number>} consecutive polls each listed capability has read absent */
+const absentPolls = {}
+
+/** The capability report for this thread, or undefined when it cannot be read — no server, a timeout,
+ * or a Frizz from before `workerCapabilities` (404). Never waits out a restart. */
+async function readCapabilities() {
+  try {
+    const slug = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
+    const res = await fetch(`http://127.0.0.1:${serverLockPort()}${rpcPath("workerCapabilities")}`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "sec-fetch-site": "same-origin" },
+      body: JSON.stringify(slug ? { slug } : {}),
+      signal: AbortSignal.timeout(CAPABILITY_TIMEOUT_MS),
+    })
+    if (!res.ok) return undefined
+    const result = (await res.json())?.result
+    return result && typeof result === "object" ? result : undefined
+  } catch {
+    return undefined
+  }
+}
+
+/** Whether `capability` counts as present: only an explicit `false` hides a tool, so a capability the
+ * server does not report (an older Frizz) keeps its tool listed. @param {Record<string, unknown> | undefined} caps
+ * @param {string} capability */
+function hasCapability(caps, capability) {
+  return caps?.[capability] !== false
+}
+
+/** The tools to list under `caps`. @param {Record<string, unknown> | undefined} caps */
+function listedTools(caps) {
+  return TOOLS.filter((tool) => !GATED_TOOLS[tool.name] || hasCapability(caps, GATED_TOOLS[tool.name]))
+}
+
+/** One poll: re-read the report and, when a gated capability has come or gone, change what is listed
+ * and tell the client to list again. */
+async function pollCapabilities() {
+  const caps = await readCapabilities()
+  if (!caps || !listedCapabilities) return
+  const next = { ...listedCapabilities }
+  let changed = false
+  for (const capability of new Set(Object.values(GATED_TOOLS))) {
+    const now = hasCapability(caps, capability)
+    if (now === hasCapability(listedCapabilities, capability)) {
+      absentPolls[capability] = 0
+      continue
+    }
+    if (!now && (absentPolls[capability] = (absentPolls[capability] ?? 0) + 1) < CAPABILITY_ABSENT_POLLS) continue
+    absentPolls[capability] = 0
+    next[capability] = now
+    changed = true
+  }
+  if (!changed) return
+  listedCapabilities = next
+  send({ jsonrpc: "2.0", method: "notifications/tools/list_changed" })
+}
+
+/** `tools/list`: the first one reads the report and starts the poll; later ones answer what the poll
+ * has settled, so a re-list right after a notification lists exactly what the notification announced. */
+async function toolsList() {
+  if (!listedCapabilities) {
+    listedCapabilities = (await readCapabilities()) ?? {}
+    let polling = false
+    setInterval(() => {
+      if (polling) return
+      polling = true
+      void pollCapabilities().finally(() => { polling = false })
+    }, CAPABILITY_POLL_MS).unref()
+  }
+  return listedTools(listedCapabilities)
+}
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -2667,7 +2769,8 @@ async function handle(msg) {
       const requested = params?.protocolVersion
       reply(id, {
         protocolVersion: typeof requested === "string" ? requested : PROTOCOL_FALLBACK,
-        capabilities: { tools: {} },
+        // `listChanged`: the tool list follows the capabilities the server reports (GATED_TOOLS).
+        capabilities: { tools: { listChanged: true } },
         serverInfo: { name: "frizz", version: "0.1.0" },
       })
       return
@@ -2679,7 +2782,7 @@ async function handle(msg) {
       if (!isNotification) reply(id, {})
       return
     case "tools/list":
-      reply(id, { tools: TOOLS })
+      reply(id, { tools: await toolsList() })
       return
     case "tools/call": {
       const name = typeof params?.name === "string" ? params.name : ""

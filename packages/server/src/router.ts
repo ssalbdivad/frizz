@@ -226,7 +226,7 @@ import { dispatchCaller } from "./dispatch-caller.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
-import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, coldResumePermission, scratchDirRelPath, workerScratchPath } from "./dispatch.ts"
+import { slugify, resolveSlug, resolveLegacyThreadFile, loadWorkerPrompt, workerCapabilities, scratchpadOrientation, frizzConfigBlock, coldResumePermission, scratchDirRelPath, workerScratchPath } from "./dispatch.ts"
 import { backgroundOpStoppable, claudeShellLabel, noticeClaudeShellStopped, stopBackgroundShell } from "./shell-stop.ts"
 import { liveShellBudget, SHELL_BUDGET_MAX_MS } from "./shell-budget.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
@@ -5048,6 +5048,23 @@ export function createRouter(ctx: AppContext) {
         const checkout = input.slug ? editorCheckoutOf(input.slug) : undefined
         const state = ctx.editors?.editorState(workDir, checkout ? [checkout.dir] : []) ?? { windows: [], connected: 0 }
         return checkout ? { ...state, checkout } : state
+      },
+    }),
+
+    // WHICH GATED TOOLS A WORKER'S MCP SERVER LISTS (cc-worker/bin/frizz-mcp.mjs): a tool whose capability
+    // is absent is left out of `tools/list` rather than paid for on every turn (plans/upstream-superset.md
+    // §5). frizz-mcp asks at its first `tools/list` and then polls, announcing a change with
+    // `notifications/tools/list_changed`, so the list follows the human opening and closing their editor.
+    // The same predicate gates the contract's sections at a worker's start (dispatch.ts workerCapabilities).
+    // `slug` is the calling thread, as for `editorState`: a window on its own checkout counts. A mutation
+    // only because the MCP server POSTs every procedure; it changes nothing. A field an older server does
+    // not send reads as present on the MCP side, so adding a capability here never hides a tool there.
+    workerCapabilities: mutation({
+      input: z.object({ slug: ThreadSlug.optional() }),
+      output: z.object({ editor: z.boolean() }),
+      handler: async ({ input }) => {
+        const checkout = input.slug ? editorCheckoutOf(input.slug) : undefined
+        return workerCapabilities(ctx.editors, workDir, checkout ? [checkout.dir] : [])
       },
     }),
 

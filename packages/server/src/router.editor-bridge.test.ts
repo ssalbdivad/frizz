@@ -174,6 +174,25 @@ test("editorState asks the bridge about the folder the project's agents work in,
   assert.deepEqual(await router("/work/alpha", "vscode").editorState.handler({ input: {} }), { windows: [], connected: 0 })
 })
 
+// What a worker's frizz-mcp lists `editor` under (and what the contract's editor section is rendered
+// under, dispatch.ts workerCapabilities): a window that has THIS project open — not merely one connected
+// to Frizz on another project, where the tool would only answer "none has this project open".
+test("workerCapabilities reports an editor only while a window has this project open", async () => {
+  const window = { app: "Visual Studio Code", kind: "vscode", focused: true, folders: ["/work/alpha"] }
+  let answer: { windows: unknown[]; connected: number } = { windows: [], connected: 0 }
+  const asked: string[] = []
+  const editors = { editorState: (dir: string) => (asked.push(dir), answer) } as unknown as Partial<EditorBridge>
+  const r = router("/work/alpha", "vscode", editors)
+  assert.deepEqual(await r.workerCapabilities.handler({ input: {} }), { editor: false })
+  answer = { windows: [], connected: 2 }
+  assert.deepEqual(await r.workerCapabilities.handler({ input: {} }), { editor: false }, "windows on other projects only")
+  answer = { windows: [window], connected: 2 }
+  assert.deepEqual(await r.workerCapabilities.handler({ input: {} }), { editor: true })
+  assert.deepEqual(asked, ["/work/alpha", "/work/alpha", "/work/alpha"])
+  // A server with no bridge has no editor to offer.
+  assert.deepEqual(await router("/work/alpha", "vscode").workerCapabilities.handler({ input: {} }), { editor: false })
+})
+
 // A worker in its own worktree asks for the editor: the answer says where that thread works, in the
 // project folder's spelling, and a window opened on the worktree counts as this project's even when the
 // worktree sits outside the project folder. A real repository and a real `git worktree add`, because the
