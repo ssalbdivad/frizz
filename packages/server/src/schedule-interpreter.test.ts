@@ -89,12 +89,26 @@ test("a fenced or chatty answer still parses", async () => {
   assert.equal(r.prompt, "triage new issues")
 })
 
-test("a bad answer is retried ONCE with the reason, then the human gets the not-found copy", async () => {
+test("a bad answer is retried ONCE with the reason, then the read FAILED — never \"no schedule\" (finding D)", async () => {
+  // Since the box acts on the answer, "couldn't find a schedule" means Enter starts the thread at once, and it is
+  // cached for 10m as the model's verdict. An answer that could not be USED is no verdict on the words: it is a
+  // read that failed, which the box says ("Couldn't check for a schedule") before the next Enter starts it.
   const { interpreter, requests } = scripted("not json", "still not json")
   const r = await interpreter.interpret({ text: "every Monday at 9am triage", tz: TZ })
-  assert.deepEqual(r, { ok: false, error: SCHEDULE_NOT_FOUND_COPY })
+  assert.equal(r.ok, false)
+  assert.match(!r.ok ? r.error : "", /^Couldn't read that just now\b/)
   assert.equal(requests.length, 2)
   assert.match(requests[1]!.prompt, /Your previous answer was:\nnot json\nIt was rejected: it was not one JSON object\./)
+  // The same for each way an answer is unusable twice: cut off, no time of day, a phrase not in the words.
+  for (const [text, answer] of [
+    ["every Monday at 9am triage new issues", '{"phrase": "every Monday at 9am", "rrule": "FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYM'],
+    ["every Monday triage new issues", monday({ phrase: "every Monday", rrule: "FREQ=WEEKLY;BYDAY=MO" })],
+    ["every  Monday at 9am triage new issues", monday()],
+  ] as const) {
+    const twice = scripted(answer, answer)
+    const unusable = await twice.interpreter.interpret({ text, tz: TZ })
+    assert.match(!unusable.ok ? unusable.error : "", /^Couldn't read that just now\b/, text)
+  }
 })
 
 test("a rule with no time of day is sent back, and the second answer is used", async () => {

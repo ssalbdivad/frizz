@@ -60,6 +60,10 @@ import { cleanThreadName, threadNameProblem } from "./thread-names.ts"
 
 export const SCHEDULE_INTERPRETER_MODEL = "sonnet"
 
+/** Two answers the interpreter could not use: a failed read (web lib/scheduleModelRead.ts `isFailedRead` keys on
+ *  "Couldn't read that just now"), never "no schedule". */
+const UNUSABLE_ANSWER = "Couldn't read that just now: the answer could not be used."
+
 const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"]
 
@@ -181,7 +185,12 @@ export function createScheduleInterpreter(deps: { complete?: ClaudeOneShot; now?
       const system = interpreterSystemPrompt()
       const clock = interpreterClock(nowMs, tz)
       let prompt = userPrompt(text, clock, existing)
-      let lastProblem = SCHEDULE_NOT_FOUND_COPY
+      // What the human hears when both answers were unusable — cut off, not JSON, no time of day, a phrase that is
+      // not in the words. That is a READ THAT FAILED, not a verdict on the words: until 2026-10-06 it was the
+      // not-found copy, which the box takes as "no schedule here" — Enter starts the thread at once, and the box
+      // caches it for 10m as the model's answer (fix round, D). It starts with the failure's own words, which the
+      // box and Change when recognise ("Couldn't check for a schedule", and nothing cached).
+      let lastProblem = UNUSABLE_ANSWER
       for (let attempt = 0; attempt < 2; attempt++) {
         let raw: string
         try {
@@ -190,7 +199,7 @@ export function createScheduleInterpreter(deps: { complete?: ClaudeOneShot; now?
           return { ok: false, error: `Couldn't read that just now: ${error instanceof Error ? error.message : String(error)}` }
         }
         const answer = parseAnswer(raw)
-        const retry = (problem: string, human = SCHEDULE_NOT_FOUND_COPY) => {
+        const retry = (problem: string, human = UNUSABLE_ANSWER) => {
           lastProblem = human
           prompt = `${userPrompt(text, clock, existing)}\n\nYour previous answer was:\n${raw.trim().slice(0, 2000)}\nIt was rejected: ${problem} Answer again with one JSON object.`
         }
