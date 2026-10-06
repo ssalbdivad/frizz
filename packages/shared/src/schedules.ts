@@ -357,6 +357,15 @@ const ScheduleFields = {
   backend: ScheduleBackend,
 }
 
+/** Where a rule came from, when it was not the model. `grammar` is the `SCHEDULE_GRAMMAR_VERSION` of the
+ *  bundle that read it, so a tab running an old bundle after a server upgrade is told to reload instead of
+ *  looping on a refused re-read (plans/schedule-live-reading.md §1.3.4). */
+export const ScheduleSource = z.object({
+  kind: z.literal("local"),
+  grammar: z.number().int().positive(),
+}).strict()
+export type ScheduleSource = z.infer<typeof ScheduleSource>
+
 /** A human's new schedule — the interpreter's result, confirmed. `tz` defaults to the reported zone. */
 export const CreateScheduleInput = z.object({
   title: ScheduleFields.title,
@@ -369,6 +378,13 @@ export const CreateScheduleInput = z.object({
   model: ScheduleFields.model,
   effort: ScheduleFields.effort.optional(),
   backend: ScheduleFields.backend.optional(),
+  /** The title is the browser's provisional one (`provisionalScheduleTitle`), so the server may rename it
+   *  once through the thread namer — only while nobody has touched the row since (plans/
+   *  schedule-live-reading.md §10.2). */
+  titleAuto: z.literal(true).optional(),
+  /** The rule came from the browser's local grammar, not the model: the server re-reads `whenText` with
+   *  the same grammar and refuses a version skew or a reading that moved (§10.1). */
+  source: ScheduleSource.optional(),
 }).strict()
 export type CreateScheduleInput = z.infer<typeof CreateScheduleInput>
 
@@ -388,6 +404,8 @@ export const UpdateScheduleInput = z.object({
   model: ScheduleFields.model.optional(),
   effort: ScheduleFields.effort.optional(),
   backend: ScheduleFields.backend.optional(),
+  /** As on create: a rule read by the local grammar, which the server re-derives from `whenText`. */
+  source: ScheduleSource.optional(),
 }).strict()
 export type UpdateScheduleInput = z.infer<typeof UpdateScheduleInput>
 
