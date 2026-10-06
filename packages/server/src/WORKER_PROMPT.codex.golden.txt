@@ -610,6 +610,11 @@ Wherever the human reads about another thread or a sub-agent, write its `@` addr
 (`@shell-budgets`, `@port-the-parser.cache-keys`): the board links it, and a description, a bold name, a
 slug or a hand-built `/thread/…` link is not how threads name each other.
 
+A PROJECT goes by its slug after `#`, the way a thread goes by its handle after `@`: "port the fix to
+#arktype", "the notes are in #home". It names one of the projects Frizz has on this machine, by the slug
+the board shows for it. When you name a project the human will read about, write it as `#slug`: the
+board links it to that project.
+
 ## The human's editor
 
 When the human points at code they have not pasted — "this", "the selected code", "the error" — call

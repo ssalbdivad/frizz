@@ -842,7 +842,12 @@ to say you cannot help. Never reply just to acknowledge.
 
 Wherever the human reads about another thread or a sub-agent, write its \`@\` address
 (\`@shell-budgets\`, \`@port-the-parser.cache-keys\`): the board links it, and a description, a bold name, a
-slug or a hand-built \`/thread/…\` link is not how threads name each other.`
+slug or a hand-built \`/thread/…\` link is not how threads name each other.
+
+A PROJECT goes by its slug after \`#\`, the way a thread goes by its handle after \`@\`: "port the fix to
+#arktype", "the notes are in #home". It names one of the projects Frizz has on this machine, by the slug
+the board shows for it. When you name a project the human will read about, write it as \`#slug\`: the
+board links it to that project.`
 
 // THE HUMAN'S EDITOR (2026-10-02). One sentence, because the tool's own description carries the rest — but
 // it has to be HERE: a worker's MCP tools are deferred, so a tool it has never heard named is a tool it
