@@ -57,6 +57,9 @@ const NEEDS_REAL_STACK = [
   "packages/web/src/components/fullscreenOpsInRail.e2e.test.ts",
   // Steps the real picker through ≥3 projects with icons, which only an `adhoc-stack.mjs` serves.
   "packages/web/src/components/projectPickerIcon.e2e.test.ts",
+  // Boots, seeds and tears down its OWN three stacks (17 projects at the heaviest), so it needs nothing
+  // from this script and is too slow for it: `FRIZZ_CAPACITY_E2E=1 nub run test <file>`, see its header.
+  "packages/web/src/capacityParity.e2e.test.ts",
 ];
 
 const args = process.argv.slice(2);
