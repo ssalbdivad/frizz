@@ -14,6 +14,7 @@ import {
   SCHEDULE_GRAMMAR_VERSION,
   SCHEDULE_READING_MOVED,
   parseScheduledRunPrompt,
+  readSchedulePhrase,
   scheduleRefusalOf,
   type BoardSnapshot,
   type ThreadView,
@@ -805,18 +806,53 @@ test("a local reading whose rule or start differs is refused as schedule-reading
   }
 })
 
-test("the server's clock decides: a minute rolling over between read and save moves the reading", async () => {
-  // Read in the browser at 14:39 UTC: "every day at 2:40pm" first runs at 14:40 today.
+test("the server's clock decides: a reading whose runs from now are the same is created at the server's start", async () => {
+  // Read in the browser at 14:39 UTC: "every day at 2:40pm" first runs at 14:40 today. Saved at 14:41 the
+  // same words start tomorrow — and every run from now on is the same run: created, at the server's start.
+  // (Until fix round 1 this was refused, and a browser whose clock ran behind the server's read the same
+  // start again, was refused a second time, and was told to reload.)
   const h = harness({ nowMs: T("2026-10-05T14:41:00Z") })
   try {
     const read = { ...WEEKLY, whenText: "every day at 2:40pm", rrule: "FREQ=DAILY;BYHOUR=14;BYMINUTE=40", dtstart: "2026-10-05T14:40" }
-    assert.throws(() => h.service.create({ ...read, source: LOCAL }), (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED)
-    // Read again at the server's clock, the same words start tomorrow, and that is created.
-    const again = h.service.create({ ...read, dtstart: "2026-10-06T14:40", source: LOCAL })
-    assert.equal(again.dtstart, "2026-10-06T14:40")
+    const made = h.service.create({ ...read, source: LOCAL })
+    assert.equal(made.dtstart, "2026-10-06T14:40", "stored as the server reads it")
+    assert.equal(made.nextRun!.occurrenceAt, new Date(T("2026-10-06T14:40:00Z")).toISOString())
   } finally {
     h.close()
   }
+})
+
+test("rederiveLocalReading: a start the clocks disagree on is accepted only when every run from now agrees (fix round 1)", () => {
+  const NY = "America/New_York"
+  // The skew repro: the browser reads "every 15 minutes" at 14:44:40 (first run 14:45), the server
+  // re-derives 30s later (first run 15:00). Same rule, same runs from the server's now.
+  const at = T("2026-10-05T14:44:40-04:00")
+  const read = readSchedulePhrase("every 15 minutes", { nowMs: at, tz: NY, scope: "field" })
+  assert.ok(read.kind === "exact")
+  assert.equal(read.dtstart, "2026-10-05T14:45")
+  for (const [skew, start] of [[2_000, "2026-10-05T14:45"], [30_000, "2026-10-05T15:00"], [90_000, "2026-10-05T15:00"]] as const) {
+    const dtstart = rederiveLocalReading(LOCAL, { whenText: "every 15 minutes", rrule: read.rrule, dtstart: read.dtstart, tz: NY }, at + skew)
+    assert.equal(dtstart, start, `server ${skew / 1000}s ahead: created, at the server's start`)
+  }
+  // Read identically: the start it was sent.
+  assert.equal(rederiveLocalReading(LOCAL, { whenText: "every 15 minutes", rrule: read.rrule, dtstart: read.dtstart, tz: NY }, at), "2026-10-05T14:45")
+  // A once is its start: a run the human saw that the server would not make is refused, never moved.
+  const once = readSchedulePhrase("today at 2:45pm", { nowMs: at, tz: NY, scope: "field" })
+  assert.ok(once.kind === "exact", "today at 2:45pm reads at 14:44:40")
+  assert.throws(
+    () => rederiveLocalReading(LOCAL, { whenText: "today at 2:45pm", rrule: once.rrule, dtstart: once.dtstart, tz: NY }, at + 30_000),
+    (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
+  )
+  // A count is anchored at its start: moving the start moves the last run, so it is refused too.
+  assert.throws(
+    () => rederiveLocalReading(LOCAL, { whenText: "every 15 minutes", rrule: `${read.rrule};COUNT=4`, dtstart: read.dtstart, tz: NY }, at + 30_000),
+    (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
+  )
+  // And a start that changes which runs come (an interval anchored elsewhere) is refused.
+  assert.throws(
+    () => rederiveLocalReading(LOCAL, { whenText: "every 2 days at 9am", rrule: "FREQ=DAILY;INTERVAL=2;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-07T09:00", tz: NY }, at),
+    (error: Error) => scheduleRefusalOf(error) === SCHEDULE_READING_MOVED,
+  )
 })
 
 test("a grammar version the server does not run is refused as schedule-grammar-stale, before any re-read", async () => {

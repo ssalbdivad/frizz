@@ -126,6 +126,9 @@ const NO_TASK_LINE = "Say what each run should do."
 const EMPTY_COPY = "Type what to do and when it runs, like “every weekday at 9am triage new issues”."
 const EVENT_COPY = "Schedules run on the clock. Try “every hour, check whether the build failed”."
 const STALE_COPY = "Frizz has updated since this page loaded. Reload the page to create this schedule."
+/** The server read the same words as a different first run twice: its clock and this page's disagree (a run
+ *  between the two). Reloading would not change that; reading again once they agree does. */
+const CLOCK_COPY = "This computer's clock is off from Frizz's. Press Enter to read it again."
 const UNPHRASABLE_COPY = "That schedule is too intricate to show here. Try saying it more simply, like “every Friday at 9am”."
 const UPDATED_FOR_TIME = "Updated for the current time. Press Enter to create."
 const UPDATED_TO_TYPED = "Updated to what you typed. Press Enter to create."
@@ -138,6 +141,7 @@ const PHONE_COPY: Readonly<Record<string, string>> = {
   [UPDATED_TO_TYPED]: "Updated to what you typed. Tap Create schedule.",
   [MODEL_UNREACHABLE_COPY]: "Couldn't read that just now. Tap the repeat button to try again.",
   [MODEL_BUDGET_COPY]: "Tap the repeat button to read it again.",
+  [CLOCK_COPY]: "This phone's clock is off from Frizz's. Tap the repeat button to read it again.",
 }
 export const phoneCopy = (copy: string): string => PHONE_COPY[copy] ?? copy
 
@@ -210,13 +214,15 @@ export function modeViewOf(a: {
   tz: string
   nowMs: number
   promptOf: (cut: string) => string
-  stale: string | null
+  /** Words the server refused for good from this page: a newer grammar (`grammar`, reload) or two clocks
+   *  that read a different first run (`clock`, read again). */
+  stale: { prose: string; why: "grammar" | "clock" } | null
   near: number | undefined
   hadModel: boolean
 }): ModeView {
   const { prose, shown } = a
   if (!prose.trim()) return { kind: "empty" }
-  if (a.stale !== null && a.stale === prose) return { kind: "copy", copy: STALE_COPY, rereads: false }
+  if (a.stale?.prose === prose) return a.stale.why === "clock" ? { kind: "copy", copy: CLOCK_COPY, rereads: true } : { kind: "copy", copy: STALE_COPY, rereads: false }
   if (!shown) return { kind: "reading", edited: false }
   const r = shown.reading
   // The words on screen were read before a half-typed word: Enter reads them again (§7, M4).
@@ -376,7 +382,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     keyOf: (text, at) => modelReadKey({ tz, nowMs: at, text }),
   }, { share: draftKey })
   const [notice, setNotice] = useState<{ prose: string; copy: string } | null>(null)
-  const [stale, setStale] = useState<string | null>(null)
+  const [stale, setStale] = useState<{ prose: string; why: "grammar" | "clock" } | null>(null)
   const movedOnce = useRef<string | null>(null)
   const [shake, setShake] = useState(0)
   const [flash, setFlash] = useState(0)
@@ -459,17 +465,22 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     onError: (error, job) => {
       const refusal = scheduleRefusalOf(error)
       // The server read the phrase differently at its clock (a minute rolled over, a midnight passed): read it
-      // again here and show that. A second refusal of the same words means the two cannot agree from this
-      // page, and so does a grammar version skew: the page has to reload (§10.1, §1.3.4).
-      if (refusal === SCHEDULE_READING_MOVED && job.local && movedOnce.current !== job.prose) {
-        movedOnce.current = job.prose
-        offer.force()
-        setNotice({ prose: job.prose, copy: UPDATED_FOR_TIME })
+      // again here and show that. A second refusal of the same words is this page's clock and the server's
+      // reading a different first run (the server already takes the same runs from another start, §10.1):
+      // reloading would not change that, so Enter reads it again — never the reload copy (fix round 1). Only
+      // a grammar version skew needs the page reloaded (§1.3.4).
+      if (refusal === SCHEDULE_READING_MOVED && job.local) {
+        setNotice(null)
+        if (movedOnce.current !== job.prose) {
+          movedOnce.current = job.prose
+          offer.force()
+          setNotice({ prose: job.prose, copy: UPDATED_FOR_TIME })
+        } else setStale({ prose: job.prose, why: "clock" })
         return
       }
       if (refusal) {
         setNotice(null)
-        setStale(job.prose)
+        setStale({ prose: job.prose, why: "grammar" })
         return
       }
       showToast(`Could not create the schedule: ${(error as Error).message.slice(0, 100)}`)

@@ -844,3 +844,29 @@ test("19. in the `c` dialog an open slash menu takes the first Esc, before the m
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
+
+test("20. the server refusing the same words twice is a clock disagreement: read again, never reload", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    // A page whose clock runs behind the server's re-reads the same first run, and is refused again.
+    const moved = "schedule-reading-moved: the server read those words differently just now"
+    await page.evaluate((m) => { window.__sched.createFail = [m, m] }, moved)
+    await accept(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await state(page))?.notice === "Updated for the current time. Press Enter to create.", 3_000), "the first refusal re-reads and says so")
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 2, 3_000))
+    assert.ok(await waitFor(async () => !!(await state(page))?.refusal, 3_000), "the second refusal shows a line")
+    let s = (await state(page))!
+    assert.equal(s.refusal, "This computer's clock is off from Frizz's. Press Enter to read it again.")
+    assert.doesNotMatch(s.refusal ?? "", /Reload/)
+    assert.equal(s.glyph, "on", "still in the mode")
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => !(await state(page))?.refusal && !!(await state(page))?.echo, 3_000), "Enter read it again")
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 3, 3_000), "and the next Enter creates")
+    s = (await state(page))!
+    assert.equal((await counts(page)).dispatch, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})

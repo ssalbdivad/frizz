@@ -180,33 +180,57 @@ function titleProblem(title: string): string | undefined {
  * with the local grammar arrives with `source: { kind: "local", grammar }`, and the server does not take the
  * browser's word for it: it reads `whenText` again with the SAME grammar (`scope: "field"`, where the whole
  * string must be the phrase — the phrase alone determines its rule, no window or chip around it) at its own
- * clock, in the schedule's zone, and writes only a rule that reads back IDENTICALLY, rrule and dtstart both.
+ * clock, in the schedule's zone, and writes only the rule it reads back: the same rrule, with the same runs.
  *
  * - A different grammar version refuses first (`schedule-grammar-stale`): a tab still running an old bundle
  *   after an upgrade would re-read the same old answer and be refused forever, so it is told to reload.
- * - Any other difference (`schedule-reading-moved`): "every day at 2:40pm" read at 2:39 and saved at 2:41
- *   now starts tomorrow, a midnight moved "tomorrow", or the page sent words it had not read. Nothing is
- *   written; the client reads the words again and shows what moved.
+ * - The same rule from another START is the two clocks disagreeing about which run comes first (a browser
+ *   behind the server, a slow request): "every 15 minutes" read at 14:44:40 starts 14:45, and at 14:45:10
+ *   starts 15:00. When every run from the server's now is the same run — the next 20, compared — it is
+ *   created at the server's start, which is what a re-read here would send. A COUNT is anchored at its
+ *   start (moving the start moves the last run) and a once IS its start, so those are never moved. Until fix
+ *   round 1 any start difference was refused, and a browser whose clock ran behind re-read the same start,
+ *   was refused again, and was told to reload (3.3% of Enter presses on "every 15 minutes" with a server
+ *   30s ahead).
+ * - Any other difference (`schedule-reading-moved`): "today at 2:40pm" read at 2:39 and saved at 2:41 has
+ *   no run left, a midnight moved "tomorrow", or the page sent words it had not read. Nothing is written;
+ *   the client reads the words again and shows what moved.
  *
- * A model reading carries no `source`: `checkSchedule` (validate) is its only gate, as it always was.
- * Exported for the property test that every local reading the prompt box can offer re-derives from its
- * phrase alone.
+ * Returns the start to store — the one sent, or the server's — or undefined with no `source`. A model reading
+ * carries no `source`: `checkSchedule` (validate) is its only gate, as it always was. Exported for the
+ * property test that every local reading the prompt box can offer re-derives from its phrase alone.
  */
 export function rederiveLocalReading(
   source: ScheduleSource | undefined,
   spec: { whenText: string; rrule: string; dtstart: string; tz: string },
   nowMs: number,
-): void {
-  if (!source) return
+): string | undefined {
+  if (!source) return undefined
   if (source.grammar !== SCHEDULE_GRAMMAR_VERSION) {
     throw new Error(`${SCHEDULE_GRAMMAR_STALE}: this page reads schedules with grammar v${source.grammar} and Frizz with v${SCHEDULE_GRAMMAR_VERSION}. Reload the page.`)
   }
   if (!isValidTimeZone(spec.tz)) throw new Error(`"${spec.tz}" is not an IANA time zone like America/New_York.`)
   const words = spec.whenText.trim()
+  const rrule = spec.rrule.trim()
+  const dtstart = spec.dtstart.trim()
   const reading = readSchedulePhrase(words, { nowMs, tz: spec.tz, scope: "field" })
-  if (reading.kind === "exact" && reading.rrule === spec.rrule.trim() && reading.dtstart === spec.dtstart.trim()) return
+  if (reading.kind === "exact" && reading.rrule === rrule) {
+    if (reading.dtstart === dtstart) return dtstart
+    if (!/(?:^|;)COUNT=/i.test(rrule) && sameRunsFrom({ rrule, dtstart, tz: spec.tz }, { rrule, dtstart: reading.dtstart, tz: spec.tz }, nowMs)) return reading.dtstart
+  }
   const got = reading.kind === "exact" ? `${reading.rrule} from ${reading.dtstart}` : `no exact rule (${reading.kind})`
-  throw new Error(`${SCHEDULE_READING_MOVED}: "${words}" reads as ${got} now, not ${spec.rrule.trim()} from ${spec.dtstart.trim()}. Read it again.`)
+  throw new Error(`${SCHEDULE_READING_MOVED}: "${words}" reads as ${got} now, not ${rrule} from ${dtstart}. Read it again.`)
+}
+
+/** The next 20 runs of two specs from `nowMs` are the same instants (and both have at least one). An interval
+ *  anchored elsewhere, or a default a start supplies (a weekday, a minute), differs within the first two. */
+function sameRunsFrom(a: { rrule: string; dtstart: string; tz: string }, b: { rrule: string; dtstart: string; tz: string }, nowMs: number): boolean {
+  const ca = compileSchedule(a)
+  const cb = compileSchedule(b)
+  if (!ca.ok || !cb.ok) return false
+  const ra = occurrencesAfter(ca.value, nowMs, 20)
+  const rb = occurrencesAfter(cb.value, nowMs, 20)
+  return ra.length > 0 && ra.length === rb.length && ra.every((ms, i) => ms === rb[i])
 }
 
 export function createScheduleService(deps: ScheduleServiceDeps): ScheduleService {
@@ -840,8 +864,9 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     if (storage.countLiveSchedules() >= SCHEDULES_PER_PROJECT_MAX) throw new Error(SCHEDULE_CAP_COPY)
     const nowMs = now()
     // A local reading is re-read before it is checked: the same clock for both, so the rule checkSchedule
-    // passes is the one the grammar read now.
-    rederiveLocalReading(source, spec, nowMs)
+    // passes is the one the grammar read now — from the start the server reads, when only that differs.
+    const start = rederiveLocalReading(source, spec, nowMs)
+    if (start !== undefined) spec = { ...spec, dtstart: start }
     validate(spec, nowMs)
     const row: ThreadScheduleRow = {
       id: newScheduleId(),
@@ -934,7 +959,8 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     }
     // A local reading is held to the words that will be STORED: the merged spec, so words sent without
     // their rule (or a rule without its words) must still read back as the stored pair.
-    rederiveLocalReading(source, spec, nowMs)
+    const start = rederiveLocalReading(source, spec, nowMs)
+    if (start !== undefined) spec.dtstart = start
     // Only a new RULE has to fire again; an ended schedule keeps the words it had.
     const ruleChanged = spec.rrule !== before.rrule || spec.dtstart !== before.dtstart || spec.tz !== before.tz
     if (ruleChanged || spec.title !== before.title || spec.backend !== before.backend || spec.effort !== before.effort) validate(spec, nowMs)

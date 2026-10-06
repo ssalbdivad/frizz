@@ -45,7 +45,7 @@ function reader(answers: Record<string, InterpretScheduleResult | "reading" | "f
   }
 }
 
-function view(text: string, opts: { answers?: Parameters<typeof reader>[0]; last?: Parameters<typeof reader>[1]; shown?: Published | null; stale?: string; hadModel?: boolean } = {}): ModeView {
+function view(text: string, opts: { answers?: Parameters<typeof reader>[0]; last?: Parameters<typeof reader>[1]; shown?: Published | null; stale?: { prose: string; why: "grammar" | "clock" }; hadModel?: boolean } = {}): ModeView {
   return modeViewOf({
     prose: text,
     shown: opts.shown === undefined ? published(text) : opts.shown,
@@ -183,7 +183,7 @@ test("M4 `changed`: words read before a half-typed word make Enter read again ra
 
 test("the stale-bundle copy, M5 empty, and the S states outside the mode", () => {
   const text = "every Monday at 9am triage new issues"
-  const stale = view(text, { stale: text })
+  const stale = view(text, { stale: { prose: text, why: "grammar" } })
   assert.equal(stale.kind, "copy")
   if (stale.kind === "copy") assert.equal(stale.copy, "Frizz has updated since this page loaded. Reload the page to create this schedule.")
   assert.equal(view("", { shown: null }).kind, "empty")
@@ -279,4 +279,20 @@ test("the human never confirms raw RRULE text: a model reading is phrased, or re
   }
   assert.equal(uiStateOf(true, false, null, refused).name, "M4")
   assert.notEqual(keyAction(uiStateOf(true, false, null, refused), "enter"), "create")
+})
+
+test("a clock disagreement is never the reload copy: Enter reads it again (fix round 1, rederive-refuses-same-runs-across-boundary)", () => {
+  // The server refused the same words twice as moved: this page's clock and the server's read a different
+  // first run. Reloading changes nothing about that; reading again once the clocks agree does.
+  const text = "every 2 hours check the deploy"
+  const clock = view(text, { stale: { prose: text, why: "clock" } })
+  assert.equal(clock.kind, "copy")
+  if (clock.kind === "copy") {
+    assert.doesNotMatch(clock.copy, /Reload|updated since/i)
+    assert.equal(clock.rereads, true)
+  }
+  assert.equal(keyAction(uiStateOf(true, false, null, clock), "enter"), "read")
+  assert.doesNotMatch(phoneCopy(clock.kind === "copy" ? clock.copy : ""), /\bEnter\b/)
+  // Other words are not held by it.
+  assert.notEqual(view("every 3 hours check the deploy", { stale: { prose: text, why: "clock" } }).kind, "copy")
 })
