@@ -5031,6 +5031,10 @@ export const DispatchInput = z.object({
   // board's own dispatch never sets it, so what the human types is never second-guessed. A plain string:
   // only its presence is read, and a caller id that is not a slug must not refuse the whole spawn.
   spawnedFrom: z.string().optional(),
+  // `spawn_thread` sets it: hold the answer until the new thread has its NAME (a caller's title at once,
+  // else the mint, bounded) and return its `@handle`, which is how one thread names another. The board's
+  // own dispatch leaves it off and is answered the moment the thread exists.
+  awaitHandle: z.boolean().optional(),
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
 

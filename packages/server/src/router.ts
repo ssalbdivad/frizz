@@ -158,6 +158,7 @@ import {
   addressSegments,
   subAgentAddress,
   subAgentChain,
+  threadHandle,
   subAgentHandle,
   MessageThreadInput,
   MessageThreadResult,
@@ -1206,6 +1207,28 @@ export function createRouter(ctx: AppContext) {
         return chain ? { ...row, address: subAgentAddress(threadHandle!, chain) } : row
       }),
     }
+  }
+
+  // THE NEW THREAD'S `@handle`, for `spawn_thread` (maintainer 2026-10-06: "threads should refer to other
+  // threads using the standard @ syntax"). The caller is told how to name what it spawned, and a link to
+  // a slug is not that: the board shows the thread by its handle, and the human and every other thread
+  // type that. A dispatch with no caller title is named by the mint, a short model call off the dispatch
+  // path, so this waits for it — bounded, because a slow or failed mint must not hold the caller's tool
+  // call: past the bound, or for a thread nothing will name, the answer carries no handle and the caller
+  // falls back to the link.
+  const SPAWNED_NAME_WAIT_MS = 10_000
+  // `on` is the project the thread started in — another one's when `spawn_thread` named a project, whose
+  // own namer mints the name and whose own storage holds the row.
+  async function spawnedHandle(slug: string, on: AppContext = ctx): Promise<string | undefined> {
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([
+      (on === ctx ? threadNamer() : on.threadNamer ?? fallbackNamer).named(slug),
+      new Promise<void>((resolve) => { timer = setTimeout(resolve, SPAWNED_NAME_WAIT_MS) }),
+    ])
+    clearTimeout(timer)
+    const row = on.storage.getSession(slug)
+    const name = row ? rowThreadName(row) : undefined
+    return name ? threadHandle(name) : undefined
   }
 
   // `read_thread` on a SUB-AGENT's address: the answer a thread gives, off the child's OWN transcript —
@@ -2732,24 +2755,27 @@ export function createRouter(ctx: AppContext) {
 
     dispatch: mutation({
       input: DispatchInput,
-      output: z.object({ slug: ThreadSlug, sessionId: z.string(), project: z.string().optional() }),
+      output: z.object({ slug: ThreadSlug, sessionId: z.string(), project: z.string().optional(), handle: z.string().optional() }),
       // Forward the picker-selected backend into the dispatch opts seam (Codex-support epic, Phase 3).
       // Omitted ⇒ the dispatcher defaults to "claude", so an old client (no backend field) is
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
         // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
-        const { spinoff, spinoffFrom, spinOff, spinOffFrom, project, spawnedFrom, ...rest } = input
+        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, project, spawnedFrom, ...rest } = input
         const request = spinoff ?? spinOff
         // A spinoff's project was chosen by the human with the request; `project` cannot redirect it.
         if (request) return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
         const target = await spawnTarget(project, spawnedFrom === undefined ? undefined : rest.prompt)
-        if (!target) return ctx.dispatcher.dispatch(rest, { backend: input.backend })
-        const started = await target.ctx.dispatcher.dispatch(rest, { backend: input.backend })
-        target.ctx.board.refresh()
-        // Named in the answer so the caller links `/project/<slug>/thread/…`: a bare `/thread/…` link
-        // resolves against the CALLER's project, where this thread is not.
-        return { ...started, project: target.slug }
+        const on = target?.ctx ?? ctx
+        const started = await on.dispatcher.dispatch(rest, { backend: input.backend })
+        if (target) target.ctx.board.refresh()
+        // Another project's thread is named in the answer, so a caller with no handle to give links
+        // `/project/<slug>/thread/…`: a bare `/thread/…` resolves against the CALLER's project.
+        const placed = target ? { ...started, project: target.slug } : started
+        if (!awaitHandle) return placed
+        const handle = await spawnedHandle(started.slug, on)
+        return handle ? { ...placed, handle } : placed
       },
     }),
 
@@ -5023,7 +5049,7 @@ export function createRouter(ctx: AppContext) {
         }
         const holder = namer.holder(input.title, input.slug)
         if (holder) {
-          return refuse(`another open thread is already named "${holder.name}" (thread ${holder.slug}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
+          return refuse(`another open thread is already named "${holder.name}" (@${handleOf(holder)}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
         }
         const accepted = ctx.storage.setAgentTitle(input.slug, input.title)
         if (accepted) ctx.board.refresh()

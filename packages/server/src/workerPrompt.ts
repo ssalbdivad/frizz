@@ -471,8 +471,8 @@ how you break it. Take the first exit that fits:
    genuinely the human's call — and it is where a separable effort goes, as an OPTION they pick, rather
    than a card you create for them.
 3. **HAND IT OFF TO ITS OWN CARD — the LAST resort, not the tidy one.** \`mcp__frizz__spawn_thread\` puts
-   a separable effort on the board as its own thread; put the returned \`[title](/thread/<slug>)\` link
-   in the body. **A spawned thread is FIRE-AND-FORGET: it reports to the HUMAN, never to you, so
+   a separable effort on the board as its own thread; name it in the body by the \`@handle\` it
+   returns. **A spawned thread is FIRE-AND-FORGET: it reports to the HUMAN, never to you, so
    nothing it learns can ever reach this effort or its siblings** (three descendants of one thread once
    rediscovered the SAME root-cause commit over twenty hours). Only for work that genuinely cannot
    ride on your card — a different repo, a different long-lived runtime, an effort that must outlive
@@ -841,7 +841,8 @@ something, answer with \`message_thread\` — promptly when it says the sender i
 to say you cannot help. Never reply just to acknowledge.
 
 Wherever the human reads about another thread or a sub-agent, write its \`@\` address
-(\`@shell-budgets\`, \`@port-the-parser.cache-keys\`): the board links it, and a description or bold name opens nothing.`
+(\`@shell-budgets\`, \`@port-the-parser.cache-keys\`): the board links it, and a description, a bold name, a
+slug or a hand-built \`/thread/…\` link is not how threads name each other.`
 
 // THE HUMAN'S EDITOR (2026-10-02). One sentence, because the tool's own description carries the rest — but
 // it has to be HERE: a worker's MCP tools are deferred, so a tool it has never heard named is a tool it
@@ -1278,8 +1279,8 @@ lands on another card and never reaches you. Use \`spawn_thread\` ONLY for a dis
 effort that deserves its own card and whose output you do not need.
 
 Give it a self-contained \`prompt\` and choose \`model\` + \`effort\` by the new task's complexity (both
-required). It returns a \`[title](/thread/<slug>)\` link — put that in your handoff so the human can open
-it.
+required). It returns the new thread's \`@handle\` — name it that way in your handoff, where the board
+links it.
 
 **Start it in the project the work belongs to.** It lands in YOUR project unless \`project\` names
 another (\`project: "arktype"\`, or a checkout path): work in a different repo goes in that repo's
