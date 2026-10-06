@@ -52,7 +52,10 @@ test("the contract bounds the work to the task, not only the stopping", () => {
 // it — 7 of 15 real markers — and the maintainer: "questions should always appear at the bottom of the
 // thread not in the middle any explanation should occur beforehand". The card draws itself at the bottom
 // of the handoff, the contract teaches writing the explanation FIRST, and it must still teach the
-// withdrawal — a question left out of the write-up is still open and still gates `done`.
+// withdrawal — a question left out of the write-up is still open and still gates `done`. (6) 2026-10-06
+// the contract stopped claiming the marker "draws nothing": the web never stopped rendering it (its
+// questionShadow.ts is upstream's), so the contract says what a marker does and tells the worker to write
+// none (plans/upstream-superset.md §3).
 test("the contract teaches that a registered question draws itself at the bottom, and how to unask one", () => {
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend)
@@ -87,8 +90,9 @@ test("the contract teaches that a registered question draws itself at the bottom
 
 // THE FREE-FORM ```question FENCE IS RETIRED (2026-09-11), and the contract has to say so where a worker
 // reads it — both in § Questions for the human and in the End-of-turn signals list, which is what a
-// worker reads when it STOPS. Since 2026-09-28 the empty placement marker is gone too, so the contract
-// carries no ```question fence of any shape.
+// worker reads when it STOPS. Since 2026-09-28 the contract teaches no placement marker either, so it
+// carries no ```question fence of any shape — but the web still RENDERS a marker (upstream's
+// questionShadow.ts, kept on purpose), so the contract must not claim one draws nothing (2026-10-06).
 test("the contract teaches ask as the only way to ask, and no question fence at all — not even the marker", () => {
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend)
@@ -108,6 +112,9 @@ test("the contract teaches ask as the only way to ask, and no question fence at 
     assert.doesNotMatch(c, /Fence a question you did NOT register/)
     assert.doesNotMatch(c, /```question ` block IS the handback/)
     assert.doesNotMatch(c, /was retired 2026-08-30;\s*a marker you still write draws nothing/)
+    // What the UI actually does with a marker, and the fork's advice: write none.
+    assert.doesNotMatch(c, /placement marker any more|empty question fence naming an id draws nothing/)
+    assert.match(c, /A placement marker — an empty `question` fence naming an id — draws the card where the fence sits instead\. Write none/)
     assert.doesNotMatch(c, /surface it as a ` ```question `/)
     assert.doesNotMatch(c, /ask a ```question/)
   }

@@ -631,8 +631,15 @@ The API call is the unit of cost, not the tokens you type: each message re-reads
 // that: 7 of 15 real markers on the maintainer's machine had prose under the card, one of them two
 // thousand characters of judgment calls and verification under a "move main now?" gate (maintainer:
 // "questions should always appear at the bottom of the thread not in the middle any explanation should
-// occur beforehand"). The web draws every card at the bottom of its rest now (web lib/questionShadow),
-// so the contract's job is the other half: the write-up has to be finished BEFORE the card.
+// occur beforehand"). A card no marker places is drawn at the bottom of its rest, so the contract's job
+// is the other half: the write-up has to be finished BEFORE the card.
+//
+// THE MARKER STILL RENDERS, AND THE CONTRACT SAYS SO. From 2026-09-28 to 2026-10-06 this section told
+// workers "an empty question fence naming an id draws nothing" — but web lib/questionShadow.ts is
+// upstream's file byte for byte and the drawer (ChatView) still draws a placed card in the marker's slot.
+// The fork keeps upstream's rendering, since it costs nothing (David 2026-10-06, plans/upstream-superset.md
+// §3 "Contract contradiction"), so the contract names the marker truthfully and keeps the fork's advice:
+// write none.
 const QUESTIONS = `## Questions for the human
 
 You run under a dashboard, not a live chat, so a question is a ROW the human still owes an answer to,
@@ -727,12 +734,12 @@ draws NOTHING: one question, one card, and answering the registered one is what 
 un-gates \`done\`. So the handoff's job is the reasoning around the ask, not the ask itself.
 
 **THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT.** Frizz draws
-a question at the BOTTOM of the handoff it is drawn at, below its last line, never inside it: the human
+a question at the BOTTOM of the handoff it is drawn at, below its last line: the human
 reads the whole write-up, then answers. So write it in that order — what you did and found, what the
 choice turns on, what each answer would set in motion — and let the ask be where it ends. Judgment
 calls, caveats and verification the human needs before answering go above the card; there is no below.
-(Nor is there a placement marker any more: an empty question fence naming an id draws nothing. It was
-retired 2026-09-28 for putting cards mid-handoff with the explanation underneath them.)
+(A placement marker — an empty \`question\` fence naming an id — draws the card where the fence sits
+instead. Write none: it puts the card mid-handoff with explanation under it.)
 
 **A QUESTION STAYS AT THE REST THAT ASKED IT.** Its card sits at the bottom of that handoff, whatever
 comes after — a wake, an answer to another card. At a later rest that still needs the answer, name it

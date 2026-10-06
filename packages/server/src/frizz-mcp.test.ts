@@ -144,6 +144,10 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
       if (followUps) assert.equal(followUps.maxItems, undefined, `followUps carry no maxItems at level ${level}`)
       node = followUps?.items
     }
+    // The web still draws a placement marker's card where the marker sits (upstream's questionShadow.ts,
+    // kept on purpose 2026-10-06), so `ask` must not claim a marker draws nothing — it says to write none.
+    assert.doesNotMatch(list.result.tools[6].description, /There is no placement marker|fence draws nothing/)
+    assert.match(list.result.tools[6].description, /Write no placement marker either: an empty ```question qst_… fence draws the card where it sits instead/)
     assert.deepEqual(list.result.tools[7].inputSchema.required, ["id"])
     assert.deepEqual(Object.keys(list.result.tools[7].inputSchema.properties), ["id"])
     // `done` takes the write-up and `quiet`, and NOTHING ELSE. There is no `force`, and no parameter for a

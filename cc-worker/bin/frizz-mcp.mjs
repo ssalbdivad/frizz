@@ -712,8 +712,9 @@ const ASK = {
     "at the BOTTOM of that rest's handoff, below its last line, whether you mention it or not — so " +
     "nothing you write can hide one, and nothing you write comes after it. PUT EVERY WORD OF " +
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
-    "motion. Never write the question itself into your handoff (one question, one card). There is no " +
-    "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
+    "motion. Never write the question itself into your handoff (one question, one card). Write no " +
+    "placement marker either: an empty ```question qst_… fence draws the card where it sits instead, " +
+    "mid-handoff.\n\n" +
     "AT EVERY LATER REST IT IS NO LONGER YOUR SIGN-OFF, and frizz does not redraw it under your newer " +
     "handoff — it stays where you asked it. Name it under `questions:` in an ```awaiting fence while you " +
     "still need the answer (its card is then drawn at that rest), or withdraw it with `unask`. A rest " +

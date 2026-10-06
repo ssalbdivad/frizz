@@ -805,12 +805,12 @@ draws NOTHING: one question, one card, and answering the registered one is what 
 un-gates `done`. So the handoff's job is the reasoning around the ask, not the ask itself.
 
 **THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT.** Frizz draws
-a question at the BOTTOM of the handoff it is drawn at, below its last line, never inside it: the human
+a question at the BOTTOM of the handoff it is drawn at, below its last line: the human
 reads the whole write-up, then answers. So write it in that order — what you did and found, what the
 choice turns on, what each answer would set in motion — and let the ask be where it ends. Judgment
 calls, caveats and verification the human needs before answering go above the card; there is no below.
-(Nor is there a placement marker any more: an empty question fence naming an id draws nothing. It was
-retired 2026-09-28 for putting cards mid-handoff with the explanation underneath them.)
+(A placement marker — an empty `question` fence naming an id — draws the card where the fence sits
+instead. Write none: it puts the card mid-handoff with explanation under it.)
 
 **A QUESTION STAYS AT THE REST THAT ASKED IT.** Its card sits at the bottom of that handoff, whatever
 comes after — a wake, an answer to another card. At a later rest that still needs the answer, name it
