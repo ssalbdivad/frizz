@@ -257,7 +257,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces, reorderWorkspaces
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, workingThread } from "@frizz/shared"
+import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread } from "@frizz/shared"
 import { EditorComposeInputSchema, EditorReviewTargetSchema, EditorSnapshotSchema, type EditorKind, type EditorReviewTarget, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
@@ -5617,8 +5617,10 @@ export function createRouter(ctx: AppContext) {
             const threads = snapshot.threads.filter((thread) => {
               // A thread's terminals ride its row (`terminals`), so the session rows are the whole list.
               if (thread.kind !== "session" || thread.foreign) return false
-              // Archived is Done, running or not — only the human reopens it (web groups.ts `sectionOf`).
-              if (thread.state === "archived") {
+              // Archived is Done unless its worker is still running: shared `sectionOf` lifts that row into
+              // Running until it rests (Colin 2026-07-10), so it travels with the open threads and the
+              // client bands it with the same function. Every other archived row is a Done count.
+              if (sectionOf(thread) === "inactive") {
                 done.push(thread)
                 return false
               }

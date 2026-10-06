@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import type { ThreadView } from "@frizz/shared"
-import { threadKey, type QueuesProject } from "./allQueues.ts"
+import type { ProjectCard, ThreadView } from "@frizz/shared"
+import { queuesProjects, threadKey, type QueuesProject } from "./allQueues.ts"
 import { listOverlay } from "./listBands.ts"
 import { phoneCounts, phoneDone, phoneProjects, phoneQueue, phoneSnoozed, phoneSubtitle } from "./phonePage.ts"
 
@@ -118,6 +118,18 @@ test("Snoozed and Done list every shown project's rows, most recently touched fi
   assert.deepEqual(names(phoneDone([alpha, beta], (p) => boards[p.id])), ["alpha:a-pinned", "alpha:a-new", "beta:b-mid", "alpha:a-old"])
   // A project whose board has not been read contributes nothing yet — never a guess.
   assert.deepEqual(names(phoneDone([alpha, beta], (p) => (p.id === "beta" ? boards.beta : undefined))), ["beta:b-mid"])
+})
+
+test("an archived thread whose worker is still running is under Working on the queue tab, never in Done", () => {
+  // Colin 2026-07-10: a running worker is never filed under Done, which is collapsed (a tab here). The
+  // server sends the row with the open threads; the same sectionOf bands it on every surface.
+  const draining = { ...done("a-draining", 1_000), runtime: "running" } as ThreadView
+  const finished = done("a-finished", 5_000)
+  const card = { id: "alpha", slug: "alpha", name: "alpha", path: "/w/alpha", lastOpenedAt: ago(0), stale: false, iconStatus: "none" } as ProjectCard
+  const [alpha] = queuesProjects([card], [{ projectId: "alpha", projectSlug: "alpha", projectName: "alpha", projectDir: "/w/alpha", threads: [draining], doneCount: 1 }])
+  assert.deepEqual(names(phoneQueue([alpha!])), ["alpha:a-draining"])
+  assert.equal(phoneCounts(phoneQueue([alpha!])).working, 1)
+  assert.deepEqual(names(phoneDone([alpha!], () => ({ threads: [draining, finished] }))), ["alpha:a-finished"])
 })
 
 test("the projects list leads with the busy ones, keeps Home last, and counts Ready and Working", () => {

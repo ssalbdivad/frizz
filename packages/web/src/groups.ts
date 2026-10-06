@@ -395,7 +395,9 @@ export function externalThreads(threads: readonly ThreadView[]): ThreadView[] {
 //                        timer wears it too — awaitingTimerWatch — the way a queued PR wait wears the
 //                        octocat. The band says parked; the mark says what it waits on.)
 //   • inactive         — state === "archived" (the only archiver is an explicit Archive / done-card
-//                        button). Rendered under the label DONE — the key and the label differ.
+//                        button) and at rest: an archived thread whose worker is still running lifts
+//                        into the Active band until it rests (sectionOf, Colin 2026-07-10). Rendered
+//                        under the label DONE — the key and the label differ.
 //   • legacy           — kind !== "session": vestigial .frizz-file rows, hidden entirely (null).
 // A FOREIGN session row (a maintainer terminal — no registry row, so no state/needsYou) is dropped
 // entirely (never rows). Order within a section is interaction recency.
@@ -650,11 +652,11 @@ export type SessionIndicatorKind = "archived" | "needs-input" | "working" | "bac
 // The prompt box's RecurringPromptControl carries the state instead, where it is legible and editable.
 
 export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
-  // DONE IS THE HUMAN'S TO UNDO, and nothing a worker does afterwards reads as undoing it — see
-  // `sectionOf`, which keeps the ROW under Done. But a live session never sits there SILENTLY
-  // (maintainer, hit 3× before 2026-07-10): while its turn drains or a sub-agent it dispatched is still
-  // out, the Done row wears the spinner (shared doneButRunning), and settles back to the check the moment
-  // it comes to rest. The mark says what the process is doing; the band says what the human decided.
+  // DONE IS THE HUMAN'S TO UNDO, and nothing a worker does afterwards un-archives the thread. But a live
+  // session never sits under Done (Colin, hit 3× before 2026-07-10): while its turn drains or a sub-agent
+  // it dispatched is still out, `sectionOf` lifts the row into Running and it wears the spinner (shared
+  // doneButRunning), then settles back into Done, with its check, the moment it comes to rest. The mark
+  // says what the process is doing; the row's Done dim and uncheck box say what the human decided.
   if (t.state === "archived") return doneButRunning(t) ? "working" : "archived"
   const activelyRunning = isActivelyRunning(t)
 

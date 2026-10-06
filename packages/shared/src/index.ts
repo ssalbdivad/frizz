@@ -4509,15 +4509,22 @@ export function sectionOf(t: ThreadView): SectionKey | null {
   // needs-you/awaiting distinction renders as the row INDICATOR and the queue cards, not as sections.
   // Legacy (.frizz-file) rows are HIDDEN entirely (null; not even a shelf). Foreign never rows.
   if (t.kind !== "session") return null
-  // Archived → Done, WHATEVER the worker is doing. Marking a thread done is reversible only by the
-  // human (maintainer 2026-09-24: "if something is marked as done ensure that the agent doesn't unmark
-  // it as done that should only be reversible by human"). Until then a running-yet-archived session
-  // was lifted back into Active as a safety net (maintainer 2026-07-10, hit 3×) — but that net was for a
-  // human BUMP, which now un-archives the row for real (server resume.ts
-  // `reopenArchivedThreadForFollowUp`). Everything that still reached it was the WORKER moving on its
-  // own after the human filed it: a sub-agent returning, a background shell finishing, a turn still
-  // draining. None of those is the human reopening it, so none of them moves the row.
-  if (t.state === "archived") return "inactive"
+  // Archived → Done, UNLESS it's actively running: a live, in-flight session must never sit under Done
+  // (Colin 2026-07-10, hit 3×). It shows in the Active band (labelled Running) with its spinner while it
+  // works, and drops back to Done the moment it comes to rest still archived. The STATE never moves —
+  // only the human reopens a thread (David 2026-09-24: "if something is marked as done ensure that the
+  // agent doesn't unmark it as done that should only be reversible by human"), and a human bump does
+  // that for real (server resume.ts `reopenArchivedThreadForFollowUp`). This is only where the row is
+  // DRAWN while its worker drains a last turn or waits on a sub-agent it dispatched.
+  //
+  // From 2026-09-24 (da8ebaf1) to 2026-10-06 the fork filed such a row in Done whatever its worker was
+  // doing, so the agent never appeared to unmark Done. But Done is collapsed by default, so a running
+  // worker filed there was invisible — the exact failure the lift-back exists for, and a break of the
+  // rule that each thread's rail is always in view (David 2026-10-06, adopting Colin's rule back). What
+  // da8ebaf1 guarded against is answered inside the lift instead: the lifted row keeps its Done dim and
+  // its uncheck box, which draws the spinner and reads "Done, still working" (doneButRunning), so it
+  // says both that the human filed it and that the worker is still finishing.
+  if (t.state === "archived" && !isActivelyRunning(t)) return "inactive"
   // Only truthful human/future-timer waiters split into the labeled, dimmed Snoozed band. Everything else
   // open — running, needs-you, bare rest, done-fenced, awaiting-its-own-subs, or an awaiting
   // `session`/hintless wait — belongs to the Active/Rested section, which band decided downstream.
@@ -4568,22 +4575,22 @@ export function activeBandThread(t: ThreadView): boolean {
  * DONE, AND STILL MOVING — a thread the human marked done whose session is actively running anyway: a
  * turn still draining, a sub-agent it dispatched still out.
  *
- * Its ROW stays in Done, because only the human reopens a thread (sectionOf, maintainer 2026-09-24). What
- * it must not do is sit there SILENTLY: a live, in-flight session filed under Done with a quiet check was
- * the bug the maintainer hit three times before 2026-07-10 ("a running thread must never sit silently
- * under Done"). So the row keeps its place and wears its spinner (web groups.ts sessionIndicatorKind),
- * and the rail's working count below includes it — the badge's spinner is "this project has work in
- * flight", and this is work in flight.
+ * Its row lifts back into the Active band (Running) while it moves (sectionOf, Colin 2026-07-10), and
+ * its STATE stays archived, because only the human reopens a thread (David 2026-09-24). This predicate is
+ * the "finishing" mark that says both: the row keeps the Done dim and its uncheck box, and the box draws
+ * the spinner (web groups.ts sessionIndicatorKind, Sidebar RowUncheckDone — "Done, still working").
  */
 export function doneButRunning(t: ThreadView): boolean {
   return t.kind === "session" && t.foreign !== true && t.state === "archived" && isActivelyRunning(t)
 }
 
 /**
- * The rail badge's RUNNING count: every Active-band row, plus every Done row still moving
- * (doneButRunning). Until 2026-09-24 the second half rode inside `activeBandThread` for free, because
- * sectionOf lifted a running-yet-archived row into Active; Done stopped moving rows, and the count has to
- * say so on its own or a project whose only live work was marked done reads as idle from the rail.
+ * The rail badge's RUNNING count: every Active-band row. A Done row still moving (doneButRunning) is one
+ * of them, because sectionOf lifts it into Active while it moves; from 2026-09-24 to 2026-10-06, while
+ * Done held such rows in place, this had to add them on its own or a project whose only live work was
+ * marked done read as idle from the rail. The OR is kept as a belt: it counts such a row even if it
+ * reached the client still carrying \`needsYou\` (the server clears that on archive, but the count should
+ * not hinge on it).
  */
 export function workingThread(t: ThreadView): boolean {
   return activeBandThread(t) || doneButRunning(t)
@@ -7440,8 +7447,9 @@ export type ProjectPickResult = z.infer<typeof ProjectPickResult>
  * it is. The page addresses each action through `/_frizz/<projectId>/rpc`, never through its own URL.
  *
  * `threads` is every OPEN session thread — the Queue, Running, Snoozed and Pinned rows the project's own
- * rail draws. Every ARCHIVED thread is Done — running or not, since only the human reopens one — and
- * Done grows without bound (553 rows on one real board), so it is `doneCount` here. A thread's
+ * rail draws, plus any ARCHIVED one whose worker is still running (sectionOf lifts it into Running until
+ * it comes to rest). Every other archived thread is Done, which grows without bound (553 rows on one real
+ * board), so it is `doneCount` here. A thread's
  * TERMINALS ride its row (`ThreadView.terminals`), and one waiting at a prompt queues that thread.
  * Foreign sessions (a project's own terminals) are left out; they are read-only and never queue. The
  * client bands every row with the same pure `groups.ts` functions the rail uses.

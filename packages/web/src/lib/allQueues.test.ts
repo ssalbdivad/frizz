@@ -137,15 +137,18 @@ test("with nothing registered, a question fence with a body is KEPT — on a leg
   assert.equal(parts.prose, "Pick one.")
 })
 
-test("an archived row an older server still sends is counted Done, working or not", () => {
+test("an archived row whose worker is still running is listed under Running; one at rest is counted Done", () => {
   const [project] = queuesProjects([card("a")], [queue("a", [
-    // A sub-agent still running does not lift an archived thread out of Done — only the human reopens it…
+    // A sub-agent still running lifts an archived thread into Running until it rests (Colin 2026-07-10):
+    // Done is collapsed, and a running worker filed there would be invisible. Its state stays archived.
     thread("sub-agent-out", { state: "archived", archived: true, subAgents: [{ id: "s1", state: "running", depth: 1 } as never] }),
-    // …and neither does a background wait.
+    thread("draining", { state: "archived", archived: true, runtime: "running" }),
+    // A background wait is not live work (an armed timer parks), so this one is Done — counted, as an
+    // older server that sent every archived row would have it.
     thread("parked", { state: "archived", archived: true, awaitingBackground: true, watches: [{ kind: "timer", state: "armed" }] as never }),
   ], { doneCount: 5 })])
-  assert.deepEqual(project!.running.map((t) => t.id), [])
-  assert.equal(project!.doneCount, 7)
+  assert.deepEqual(project!.running.map((t) => t.id).sort(), ["draining", "sub-agent-out"])
+  assert.equal(project!.doneCount, 6)
 })
 
 test("a thread's terminals ride its row: one at a prompt queues the thread, and no terminal rows on its own", () => {

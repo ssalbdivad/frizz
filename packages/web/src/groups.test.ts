@@ -575,45 +575,33 @@ test("sectionOf: running/needs-you land in the Active+Rested section; only truth
   assert.equal(sectionOf(thread({ kind: "session", foreign: true, runtime: "running" })), "active")
 })
 
-test("sectionOf: an ARCHIVED thread is Done whatever its worker is doing — only the human reopens it", () => {
+test("sectionOf: an ARCHIVED thread whose worker is running lifts into Running; at rest it is Done", () => {
+  // Colin 2026-07-10, hit 3×: a running thread must never sit under Done. Done is collapsed by default, so
+  // a worker filed there is invisible. This reverses da8ebaf1 (2026-09-24), which filed it in Done
+  // whatever its worker was doing; the state never changes — only the human reopens a thread.
   const sub = [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const, id: "a1" }]
   const shell = [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const }]
   for (const extra of [
-    { runtime: "turn-idle" as const },
-    { runtime: "exited" as const },
     { runtime: "running" as const },
     { runtime: "spawning" as const },
+    // A parent at rest with its own sub-agent out is live work too.
     { runtime: "turn-idle" as const, subAgents: sub },
-    { runtime: "turn-idle" as const, bgShells: shell },
   ]) {
+    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
+    assert.equal(sectionOf(t), "active", JSON.stringify(extra))
+    assert.equal(bandOf(t), "working", `lifted into Running, not the queue: ${JSON.stringify(extra)}`)
+    assert.equal(sessionIndicatorKind(t), "working", `and it spins there: ${JSON.stringify(extra)}`)
+    assert.equal(doneButRunning(t), true, `the finishing mark (Done dim + "Done, still working"): ${JSON.stringify(extra)}`)
+    assert.equal(workingThread(t), true, `the rail's working count carries it: ${JSON.stringify(extra)}`)
+    assert.equal(sectionThreads([t]).active.length, 1, "the rail lists it in the Active section")
+    assert.equal(partitionActive([t]).running.length, 1, "below the rule, in Running")
+  }
+  // NEGATIVE CONTROLS: at rest, exited, or holding nothing but a background shell (never live work,
+  // 2026-07-22) — Done, with the quiet check, and no working count.
+  for (const extra of [{ runtime: "turn-idle" as const }, { runtime: "exited" as const }, { runtime: "turn-idle" as const, bgShells: shell }]) {
     const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
     assert.equal(sectionOf(t), "inactive", JSON.stringify(extra))
     assert.equal(bandOf(t), "done", JSON.stringify(extra))
-  }
-})
-
-test("a RUNNING Done row wears its spinner in Done — never a silent check (maintainer, hit 3x)", () => {
-  // Restored from 7a20f425, where the spinner came with a lift into Active. The row stays in Done now
-  // (only the human reopens it); what it may not do is sit there looking finished while it works.
-  const sub = [{ label: "x", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const, id: "a1" }]
-  const shell = [{ label: "watch CI", startedAt: "2026-07-10T00:00:00.000Z", state: "running" as const }]
-  const moving = [
-    { runtime: "running" as const },
-    { runtime: "spawning" as const },
-    // A parent at rest with its own sub-agent out spins too (the ellipsis-in-spinner variant).
-    { runtime: "turn-idle" as const, subAgents: sub },
-  ]
-  for (const extra of moving) {
-    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
-    assert.equal(sessionIndicatorKind(t), "working", JSON.stringify(extra))
-    assert.equal(doneButRunning(t), true, JSON.stringify(extra))
-    assert.equal(workingThread(t), true, `the rail's working count carries it: ${JSON.stringify(extra)}`)
-    assert.equal(sectionOf(t), "inactive", "and it stays in Done")
-  }
-  // NEGATIVE CONTROLS: at rest, exited, or holding nothing but a background shell (never live work,
-  // 2026-07-22) — the quiet check, and no working count.
-  for (const extra of [{ runtime: "turn-idle" as const }, { runtime: "exited" as const }, { runtime: "turn-idle" as const, bgShells: shell }]) {
-    const t = thread({ kind: "session", state: "archived", archived: true, ...extra })
     assert.equal(sessionIndicatorKind(t), "archived", JSON.stringify(extra))
     assert.equal(workingThread(t), false, JSON.stringify(extra))
   }
@@ -1345,8 +1333,8 @@ test("bandOf: Snoozed, Done, External, and no band for a legacy row", () => {
   const future = new Date(Date.now() + 3_600_000).toISOString()
   assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", snoozedUntil: future })), "snoozed")
   assert.equal(bandOf(thread({ kind: "session", state: "archived", archived: true, runtime: "turn-idle" })), "done")
-  // A worker still running after Mark as done does not lift its row out of Done.
-  assert.equal(bandOf(thread({ kind: "session", state: "archived", archived: true, runtime: "running" })), "done")
+  // A worker still running after Mark as done lifts its row into Running until it rests (Colin 2026-07-10).
+  assert.equal(bandOf(thread({ kind: "session", state: "archived", archived: true, runtime: "running" })), "working")
   assert.equal(bandOf(thread({ kind: "session", foreign: true, runtime: "turn-idle" })), "external")
   // A terminal waiting at a prompt queues its THREAD (server board.withThreadTerminals); it has no row.
   assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: true, terminals: [{ id: "term-1", command: "npm publish", cwd: "/repo", state: "running", awaitingInput: true, runId: 1, startedAt: "2026-09-29T10:00:00.000Z" }] })), "ready")

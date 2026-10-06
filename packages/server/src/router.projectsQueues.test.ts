@@ -37,7 +37,8 @@ test("answers every open project with its open threads, its Done count and the i
           session("snoozed", { snoozedUntil: "2099-01-01T00:00:00.000Z" }),
           session("finished", { state: "archived" }),
           session("finished-2", { state: "archived" }),
-          // Archived is Done even while its worker is still moving — only the human reopens a thread.
+          // An archived thread whose worker is still moving travels with the open threads — the client's
+          // sectionOf lifts it into Running until it rests (Colin 2026-07-10) — and is not counted as Done.
           session("wrapping-up", { state: "archived", runtime: "running" }),
           session("sub-agent-out", { state: "archived", subAgents: [{ state: "running" } as never] }),
           session("sub-agent-back", { state: "archived", subAgents: [{ state: "completed" } as never] }),
@@ -62,9 +63,9 @@ test("answers every open project with its open threads, its Done count and the i
     { projectSlug: alpha!.projectSlug, projectName: alpha!.projectName, projectDir: alpha!.projectDir, homeDir: alpha!.homeDir, githubRepo: alpha!.githubRepo },
     { projectSlug: "alpha", projectName: "Alpha", projectDir: "/work/alpha", homeDir: "/home/me", githubRepo: "me/alpha" },
   )
-  assert.deepEqual(alpha!.threads.map((t) => t.id), ["queued", "running", "snoozed", "publishing"])
-  assert.equal(alpha!.doneCount, 5)
-  assert.deepEqual(alpha!.recentDone?.map((t) => t.id).sort(), ["finished", "finished-2", "sub-agent-back", "sub-agent-out", "wrapping-up"])
+  assert.deepEqual(alpha!.threads.map((t) => t.id), ["queued", "running", "snoozed", "wrapping-up", "sub-agent-out", "publishing"])
+  assert.equal(alpha!.doneCount, 3)
+  assert.deepEqual(alpha!.recentDone?.map((t) => t.id).sort(), ["finished", "finished-2", "sub-agent-back"])
   assert.deepEqual(alpha!.threads.find((t) => t.id === "publishing")?.terminals?.map((t) => t.id), ["term-otp"])
   assert.deepEqual(
     { projectSlug: beta!.projectSlug, projectName: beta!.projectName, projectDir: beta!.projectDir, threads: beta!.threads, doneCount: beta!.doneCount },

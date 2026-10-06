@@ -65,8 +65,8 @@ export function optimisticallyArchived(t: ThreadView, at: number | undefined, no
   if (at === undefined || nowMs - at > ARCHIVE_OPTIMISM_MS) return t
   // Server truth has landed — return BY IDENTITY so memoized rows skip the re-render.
   if (t.state === "archived") return t
-  // A thread still working is not predicted: completeThread asks before it stops one, and Done is no
-  // longer lifted for a running row, so predicting here would flash it under Done ahead of that ask.
+  // A thread still working is not predicted: completeThread asks before it stops one, so predicting here
+  // would dim the row (sectionOf keeps a running archived row in Running) ahead of that ask.
   if (isActivelyRunning(t)) return t
   return {
     ...t,
