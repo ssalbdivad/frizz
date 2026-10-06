@@ -331,7 +331,7 @@ ambiguous kind.
 
 ### 3.1 Contract
 ```ts
-export const SCHEDULE_GRAMMAR_VERSION = 2   // 1 until fix round 1 (2026-10-06)
+export const SCHEDULE_GRAMMAR_VERSION = 3   // 1 until fix round 1, 2 until fix round 2 (both 2026-10-06)
 
 export type Span = { start: number; end: number }                 // into the string given
 export type Edge = "open" | "close" | "inside" | "field"
@@ -435,6 +435,51 @@ were silently wrong; each is pinned in `schedule-phrase.test.ts` § "the break-i
   `the job that runs every Monday at 9am is broken, fix it` read EXACT inside the text before; they are cues with no
   core (why `condition`) now, because the words after the phrase make a statement about a schedule rather than set
   one. In the mode those texts go to the model rather than reading locally.
+
+*As built (fix round 2, 2026-10-06): `SCHEDULE_GRAMMAR_VERSION = 3`.* A second break-it pass found seven more ways an
+exact reading was silently wrong, each a NEW member of a class round 1 had closed with a list (its `l-prefix`
+measure: 1,358 silent prefixes in 3,000 reads, 404 offered in the box). Pinned in `schedule-phrase.test.ts` §
+"the break-it battery, round 2":
+- **WHEN is read by closed classes, not lists.** A task opens with an imperative, and English has a fixed stock
+  of prepositions, subordinators and modals, none of which can open one. Right after a phrase (and opening a
+  clause before one): words of time or condition whatever follows (`after`, `until`, `'til`, `following`,
+  `given`, `providing`, `barring`, `upon`, a modal other than a request's `could you`, `right after`, `10 minutes
+  before`, `<x> permitting`, `post-`/`pre-`, a count or a second frequency) are always unread WHEN
+  (`WHEN_ALWAYS`); prepositions that place a task as often as they time it (`on main`, `to keep CI green`, `with
+  the new client`, `by priority`) are WHEN only before a word of time (`WHEN_IF_TIME` + `TEMPORAL_NEXT`, a
+  closed set: numbers, clock and calendar words, units, ordinals, span limits, the events a schedule hangs on).
+  `via`, `per`, `using`, `because` and the verbs `post`, `back`, `round`, `save` are in neither. Round 1's lists
+  still run first and keep their words. Measured: the reviewer's measure 1,358 → 0; a held-out set written
+  BEFORE the change and never tuned against 529 → 9 of 3,060 (none offered in the box), a second written after
+  it 14 of 2,520 (none offered); both residues fixed in class and pinned (`ROUND2_HELD_OUT`). Of 26 realistic
+  requests none changed (the first cut, every preposition, had turned `every night at 2 on main, run the full
+  suite` into a cue).
+- **`at` after a phrase always names a time** (`every hour at half past`, `at xx:30`, `at lunch`, `at the
+  all-hands`); a colon minute (`, :45`, `and :35`), number words past twelve (`9 thirty`, `oh nine hundred`) and
+  `noon-thirty` are clock leftovers; `and again at 5`, `then at 5`, `and later at 5` are compounds; `to 5` is
+  WHEN. A guess that lands on an hour the list STATES is the other one: `at 6 and 18` is `BYHOUR=6,18`.
+- **A count glued to an adverb is one vague core** (`twice daily`, `3x weekly`, `semi-weekly`, `half-hourly`,
+  `bi-hourly`), like `twice a week`; the adverb alone read once a period.
+- **An adjective that limits which days** (`alternate`, `odd`, `even`, `most`, `some`, `select`, `the first
+  two`, `the remaining`) before a phrase is unread, why `vague`, with the core kept (every reading is a subset).
+- **Abbreviated calendar words**: month abbreviations join `CAL_WORD`; anywhere, a month before a day or a
+  span (`Oct 12-30`, `(Oct–Dec)`), a weekday in a span or list or after a no (`Mon–Fri`, `Sat/Sun`, `not Sat`),
+  `EOQ`/`EOY`, `in H2`, `for 2 wks`, `— 2 weeks`, `x14` (never `x86`), `14 runs max`, `through <date>`, `for
+  the rest of`, `stop after`, and the conditions `only while`, `as long as`, `providing`, `barring`.
+- **Zones**: NZT, AET, SAST, BRT, AST, WIB, IDT, PHT, ICT, PST8PDT and kin; CAT, EAT, ART, WAT only in capitals
+  (`every morning cat the error log` is a command); a hand-picked city list (not `Intl.supportedValuesOf`, whose
+  ICU differs between browser and server — this box's node has no `Kyiv`, and the server re-derives what the
+  browser read); a bare ASCII offset (`-0500`, `-05:00`; `9am-5pm` stays a window).
+- **A second frequency said as one** (`…, fortnightly is fine`) anywhere is a compound; as an adjective (`the
+  weekly digest`) it is not.
+- **Deviation — cores.** A cue whose unread words ADD runs (a count, a conjoined or second rule) or move a STATED
+  clock (`at 9 thirty`, `every hour at half past`) carries no core; an assumed time is no constraint, so `every
+  Friday at lunch` keeps `every Friday`. With the core kept, the model's faithful answer could never pass
+  `readingsConsistent` (§4.3) and Create was disabled: that was already true of every compound pinned with a
+  core (`every Monday at 9am and Friday at 5pm` would have been the disagree state), so those six pins lost it.
+  A ZONE moves every run, and the interpreter writes `9am NZT` as this box's wall clock (Sunday 4pm in New
+  York), so a zone cue carries no core either — round 1's touching zones (`Berlin time`) kept one and would have
+  refused the right answer; the clock's own zone (`9 PT`) never had one.
 
 ### 3.2 Phrase families (exact)
 | | Family | Examples | Reading |
@@ -638,6 +683,9 @@ Found while computing §3.3; each one is pinned by a test.
   assumed part is not a constraint.
 
 A condition, COUNT or UNTIL can only remove runs, so a faithful reading always passes.
+*As built (fix round 2):* that holds only for unread words that REMOVE runs. A cue whose unread words add runs (a
+second rule, a count) or move a clock the human stated carries no `core`, so a faithful answer is never the
+disagree state (§3.1 as built, "cores").
 
 *As built (fix round 1):*
 - **(b) holds an assumed day to the core's frequency** (X5). With both a day and a time assumed (`every week unless
@@ -1007,6 +1055,12 @@ the row up.
   - **Lifetime:** it survives remounts and same-tab reloads, and it is cleared in the same synchronous call that
     clears the prompt (`clearDispatchDraft`).
   - **Model readings** are not stored. They are re-derivable, and a reload in the mode re-reads.
+  - *As built (fix round 2, carry-drops-mode):* **it moves with the text.** The All-projects box re-aimed at
+    another project (its picker, ⌥↑/⌥↓) moved the text and left the mode filed under the old project; driven on
+    a real stack, Tab → re-aim → Enter DISPATCHED the text, and the orphaned `{on:true}` put the next text typed
+    back there straight into the mode. `carryDispatchDraft` (`scheduleDraftState.ts`) is now the one way the
+    draft moves: the mode and its dismissals land in the commit the text lands in (`DraftStore.setMany`),
+    replacing what the target held, and leave in the same commit. Still only into an empty box.
 - **I-5. Enter's meaning is always on screen.**
   - With an offer, the ledge prints `↵ Start now`.
   - In the mode, the send button shows `Repeat` and the title `Create schedule (Enter)`.
@@ -1467,6 +1521,11 @@ prompts get an offer, or more than 0.25% get an open-edge exact offer. Print the
   mid-word prefix" holds by construction there, so the grammar's own share is pinned instead: a half-typed word is
   never a typo.
 - Performance pins the warm path at the §15.1 numbers and the cold first read under 50ms (§2.2 as built).
+
+*As built (fix round 2):* § "the break-it battery, round 2" adds seven tests, one per finding class, each red on the
+round-1 grammar first; the no-silent-prefix property over `ROUND2_QUALIFIERS` (the reviewer's 56, by class),
+`ROUND2_HELD_OUT` (the two held-out sets) and `SECOND_SENTENCES`, in the five placements, both scopes and the
+field. `scheduleDraftState.test.ts` pins the carry. The history gate re-ran at v3: 0 offers in 1,296 prompts.
 
 ### 15.2 Real browser e2e
 **`components/composerScheduleLive.e2e.test.ts`** follows the pattern of `composerMentionTypeahead.e2e.test.ts`:
