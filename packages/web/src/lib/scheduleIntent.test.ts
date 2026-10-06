@@ -12,6 +12,7 @@ import {
   SCHEDULE_KEYS,
   SCHEDULE_STATES,
   draftAfter,
+  draftAfterUndo,
   inMode,
   keyAction,
   sendGlyphOf,
@@ -115,6 +116,18 @@ test("§8: entering explicitly re-arms every edge; Esc in the mode leaves AND di
   assert.deepEqual(draftAfter("dismiss", { v: 1, on: false, dismissed: {} }, "close"), { v: 1, on: false, dismissed: { close: true } })
   // With no edge to dismiss (a mid-text reading), nothing is set.
   assert.deepEqual(draftAfter("dismiss", { v: 1, on: false, dismissed: {} }), { v: 1, on: false, dismissed: {} })
+})
+
+test("I-3 and Undo: Undo puts back the pre-accept dismissals, and never ends a mode entered since", () => {
+  const preAccept = { open: true as const }
+  // The create left the draft off (it cleared the record): Undo restores what the accept took.
+  assert.deepEqual(draftAfterUndo({ v: 1, on: false, dismissed: {} }, preAccept), { v: 1, on: false, dismissed: { open: true } })
+  // The human pressed Tab on NEW text before Undo (fix round 1, X1): that mode is theirs, for that text. Undo
+  // deletes the old schedule and merges its text back, but the record it finds is the one it leaves — Undo
+  // is not among the explicit acts that turn the mode off.
+  const since = { v: 1 as const, on: true, dismissed: {} }
+  assert.equal(draftAfterUndo(since, preAccept), since)
+  assert.equal(draftAfterUndo(since, {}).on, true)
 })
 
 test("Tab accepts only on an acceptable offer (S1, S2); everywhere else it is the browser's", () => {

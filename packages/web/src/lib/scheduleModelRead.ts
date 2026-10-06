@@ -100,6 +100,23 @@ export function modelRefusalCopy(result: Extract<InterpretScheduleResult, { ok: 
   return /^Couldn't read that just now\b/.test(result.error) ? MODEL_UNREACHABLE_COPY : result.error
 }
 
+/**
+ * The model's offsets, moved onto the text the box SENT. The server parses the request with
+ * `InterpretScheduleInput`, whose `text` is trimmed, so the interpreter's `phraseStart`/`phraseEnd` index the
+ * trimmed text: a prompt that starts with a newline (Shift-Enter first) or a pasted space drew every model mark
+ * that many characters late, and cut the wrong words out of Each run ("y post the digest") — fix round 1, X8.
+ * The trimmed lead is added back unless the offsets already slice the phrase out of the sent text (a server
+ * that does not trim). `phrase` is always `text.slice(start, end)` of what the interpreter read.
+ */
+export function alignModelOffsets(sent: string, result: InterpretScheduleResult): InterpretScheduleResult {
+  if (!result.ok) return result
+  const lead = sent.length - sent.trimStart().length
+  if (!lead) return result
+  const slices = (by: number) => sent.slice(result.phraseStart + by, result.phraseEnd + by) === result.phrase
+  if (slices(0) && !slices(lead)) return result
+  return { ...result, phraseStart: result.phraseStart + lead, phraseEnd: result.phraseEnd + lead }
+}
+
 // ---- the reader: single flight, budget ------------------------------------------------------------------
 
 export type ModelReadView =
@@ -170,7 +187,8 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
       call = Promise.reject(error)
     }
     call.then(
-      (result) => {
+      (answer) => {
+        const result = alignModelOffsets(text, answer)
         if (isModelVerdict(result)) remember(key, result, now())
         else {
           answers.set(text, result)
@@ -249,17 +267,52 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
   }
 }
 
-/** One reader per box for the component's lifetime, re-rendering it whenever what it knows changes. The
- *  latest `interpret` and `keyOf` are always the ones called, so a reader never reads with a stale schedule. */
-export function useModelReader(deps: ModelReaderDeps): ModelReader {
+/** The readers boxes share, by draft (`useModelReader`'s `share`). One per draft key the tab has opened — a
+ *  handful — each holding at most 20 answers; kept for the tab, like the cache. */
+const sharedReaders = new Map<string, { deps: { current: ModelReaderDeps }; reader: ModelReader }>()
+
+function readerOver(deps: { current: ModelReaderDeps }): ModelReader {
+  const first = deps.current
+  return createModelReader({
+    interpret: (text) => deps.current.interpret(text),
+    keyOf: (text, nowMs) => deps.current.keyOf(text, nowMs),
+    ...(first.now ? { now: () => deps.current.now!() } : {}),
+    ...(first.budget !== undefined ? { budget: first.budget } : {}),
+  })
+}
+
+/**
+ * The reader for every box on one draft. The `c` dialog and the page box under it edit ONE draft and show one
+ * mode (lib/scheduleDraftState.ts), so they must share one flight and one budget: with a reader each, Tab in
+ * the dialog sent its explicit read and the hidden page box's own idle sent the same text again 700ms later —
+ * two Sonnet calls per mode entry and per idle edit (fix round 1, X2). With one, the second box's request finds
+ * that text already out and sends nothing, and the answer lands in both. The latest box to render supplies
+ * `interpret` and `keyOf`.
+ */
+export function sharedModelReader(key: string, deps: ModelReaderDeps): ModelReader {
+  let entry = sharedReaders.get(key)
+  if (!entry) {
+    const holder = { current: deps }
+    entry = { deps: holder, reader: readerOver(holder) }
+    sharedReaders.set(key, entry)
+  }
+  entry.deps.current = deps
+  return entry.reader
+}
+
+/** Tests only: forget the shared readers. */
+export function clearSharedModelReaders(): void {
+  sharedReaders.clear()
+}
+
+/** A reader for the component's lifetime — or, with `share`, the one every box on that draft uses — and a
+ *  re-render whenever what it knows changes. The latest `interpret` and `keyOf` are always the ones called, so
+ *  a reader never reads with a stale schedule. */
+export function useModelReader(deps: ModelReaderDeps, opts: { share?: string } = {}): ModelReader {
   const latest = useRef(deps)
   latest.current = deps
-  const [reader] = useState(() => createModelReader({
-    interpret: (text) => latest.current.interpret(text),
-    keyOf: (text, nowMs) => latest.current.keyOf(text, nowMs),
-    ...(deps.now ? { now: () => latest.current.now!() } : {}),
-    ...(deps.budget !== undefined ? { budget: deps.budget } : {}),
-  }))
+  const [own] = useState(() => (opts.share === undefined ? readerOver(latest) : null))
+  const reader = opts.share === undefined ? own! : sharedModelReader(opts.share, deps)
   const [, bump] = useReducer((n: number) => n + 1, 0)
   useEffect(() => reader.subscribe(bump), [reader])
   return reader

@@ -7,9 +7,9 @@ import assert from "node:assert/strict"
 import { readFileSync } from "node:fs"
 import test from "node:test"
 import { readSchedulePhrase, type InterpretScheduleResult } from "@frizz/shared"
-import { modeViewOf, needsModel, t3, uiStateOf, type ModeView } from "./ScheduleComposer.tsx"
+import { modeViewOf, needsModel, phoneCopy, t3, uiStateOf, type ModeView } from "./ScheduleComposer.tsx"
 import { keyAction } from "../lib/scheduleIntent.ts"
-import type { ModelReadOk, ModelReadView } from "../lib/scheduleModelRead.ts"
+import { MODEL_BUDGET_COPY, MODEL_UNREACHABLE_COPY, type ModelReadOk, type ModelReadView } from "../lib/scheduleModelRead.ts"
 import type { Published } from "../lib/scheduleOffer.ts"
 
 const NY = "America/New_York"
@@ -247,4 +247,36 @@ test("I-12: no accent before accept — the offer's marks and its ledge are draw
   const ledge = source.slice(source.indexOf("function LedgeLine("), source.indexOf("function EchoLine("))
   assert.ok(ledge.length > 500, "found the ledge's source")
   assert.doesNotMatch(ledge, /accent/, "the ledge never uses the accent")
+})
+
+test("the phone has no keys: every line that says Press Enter says what to tap there instead (fix round 1, X7)", () => {
+  const source = readFileSync(new URL("./ScheduleComposer.tsx", import.meta.url), "utf8")
+  // Every copy constant in this file that names a key, plus the model tier's two.
+  const keyed = [...source.matchAll(/^const [A-Z_]+ = "([^"]*\b(?:Press|Enter)\b[^"]*)"/gm)].map((m) => m[1]!)
+  assert.ok(keyed.length >= 2, `found the keyed copy: ${JSON.stringify(keyed)}`)
+  for (const copy of [...keyed, MODEL_UNREACHABLE_COPY, MODEL_BUDGET_COPY]) {
+    const phone = phoneCopy(copy)
+    assert.doesNotMatch(phone, /\b(?:Press|Enter|Esc|Tab)\b/, `${copy} → ${phone}`)
+    assert.match(phone, /\bTap\b/, `the phone line says what to tap: ${phone}`)
+  }
+  assert.equal(phoneCopy("Say what each run should do."), "Say what each run should do.", "copy with no key is the same on the phone")
+})
+
+test("the human never confirms raw RRULE text: a model reading is phrased, or refused (fix round 1, model-raw-rrule-echo)", () => {
+  // Real Sonnet's answer to "every Friday except in December…": phrased now, and consistent with the core.
+  const text = "every Friday except in December write the changelog"
+  const dec = answer(text, "every Friday except in December", { rrule: "FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-09T09:00", title: "Changelog" })
+  const phrased = view(text, { answers: { [text]: dec }, last: { text, result: dec } })
+  assert.equal(phrased.kind, "model", JSON.stringify(phrased))
+  // A rule no words cover: refused with copy, never echoed as `on the rule FREQ=…`, and nothing to create.
+  const odd = "write the changelog sometimes"
+  const raw = answer(odd, "sometimes", { rrule: "FREQ=YEARLY;BYDAY=20MO;BYHOUR=9;BYMINUTE=0", dtstart: "2027-05-17T09:00" })
+  const refused = view(odd, { answers: { [odd]: raw }, last: { text: odd, result: raw } })
+  assert.equal(refused.kind, "copy", JSON.stringify(refused))
+  if (refused.kind === "copy") {
+    assert.doesNotMatch(refused.copy, /FREQ=|on the rule/)
+    assert.equal(refused.rereads, false, "reading the same words again would give the same rule")
+  }
+  assert.equal(uiStateOf(true, false, null, refused).name, "M4")
+  assert.notEqual(keyAction(uiStateOf(true, false, null, refused), "enter"), "create")
 })

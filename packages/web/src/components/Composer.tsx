@@ -269,6 +269,7 @@ export function Composer({
   onLazyBlocked,
   onEscape,
   sendGlyph = "send",
+  sendTitle,
   lazyBlocked = false,
   attachBase,
   phone,
@@ -390,6 +391,9 @@ export function Composer({
   // caller's schedule mode is on: Send wears the repeat glyph and says "Create schedule", because Enter and a
   // click there create the schedule on screen and start nothing. The glyph and Enter's act never disagree.
   sendGlyph?: "send" | "schedule"
+  // The send button's title, when the caller knows better than the default — a phone in the schedule mode,
+  // which has no Enter to name (plans/schedule-live-reading.md §12).
+  sendTitle?: string
   // The lazy save is closed (schedule mode, I-2): the snail is disabled with a title saying how to reach it,
   // and ⌘/Ctrl-Shift-Enter is consumed rather than saving or falling through to the textarea.
   lazyBlocked?: boolean
@@ -1643,7 +1647,7 @@ export function Composer({
         onClick={onSubmit}
         // `uploading` mirrors the Enter gate above: sending mid-upload dropped the pending attachment.
         disabled={!hasContent || busy || uploading}
-        title={sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`}
+        title={sendTitle ?? (sendGlyph === "schedule" ? "Create schedule (Enter)" : `Send (Enter · ${interruptChord} sends now)`)}
         aria-label={sendGlyph === "schedule" ? "Create schedule" : "Send"}
         data-composer-send={sendGlyph}
         // Never `transition-all`: it animates box-shadow, which holds the hover edge back (styles.css).

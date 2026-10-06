@@ -3,7 +3,7 @@
 // edit that touches its phrase.
 import assert from "node:assert/strict"
 import test from "node:test"
-import { SCHEDULE_NOT_FOUND_COPY, type InterpretScheduleResult } from "@frizz/shared"
+import { InterpretScheduleInput, SCHEDULE_NOT_FOUND_COPY, cutPhrase, locatePhrase, type InterpretScheduleResult } from "@frizz/shared"
 import {
   MODEL_CACHE_MAX,
   MODEL_CACHE_TTL_MS,
@@ -11,11 +11,13 @@ import {
   MODEL_UNREACHABLE_COPY,
   cachedModelRead,
   clearModelReadCache,
+  clearSharedModelReaders,
   createModelReader,
   isModelVerdict,
   modelReadKey,
   modelRefusalCopy,
   relocateModelReading,
+  sharedModelReader,
   type ModelReadOk,
 } from "./scheduleModelRead.ts"
 
@@ -235,4 +237,51 @@ test("with two copies of the phrase, the one near where it was is the reading's"
   const at = relocateModelReading(prose, { text: read, result })
   assert.deepEqual(at?.span, { start: prose.lastIndexOf("twice a week"), end: prose.lastIndexOf("twice a week") + 12 })
   assert.equal(at?.prompt, "twice a week check the deps, and say in the summary")
+})
+
+test("the model's offsets index the text the box SENT, though the server reads it trimmed (fix round 1, X8)", async () => {
+  // The server parses the request with InterpretScheduleInput, whose `text` is `.trim()`ed, and the
+  // interpreter's offsets index THAT. A prompt that starts with a newline (Shift-Enter first) or a pasted
+  // space put every model mark one character late: the panel read "Each run: y post the digest".
+  const { r, held } = reader()
+  const sent = "\n  every Monday unless it's a holiday post the digest"
+  r.request(sent)
+  const parsed = InterpretScheduleInput.parse({ text: held.asked[0] })
+  const span = locatePhrase(parsed.text, "every Monday unless it's a holiday")!
+  held.pending[0]!.resolve(ok(parsed.text, "every Monday unless it's a holiday", { prompt: cutPhrase(parsed.text, span) }))
+  await settle()
+  const v = r.view(sent)
+  assert.ok(v.status === "answered" && v.result.ok)
+  assert.equal(sent.slice(v.result.phraseStart, v.result.phraseEnd), "every Monday unless it's a holiday")
+  const last = r.lastAnswer()!
+  assert.ok(last.result.ok)
+  assert.equal(sent.slice(last.result.phraseStart, last.result.phraseEnd), "every Monday unless it's a holiday")
+  assert.equal(relocateModelReading(sent, { text: last.text, result: last.result })?.prompt, "post the digest")
+  // A server that did NOT trim (offsets already into the sent text) is left as it is.
+  const { r: r2, held: held2 } = reader()
+  r2.request(sent)
+  held2.pending[0]!.resolve(ok(sent, "every Monday unless it's a holiday"))
+  await settle()
+  const v2 = r2.view(sent)
+  assert.ok(v2.status === "answered" && v2.result.ok)
+  assert.equal(sent.slice(v2.result.phraseStart, v2.result.phraseEnd), "every Monday unless it's a holiday")
+})
+
+test("one reader per draft: two boxes on one draft send one read for one text (fix round 1, X2)", async () => {
+  clearModelReadCache()
+  clearSharedModelReaders()
+  const held = heldInterpreter()
+  const deps = { interpret: held.interpret, keyOf: (text: string, nowMs: number) => modelReadKey({ tz: NY, nowMs, text }), now: () => NOW }
+  const dialog = sharedModelReader("draft:/a", deps)
+  const page = sharedModelReader("draft:/a", deps)
+  assert.equal(dialog, page, "the dialog and the page box under it read through one reader")
+  const text = "every Monday unless it's a holiday post the digest"
+  dialog.request(text, { explicit: true })
+  page.request(text)
+  assert.deepEqual(held.asked, [text], "the second box finds the text already out")
+  held.pending[0]!.resolve(ok(text, "every Monday unless it's a holiday"))
+  await settle()
+  assert.equal(page.view(text).status, "answered", "and the answer lands in both")
+  assert.notEqual(sharedModelReader("draft:/b", deps), dialog, "another draft has its own")
+  clearSharedModelReaders()
 })

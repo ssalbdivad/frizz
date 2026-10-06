@@ -23,7 +23,7 @@ import { flashScheduleCount, pushScheduleDrawer, showToast } from "../store.ts"
 import { invalidateSchedules } from "../lib/schedules.ts"
 import { useScheduleDraftState, writeScheduleDraftState } from "../lib/scheduleDraftState.ts"
 import { MODEL_IDLE_MS, dismissalEdge, useScheduleOffer, type BoxInputEvent, type Dismissed, type Published } from "../lib/scheduleOffer.ts"
-import { draftAfter, keyAction, sendGlyphOf, type ScheduleKey, type ScheduleUiState } from "../lib/scheduleIntent.ts"
+import { draftAfter, draftAfterUndo, keyAction, sendGlyphOf, type ScheduleKey, type ScheduleUiState } from "../lib/scheduleIntent.ts"
 import {
   MODEL_BUDGET_COPY,
   MODEL_UNREACHABLE_COPY,
@@ -108,6 +108,8 @@ export interface LiveSchedule {
   /** A polite live-region line, once per offer appearance (§5.3). */
   announcement: string
   sendGlyph: "send" | "schedule"
+  /** The send button's title where the default names a key the device has not got (a phone in the mode). */
+  sendTitle: string | undefined
   lazyBlocked: boolean
   /** Ask the §7 matrix what a key does here, and do the schedule's half of it. */
   key: (k: ScheduleKey) => ScheduleKeyOutcome
@@ -124,8 +126,20 @@ const NO_TASK_LINE = "Say what each run should do."
 const EMPTY_COPY = "Type what to do and when it runs, like “every weekday at 9am triage new issues”."
 const EVENT_COPY = "Schedules run on the clock. Try “every hour, check whether the build failed”."
 const STALE_COPY = "Frizz has updated since this page loaded. Reload the page to create this schedule."
+const UNPHRASABLE_COPY = "That schedule is too intricate to show here. Try saying it more simply, like “every Friday at 9am”."
 const UPDATED_FOR_TIME = "Updated for the current time. Press Enter to create."
 const UPDATED_TO_TYPED = "Updated to what you typed. Press Enter to create."
+
+/** The same lines on a phone (§12), which has no keys: they name the tap instead — the panel's Create schedule
+ *  where it shows, else the send button, which wears the repeat glyph in the mode. Fix round 1, X7: the phone
+ *  read "Press Enter to try again" beside a row that says "Tap Schedule". */
+const PHONE_COPY: Readonly<Record<string, string>> = {
+  [UPDATED_FOR_TIME]: "Updated for the current time. Tap Create schedule.",
+  [UPDATED_TO_TYPED]: "Updated to what you typed. Tap Create schedule.",
+  [MODEL_UNREACHABLE_COPY]: "Couldn't read that just now. Tap the repeat button to try again.",
+  [MODEL_BUDGET_COPY]: "Tap the repeat button to read it again.",
+}
+export const phoneCopy = (copy: string): string => PHONE_COPY[copy] ?? copy
 
 // ---- timing (§6) --------------------------------------------------------------------------------------------------
 
@@ -172,6 +186,12 @@ export function needsModel(p: Published, promptOf: (cut: string) => string): boo
   if (!p.prose.trim()) return false
   if (r.kind === "none") return true
   return r.kind === "cue" && promptOf(cutPhrase(p.prose, r.span)) !== ""
+}
+
+/** A rule `describeSchedule` cannot phrase: it falls back to the RRULE itself. */
+function unphrasable(rrule: string, dtstart: string, tz: string): boolean {
+  const c = compileSchedule({ rrule, dtstart, tz })
+  return c.ok && describeSchedule(c.value).startsWith("on the rule")
 }
 
 function describeRule(rrule: string, dtstart: string, tz: string): string {
@@ -245,6 +265,9 @@ export function modeViewOf(a: {
         prompt: answer.prompt,
       }
     }
+    // I-11 held for the model too: a rule the house cannot put into words would echo as `on the rule FREQ=…`,
+    // and the human is never asked to confirm RRULE text (fix round 1, model-raw-rrule-echo).
+    if (unphrasable(answer.result.rrule, answer.result.dtstart, answer.result.tz)) return { kind: "copy", copy: UNPHRASABLE_COPY, rereads: false }
     return { kind: "model", result: answer.result, text: answer.text, span: answer.span, prompt: answer.prompt, ...(core ? { core: core.span } : {}) }
   }
   if (mv.status === "failed") return { kind: "copy", copy: MODEL_UNREACHABLE_COPY, rereads: true }
@@ -346,10 +369,12 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   // edges, same publish policy; only what is drawn differs.
   const phone = useIsMobile()
   const offer = useScheduleOffer({ prose, exclude, mode: on, dismissed: mode.dismissed, tz })
+  // ONE reader per draft, not per box: the `c` dialog and the page box under it share the mode, so they share
+  // its single flight and its budget too (§4.2; fix round 1, X2).
   const reader = useModelReader({
     interpret: (text) => rpc.interpretSchedule({ text, tz }),
     keyOf: (text, at) => modelReadKey({ tz, nowMs: at, text }),
-  })
+  }, { share: draftKey })
   const [notice, setNotice] = useState<{ prose: string; copy: string } | null>(null)
   const [stale, setStale] = useState<string | null>(null)
   const movedOnce = useRef<string | null>(null)
@@ -455,13 +480,14 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   /** Undo (§5.11, I-13): delete the schedule, then put back exactly what the accept took — the text merged
    *  with anything typed since, the chips, the pick, the mode off and the dismissals as they were. The offer
-   *  re-derives from the text, so `⇥ Schedule  ↵ Start now` is back on screen. */
+   *  re-derives from the text, so `⇥ Schedule  ↵ Start now` is back on screen. A mode the human entered
+   *  since, for new text, stays on (`draftAfterUndo`, I-3). */
   const undo = (created: ScheduleView, restore: () => void, dismissed: Dismissed) => {
     void projectRpc(created.projectId).deleteSchedule({ id: created.id }).then(
       () => {
         invalidateSchedules(queryClient, created.id)
         restore()
-        writeScheduleDraftState(draftKey, { v: 1, on: false, dismissed })
+        writeScheduleDraftState(draftKey, (m) => draftAfterUndo(m, dismissed))
         latest.current.focus()
       },
       (error: unknown) => showToast(`Could not undo: ${(error as Error).message.slice(0, 100)}`),
@@ -710,6 +736,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     slotOpen: current !== null,
     announcement,
     sendGlyph: sendGlyphOf(state),
+    sendTitle: phone && sendGlyphOf(state) === "schedule" ? "Create schedule" : undefined,
     lazyBlocked: on,
     key,
     onTab: () => key("tab") === "handled",
@@ -1170,7 +1197,7 @@ function panelParts(a: {
   let lead: 12 | 13 = 12
   let body: ReactNode = null
   let create: "enabled" | "disabled" | "hidden" = "hidden"
-  let createTitle = "Create schedule (Enter)"
+  let createTitle = a.phone ? "Create schedule" : "Create schedule (Enter)"
   switch (view.kind) {
     case "empty":
       line = <span data-schedule-copy className="min-w-0 flex-1 text-pretty">{EMPTY_COPY}</span>
@@ -1252,20 +1279,20 @@ function panelParts(a: {
         body = (
           <>
             {model.ok && <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />}
-            <p key={a.shake} data-schedule-refusal className={`text-pretty text-[12px] leading-5 text-fg/85 ${a.shake ? "kbd-shake" : ""}`}>{view.copy}</p>
+            <p key={a.shake} data-schedule-refusal className={`text-pretty text-[12px] leading-5 text-fg/85 ${a.shake ? "kbd-shake" : ""}`}>{a.phone ? phoneCopy(view.copy) : view.copy}</p>
           </>
         )
         create = "disabled"
         createTitle = "Say what each run should do first"
       } else {
-        line = <span key={a.shake} data-schedule-refusal className={`min-w-0 flex-1 text-pretty text-fg/85 ${a.shake ? "kbd-shake" : ""}`}>{view.copy}</span>
+        line = <span key={a.shake} data-schedule-refusal className={`min-w-0 flex-1 text-pretty text-fg/85 ${a.shake ? "kbd-shake" : ""}`}>{a.phone ? phoneCopy(view.copy) : view.copy}</span>
       }
       break
     }
   }
   const footer = (
     <>
-      {a.notice && <p data-schedule-notice className="text-pretty text-[12px] leading-5 text-muted">{a.notice}</p>}
+      {a.notice && <p data-schedule-notice className="text-pretty text-[12px] leading-5 text-muted">{a.phone ? phoneCopy(a.notice) : a.notice}</p>}
       <div className="mt-2 flex items-center justify-end gap-3">
         <button
           key={`cancel:${a.flash}`}

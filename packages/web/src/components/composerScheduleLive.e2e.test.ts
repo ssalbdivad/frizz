@@ -693,3 +693,154 @@ test("14. under reduced motion every state arrives with no draw", { skip: !baseU
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
+
+// ---- fix round 1 (2026-10-06): the break-it findings that only a browser shows ----------------------------------
+
+test("15. Undo of an older schedule never ends a mode entered since for new text (X1)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await accept(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => !!(await state(page))?.toast?.actions.includes("Undo"), 3_000))
+    assert.ok(await waitFor(async () => (await state(page))?.text === "", 3_000), "the box cleared")
+    // Inside the Undo window, the human sets up the NEXT schedule.
+    const next = "every Friday at 4pm write the changelog"
+    await focusEnd(page)
+    await accept(page, next)
+    assert.equal((await state(page))!.send, "schedule")
+    await page.click('[data-toast-action="Undo"]')
+    assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1, 3_000), "Undo deleted the first")
+    await sleep(500)
+    const s = (await state(page))!
+    assert.ok(s.text?.includes(PHRASE_TASK) && s.text.includes(next), `both texts kept: ${JSON.stringify(s.text)}`)
+    assert.equal(s.glyph, "on", "the mode entered for the new text is still on")
+    assert.equal(s.send, "schedule", "so Enter still says it schedules")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    await sleep(600)
+    assert.equal((await counts(page)).dispatch, 0, "Enter never dispatched the merged text")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("16. a prompt that starts with whitespace: the model's marks and Each run sit on the right words (X8)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await armModel(page, CONSISTENT)
+    // Shift-Enter first: the box's text starts with a newline, which the server trims before it reads.
+    await chord(page, ["Shift"], "Enter")
+    await offer(page, CUE)
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => !!(await state(page))?.echo, 5_000), "the answer lands")
+    const s = (await state(page))!
+    assert.equal(s.each, "Each run: post the digest")
+    assert.equal(marksOf(s, "accepted"), "every Monday")
+    assert.equal(marksOf(s, "grow"), " unless it's a holiday")
+    assert.equal(s.create?.disabled, false)
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 3_000), "Enter creates")
+    assert.equal((await bodies(page, "createSchedule"))[0]!.prompt, "post the digest")
+    assert.equal((await counts(page)).interpretSchedule, 1)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("17. the `c` dialog over the page box: one model read for one text, not one per box (X2)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await armModel(page, { ...CONSISTENT, delayMs: 3_000 })
+    await page.evaluate(() => window.__sched.openDialog())
+    await ready(page, DIALOG_BOX)
+    await typeFast(page, CUE)
+    assert.ok(await waitFor(async () => (await state(page, DIALOG_BOX))?.slot === "ledge", 3_000), "the dialog offers it")
+    await focusEnd(page, DIALOG_BOX)
+    await page.keyboard.press("Tab")
+    // Past the page box's own idle (700ms), with the dialog's read still out.
+    await sleep(2_000)
+    assert.equal((await state(page))!.glyph, "on", "the page box under the dialog is in the mode too")
+    assert.equal((await counts(page)).interpretSchedule, 1, "one read, though two boxes show the mode")
+    assert.ok(await waitFor(async () => !!(await state(page, DIALOG_BOX))?.echo, 5_000), "the answer lands in the dialog")
+    assert.ok(await waitFor(async () => !!(await state(page))?.echo, 2_000), "…and in the page box")
+    await sleep(1_000)
+    assert.equal((await counts(page)).interpretSchedule, 1)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("18. a panel folding away after Esc is inert: a click on its Create creates nothing (X3)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await accept(page)
+    // The old panel stays mounted for 160ms after Esc while its slot folds from the bottom, so Create is
+    // clipped away within a few tens of ms — a real press one CDP round trip behind the key found it in one
+    // run of two. The slot is held still here (the test's only change to the page: its row pinned open and
+    // every transition and animation in it off) so the press reliably meets a Create that is still DRAWN,
+    // inside the 160ms the panel lingers: what is under test is whether that drawn Create still acts, not
+    // how fast a mouse is.
+    const at = await page.evaluate((sel) => {
+      const wrap = document.querySelector<HTMLElement>(`${sel} [data-schedule-slot-wrap]`)!
+      const still = document.createElement("style")
+      still.textContent = `${sel} [data-schedule-slot-wrap] { grid-template-rows: 1fr !important }
+        ${sel} [data-schedule-slot-wrap], ${sel} [data-schedule-slot-wrap] * { transition: none !important; animation: none !important }`
+      document.head.append(still)
+      const r = document.querySelector(`${sel} [data-schedule-create]`)!.getBoundingClientRect()
+      const at = { x: r.left + r.width / 2, y: r.top + r.height / 2 }
+      const w = window as unknown as { __press: { t: number; drawn: boolean; hit: string }[]; __esc: number }
+      w.__press = []
+      document.addEventListener("keydown", (e) => { if (e.key === "Escape") w.__esc = performance.now() }, true)
+      document.addEventListener("pointerdown", (e) => {
+        const create = document.querySelector(`${sel} [data-schedule-create]`)
+        const box = create?.getBoundingClientRect()
+        const clip = (wrap.firstElementChild as HTMLElement).getBoundingClientRect()
+        w.__press.push({
+          t: Math.round(performance.now() - w.__esc),
+          drawn: !!box && at.x >= box.left && at.x <= box.right && at.y >= box.top && at.y <= box.bottom && clip.bottom >= box.bottom && !wrap.hasAttribute("data-open"),
+          hit: (e.target as Element).closest("[data-schedule-create]") ? "create" : (e.target as Element).tagName,
+        })
+      }, true)
+      return at
+    }, PAGE_BOX)
+    await page.mouse.move(at.x, at.y)
+    await page.keyboard.press("Escape")
+    await page.mouse.click(at.x, at.y)
+    const press = await page.evaluate(() => (window as unknown as { __press: { t: number; drawn: boolean; hit: string }[] }).__press)
+    // `drawn` needs the old Create still in the page, so it also says the press came inside the linger.
+    assert.ok(press[0]?.drawn, `the press came while the folded-away panel's Create was still drawn (the test is not vacuous): ${JSON.stringify(press)}`)
+    await sleep(800)
+    const c = await counts(page)
+    assert.equal(c.createSchedule, 0, `the folding panel created nothing: ${JSON.stringify(press)}`)
+    assert.equal(c.dispatch, 0)
+    assert.notEqual((await state(page))!.glyph, "on", "Esc left the mode")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("19. in the `c` dialog an open slash menu takes the first Esc, before the mode (X4)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await page.evaluate(() => window.__sched.openDialog())
+    await ready(page, DIALOG_BOX)
+    await typeFast(page, PHRASE_TASK)
+    assert.ok(await waitFor(async () => (await state(page, DIALOG_BOX))?.slot === "ledge", 3_000))
+    await focusEnd(page, DIALOG_BOX)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => (await state(page, DIALOG_BOX))?.glyph === "on", 3_000), "in the mode")
+    await page.evaluate((sel) => document.querySelector<HTMLTextAreaElement>(sel)!.setSelectionRange(0, 0), ta(DIALOG_BOX))
+    await typeFast(page, "/re", 60)
+    assert.ok(await waitFor(async () => !!(await page.$(`${DIALOG_BOX} [data-slash-menu]`)), 3_000), "the slash menu is open")
+    await page.keyboard.press("Escape")
+    await sleep(300)
+    assert.equal(await page.$(`${DIALOG_BOX} [data-slash-menu]`), null, "the first Esc closed the menu")
+    assert.ok(await page.$(DIALOG_BOX), "…kept the dialog")
+    assert.equal((await state(page, DIALOG_BOX))!.glyph, "on", "…and kept the mode")
+    await page.keyboard.press("Escape")
+    await sleep(300)
+    assert.ok(await page.$(DIALOG_BOX), "the second Esc keeps the dialog")
+    assert.notEqual((await state(page, DIALOG_BOX))!.glyph, "on", "…and leaves the mode")
+    const c = await counts(page)
+    assert.equal(c.dispatch + c.createSchedule, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})

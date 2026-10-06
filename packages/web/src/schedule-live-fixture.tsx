@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import {
+  InterpretScheduleInput,
   cutPhrase,
   scheduleEcho,
   type BoardSnapshot,
@@ -169,7 +170,9 @@ window.fetch = async (input, init) => {
     case "interpretSchedule": {
       const delay = sched.answer?.delayMs ?? 300
       await new Promise((r) => setTimeout(r, delay))
-      return json(interpret(String(body.text), String(body.tz)))
+      // Parsed as the server parses it: `text` is TRIMMED, and the answer's offsets index the trimmed text.
+      const input = InterpretScheduleInput.parse(body)
+      return json(interpret(input.text, input.tz ?? "America/New_York"))
     }
     case "createSchedule": {
       const fail = sched.createFail.shift()

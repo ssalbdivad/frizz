@@ -156,3 +156,15 @@ export function draftAfter(action: ScheduleAction, prev: ScheduleDraftRecord, ed
       return prev
   }
 }
+
+/**
+ * What Undo (§5.11) does to the mode record it finds. The create left the draft OFF (it cleared the record),
+ * and Undo puts back the dismissals as they were before the accept (§1.3.1). But the Undo window is 8s, and
+ * the human may have typed new text and pressed Tab inside it: that mode belongs to the new text, entered by
+ * an explicit act after the create, and Undo is not one of the acts that end a mode (I-3). Turning it off there
+ * left the new text one Enter from a DISPATCH it was being set up not to be (fix round 1, X1). So a record
+ * that is on is left exactly as it is; the old text still merges back, and the mode reads both.
+ */
+export function draftAfterUndo(prev: ScheduleDraftRecord, preAccept: ScheduleDraftRecord["dismissed"]): ScheduleDraftRecord {
+  return prev.on ? prev : { v: 1, on: false, dismissed: preAccept }
+}

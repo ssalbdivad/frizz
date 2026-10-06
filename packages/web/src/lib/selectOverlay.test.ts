@@ -111,3 +111,33 @@ test("an open Select still wins Escape over a claim", () => {
   unregisterSelect()
   unregisterClaim()
 })
+
+test("a claim can PASS: the dialog stays, and the key goes on to the box's open menu or IME (fix round 1, X4)", () => {
+  // The `c` dialog's box with its slash menu open, in the mode: Radix asks the claim at the document's capture
+  // phase, before the box's own handler. The menu is the box's to close first (§7), as on the page — so the
+  // claim neither acts nor lets the dialog close, and the key travels on to the box.
+  let menuOpen = true
+  let on = true
+  const unregister = registerEscapeClaim(focusedEscapeClaim(
+    () => root("dialog-textarea"),
+    (event) => {
+      if (event?.isComposing || menuOpen) return "pass"
+      if (!on) return false
+      on = false
+      return true
+    },
+    () => "dialog-textarea",
+  ))
+  assert.deepEqual(escape(), { prevented: 1, stopped: 0 }, "the menu's Escape: the dialog stays, the key is not stopped")
+  assert.equal(on, true, "and the mode is untouched")
+  menuOpen = false
+  let prevented = 0
+  let stopped = 0
+  handleDialogEscape({ preventDefault: () => prevented++, stopPropagation: () => stopped++, isComposing: true })
+  assert.deepEqual({ prevented, stopped }, { prevented: 1, stopped: 0 }, "an IME's Escape is its own cancel")
+  assert.equal(on, true)
+  assert.deepEqual(escape(), { prevented: 1, stopped: 1 }, "the next Escape leaves the mode")
+  assert.equal(on, false)
+  assert.deepEqual(escape(), { prevented: 0, stopped: 1 }, "and the one after closes the dialog")
+  unregister()
+})

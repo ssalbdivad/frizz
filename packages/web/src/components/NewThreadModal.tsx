@@ -302,7 +302,12 @@ function PromptForm({
   // there is no dialog and `onEscape` is the whole story.
   const escapeScheduleRef = useRef(schedule.onEscape)
   escapeScheduleRef.current = schedule.onEscape
-  useEffect(() => registerEscapeClaim(focusedEscapeClaim(() => rootRef.current, () => escapeScheduleRef.current())), [])
+  // An open slash or mention menu in this box, or an IME composing, owns the key before the schedule does
+  // (§7): the claim PASSES it on, so the dialog stays and the box's own handler closes the menu (X4).
+  useEffect(() => registerEscapeClaim(focusedEscapeClaim(() => rootRef.current, (event) => {
+    if (event?.isComposing || rootRef.current?.querySelector("[data-slash-menu], [data-mention-menu]")) return "pass"
+    return escapeScheduleRef.current()
+  })), [])
 
   function submit() {
     // WHAT ENTER MEANS is the schedule's key matrix (lib/scheduleIntent.ts): in the mode it creates (or reads,
@@ -446,6 +451,7 @@ function PromptForm({
         onLazyBlocked={() => void schedule.key("lazy")}
         onEscape={schedule.onEscape}
         sendGlyph={schedule.sendGlyph}
+        sendTitle={schedule.sendTitle}
         lazyBlocked={schedule.lazyBlocked}
         contextTokens={contextTokens}
         contextSources={contextSources}
@@ -471,7 +477,10 @@ function PromptForm({
         data-open={schedule.slotOpen || undefined}
         className={`-mt-3 grid transition-[grid-template-rows] duration-[140ms] ease-out motion-reduce:transition-none ${schedule.slotOpen ? "grid-rows-[1fr] delay-[60ms]" : "grid-rows-[0fr]"}`}
       >
-        <div className="min-h-0 overflow-hidden">{schedule.slot}</div>
+        {/* A slot folding away is a picture of what WAS: the panel stays mounted for its fold with the
+            handlers of the state it was drawn in, so a press that met it after Esc ran Create (fix round 1,
+            X3). Inert while it folds — no press, no focus, nothing read out. */}
+        <div className="min-h-0 overflow-hidden" inert={!schedule.slotOpen}>{schedule.slot}</div>
         <span className="sr-only" role="status" aria-live="polite">{schedule.announcement}</span>
       </div>
       {dispatch.isError && (
