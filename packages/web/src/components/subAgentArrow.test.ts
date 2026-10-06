@@ -84,19 +84,22 @@ test("lib/childOps.ts holds the one child-arrow token, and it is U+2937", () => 
 })
 
 // Every surface that lists a thread's children as operation rows: the queue card's sub-agent lines,
-// the queue card's reproduction of the drawer strip, and the thread view's own ops strip.
-const CHILD_ROW_SURFACES = ["components/QueueSubAgentLines.tsx", "components/QueueChildOps.tsx", "components/ChatView.tsx"]
+// the queue card's reproduction of the drawer strip, the thread view's own ops strip, and a project
+// board's rows under each thread (Sidebar.tsx SubAgentRows, since 2026-10-06).
+const CHILD_ROW_SURFACES = ["components/QueueSubAgentLines.tsx", "components/QueueChildOps.tsx", "components/ChatView.tsx", "components/Sidebar.tsx"]
 
 test("every child-operation surface renders through the one shared row component", () => {
-  // ChildOpRow is the only renderer of a child row; these are its three adoption sites. A new surface
-  // that hand-rolled the row would already fail the arrow guard above — this pins the existing three so
-  // none of them quietly regresses back to a local copy. The rail (Sidebar) is deliberately NOT one of
+  // ChildOpRow is the only renderer of a child row; these are its four adoption sites. A new surface
+  // that hand-rolled the row would already fail the arrow guard above — this pins the existing four so
+  // none of them quietly regresses back to a local copy. All projects' list is deliberately NOT one of
   // them: since 54309fb2 it lists no child rows at all, only a count and a robot on the thread's own row
-  // (pinned by Sidebar.subAgentCount.test.ts), so it must not grow one back either.
+  // (pinned by Sidebar.subAgentCount.test.ts), so it must not grow one back either. A project's board
+  // lists them as rows under each thread, as upstream's sidebar did (2026-10-06, ProjectBoard.tsx).
   for (const file of CHILD_ROW_SURFACES) {
     assert.match(readFileSync(join(SRC, file), "utf8"), /<ChildOpRow\b/, `${file} must render the shared ChildOpRow`)
   }
-  assert.doesNotMatch(readFileSync(join(SRC, "components/Sidebar.tsx"), "utf8"), /<ChildOpRow\b/, "the rail shows a count, not child rows")
+  assert.doesNotMatch(readFileSync(join(SRC, "components/ProjectList.tsx"), "utf8"), /<ChildOpRow\b|<SubAgentRows\b/, "All projects shows a count, not child rows")
+  assert.match(readFileSync(join(SRC, "components/ProjectBoard.tsx"), "utf8"), /<SubAgentRows\b/, "a project's board lists them under each thread")
   // The completion-hold dialog lists children as PROSE inside a dialog, not as operation rows (no
   // liveness mark, no drill-in, no dismiss), so it consumes the tokens directly rather than the row.
   assert.match(readFileSync(join(SRC, "components/ThreadLifecycle.tsx"), "utf8"), /CHILD_ARROW\b/)
@@ -109,8 +112,8 @@ test("every child-operation surface offers the dismiss ×, through the one share
   // guard against a surface silently dropping the control again, and against one of them growing its
   // own dismiss call: `childOpDismisser` is where the direct-child / has-an-id rule lives, and a local
   // `stopBackgroundOp` call on any client — the page's `rpc` or a project-scoped one — would route
-  // around it. The rail has since stopped listing children (54309fb2), so it is no longer on the list;
-  // every surface that still lists them is.
+  // around it. All projects' list stopped listing children (54309fb2); a project's board lists them again
+  // (Sidebar.tsx SubAgentRows), and is on the list.
   for (const file of CHILD_ROW_SURFACES) {
     const source = readFileSync(join(SRC, file), "utf8")
     assert.match(source, /onDismiss=\{childOpDismisser\(/, `${file} must pass the shared dismisser to its ChildOpRow`)

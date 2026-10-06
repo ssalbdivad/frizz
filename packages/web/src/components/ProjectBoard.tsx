@@ -34,6 +34,9 @@
 // No project row heads the board: the switcher over the prompt box names the project (StatusRow.tsx), so
 // a row repeating it would only cost the board a line — and the capacity gate has none to spare
 // (capacityParity.e2e.test.ts).
+//
+// A THREAD'S SUB-AGENTS ARE ROWS under it here (Sidebar.tsx SubAgentRows), as upstream drew them; All
+// projects keeps the count on the row.
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import { useVirtualizer, useWindowVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
@@ -54,7 +57,7 @@ import { drawerThreadSlug, store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import type { BandKey } from "./BandLabel.tsx"
 import { ScheduleRows } from "./ProjectList.tsx"
-import { RailRow, SectionHeader, type RowScope } from "./Sidebar.tsx"
+import { RailRow, SectionHeader, SubAgentRows, type RowScope } from "./Sidebar.tsx"
 
 /** Every band the board draws rows in — the sections lib/heldLayout.ts holds. */
 type BoardBand = "pinned" | "ready" | "working" | "snoozed" | "done" | "external"
@@ -139,6 +142,8 @@ export function ProjectBoard({
     const t = slot.item
     const band = bandNow.get(t.id)
     return (
+      // Siblings, not a wrapper: the cord strings each row by its own place in the board (ThreadConnector),
+      // and a thread's sub-agent rows, between two of them, cut it there.
       <Fragment key={t.id}>
         <RailRow
           t={t}
@@ -151,7 +156,9 @@ export function ProjectBoard({
           cardKey={bandsNow.carded.has(t.id) ? threadKey(project.id, t.id) : undefined}
           band={band as BandKey | undefined}
           held={slot.held}
+          subAgentRows
         />
+        {band !== "external" && <SubAgentRows t={t} scope={scope} />}
       </Fragment>
     )
   }

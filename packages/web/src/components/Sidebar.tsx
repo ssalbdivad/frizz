@@ -2,7 +2,7 @@ import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, Repeat, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
-import { showToast } from "../store.ts"
+import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents, restIsWorking } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
@@ -11,6 +11,8 @@ import { humpStarts } from "../lib/threadMentions.ts"
 import { BANDS, BAND_LABEL_TYPE, BandCount, type BandKey } from "./BandLabel.tsx"
 import { BoxSpinner, STATUS_BOX } from "./BoxSpinner.tsx"
 import { visibleChildOps } from "../lib/childOps.ts"
+import { childOpDismisser } from "../lib/dismissChildOp.ts"
+import { ChildOpRow } from "./ChildOpRow.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { ProviderMark } from "./ProviderMark.tsx"
 import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
@@ -100,11 +102,13 @@ export interface RowScope {
   page: boolean
 }
 
-// One row of a band. A thread's live sub-agents get no row of their own — a count on the thread's row
-// (SubAgentCount) — and its TERMINALS get no row and no mark (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already
-// say everything one could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean }) {
-  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} />
+// One row of a band. A thread's live sub-agents are a count on the thread's row in All projects
+// (SubAgentCount); on a project's board they are rows of their own under it (SubAgentRows), and the
+// board passes `subAgentRows` so the count is not said twice. Its TERMINALS get no row and no mark
+// (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already say everything one
+// could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false, subAgentRows = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean; subAgentRows?: boolean }) {
+  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} subAgentRows={subAgentRows} />
 }
 
 // A BAND'S HEADER — its glyph, its NAME and its count, over its rows. ONE source of truth for every band
@@ -199,6 +203,42 @@ const BAND_MARK = "flex h-[1em] shrink-0 justify-center self-baseline translate-
  *  mark every surface draws for a schedule. */
 const SCHEDULES_BAND = { label: "Schedules", Icon: Repeat }
 
+// A THREAD'S SUB-AGENTS, AS ROWS UNDER IT — on a project's board, as Colin's sidebar drew them (upstream
+// Sidebar.tsx SubAgentRows): the shared ChildOpRow at "rail" density, indented to clear the parent row's
+// indicator column, nested one step per depth so a fanned-out branch reads as the tree it is. A click
+// opens the sub-agent's drawer over the page; the × retires it (stops a live one, clears a finished one),
+// through the row's own project's client. The liveness policy is the rail's (lib/childOps.ts
+// visibleChildOps). All projects keeps the COUNT on the thread's row instead (SubAgentCount): there every
+// project's threads share one column, and a branch of rows under each would push the next project's work
+// off the screen (maintainer 2026-10-01: "usually people won't want to click on it from that view").
+export function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
+  const api = useThreadApi()
+  const subs = visibleChildOps(t.subAgents ?? [], "rail")
+  if (subs.length === 0) return null
+  return (
+    <div data-xq-subagent-rows={t.id} className="flex flex-col">
+      {subs.map((s) => (
+        <ChildOpRow
+          key={s.id}
+          kind="AGENT"
+          label={s.label}
+          state={s.state}
+          density="rail"
+          depth={s.depth}
+          startedAt={s.startedAt}
+          parentSlug={t.id}
+          // Its drawer is the page project's to open. A row of another project (never on a board, whose
+          // rows are all the page's) opens its thread instead, where the sub-agent is one click on.
+          onOpen={() => (scope.page ? pushSubAgentDrawer(t.id, s.id, { label: s.label, subagentType: s.subagentType, startedAt: s.startedAt }) : scope.open(t))}
+          onDismiss={childOpDismisser(t.id, s, "AGENT", api)}
+          // The rail has no room for the worker-profile tag the ops strip can show, so it rides the tooltip.
+          title={s.subagentType ? `[${s.subagentType}] ${s.label}` : s.label}
+        />
+      ))}
+    </div>
+  )
+}
+
 // The title's trailing adornment, the provider mark, is an ATOMIC inline box, and the line breaker is
 // free to break right BEFORE it even though no whitespace separates it from the title. On a wrapping title that regularly stranded the provider
 // mark ALONE on a second line, with the whole title above it (maintainer 2026-07-31: "often the only
@@ -258,6 +298,7 @@ export const ThreadRow = memo(function ThreadRow({
   cardKey,
   band,
   held = false,
+  subAgentRows = false,
 }: {
   t: ThreadView
   active?: boolean
@@ -276,6 +317,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** Drawn where the list last put it, not where it now belongs: the list is held under the pointer
    *  (lib/listHold.ts). Drawn exactly like any row; `data-xq-held` is for scripts. */
   held?: boolean
+  /** Its sub-agents are rows of their own under it (a project's board, SubAgentRows), so it draws no
+   *  count of them. */
+  subAgentRows?: boolean
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -397,7 +441,7 @@ export const ThreadRow = memo(function ThreadRow({
             {/* The time limit's countdown, first in the column: over time it is the loudest thing on the row
                 (DeadlineControl RailDeadline). Nothing on a Done row. */}
             <RailDeadline thread={t} yieldsToRetry={hoverActions} />
-            <SubAgentCount t={t} yieldsToRetry={hoverActions} />
+            {!subAgentRows && <SubAgentCount t={t} yieldsToRetry={hoverActions} />}
             {working && <WorkingAge elapsed={working.elapsed} yieldsToRetry={hoverActions} />}
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
                 it the two would collide — a 19px opaque button landing halfway across "20 seconds",
