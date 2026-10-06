@@ -1549,6 +1549,18 @@ in about half the runs), 19 a slash menu's Esc in the dialog (X4), 20 the clock 
 `projectPickerIcon.e2e.test.ts` is now in `NEEDS_REAL_STACK`, so `nub run test:e2e -- <this file>` runs it:
 21/21 (case 10 is two tests).
 
+*End-to-end round 2:* cases **21–24** carry the fixed findings no case reached into the real box, and each was run
+red against the pre-fix code (`70279b8b`, served by its own vite) before it was kept: 21 the grammar's break-it
+words through the box's windows, `composerExcludeRuns` and the edge gates (bug reports, negations, statements,
+`see packages/web/src/daily`, `set FREQ=DAILY`, `on the 15th` settle dark; a qualifier, a zone, `0900`, `and a
+half`, `every 2nd week` are offered only as cues with their leftover dashed; X6's `apart from Fridays` goes to the
+model on Tab and creates nothing without it; `every night at 2` creates 2am; `Wed.` reads to its clock); 22 X5
+(an HOURLY answer over `every week`'s assumed core is the disagree state) and the month filter in words, with an
+unphrasable month set refused by copy; 23 the publish flicker, sampled every frame (a 400ms pause inside `10am`
+never shows `1pm`; `10:` is never a cue); 24 the phone's failed read naming the tap (X7). An open-edge text is
+offered while it is still only `Every night `, so 21 pins the settled screen for those and "never offered" for the
+rest. `nub run test:e2e -- <this file>`: **25/25**.
+
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
    - the schedule row and its next lazy run exist;
@@ -1585,6 +1597,30 @@ dark, `America/New_York`, Tue Oct 6 2026 ~01:30–01:45) by `scratch/verify-live
   server stored Thursday 3pm); `every Monday unless it's a holiday` went to the model 541ms after the last key,
   landed 3.15s after it (RPC 2.59s) and saved with its condition and no source — at Monday **3pm**, the stored
   time, the known design call in §11.
+
+*End-to-end round 2, driven* the same way (Tue Oct 6 2026 ~03:00–03:10, `scratch/verify-live-stack.ts` now
+asserting `SCHEDULE_GRAMMAR_VERSION`), 28/28 in two runs, no page errors:
+- **1–3** as before: `source {local, grammar 2}` accepted by the server's re-derive; the only new board row the
+  pending run (`turn-idle`); the count flashed; Open showed the drawer; the namer had already renamed `Triage issues`
+  → `Issue triage` by the first poll after the toast, and the pending run followed; a real Haiku thread for the
+  offered text and no schedule; reload + Enter a schedule and no thread, Undo deleted it and its run and restored
+  the draft with the offer.
+- **4** real Sonnet, n=4, one each, typing at 60ms a key: keystroke → cue ledge **368, 443, 15, 517ms** (the
+  qualifier held to the next boundary; `twice a week` has none); Tab → landed **4.50, 2.59, —, 2.36s** (RPC 4.48,
+  2.57, 2.34, 2.34s; the third's landing was not caught by the frame recorder). The December answer now reads
+  `every Friday at 9am, except in December`; X6's `apart from Fridays` came back Monday–Thursday. Still only with
+  resolve-on-result and only on this box.
+- **5** `every Thursday at 3pm` saved locally (grammar 2); the cue's request went 540ms after the last key, RPC
+  2.61s, landed 3.16s after it, at the stored 3pm (§11's open call).
+- The server's re-derive across a run boundary (`scratch/r2-skew.ts`, real RPC): `every 15 minutes` and `every
+  hour` read just before a boundary the server had passed were created at the server's start; `every 2 hours`
+  read before an odd hour was refused `schedule-reading-moved`, and before an even one created.
+- **Open, found here:** the ledge's `Each run` (and its tooltip) stops one word short of the task for good once
+  typing stops — `every Monday at 9am triage new issues` reads `Each run: triage new` 6s later — because
+  `pausePublishes` (fix round 1, `1fec06db`) refuses a rest or idle whenever the reading ends before the caret's
+  word, which at the open edge is every task word. The panel's `Each run` is right. Shown on the fixture with
+  `1fec06db`'s `scheduleOffer.ts` alone over `70279b8b` (`triage new`) against `70279b8b` itself (`triage new
+  issues`).
 
 *As built (Step 5), driven* on a disposable stack (`--creds`, a throwaway git project), headless puppeteer with
 touch emulation (`isMobile`, `hasTouch`, every press a `page.tap`), dark, `America/New_York`, Tue Oct 6 2026

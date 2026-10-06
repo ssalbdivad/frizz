@@ -870,3 +870,242 @@ test("20. the server refusing the same words twice is a clock disagreement: read
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
+
+// ---- end-to-end round 2 (2026-10-06): the fixed findings no case above reached ------------------------------------
+// Each finding below was fixed and pinned at the unit level in fix round 1 (the grammar's break-it battery,
+// scheduleOffer's simulated-timer typing, readingsConsistent, the model-echo phrasing). These cases put the same
+// words through the real box — the windows, composerExcludeRuns, the edge gates, the publish policy and the
+// panel — because a unit test of the grammar cannot see what the box hands it or what it does with the answer.
+
+/** Clear the box, type `text`, and wait out the close edge's idle: what does the box show for it? */
+async function settle(page: Page, text: string, delay = 8) {
+  await clearBox(page)
+  await resetLive(page)
+  await typeFast(page, text, delay)
+  await sleep(1_300)
+  return { s: (await state(page))!, everOpen: (await live(page)).slots.some((x) => x.open) }
+}
+
+test("21. the grammar's break-it words in the real box: dark stays dark, a qualifier is never left in the task, a night clock is the night (I-9)", { skip: !baseUrl, timeout: 180_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    // A bug report, a negation, a statement, code, a date: never an offer (false-offer-*, on-the-15th,
+    // weekday-list-swallows-negated-day). `see packages/web/src/daily` is the case composerExcludeRuns
+    // cannot mask (the path does not open a word), so it is the grammar's code guard that keeps it dark.
+    const dark = [
+      "Every night the backup job fails with ENOSPC, fix it",
+      "Every 15 minutes the health check flaps, find out why",
+      "don't deploy on Fridays",
+      "the meeting is every Monday at 9am",
+      "see packages/web/src/daily",
+      "set FREQ=DAILY",
+      "ship the release on the 15th",
+      "every Monday, Friday is off-limits, triage new issues",
+    ]
+    // An open-edge text is offered while it is still only "Every night " — nothing can know the words to
+    // come — so what is pinned for those is the settled screen; a close-edge one must never open at all.
+    for (const text of dark) {
+      const { s, everOpen } = await settle(page, text)
+      assert.equal(s.open, false, `dark once typed: ${JSON.stringify(text)}`)
+      if (!/^every/i.test(text)) assert.equal(everOpen, false, `never offered while typed: ${JSON.stringify(text)}`)
+    }
+    // A qualifier, a zone, an unparsed clock, a fraction: offered only as a CUE — its leftover words dashed as
+    // unread, never an exact reading that would leave them in the task (X6, named-zone-ignored,
+    // unparsed-clock-assumed-9am, and-a-half-dropped, ordinal-unit-dropped).
+    const cues: [string, string][] = [
+      ["every weekday at 9am apart from Fridays triage new issues", "apart from Fridays"],
+      ["every Monday at 9am stopping Oct 30 triage new issues", "stopping Oct"],
+      ["every Monday at 9am Berlin time triage new issues", "Berlin"],
+      ["every Monday at 0900 triage new issues", "0900"],
+      ["every hour and a half check CI", "and a half"],
+      ["every 2nd week review billing", ""],
+    ]
+    for (const [text, unread] of cues) {
+      const { s } = await settle(page, text)
+      assert.equal(s.slot, "ledge", `offered: ${JSON.stringify(text)}`)
+      assert.ok(marksOf(s, "unread").includes(unread), `${JSON.stringify(unread)} is dashed as unread in ${JSON.stringify(text)}: ${JSON.stringify(s.marks)}`)
+      assert.ok(/“/.test(s.ledge ?? "") || marksOf(s, "offer") === "", `the ledge quotes what it did not read: ${s.ledge}`)
+    }
+    // X6 end to end: Tab on the qualifier asks the model (it is not accepted locally), and with the model
+    // answering nothing usable, Enter creates nothing — the qualifier never silently drops.
+    await settle(page, "every weekday at 9am apart from Fridays triage new issues")
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule === 1, 3_000), "Tab sent the qualifier to the model")
+    assert.ok(await waitFor(async () => !!(await state(page))?.refusal, 3_000), "the model's 'no' is shown")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    await sleep(500)
+    assert.equal((await counts(page)).createSchedule, 0, "nothing created over a qualifier the box could not read")
+    await page.keyboard.press("Escape")
+    await sleep(300)
+
+    // night-hour-pm: "every night at 2" is 2am, and the toast-bound create says so.
+    await settle(page, "every night at 2 back up the db")
+    let s = (await state(page))!
+    assert.ok((s.ledge ?? "").startsWith("Every day at 2am"), `the night clock: ${s.ledge}`)
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "panel", 3_000))
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 3_000))
+    const body = (await bodies(page, "createSchedule"))[0]!
+    assert.equal(body.rrule, "FREQ=DAILY;BYHOUR=2;BYMINUTE=0")
+    assert.equal(body.prompt, "back up the db")
+    // abbrev-dot-ends-window: "Wed." does not end the reading.
+    s = (await settle(page, "every Wed. at 3 review billing")).s
+    assert.ok((s.ledge ?? "").startsWith("Every Wednesday at 3pm"), `an abbreviation's dot: ${s.ledge}`)
+    assert.equal(marksOf(s, "offer"), "every Wed. at 3")
+    const c = await counts(page)
+    assert.equal(c.dispatch, 0)
+    // The fixture's "no" is not one of the server's verdicts, so Enter over it reads again (M4): one or two
+    // reads, and every one of them for the qualifier's words — each other reading above was local.
+    const asked = (await bodies(page, "interpretSchedule")).map((b) => String(b.text).trim())
+    assert.ok(asked.length >= 1 && asked.every((t) => t === "every weekday at 9am apart from Fridays triage new issues"), `model reads: ${JSON.stringify(asked)}`)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("22. a model reading the core's assumed day and time cannot hold, and a month filter, in words (X5, model-raw-rrule-echo)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    // X5: "every week" assumes Monday 9am; an HOURLY answer is not a reading of it.
+    const WEEK = "every week unless it's a holiday post the digest"
+    await armModel(page, { phrase: "every week unless it's a holiday", rrule: "FREQ=HOURLY;BYMINUTE=0", dtstart: "2026-10-05T15:00", condition: "unless it's a holiday", title: "Post digest" })
+    await offer(page, WEEK)
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => !!(await state(page))?.disagree, 5_000), "the disagree state")
+    let s = (await state(page))!
+    assert.match(s.disagree ?? "", /every hour/, `it names the model's reading: ${s.disagree}`)
+    assert.equal(s.create?.disabled, true)
+    await page.keyboard.press("Enter")
+    await sleep(500)
+    assert.equal((await counts(page)).createSchedule, 0, "Enter created nothing over the disagreement")
+    await page.keyboard.press("Escape")
+    await sleep(300)
+
+    // model-raw-rrule-echo: Sonnet's real answer for this text, a month filter on a weekly rule, reads in words.
+    const DEC = "every Friday except in December write the changelog"
+    await clearBox(page)
+    await armModel(page, { phrase: "every Friday except in December", rrule: "FREQ=WEEKLY;BYMONTH=1,2,3,4,5,6,7,8,9,10,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-09T09:00", title: "Write changelog" })
+    await offer(page, DEC)
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => !!(await state(page))?.echo, 5_000), "the answer lands")
+    s = (await state(page))!
+    assert.equal(s.echo, "Write changelog · every Friday at 9am, except in December")
+    assert.doesNotMatch(JSON.stringify(s), /FREQ=|on the rule/, "no RRULE text anywhere on screen")
+    assert.equal(s.create?.disabled, false)
+    await page.keyboard.press("Escape")
+    await sleep(300)
+
+    // …and a month set no words cover is refused with copy, never confirmed as raw RRULE. (Other words than
+    // DEC's: the reader caches its answer for those for 10m.)
+    await clearBox(page)
+    await armModel(page, { phrase: "every Friday except in December", rrule: "FREQ=WEEKLY;BYMONTH=1,3,5,8,11;BYDAY=FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-11-06T09:00", title: "Write release notes" })
+    await offer(page, "every Friday except in December write the release notes")
+    await focusEnd(page)
+    await page.keyboard.press("Tab")
+    assert.ok(await waitFor(async () => !!(await state(page))?.refusal, 5_000), "the refusal")
+    s = (await state(page))!
+    assert.equal(s.refusal, "That schedule is too intricate to show here. Try saying it more simply, like “every Friday at 9am”.")
+    assert.doesNotMatch(JSON.stringify(s), /FREQ=|on the rule/)
+    assert.equal(s.create, null, "no Create to press")
+    await page.keyboard.press("Enter")
+    await sleep(500)
+    const c = await counts(page)
+    assert.equal(c.createSchedule, 0)
+    assert.equal(c.dispatch, 0)
+    assert.equal(c.interpretSchedule, 3)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("23. a pause inside a clock or a colon never puts a half-typed time on screen (publish-flicker-colon-and-rest)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    // Sample the ledge on every frame, not per key: a pause publishes on a timer, between keys.
+    await page.evaluate((sel) => {
+      const w = window as unknown as { __ledges: string[] }
+      w.__ledges = []
+      const tick = () => {
+        const form = document.querySelector(sel)
+        const open = form?.querySelector("[data-schedule-slot-wrap]")?.hasAttribute("data-open")
+        const row = open ? form?.querySelector<HTMLElement>("[data-schedule-ledge-reading]") : null
+        const unread = [...(form?.querySelectorAll('[data-composer-mark="unread"]') ?? [])].map((m) => m.textContent).join("")
+        // The rule and its next run: Each run follows the task as it is typed, which is not a reading changing.
+        const v = `${row ? row.innerText.replace(/\s+/g, " ").replace(/ · Each run:.*$/, "").trim() : "∅"}${unread ? ` [unread ${unread}]` : ""}`
+        if (w.__ledges.at(-1) !== v) w.__ledges.push(v)
+        requestAnimationFrame(tick)
+      }
+      requestAnimationFrame(tick)
+    }, PAGE_BOX)
+    const ledges = () => page.evaluate(() => (window as unknown as { __ledges: string[] }).__ledges)
+
+    // (D) a 400ms pause between the "1" and the "0" of 10am.
+    await typeFast(page, "every Monday at 1", 120)
+    await sleep(400)
+    await typeFast(page, "0am triage new issues", 120)
+    await sleep(1_000)
+    let seen = await ledges()
+    assert.ok(seen.every((l) => !/at 1(am|pm)\b/.test(l)), `never "at 1pm" through the pause: ${JSON.stringify(seen)}`)
+    assert.ok(seen.at(-1)!.startsWith("Every Monday at 10am"), `ends on 10am: ${seen.at(-1)}`)
+    assert.ok(seen.filter((l) => l !== "∅").length <= 4, `at most 4 readings shown: ${JSON.stringify(seen)}`)
+
+    // (A) a colon is mid-word: "at 10:" is never a cue.
+    await clearBox(page)
+    await page.evaluate(() => { (window as unknown as { __ledges: string[] }).__ledges = [] })
+    await typeFast(page, "every weekday at 10:30am check CI", 120)
+    await sleep(1_000)
+    seen = await ledges()
+    assert.ok(seen.every((l) => !l.includes("[unread")), `no cue while the clock is typed: ${JSON.stringify(seen)}`)
+    assert.ok(seen.at(-1)!.startsWith("Every weekday at 10:30am"), `ends on 10:30am: ${seen.at(-1)}`)
+    assert.ok(seen.filter((l) => l !== "∅").length <= 4, `at most 4 readings shown: ${JSON.stringify(seen)}`)
+    assert.equal((await counts(page)).interpretSchedule, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("24. on a phone a failed model read names the tap, never a key (X7)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const page = await browser!.newPage()
+  const errors: string[] = []
+  try {
+    page.setDefaultTimeout(30_000)
+    await page.emulateTimezone(NY)
+    await page.setViewport({ width: 420, height: 860, deviceScaleFactor: 1, isMobile: true, hasTouch: true })
+    await page.emulateMediaFeatures([{ name: "prefers-color-scheme", value: "dark" }])
+    page.on("console", (m) => { if (m.type() === "error" && !/404|500|favicon|Failed to load resource/i.test(m.text())) errors.push(m.text()) })
+    page.on("pageerror", (e) => errors.push(String(e)))
+    await page.evaluateOnNewDocument(INSTRUMENT)
+    await page.goto(`${baseUrl}/schedule-live-fixture.html`, { waitUntil: "networkidle0" })
+    await ready(page)
+    // The model is down: interpretSchedule answers 500 (counted first by the fixture's own seam).
+    await page.evaluate(() => {
+      const inner = window.fetch
+      window.fetch = async (input, init) => {
+        const r = await inner(input, init)
+        const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
+        return /\/rpc\/interpretSchedule$/.test(new URL(url, location.origin).pathname)
+          ? new Response(JSON.stringify({ error: "the model is down" }), { status: 500, headers: { "content-type": "application/json" } })
+          : r
+      }
+    })
+    await offer(page, CUE)
+    let s = (await state(page))!
+    assert.equal(s.startNow, false, "the phone's row has no Start now")
+    await page.tap(`${PAGE_BOX} [data-schedule-accept]`)
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule === 1, 3_000), "the tap read it")
+    assert.ok(await waitFor(async () => !!(await state(page))?.refusal, 5_000), "the failure is shown")
+    s = (await state(page))!
+    assert.equal(s.refusal, "Couldn't read that just now. Tap the repeat button to try again.")
+    assert.doesNotMatch(`${s.refusal} ${s.notice ?? ""} ${s.sendTitle}`, /Enter|Esc|Tab/, "no key named on a phone")
+    assert.equal(s.sendTitle, "Create schedule")
+    assert.equal((await counts(page)).createSchedule + (await counts(page)).dispatch, 0)
+    // The tap it names does what it says: the send button reads it again.
+    await page.tap(`${PAGE_BOX} [data-composer-send]`)
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule === 2, 3_000), "the repeat button read it again")
+    assert.equal((await counts(page)).createSchedule + (await counts(page)).dispatch, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
