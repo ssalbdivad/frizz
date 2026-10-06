@@ -32,6 +32,7 @@ import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
+import { createBackgroundSummaries } from "./background-summaries.ts"
 import { createEffortChooser } from "./effort-chooser.ts"
 import { readTranscriptYielding, sourceForThread } from "./transcript.ts"
 import { forkPointOf } from "./fork-point.ts"
@@ -980,16 +981,25 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // here was the source of multi-second RPC stalls). Late-bound `board` breaks the cycle.
   // It ALSO reports, per tick, which sessions' JSONL advanced → fanned out on transcriptChange so the
   // /ws transcript producer can push (no board dependency; the two signals are independent).
+  // BACKGROUND SUMMARIES (Settings, default on): the one switch over every model call Frizz makes on its
+  // own — the namer, both status writers, the effort chooser and the schedule reader below. Each gets its
+  // completer through `summaries.model`, read at the moment of a call, so turning the setting off takes
+  // effect within seconds and each module falls back as it always did with no model wired
+  // (background-summaries.ts). The FRIZZ_*=0 variables still switch a call off, and only off.
+  const summaries = createBackgroundSummaries({
+    settings: () => getSettings(storage, home),
+    log: (message) => frizzLog.debug("summaries", message),
+  })
+  const namerOff = process.env.FRIZZ_THREAD_NAMER === "0"
   // THE THREAD NAMER (thread-names.ts): mints a 1-2 word, project-unique NAME at dispatch, answers the AI
   // rename, and writes the live STATUS line — all through one short Claude completion with Frizz's own
   // prompt (backend/claude-oneshot.ts). It spawns nothing on its own: every call is a dispatch, a click or
-  // a thread's 5th message. FRIZZ_THREAD_NAMER=0 switches the model off; uniqueness still holds for
-  // every writer without it, because that check reads the registry, not a model.
+  // a thread's 5th message. With Background summaries off (or FRIZZ_THREAD_NAMER=0) it has no model;
+  // uniqueness still holds for every writer without it, because that check reads the registry, not a model.
+  const namerModel = summaries.model("thread name", createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }), namerOff)
   const threadNamer: ThreadNamer = createThreadNamer({
     storage,
-    complete: process.env.FRIZZ_THREAD_NAMER === "0"
-      ? undefined
-      : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }),
+    get complete() { return namerModel() },
     onNamed: () => board.refresh(),
     log: (message) => frizzLog.warn("server", `thread namer: ${message}`),
   })
@@ -997,7 +1007,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // never its name (periodic-status.ts).
   const periodicStatus = createPeriodicStatus({
     storage,
-    writeStatus: threadNamer.available ? (input) => threadNamer.status(input) : undefined,
+    // A getter, like every completer here: the namer is available exactly while Background summaries is on.
+    get writeStatus() { return threadNamer.available ? (input: { name?: string; conversation: string }) => threadNamer.status(input) : undefined },
     nameOf: (row) => threadNamer.threads().find((t) => t.slug === row.slug)?.name || undefined,
     readMessages: (sessionId, forkAnchor) => readTranscriptYielding(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
@@ -1005,13 +1016,13 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   })
   // While a turn runs, keep the status on the TASK the thread is working on, with its own clock
   // (live-status.ts). Its own completer, so a dispatch's name mint never queues behind a fleet's checks.
-  // FRIZZ_LIVE_STATUS=0 switches it off; FRIZZ_LIVE_STATUS_MS shortens the cadence for a verification run.
+  // Off with Background summaries, and with FRIZZ_LIVE_STATUS=0 or FRIZZ_THREAD_NAMER=0;
+  // FRIZZ_LIVE_STATUS_MS shortens the cadence for a verification run.
   const liveStatusMs = Number(process.env.FRIZZ_LIVE_STATUS_MS)
+  const liveStatusModel = summaries.model("working status", createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }), namerOff || process.env.FRIZZ_LIVE_STATUS === "0")
   const liveStatus = createLiveStatus({
     storage,
-    complete: threadNamer.available && process.env.FRIZZ_LIVE_STATUS !== "0"
-      ? createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) })
-      : undefined,
+    get complete() { return liveStatusModel() },
     readMessages: (sessionId, forkAnchor) => readTranscriptYielding(project, sessionId, forkAnchor),
     onStatus: () => board.refresh(),
     onError: (slug, error) => process.stderr.write(`[frizz] working status of ${slug} failed: ${error instanceof Error ? error.message : String(error)}\n`),
@@ -1118,6 +1129,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     void readClaudeModels({ claudeBin: opts.claudeBin, cwd: workDirOf(project), log: (message) => frizzLog.warn("server", message) })
   }
   opts.startup?.afterPhase?.("board watcher")
+  // Its own completer with a short timeout and room for four at once (chooseEffort below).
+  const effortModel = summaries.model("auto effort", createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), timeoutMs: 20_000, concurrency: 4 }), process.env.FRIZZ_AUTO_EFFORT === "0")
   const dispatcher = createDispatcher({
     project,
     storage,
@@ -1137,11 +1150,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     threadNamer,
     // "auto" effort → a level read off the prompt by Haiku, before launch (effort-chooser.ts). Its own
     // completer with a short timeout: it blocks the dispatch, so it must never queue behind the namer's
-    // mints, and a slow answer falls back to a fixed level. FRIZZ_AUTO_EFFORT=0 skips the model.
+    // mints, and a slow answer falls back to a fixed level. With Background summaries off (or
+    // FRIZZ_AUTO_EFFORT=0) the model is skipped and "auto" launches on that fixed level.
     chooseEffort: createEffortChooser({
-      complete: process.env.FRIZZ_AUTO_EFFORT === "0"
-        ? undefined
-        : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), timeoutMs: 20_000, concurrency: 4 }),
+      get complete() { return effortModel() },
       log: (message) => frizzLog.warn("dispatch", `auto effort: ${message}`),
     }),
     // Auth preflight (claude-auth plan, Slice A): Claude reads its local credential and confirms only
@@ -1182,9 +1194,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     awake: processAwakeClock,
     log: (message) => frizzLog.info("schedules", message),
     // A schedule created with a provisional title (`titleAuto`) is renamed by the thread namer, compare-and-
-    // set (schedules.ts autoTitle). Same switch as every Frizz-side model call: FRIZZ_THREAD_NAMER=0 leaves
-    // the namer without a model, and the provisional title stays.
-    ...(threadNamer.available ? { nameFor: (source: string, exceptSlug?: string) => threadNamer.name(source, exceptSlug) } : {}),
+    // set (schedules.ts autoTitle). Same switch as every Frizz-side model call: with Background summaries
+    // off the namer has no model, and the provisional title stays. A getter, read at each schedule's save.
+    get nameFor() { return threadNamer.available ? (source: string, exceptSlug?: string) => threadNamer.name(source, exceptSlug) : undefined },
   })
   const scheduleService = schedules
   // FRIZZ PLUGINS (plugins/project.ts): the machine's registry, scoped to this project. A held thread a
@@ -1200,14 +1212,14 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     })
   }
   // Its own completer, so reading a schedule never queues behind a fleet's name mints. Same switch as the
-  // namer: FRIZZ_THREAD_NAMER=0 turns every Frizz-side model call off. The prompt box reads as the human
+  // namer: Background summaries off (or FRIZZ_THREAD_NAMER=0) leaves it no model, and the box reads every
+  // prompt as having no schedule in it. The prompt box reads as the human
   // types — a burst of reads, one at a time — so it keeps one CLI started ahead for the next read (`spare`,
   // claude-oneshot.ts), closed after a minute unused. 30s, down from 90s: one read at a time means a
   // stuck read holds up every read behind it, and the box gives up on a read at submit after 15s anyway.
+  const scheduleModel = summaries.model("schedule reading", createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), model: SCHEDULE_INTERPRETER_MODEL, timeoutMs: 30_000, concurrency: 1, spare: { idleMs: 60_000 } }), namerOff)
   const scheduleInterpreter = createScheduleInterpreter({
-    complete: process.env.FRIZZ_THREAD_NAMER === "0"
-      ? undefined
-      : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), model: SCHEDULE_INTERPRETER_MODEL, timeoutMs: 30_000, concurrency: 1, spare: { idleMs: 60_000 } }),
+    get complete() { return scheduleModel() },
   })
 
   // Durable timer waker + legacy pr/ci compatibility. Reuses the SAME resume path as followUp;

@@ -95,6 +95,9 @@ export const defaultSettings = (): Settings => ({
   deleteDoneThreadsUntouchedDays: 0,
   // Off — it moves work onto Fable; see the schema and backend/fable-fallback.ts.
   fableFallback: false,
+  // On — names, status lines and auto effort are the fork's defaults; see the schema and
+  // background-summaries.ts.
+  backgroundSummaries: true,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults

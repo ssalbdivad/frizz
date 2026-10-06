@@ -15,11 +15,12 @@ const tooltipSource = readFileSync(new URL("./Tooltip.tsx", import.meta.url), "u
 test("settings maps each contextual explanation to a help control", () => {
   // `subagentInstructions` is gone: the settings preamble was retired in favour of FRIZZ.md, so there
   // is exactly one operator-authored surface for project conventions.
-  for (const key of ["permissionMode", "promptCacheTtl", "appearance", "density", "notifications", "githubPrompt"]) {
+  for (const key of ["permissionMode", "promptCacheTtl", "appearance", "density", "notifications", "backgroundSummaries", "githubPrompt"]) {
     assert.match(helpSource, new RegExp(`\\b${key}:`), `missing settings help mapping: ${key}`)
   }
   assert.match(source, /label="Density" help=\{SETTINGS_HELP\.density\}/)
   assert.match(source, /label="Desktop notifications" help=\{SETTINGS_HELP\.notifications\}/)
+  assert.match(source, /label="Background summaries" help=\{SETTINGS_HELP\.backgroundSummaries\}/)
   // The runtime fields read the same table from their own surface.
   assert.match(agentSource, /label="Permissions" help=\{SETTINGS_HELP\.permissionMode\}/)
   assert.match(agentSource, /label="Prompt cache tier" help=\{SETTINGS_HELP\.promptCacheTtl\}/)
@@ -73,7 +74,7 @@ test("the drawer is one untabbed list of interface preferences, with no project 
   // (The note above the component NAMES the retired tab in prose; what must be gone is the markup.)
   assert.doesNotMatch(source, /role="tab(?:list)?"|SettingsTabs|label: "(?:Project|Frizz) settings"/)
   const fields = [...source.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
-  assert.deepEqual(fields, ["Appearance", "Density", "Queue order", "Desktop notifications", "Home folder", "Worktree folder", "Remove worktrees when done", "Delete done threads", "Delete untouched threads now", "Open code files", "External app"])
+  assert.deepEqual(fields, ["Appearance", "Density", "Queue order", "Desktop notifications", "Background summaries", "Home folder", "Worktree folder", "Remove worktrees when done", "Delete done threads", "Delete untouched threads now", "Open code files", "External app"])
   // The triage prompt has exactly one editor, and it is the picker's.
   assert.doesNotMatch(source, /GithubPromptEditor|githubPrompt|<textarea/)
   assert.match(promptPopoverSource, /<GithubPromptEditor draft=\{draft\} onChange=\{update\} rows=\{14\} \/>/)

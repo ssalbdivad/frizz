@@ -42,7 +42,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   // one way to change the default from here. A Codex cache refresh can invalidate the pair while the
   // picker is open; the final revalidation below then fails closed rather than downgrading.
   const pickState = useState<DispatchPick | undefined>(undefined)
-  const { resolved, defaultResolved, picked, codexList, claudeList, acpList, loadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
+  const { resolved, defaultResolved, picked, codexList, claudeList, acpList, autoEffort, loadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
   // A settings write still in flight — the triage prompt just edited in the header popover, a
   // compaction window picked in the selector — must land before a batch that would read it.
   const savingSettings = useIsMutating({ mutationKey: [...SETTINGS_WRITE_KEY] }) > 0
@@ -136,7 +136,7 @@ export function GithubPickerModal({ onClose }: { onClose: () => void }) {
   const n = selected.size
   // Stable identity: ProfileGridSelector memoizes off `groups`, and this modal re-renders on every
   // row toggle.
-  const profileGroups = useMemo(() => dispatchProfileGroups(codexList, acpList, claudeList), [codexList, acpList, claudeList])
+  const profileGroups = useMemo(() => dispatchProfileGroups(codexList, acpList, claudeList, { autoEffort }), [codexList, acpList, claudeList, autoEffort])
   const acpAgent = resolved?.acpAgentId ? acpList.find((agent) => agent.id === resolved.acpAgentId) : undefined
   const profile: DispatchProfileSnapshot | undefined = resolved
     ? { backend: resolved.backend, model: resolved.model, effort: (resolved.effort || undefined) as DispatchProfileSnapshot["effort"] }

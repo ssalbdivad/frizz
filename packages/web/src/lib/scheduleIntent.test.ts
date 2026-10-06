@@ -59,7 +59,7 @@ test("the model's answer, as the box acts on it", () => {
   }
   assert.deepEqual(classifyResult({ ok: false, error: "Couldn't read that just now: overloaded" }), { kind: "failed" })
   assert.deepEqual(
-    classifyResult({ ok: false, error: "Reading a schedule needs Claude, which this server has switched off." }),
+    classifyResult({ ok: false, error: "Reading a schedule needs Background summaries, which are off in Settings." }),
     { kind: "none" },
     "an interpreter that is off: the box behaves as it does without schedules",
   )

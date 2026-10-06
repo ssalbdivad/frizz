@@ -202,7 +202,7 @@ test("only verdicts are cached: a failed call is kept for its text, never cached
   await settle()
   assert.deepEqual(r.view(text), { status: "failed", message: "network down" })
   assert.equal(isModelVerdict(NONE), true)
-  assert.equal(isModelVerdict({ ok: false, error: "Reading a schedule needs Claude, which this server has switched off." }), false)
+  assert.equal(isModelVerdict({ ok: false, error: "Reading a schedule needs Background summaries, which are off in Settings." }), false)
 })
 
 test("the budget: 40 automatic reads per draft, then only a submit reads; a new draft refills it", async () => {

@@ -4,6 +4,7 @@ import { acpModelSlug, type AcpAgent, type Backend, type ClaudeModel, type Codex
 import { rpc } from "../api/rpc.ts"
 import { showToast } from "../store.ts"
 import { useDraft } from "../lib/drafts.ts"
+import { useBackgroundSummaries } from "./useBackgroundSummaries.ts"
 import type { ProfileGridSelection } from "../lib/profileGrid.ts"
 import {
   applyDispatchPreferenceUpdate,
@@ -73,6 +74,9 @@ export function useDispatchProfile(pickState: DispatchPickState = NO_PICK): {
   // The ACP agents the server knows, `available` for the ones on its PATH. Empty on a server too old
   // to answer, which is why neither readiness nor `loadError` waits on this query.
   acpList: readonly AcpAgent[]
+  // Whether Auto is offered (Background summaries, Settings) — for the surface's own profile grid
+  // (dispatchProfileGroups), which must agree with `resolved` about it.
+  autoEffort: boolean
   loadError: boolean
   // A cell chosen in the profile grid, and a model chosen inside an ACP agent: both set the pick.
   choose: (selection: ProfileGridSelection) => void
@@ -140,13 +144,15 @@ export function useDispatchProfile(pickState: DispatchPickState = NO_PICK): {
   const acpSettled = acpAgents.isSuccess || acpAgents.isError
   const needsAcp = preferences.data?.backend === "acp" || pick?.backend === "acp"
   const controlsReady = !!preferences.data && !!codexModels.data && (!needsAcp || acpSettled)
+  // Auto effort is a model call, so it is offered only while Background summaries is on (Settings).
+  const autoEffort = useBackgroundSummaries()
   const defaultResolved = useMemo(
-    () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList, acpList) : undefined,
-    [controlsReady, preferences.data, codexList, acpList],
+    () => controlsReady ? resolveDispatchPreferences(preferences.data!, codexList, acpList, { autoEffort }) : undefined,
+    [controlsReady, preferences.data, codexList, acpList, autoEffort],
   )
   const resolved = useMemo(
-    () => controlsReady && pick ? resolveDispatchPreferences(withDispatchPick(preferences.data!, pick), codexList, acpList) : defaultResolved,
-    [controlsReady, preferences.data, codexList, acpList, pick, defaultResolved],
+    () => controlsReady && pick ? resolveDispatchPreferences(withDispatchPick(preferences.data!, pick), codexList, acpList, { autoEffort }) : defaultResolved,
+    [controlsReady, preferences.data, codexList, acpList, pick, defaultResolved, autoEffort],
   )
 
   const choose = useCallback((selection: ProfileGridSelection) => {
@@ -186,6 +192,7 @@ export function useDispatchProfile(pickState: DispatchPickState = NO_PICK): {
     codexList,
     claudeList,
     acpList,
+    autoEffort,
     loadError: preferences.isError || codexModels.isError,
     choose,
     chooseAcpModel,

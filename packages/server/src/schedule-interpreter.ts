@@ -176,11 +176,16 @@ export interface ScheduleInterpreter {
   interpret(input: { text: string; tz: string; existing?: ThreadScheduleRow; viewerTz?: string }): Promise<InterpretScheduleResult>
 }
 
+/** What reading a schedule answers while Background summaries is off (Settings): no model is asked. The
+ *  prompt box takes it as "no schedule here" (web scheduleIntent.classifyResult) and says nothing; Change
+ *  when shows it, so it names where to turn reading back on. */
+export const SCHEDULE_READING_OFF_COPY = "Reading a schedule needs Background summaries, which are off in Settings."
+
 export function createScheduleInterpreter(deps: { complete?: ClaudeOneShot; now?: () => number; model?: string }): ScheduleInterpreter {
   const now = deps.now ?? Date.now
   return {
     async interpret({ text, tz, existing, viewerTz }) {
-      if (!deps.complete) return { ok: false, error: "Reading a schedule needs Claude, which this server has switched off." }
+      if (!deps.complete) return { ok: false, error: SCHEDULE_READING_OFF_COPY }
       if (!isValidTimeZone(tz)) return { ok: false, error: `"${tz}" is not a time zone Frizz knows.` }
       const nowMs = now()
       const system = interpreterSystemPrompt()

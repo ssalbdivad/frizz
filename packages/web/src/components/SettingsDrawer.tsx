@@ -2,7 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternal
 import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { ArrowLeft, Check, ChevronRight, Copy } from "lucide-react"
-import { type Settings } from "@frizz/shared"
+import { backgroundSummariesOn, type Settings } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { store, type ConnectionState } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
@@ -180,6 +180,15 @@ export function SettingsDrawer() {
             <SettingsField label="Desktop notifications" help={SETTINGS_HELP.notifications}>
               <OnOffToggle value={draft.notifications} onChange={toggleNotifications} />
               {inEditor ? <EditorHint>Shown in your browser, not in the sidebar.</EditorHint> : draft.notifications && <PermHint perm={perm} />}
+            </SettingsField>
+
+            {/* The one switch over every model call Frizz makes on its own (shared Settings
+                `backgroundSummaries`, server background-summaries.ts). On by default. */}
+            <SettingsField label="Background summaries" help={SETTINGS_HELP.backgroundSummaries}>
+              <OnOffToggle
+                value={backgroundSummariesOn(draft)}
+                onChange={(backgroundSummaries) => update({ ...draft, backgroundSummaries })}
+              />
             </SettingsField>
 
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}

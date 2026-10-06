@@ -109,9 +109,28 @@ export function applyDispatchPreferenceUpdate(
   }
 }
 
+/**
+ * Whether a dispatch surface offers AUTO effort. Auto is a model call Frizz makes before launch (server
+ * effort-chooser.ts), so it exists only while Background summaries is on (Settings, shared
+ * `backgroundSummariesOn`). Off, the surfaces offer the concrete ladder alone and a saved "auto" reads
+ * as the level the server would launch it on anyway (`fixedEffort`) — the record keeps "auto", so
+ * turning the setting back on brings it back untouched.
+ */
+export interface DispatchEffortOptions {
+  autoEffort?: boolean
+}
+
+/**
+ * The level an "auto" dispatch launches on when no model picks one — the server's own rule (dispatch.ts
+ * concreteEffort): high where the model's ladder has it, else the Codex model's default, else its first.
+ */
+export function fixedEffort(efforts: readonly string[], codexDefault?: string): string {
+  return efforts.includes("high") ? "high" : codexDefault ?? efforts[0] ?? ""
+}
+
 // `claudeModels` is the runtime-resolved Claude catalogue (the claudeModels RPC): the Claude rows take
 // their edition labels from it ("Opus 5.5"), exactly as the Codex rows take theirs from the codex cache.
-export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAgents: readonly AcpAgent[] = [], claudeModels: readonly ClaudeModel[] = []): ProfileGridGroup[] {
+export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAgents: readonly AcpAgent[] = [], claudeModels: readonly ClaudeModel[] = [], { autoEffort = true }: DispatchEffortOptions = {}): ProfileGridGroup[] {
   // Only the agents actually on the server's PATH get a row: the catalogue lists eight, and a grid of
   // "not installed" rows would bury the two the operator has. A SAVED agent that has since gone
   // missing surfaces through resolveDispatchPreferences's `modelAvailable`, not through a row here.
@@ -130,11 +149,11 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAge
         model: option.value,
         label: option.label,
         edition: claudeModels.find((model) => model.alias === option.value)?.edition,
-        defaultEffort: AUTO_EFFORT,
+        defaultEffort: autoEffort ? AUTO_EFFORT : fixedEffort(claudeEfforts(option.value)),
         // Per-model, exactly like the codex rows below: the ultracode rung exists only on the
-        // xhigh-capable models, so Haiku's row leaves that grid cell empty. Auto leads every row: it
-        // picks from the rest of that row at dispatch.
-        efforts: [AUTO_EFFORT, ...claudeEfforts(option.value)],
+        // xhigh-capable models, so Haiku's row leaves that grid cell empty. Auto leads every row while
+        // Background summaries is on: it picks from the rest of that row at dispatch.
+        efforts: autoEffort ? [AUTO_EFFORT, ...claudeEfforts(option.value)] : claudeEfforts(option.value),
       })),
     },
     {
@@ -143,8 +162,8 @@ export function dispatchProfileGroups(codexModels: readonly CodexModel[], acpAge
       options: codexModels.map((model) => ({
         model: model.slug,
         label: model.displayName,
-        defaultEffort: AUTO_EFFORT,
-        efforts: [AUTO_EFFORT, ...model.efforts],
+        defaultEffort: autoEffort ? AUTO_EFFORT : fixedEffort(model.efforts, model.defaultEffort),
+        efforts: autoEffort ? [AUTO_EFFORT, ...model.efforts] : [...model.efforts],
       })),
     },
     ...(acpOptions.length ? [{ id: "acp", label: "ACP agents", options: acpOptions }] : []),
@@ -155,6 +174,7 @@ export function resolveDispatchPreferences(
   preferences: DispatchPreferences,
   codexModels: readonly CodexModel[],
   acpAgents: readonly AcpAgent[] = [],
+  { autoEffort = true }: DispatchEffortOptions = {},
 ): ResolvedDispatchPreferences {
   const backend = preferences.backend
   // `acp` is optional on the record (older rows predate it), so an ACP backend with no saved profile
@@ -180,15 +200,19 @@ export function resolveDispatchPreferences(
       ? codexModels.some((candidate) => candidate.slug === model)
       : acpAgents.some((candidate) => candidate.available && candidate.id === acpAgentId)
   // Auto unless the operator made another level the default: the server picks one from the prompt.
-  const defaultEffort = backend === "claude" || codexModel ? AUTO_EFFORT : ""
+  // With Background summaries off there is no Auto: the default, and a saved "auto", read as the level
+  // the server launches such a dispatch on (fixedEffort), so the pill shows what will actually run.
+  const fixed = backend === "claude" ? fixedEffort(claudeEfforts(model)) : codexModel ? fixedEffort(codexModel.efforts, codexModel.defaultEffort) : ""
+  const defaultEffort = backend === "claude" || codexModel ? (autoEffort ? AUTO_EFFORT : fixed) : ""
   // An ACP agent has no effort axis in Frizz — it runs on its own CLI's model and effort — so its
   // effort is "" and always "available": there is nothing to be unavailable.
-  const effort = backend === "acp" ? "" : profile.effort ?? defaultEffort
-  const autoOption = { value: AUTO_EFFORT, label: "Auto" }
+  const saved = profile.effort === AUTO_EFFORT && !autoEffort ? undefined : profile.effort
+  const effort = backend === "acp" ? "" : saved ?? defaultEffort
+  const autoOptions = autoEffort ? [{ value: AUTO_EFFORT, label: "Auto" }] : []
   const baseEfforts = backend === "claude"
-    ? [autoOption, ...claudeEffortOptions(model, { withDefault: false })]
+    ? [...autoOptions, ...claudeEffortOptions(model, { withDefault: false })]
     : backend === "codex" && codexModel
-      ? [autoOption, ...codexEffortOptions(codexModel, { withDefault: false })]
+      ? [...autoOptions, ...codexEffortOptions(codexModel, { withDefault: false })]
       : []
   const effortAvailable = backend === "acp" || baseEfforts.some((option) => option.value === effort)
   const effortOptions = effort && !effortAvailable
