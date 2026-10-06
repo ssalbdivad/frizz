@@ -77,8 +77,11 @@ export function phoneQueue(
   const working: ThreadView[] = []
   for (const project of projects) {
     const bands = loudBands(project, hidden, overlayFor(project))
-    for (const t of [...bands.pinned, ...bands.ready, ...bands.working]) owner.set(t, project)
-    pinned.push(...bands.pinned)
+    // The shelf's OPEN pins: a pinned Done thread, which the list's Pinned band now carries from the poll
+    // (lib/listBands.ts), is the Done tab's here (phoneDone) — one tab per thread, as it always was.
+    const shelf = bands.pinned.filter((t) => t.state !== "archived")
+    for (const t of [...shelf, ...bands.ready, ...bands.working]) owner.set(t, project)
+    pinned.push(...shelf)
     ready.push(...bands.ready)
     working.push(...bands.working)
   }
@@ -97,9 +100,8 @@ export function phoneSnoozed(projects: readonly QueuesProject[]): PhoneRow[] {
 /**
  * THE DONE TAB: every shown project's finished threads, most recent first — read from each project's own
  * board, since the poll carries only a COUNT of them (lib/projectBoards.ts). A project whose board has not
- * been read yet contributes nothing until it has. A pinned thread that is done is listed here too: the
- * queue's shelf comes from the poll, which carries open threads alone, so this is the one tab that can show
- * it.
+ * been read yet contributes nothing until it has. A pinned thread that is done is listed here too, and only
+ * here: the queue tab's shelf keeps the open pins (phoneQueue), so a thread is on one tab.
  */
 export function phoneDone(projects: readonly QueuesProject[], boardOf: (project: QueuesProject) => Pick<BoardSnapshot, "threads"> | null | undefined): PhoneRow[] {
   const owner = new Map<ThreadView, QueuesProject>()

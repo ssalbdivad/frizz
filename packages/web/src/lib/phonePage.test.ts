@@ -37,7 +37,7 @@ const snoozed = (id: string, activeMsAgo: number) => ready(id, 0, { needsYou: fa
 const done = (id: string, activeMsAgo: number) => ready(id, 0, { needsYou: false, queuedAt: undefined, state: "archived", status: "done", lastActivityAt: ago(activeMsAgo), lastUserAt: ago(activeMsAgo) })
 
 const project = (id: string, over: Partial<QueuesProject> = {}): QueuesProject =>
-  ({ id, slug: id, name: id, card: undefined, open: true, stale: false, projectDir: `/w/${id}`, homeDir: "/home/x", githubRepo: undefined, queued: [], running: [], snoozed: [], doneCount: 0, ...over }) as QueuesProject
+  ({ id, slug: id, name: id, card: undefined, open: true, stale: false, projectDir: `/w/${id}`, homeDir: "/home/x", githubRepo: undefined, queued: [], running: [], snoozed: [], pinnedDone: [], doneCount: 0, ...over }) as QueuesProject
 
 const names = (rows: readonly { project: QueuesProject; thread: ThreadView }[]) => rows.map((r) => `${r.project.id}:${r.thread.id}`)
 
@@ -66,6 +66,13 @@ test("a pinned thread leads even the asks, in pin order, and is listed once", ()
   const alpha = project("alpha", { queued: [ask("a-ask", 60_000), pinnedLate], running: [pinnedEarly] })
   const rows = names(phoneQueue([alpha]))
   assert.deepEqual(rows, ["alpha:pinned-early", "alpha:pinned-late", "alpha:a-ask"])
+})
+
+test("a pinned Done thread the poll carries is the Done tab's, not the queue's shelf — one tab per thread", () => {
+  const shelved = { ...done("shelved", 5_000), pinnedAt: ago(9_000) }
+  const alpha = project("alpha", { queued: [ask("a-ask", 60_000)], pinnedDone: [shelved] })
+  assert.deepEqual(names(phoneQueue([alpha])), ["alpha:a-ask"])
+  assert.deepEqual(names(phoneDone([alpha], () => ({ threads: [shelved] }))), ["alpha:shelved"])
 })
 
 test("a same-slug thread in two projects is two rows with two keys", () => {
