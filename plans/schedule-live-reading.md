@@ -899,6 +899,11 @@ Rules behind the table:
 - The rail glyph stays `hint` while a dismissed edge still reads, so the way back is one key.
 - No caption and no toast. The underline and ledge simply leave.
 
+*As built (Step 5, `e34fd2a9`):* a dismissal is applied at RENDER (`shownUnder` in `lib/scheduleOffer.ts`), not
+at the next publish point. It changes no text, so the policy never re-ran on it, and Step 4's Esc and × worked
+only while the 800ms close-edge idle was still armed; a tap on the phone's `×` seconds after the last key left
+the row up.
+
 ---
 
 ## 9. Safety invariants (each one is a test, §15)
@@ -1078,6 +1083,24 @@ go, and fixes the comment.
 - **The send glyph swap** carries Enter's meaning in the mode: the tap that creates is the repeat glyph.
 - The thread reply bar (`ThreadComposerBox`, `layout: "bar"`) stays without schedules.
 
+*As built (Step 5, `ecec8662`):*
+- **The tap row** is `TapRowLine` in `ScheduleComposer.tsx`: `Schedule` is a bordered pill (a bare word does not
+  read as tappable), `×` a 32px square; both hit areas measure ≥32px on every side, and the row never wraps (the
+  desktop's actions-to-a-second-row rule is the desktop's). No `Each run` segment on the phone: no room, and no
+  hover for the ledge's title.
+- **The order of loss is measured, not wrapped.** It drops a MIDDLE segment first (`next {day}` before `in 6d`),
+  which the desktop's wrapping clip (it drops the last) cannot do: invisible copies of the rule and its two tails
+  sit beside the row, and `useTailFit` shows the longest that fits, re-fit by a ResizeObserver. With `next` gone
+  the span joins with a dot: `Every Monday at 9am · in 6d`. Driven: 640px wears the whole reading, 420px `· in
+  6d`, and 360px ellipsizes the rule (`Every Monday at 9…`) in DejaVu Sans, this box's `system-ui`, 6.8px short;
+  in Liberation Sans (Arial's metrics, nearer SF and Roboto) the rule reads whole at 360. On a real phone face it
+  is expected to fit; that is inferred, not measured.
+- **The panel** names no Esc and gives Cancel and Create schedule 32px hit layers. Its Next line now drops
+  dates whole, last first (the ledge's wrapping clip), on every width: on the phone it read `… · Mon Oct 1…`.
+- The glyph's title drops `(Tab)`, and the screen-reader line ends `Tap Schedule to schedule it.`
+- The send button's swap needed nothing new: the sheet holds the desktop box, whose send glyph already follows
+  the mode; driven, the repeat glyph's tap created and never dispatched.
+
 ---
 
 ## 13. Server changes (all small)
@@ -1254,6 +1277,10 @@ grades the 133-text probe corpus as written at its own clock, with eight documen
 
 ### Step 5: the phone
 - **Edit** the ledge and panel for `useIsMobile()` (§12), then verify at 360px.
+- **As built (`e34fd2a9`, `ecec8662`):** see §8 and §12 *As built*. `useLiveSchedule` reads `useIsMobile()` and
+  hands `phone` to the slot, the ledge (`TapRowLine` instead of `LedgeLine`) and the panel's footer. The
+  reading the two lines share is `offerReading`. `PhonePage.tsx`'s header comment says what the phone draws
+  differently. Driven at 420 and 360 (§15.3 item 6 *As built*); measured (§15.4 *As built*).
 
 ---
 
@@ -1413,6 +1440,18 @@ cost is that nothing runs them in `nub --test`; the harness is kept in the threa
 5. Change when saves a local reading, and a cue through the model.
 6. The phone sheet at 360px.
 
+*As built (Step 5), driven* on a disposable stack (`--creds`, a throwaway git project), headless puppeteer with
+touch emulation (`isMobile`, `hasTouch`, every press a `page.tap`), dark, `America/New_York`, Tue Oct 6 2026
+~01:00–01:20, `dispatch`/`createLazyThread` counted and refused on the wire: **41/41 at 420px and 360px**
+(`scratch/verify-live-phone.ts`), no page errors. The row appears at the space after `Monday` and not mid-word,
+with zero model calls; `×` puts it away (seconds after the last key — the case §8's fix is for) and keeps focus;
+`Schedule` opens the panel with Create enabled, the repeat glyph on send and focus kept in the box; tapping the
+repeat send created one schedule (`FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0`, prompt `triage new issues`, local
+source) and dispatched nothing — the one new board row is the schedule's pending run; the sheet closed with the
+Undo/Open toast; Cancel left the mode and dismissed the edge; the rail glyph re-entered it; Undo by tap deleted
+the schedule and restored the draft as it was before the accept. The desktop phases (offer, close, event,
+dismiss, reload, states) of `scratch/verify-live-box.ts` re-ran green on the same code.
+
 *As built (Step 4), driven* on a disposable stack (`--creds`, a throwaway git project, headless puppeteer, dark,
 `America/New_York`, Tue Oct 6 2026 ~00:15–01:00), `dispatch`/`createLazyThread` counted and refused on the
 wire so no worker could start; **53/53 checks in one run** (at `d7996763`; the later underline pad is CSS,
@@ -1466,6 +1505,17 @@ the narrowest column (800px window) and in the 640px dialog. The rail in the off
 14.5 (paperclip · glyph · snail · send), inside iconRhythm's band; in the mode the pressed glyph's fill reaches
 the scan's padded clip, so those two gaps were not measured (that treatment is Step 0's, unchanged). 360px is
 Step 5's and was not shot.
+
+*As built (Step 5), the phone row* (`scratch/verify-live-phone.ts`, the real sheet, dark, sans, 420 and 360,
+identical at both): ink gaps border → `↻` 11.0 · `↻` → reading 8.0 · pill → `×` 12.0 · `×` → border 11.0 — the
+SVG marks by their geometry plus half the stroke (Chrome's rect leaves the stroke out), the reading and the pill
+by a pixel scan of their own boxes. The reading → pill gap is a right-aligned cluster's free space (24.66 at 420,
+13.66 against the ellipsis at 360). Against the reading's cap band: `↻` −0.13, `×` −0.13, the pill's frame −0.13
+(its word trimmed to the cap band with `text-box`, so `items-center` centres the ink in any face; centring the
+line box left it −0.50 in DejaVu), the pill's word on the reading's baseline (0.00). Row: 36px inside, the pill
+4px from either edge. The join at 360 and 420: the box's bottom border is the row's top, no seam. Shots:
+`live-phone-{420,360}-{offer,row,mode,toast,after}.png`, `live-phone-640-offer.png`,
+`live-phone-360-liberation.png`.
 
 ---
 
