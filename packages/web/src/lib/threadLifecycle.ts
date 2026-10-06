@@ -2,9 +2,10 @@ import type { CompletionHold, ThreadView } from "@frizz/shared"
 import { isDirectSubAgent } from "@frizz/shared"
 
 export interface ThreadLifecycleAvailability {
-  // The strip itself renders. TRUE for any owned session thread, done or not — see `done`.
-  footer: boolean
-  // The thread is already complete, so the strip STATES that instead of offering a verb.
+  // The header's lifecycle cluster renders (ThreadLifecycleActions). TRUE for any owned session thread,
+  // done or not — see `done`.
+  lifecycle: boolean
+  // The thread is already complete, so the cluster STATES that instead of offering a verb.
   done: boolean
   snooze: boolean
   archive: boolean
@@ -23,17 +24,17 @@ export function threadLifecycleAvailability(
   // `archived` mirrors the pre-state-column protocol; honor it during a rolling server/client reload.
   const archived = owned && (thread.state === "archived" || thread.archived === true)
   // An archived thread has no lifecycle VERBS — there is no Reopen button (reopening is just sending
-  // the thread another message), and Snooze rejects an archived thread server-side. It keeps the STRIP
-  // regardless, reading "Done" where the buttons were, because dropping it left the completed state
-  // with nowhere to appear: a thread's full view showed a title, an activity stamp and a composer, and
-  // nothing anywhere said the thread was finished (maintainer 2026-07-29, on a /full page: "why does
+  // the thread another message), and Snooze rejects an archived thread server-side. It keeps the
+  // CLUSTER regardless, reading "Done" where the buttons were, because dropping it left the completed
+  // state with nowhere to appear: a thread's full view showed a title, an activity stamp and a composer,
+  // and nothing anywhere said the thread was finished (maintainer 2026-07-29, on a /full page: "why does
   // this not have a footer with the mark as done button?" — the honest answer is a readout, not an
-  // absence). Holding the strip also keeps the two things it alone carries: the ContextMeter, and the
-  // device safe-area inset for the whole thread column.
-  const footer = owned
+  // absence). The cluster was a footer under the prompt box until 2026-10-05; it closes the header's
+  // action strip now.
+  const lifecycle = owned
   const actionable = owned && !archived
   return {
-    footer,
+    lifecycle,
     done: archived,
     snooze: actionable,
     archive: actionable,

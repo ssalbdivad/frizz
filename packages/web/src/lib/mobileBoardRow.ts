@@ -1,6 +1,6 @@
 import { futureSnoozedUntil, type ThreadView } from "@frizz/shared"
 import type { SessionIndicatorKind } from "../groups.ts"
-import { hintGloss } from "./awaitingPresentation.ts"
+import { awaitingProse, awaitingWaitClause, hintGloss } from "./awaitingPresentation.ts"
 import { toolActivityLabel } from "./toolActivity.ts"
 
 // THE PHONE BOARD ROW'S SECOND LINE — what the thread wants, in one line.
@@ -118,7 +118,21 @@ export function rowSecondLine(
 ): RowLine | null {
   // The real first line when the server sent one; a line that is only a fence opener or a bare heading
   // mark strips to nothing, and then the preview's approximation is still better than no line.
-  const handoff = () => handoffLine(t.lastAssistantLine, true) ?? handoffLine(t.lastAssistant)
+  //
+  // EXCEPT A QUIET PARK, which is the ```awaiting fence alone — the shape a `status: working` or
+  // `watching` rest takes (2026-10-05). Its preview is the fence's YAML, which must never reach the reader
+  // (awaitingPresentation's FENCE_SYNTAX_KEYS), so the line is the fence's own prose when it has any, and
+  // otherwise the wait it names.
+  const parked = t.lastFence?.kind === "awaiting" && /^`{3,}awaiting\b/.test((t.lastAssistant ?? "").trimStart()) ? t.lastFence : undefined
+  const handoff = (): RowLine | null => {
+    if (parked) {
+      const prose = awaitingProse(parked)
+      if (prose) return handoffLine(prose)
+      const wait = awaitingWaitClause(parked.hints)
+      if (wait) return { text: `${wait.charAt(0).toUpperCase()}${wait.slice(1)}` }
+    }
+    return handoffLine(t.lastAssistantLine, true) ?? handoffLine(t.lastAssistant)
+  }
   if (kind === "needs-input") {
     const registered = questionsLine((t.questions ?? []).map((q) => q.spec.question))
     if (registered) return { text: registered }

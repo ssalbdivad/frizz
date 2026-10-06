@@ -208,12 +208,76 @@ export function CardHead({
   )
 }
 
+// THE KIND CHIP — the second head shape (2026-10-05). A card that names its KIND in a small filled chip
+// carries its glyph INSIDE that chip, at chip size, with the title on its own line under it and a rule
+// between that header and the body (maintainer, of the steps card: "we should have a little icon … then
+// a label that says just says to do, like a chip basically. Then underneath that can be the title … I
+// think it would help if we had another horizontal rule dividing the title and chip from the actual
+// body"). The 16px glyph beside a 16px title read as two headings side by side; a chip says what KIND
+// of card this is once, small, and leaves the title to say what THIS one is about.
+//
+// FILLED, NEVER OUTLINED: the code chip's own translucent fill (styles.css, `.card-md .md-body code`),
+// so the two chip kinds on one card are one family on any card fill. An outlined pill was the
+// secondary button's treatment, and that border was the first thing the maintainer struck off this
+// card ("There should be no border around the 'couldn't do it' button").
+//
+// The LEFT padding is 1px under the right, because the two ends are different marks: ListTodo inks 1.5px
+// in from its 12px box while the label's last letter inks ~0.6px in from its advance. Measured
+// 2026-10-05 (sans, 11px): 8.5px of fill before the glyph's ink, 8.6px after the label's.
+const CARD_CHIP = "inline-flex shrink-0 items-center gap-1 rounded-full bg-fg/[0.08] py-0.5 pl-[7px] pr-2 text-[11px] font-medium leading-4 text-fg/85"
+
+export function KindChip({ icon: Icon, children }: { icon?: LucideIcon; children: ReactNode }) {
+  return (
+    <span data-card-chip className={CARD_CHIP}>
+      {Icon && <Icon aria-hidden="true" size={12} className="shrink-0" />}
+      {children}
+    </span>
+  )
+}
+
+// The chipped head: the chip row (with any aside at its far right), then the title when there is one —
+// a steps card whose worker named no `title:` is headed by its chip alone, which already says what the
+// card is for.
+//
+// THE RULE UNDER IT sits the same INK distance from what is above it as from the body's first line
+// below — 17px each way, measured on the steps card (sans). The title's line box carries 3px of its own
+// air under the ink, so the rule takes 14px of margin under a title and the full 17px under a bare chip,
+// whose fill IS its ink.
+function ChipHead({ icon, chip, label, head, aside, ruled }: {
+  icon?: LucideIcon
+  chip: ReactNode
+  label?: ReactNode
+  head: string
+  aside?: ReactNode
+  ruled: boolean
+}) {
+  const titled = label != null && label !== false
+  return (
+    <>
+      <div className="min-w-0">
+        <div className="flex min-w-0 items-center gap-2">
+          <KindChip icon={icon}>{chip}</KindChip>
+          {aside && <span className="ml-auto shrink-0">{aside}</span>}
+        </div>
+        {titled && (
+          <div data-card-title className={`mt-1.5 min-w-0 text-[16px] font-semibold leading-6 tracking-tight ${head}`}>{label}</div>
+        )}
+      </div>
+      {ruled && <div aria-hidden data-card-rule className={`-mx-4 border-t border-border ${titled ? "mt-3.5" : "mt-[17px]"}`} />}
+    </>
+  )
+}
+
 // The card's content. One wrapper so every card spells its top gap the same way, and `card-md` pulls
 // any markdown rendered inside down to the card's own body scale (styles.css) — without it a ```done
 // bullet list renders at the transcript's 14px prose scale and is visibly larger than the identical
 // sentence in the card above it.
-export function CardContent({ children }: { children: ReactNode }) {
-  return <div className="card-md mt-1 min-w-0 text-fg/75">{children}</div>
+//
+// UNDER A CHIPPED HEAD the body opens past a full-bleed rule (ChipHead draws it) — the same rule the
+// wait table's divider and the action footer draw (`-mx-4 … border-t border-border`), so a chipped card
+// reads as three bands: what it is, what it says, what to do.
+export function CardContent({ children, ruled = false }: { children: ReactNode; ruled?: boolean }) {
+  return <div className={`card-md ${ruled ? "mt-3" : "mt-1"} min-w-0 text-fg/75`}>{children}</div>
 }
 
 // Part one: the SHELL. One rounded panel-2 card at one padding for every kind. Cards used to disagree
@@ -246,6 +310,7 @@ export function CardContent({ children }: { children: ReactNode }) {
 export function TranscriptCard({
   tone = "neutral",
   icon,
+  chip,
   label,
   aside,
   children,
@@ -256,6 +321,10 @@ export function TranscriptCard({
   tone?: CardTone
   /** Optional — see CardHead. A question card carries no corner glyph; every other kind still does. */
   icon?: LucideIcon
+  /** The card's KIND as a small chip over the title — the second head shape (KindChip). The glyph rides
+   *  inside the chip, and the body opens past a rule. Absent, the card keeps the glyph-beside-title head. */
+  chip?: ReactNode
+  /** The title. Under a chip it may be absent: the chip alone heads the card. */
   label: ReactNode
   // Optional trailing slot at the title row's far right: the one thing the card is ABOUT, when that is a short reference rather than
   // prose (the wake card's `owner/repo#N` link). It rides the title instead of taking a body line of
@@ -272,8 +341,10 @@ export function TranscriptCard({
   const { border, head } = CARD_TONES[tone]
   return (
     <div {...rest} className={`min-w-0 ${BLOCK_RADIUS} border ${surface === "question" ? "border-question-border bg-question" : `${border} bg-panel-2`} p-4 ${className}`}>
-      <CardHead icon={icon} label={label} head={head} aside={aside} />
-      {children != null && <CardContent>{children}</CardContent>}
+      {chip != null
+        ? <ChipHead icon={icon} chip={chip} label={label} head={head} aside={aside} ruled={children != null} />
+        : <CardHead icon={icon} label={label} head={head} aside={aside} />}
+      {children != null && <CardContent ruled={chip != null}>{children}</CardContent>}
     </div>
   )
 }

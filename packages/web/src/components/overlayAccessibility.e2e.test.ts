@@ -1,11 +1,59 @@
 import assert from "node:assert/strict"
 import test from "node:test"
+import { MOBILE_MAX_PX } from "../lib/mobile.ts"
 
 // Opt-in because this drives a real Frizz server and Chrome. Normal unit runs record the regression
-// without requiring a listener; local/live verification supplies a disposable URL and session row.
+// without requiring a listener; local/live verification supplies a disposable URL and session rows.
+//
+// FRIZZ_OVERLAY_E2E_URL is a PROJECT's board, not the server root: one server serves every project,
+// and the bare origin is the project grid, which has no board and no Settings button. Working
+// invocation (from the repo root, against a disposable stack):
+//
+//   nub scripts/adhoc-stack.mjs --port=47451            # first JSON line names `home` and `url`
+//   nub scripts/seed-nested-subagents.mjs --home=<home>  # the nested sub-agent thread (first test)
+//   nub scripts/seed-overlay-e2e.mjs --home=<home>       # the "Overlay E2E" thread (second test)
+//   FRIZZ_OVERLAY_E2E_URL=http://127.0.0.1:47451/project/frizz FRIZZ_OVERLAY_E2E_NESTED_SLUG=nested-subagents \
+//     nub run test packages/web/src/components/overlayAccessibility.e2e.test.ts
+//
+// While the Mac sits idle, new headless Chrome can stop drawing frames after a tab's second
+// navigation (see the headless-browser skill). The app keeps working, but puppeteer's
+// requestAnimationFrame-polled waits never re-check, so a step whose state is already true times out
+// (measured 2026-10-05: 3 of 6 runs, the sheet already closed and the route already rewritten).
+// PUPPETEER_EXECUTABLE_PATH pointed at puppeteer's chrome-headless-shell keeps drawing (6 of 6).
 const baseUrl = process.env.FRIZZ_OVERLAY_E2E_URL
 const threadSlug = process.env.FRIZZ_OVERLAY_E2E_SLUG ?? "overlay-e2e"
 const nestedThreadSlug = process.env.FRIZZ_OVERLAY_E2E_NESTED_SLUG
+// The board's own path ("/project/frizz"): where closing the last sheet leaves the address bar.
+const boardPath = baseUrl ? new URL(baseUrl).pathname.replace(/\/$/, "") || "/" : "/"
+
+type AppStore = typeof import("../store.ts")
+type StoreHandle = { frizzOverlayE2eStore: () => Promise<AppStore> }
+
+// The tests reach the app's store to open and read drawers. A bare `import("/src/store.ts")` is NOT
+// the app's store once vite has hot-updated anything since it started — the app then holds
+// `/src/store.ts?t=<n>`, and the bare URL evaluates a second, empty instance whose `pushDrawer` opens
+// nothing. Other agents edit this tree all day, so that is the common case on a live stack. This
+// handle imports the exact URL the app itself loaded (the resource-timing buffer is widened first:
+// vite's dev graph is far past the default 250 entries). Serialized into the page, so self-contained.
+function installStoreHandle(): void {
+  performance.setResourceTimingBufferSize(100_000)
+  ;(globalThis as unknown as StoreHandle).frizzOverlayE2eStore = () => {
+    const loaded = performance.getEntriesByType("resource").map((entry) => entry.name)
+      .filter((name) => new URL(name).pathname === "/src/store.ts")
+    return import(loaded.at(-1) ?? "/src/store.ts")
+  }
+}
+
+// adhoc-stack runs without the launcher supervisor. Only its unrelated status probe is stubbed; the
+// board, transcript, drawer components and keyboard dispatch all run through the real app.
+async function stubSupervisorStatus(page: import("puppeteer").Page): Promise<void> {
+  await page.setRequestInterception(true)
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/_frizz/control/status") {
+      void request.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ protocol: 1, state: "ready", updateRestart: false }) })
+    } else void request.continue()
+  })
+}
 
 // Seed with scripts/seed-nested-subagents.mjs against the disposable stack's HOME, then set
 // FRIZZ_OVERLAY_E2E_NESTED_SLUG=nested-subagents alongside FRIZZ_OVERLAY_E2E_URL.
@@ -17,44 +65,44 @@ test("Escape unwinds nested subagent drawers without dismissing their session", 
   const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] })
   try {
     const page = await browser.newPage()
-    // adhoc-stack runs without the launcher supervisor. Only its unrelated status probe is stubbed;
-    // the board, transcript, drawer components and keyboard dispatch all run through the real app.
-    await page.setRequestInterception(true)
-    page.on("request", (request) => {
-      if (new URL(request.url()).pathname === "/_frizz/control/status") {
-        void request.respond({ status: 200, contentType: "application/json", body: JSON.stringify({ protocol: 1, state: "ready", updateRestart: false }) })
-      } else void request.continue()
-    })
+    await page.evaluateOnNewDocument(installStoreHandle)
+    await stubSupervisorStatus(page)
     const errors: string[] = []
     page.on("pageerror", (error) => errors.push(String(error)))
     page.on("console", (message) => { if (message.type() === "error") errors.push(`${message.text()} ${message.location().url}`) })
     const drawers = () => page.evaluate(async () => {
-      const path = "/src/store.ts"
-      const { store } = await import(path)
+      const { store } = await (globalThis as unknown as StoreHandle).frizzOverlayE2eStore()
       return store.drawers.map((drawer: { kind: string; closing?: boolean }) => ({ kind: drawer.kind, closing: !!drawer.closing }))
     })
     for (const [width, font] of [[1440, "sans"], [390, "sans"], [1440, "mono"], [390, "mono"]] as const) {
       await page.setViewport({ width, height: 900 })
       await page.goto(`${baseUrl}/thread/${nestedThreadSlug}`, { waitUntil: "domcontentloaded" })
-      await page.waitForSelector(`[data-subagent-parent="${nestedThreadSlug}"]`)
+      // Wait for the board to have drawn this thread with its live children. The desktop rail lists
+      // each sub-agent as its own row (`data-subagent-parent`); the PHONE board (MobileBoard, below
+      // MOBILE_MAX_PX) deliberately draws no sub-agent rows — one row per thread, a "· N agents" count
+      // in their place — so there the thread's own row is the board's evidence. Either way the drill
+      // under test is the TRANSCRIPT's Agent card below, which both widths render.
+      await page.waitForSelector(width > MOBILE_MAX_PX
+        ? `[data-subagent-parent="${nestedThreadSlug}"]`
+        : `[data-mobile-thread-row="${nestedThreadSlug}"]`)
       await page.evaluate((font) => { document.documentElement.dataset.font = font }, font)
+      // A desktop deep link to a thread that needs you lands on its queue card, not a drawer
+      // (store.resolveRoutedThread); open the session drawer explicitly. Where the route already
+      // opened it (the phone), this raises the same layer rather than stacking a second.
       await page.evaluate(async (slug) => {
-        const path = "/src/store.ts"
-        const { pushDrawer } = await import(path)
+        const { pushDrawer } = await (globalThis as unknown as StoreHandle).frizzOverlayE2eStore()
         pushDrawer("thread", slug)
-      }, nestedThreadSlug)
+      }, nestedThreadSlug!)
       const child = '[role="dialog"] [aria-label^="Open sub-agent transcript:"]'
       await page.waitForSelector(child)
       await page.click(child)
       await page.waitForFunction(async () => {
-        const path = "/src/store.ts"
-        const { store } = await import(path)
+        const { store } = await (globalThis as unknown as StoreHandle).frizzOverlayE2eStore()
         return store.drawers.length === 2
       })
       await page.keyboard.press("Escape")
       await page.waitForFunction(async () => {
-        const path = "/src/store.ts"
-        const { store } = await import(path)
+        const { store } = await (globalThis as unknown as StoreHandle).frizzOverlayE2eStore()
         return store.drawers.length < 2
       })
       assert.deepEqual(await drawers(), [{ kind: "thread", closing: false }], "one Escape leaves the session drawer open")
@@ -73,16 +121,19 @@ test("Escape unwinds nested subagent drawers without dismissing their session", 
   }
 })
 
-test("dialog portals, nested Select Escape, and thread tabs keep their keyboard contracts", {
+// Seed with scripts/seed-overlay-e2e.mjs: the "Overlay E2E" thread this test opens by its cold route.
+test("dialog portals, nested Select Escape, and thread sheets keep their keyboard contracts", {
   skip: !baseUrl,
   timeout: 90_000,
 }, async () => {
   const { default: puppeteer } = await import("puppeteer")
   const browser = await puppeteer.launch({
-    headless: "new",
+    headless: true,
     args: ["--no-sandbox", "--force-color-profile=srgb"],
   })
   const page = await browser.newPage()
+  await page.evaluateOnNewDocument(installStoreHandle)
+  await stubSupervisorStatus(page)
   const errors: string[] = []
   const failedResponses: string[] = []
   page.on("console", (message) => {
@@ -100,31 +151,20 @@ test("dialog portals, nested Select Escape, and thread tabs keep their keyboard 
     }), true)
   }
 
-  async function dismissSelectThenDialog(): Promise<void> {
-    await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[role=listbox]"))
-    assert.ok(await page.$("[role=dialog]"), "the Select Escape must leave its parent dialog open")
-    // Radix restores the portaled Select's trigger on a queued focus-scope cleanup. Wait for that
-    // layer to settle before exercising the next, intentionally separate Escape.
-    await page.waitForFunction(
-      () => document.activeElement?.getAttribute("role") === "combobox",
-      { polling: 50, timeout: 5_000 },
-    )
-    await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[role=dialog]"))
-  }
-
-  // The model/effort selector is a portaled DropdownMenu (role=menu), not a Select (role=listbox), so
-  // it unwinds through its own layer: the first Escape closes only the menu, the next closes the sheet.
-  async function dismissMenuThenDialog(): Promise<void> {
+  // Every model selector is a portaled DropdownMenu (role=menu) — the profile grid, and since the
+  // shared Select moved onto the same primitive, every Select too; nothing renders a role=listbox any
+  // more. Each registers in lib/selectOverlay, so it unwinds through its own layer: the first Escape
+  // closes only the menu and hands focus back to its trigger, the next closes the parent dialog.
+  async function dismissMenuThenDialog(triggerLabel: string): Promise<void> {
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[role=menu]"))
     assert.ok(await page.$("[role=dialog]"), "the menu Escape must leave its parent dialog open")
     // Radix restores the portaled menu's trigger on a queued focus-scope cleanup. Wait for that layer
     // to settle before exercising the next, intentionally separate Escape.
     await page.waitForFunction(
-      () => document.activeElement?.getAttribute("aria-label") === "Thread model and effort",
+      (label) => document.activeElement?.getAttribute("aria-label") === label,
       { polling: 50, timeout: 5_000 },
+      triggerLabel,
     )
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[role=dialog]"))
@@ -136,16 +176,27 @@ test("dialog portals, nested Select Escape, and thread tabs keep their keyboard 
     await page.keyboard.up("Shift")
   }
 
+  // The thread sheet's semantics on a cold route, read once the sheet has resolved its thread and drawn
+  // its header (desktop and phone headers both carry data-thread-header). Before that the title is
+  // the bare slug, which would race the label assertion.
+  async function threadSheet(): Promise<{ label?: string; modal: string | null; path: string }> {
+    await page.waitForSelector("[role=dialog] [data-thread-header]")
+    return page.$eval("[role=dialog]", (dialog) => ({
+      label: document.getElementById(dialog.getAttribute("aria-labelledby") ?? "")?.textContent?.trim(),
+      modal: dialog.getAttribute("aria-modal"),
+      path: location.pathname,
+    }))
+  }
+
   try {
     await page.setViewport({ width: 1440, height: 960, deviceScaleFactor: 1 })
-    await page.goto(`${baseUrl}/`, { waitUntil: "domcontentloaded" })
+    await page.goto(baseUrl!, { waitUntil: "domcontentloaded" })
     await page.waitForSelector('button[title="Settings"]')
 
     // Open from a real focused control so the close path can prove restoration.
     await page.focus('button[title="Settings"]')
     await page.evaluate(async () => {
-      const storeModule = "/src/store.ts"
-      const { openNewThread } = await import(storeModule)
+      const { openNewThread } = await (globalThis as unknown as StoreHandle).frizzOverlayE2eStore()
       openNewThread()
     })
     await page.waitForSelector('[role="dialog"][aria-modal="true"]')
@@ -164,76 +215,54 @@ test("dialog portals, nested Select Escape, and thread tabs keep their keyboard 
       await page.keyboard.press("Tab")
       await expectFocusInsideDialog()
     }
-    const model = await page.waitForSelector('[role="dialog"] button[aria-label="Model"]:not([disabled])')
+    // The dispatch profile picker (ProfileGridSelector) replaced the separate Model select: one
+    // trigger for model and effort, its grid portaled outside the dialog's DOM.
+    const model = await page.waitForSelector('[role="dialog"] button[aria-label="Model and effort"]:not([disabled])')
     assert.ok(model)
     await model.focus()
     await page.keyboard.press("Enter")
-    await page.waitForSelector("[role=listbox]")
-    assert.ok(await page.$("[role=dialog]"), "opening a portaled Select must leave its parent dialog mounted")
-    await dismissSelectThenDialog()
+    await page.waitForSelector('[role=menu][aria-label="Choose model and effort"]')
+    assert.equal(await page.$eval("[role=menu]", (menu) => menu.closest("[role=dialog]")), null, "the picker's menu is portaled outside the dialog")
+    assert.ok(await page.$("[role=dialog]"), "opening a portaled picker must leave its parent dialog mounted")
+    await dismissMenuThenDialog("Model and effort")
     await page.waitForFunction(
       () => document.activeElement?.getAttribute("title") === "Settings",
       { polling: 50, timeout: 5_000 },
     )
     assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("title")), "Settings")
 
-    // A cold /thread route must create the same modal sheet semantics immediately, including the
-    // linked tab/panel IDs. Radix Tabs owns arrows while onValueChange still owns route persistence.
+    // A cold /thread route must create the thread sheet immediately, labelled and holding focus. On a
+    // desktop the sheet is deliberately NON-modal (ThreadSheet: `modal={narrow}`) so the rail beside it
+    // stays live; at or below 800px it is a modal sheet (asserted at 390px below). The sheet's
+    // Chat|Doc tab strip — and with it the tablist/tabpanel contract this test once pinned here — was
+    // removed on 2026-08-06 (6d00c75e) when the Doc tab lost its only destination; the sheet has one
+    // surface and no tabs, so there is no arrow-key or tab-persistence contract left to drive.
     await page.goto(`${baseUrl}/thread/${encodeURIComponent(threadSlug)}`, { waitUntil: "domcontentloaded" })
-    await page.waitForSelector('[role="dialog"][aria-modal="true"] [role="tablist"]')
+    const desktopSheet = await threadSheet()
+    assert.deepEqual(desktopSheet, { label: "Thread: Overlay E2E", modal: null, path: `${boardPath}/thread/${threadSlug}` })
     await expectFocusInsideDialog()
-    const initialTabs = await page.evaluate(() => {
-      const dialog = document.querySelector<HTMLElement>("[role=dialog]")!
-      const selected = dialog.querySelector<HTMLElement>('[role=tab][aria-selected="true"]')!
-      const controls = selected.getAttribute("aria-controls")
-      const panel = controls ? document.getElementById(controls) : null
-      return {
-        label: dialog.getAttribute("aria-labelledby")
-          ? document.getElementById(dialog.getAttribute("aria-labelledby")!)?.textContent?.trim()
-          : undefined,
-        listLabel: dialog.querySelector('[role=tablist]')?.getAttribute("aria-label"),
-        selected: selected.textContent?.trim(),
-        panelRole: panel?.getAttribute("role"),
-        panelLabelledBy: panel?.getAttribute("aria-labelledby"),
-        selectedId: selected.id,
-        path: location.pathname,
-      }
-    })
-    assert.equal(initialTabs.label, "Thread: Overlay E2E")
-    assert.equal(initialTabs.listLabel, "Thread view")
-    assert.equal(initialTabs.selected, "Chat")
-    assert.equal(initialTabs.panelRole, "tabpanel")
-    assert.equal(initialTabs.panelLabelledBy, initialTabs.selectedId)
-    assert.equal(initialTabs.path, `/thread/${threadSlug}`)
 
-    await page.focus('[role=tab][aria-selected="true"]')
-    await page.keyboard.press("ArrowRight")
-    await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected="true"]')?.textContent?.trim() === "Terminal")
-    assert.equal(await page.evaluate(() => location.pathname), `/thread/${threadSlug}`)
-
-    // The controlled tab remains session-persisted across a real hard reload.
+    // The same cold route survives a real hard reload: the sheet comes back, labelled, holding focus.
     await page.reload({ waitUntil: "domcontentloaded" })
-    await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected="true"]')?.textContent?.trim() === "Terminal")
+    assert.deepEqual(await threadSheet(), desktopSheet)
     await expectFocusInsideDialog()
-    await page.focus('[role=tab][aria-selected="true"]')
-    await page.keyboard.press("ArrowLeft")
-    await page.waitForFunction(() => document.querySelector('[role=tab][aria-selected="true"]')?.textContent?.trim() === "Chat")
 
     // The live-thread model/effort menu is portaled outside the dialog DOM. Escape still dismisses
-    // only that highest layer; the next Escape closes the sheet and rewrites the route to root.
+    // only that highest layer; the next Escape closes the sheet and rewrites the route to the board.
     const profileMenu = await page.waitForSelector('[role="dialog"] button[aria-label="Thread model and effort"]:not([disabled])')
     assert.ok(profileMenu)
     await profileMenu.focus()
     await page.keyboard.press("Enter")
     await page.waitForSelector("[role=menu]")
     assert.ok(await page.$("[role=dialog]"), "opening a portaled menu must leave its parent sheet mounted")
-    await dismissMenuThenDialog()
-    await page.waitForFunction(() => location.pathname === "/")
+    await dismissMenuThenDialog("Thread model and effort")
+    await page.waitForFunction((path) => location.pathname === path, {}, boardPath)
 
-    // Repeat the essential portal/focus checks at the requested compact viewport.
+    // Repeat the essential portal/focus checks at the requested compact viewport, where the sheet is
+    // modal.
     await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
     await page.goto(`${baseUrl}/thread/${encodeURIComponent(threadSlug)}`, { waitUntil: "domcontentloaded" })
-    await page.waitForSelector('[role="dialog"][aria-modal="true"] [role="tablist"]')
+    assert.deepEqual(await threadSheet(), { label: "Thread: Overlay E2E", modal: "true", path: `${boardPath}/thread/${threadSlug}` })
     await expectFocusInsideDialog()
     const mobileGeometry = await page.$eval('[role="dialog"]', (dialog) => {
       const rect = dialog.getBoundingClientRect()

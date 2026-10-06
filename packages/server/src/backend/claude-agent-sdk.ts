@@ -1,4 +1,4 @@
-import { accessSync, constants as fsConstants } from "node:fs"
+import { accessSync, constants as fsConstants, rmSync } from "node:fs"
 import { delimiter, isAbsolute } from "node:path"
 import {
   query,
@@ -980,6 +980,13 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
   const claudeEffort = resolveClaudeEffort(options.effort)
   const launchModel = resolveClaudeLaunchModel(options.model)
 
+  // Written here, read by the CLI once at startup, and removed as soon as the session reports `init` (or
+  // fails before it) — see the end of this function. Left in place it is a copy of the operator's tokens
+  // per session, forever: 1,197 of them had piled up in four days, most from broker tests.
+  const mcpConfigFile = options.mcpServers && Object.keys(options.mcpServers).length > 0
+    ? writeMcpConfigFile(sessionId, options.mcpServers)
+    : undefined
+
   const raw = query({
     prompt: input,
     options: {
@@ -1018,9 +1025,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // SDK renders that one as inline `--mcp-config <json>` on the CLI's argv, and the config carries the
       // operator's credentials — so every worker published its bearer tokens to `ps` (writeMcpConfigFile).
       ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
-      ...(options.mcpServers && Object.keys(options.mcpServers).length > 0
-        ? { extraArgs: { "mcp-config": writeMcpConfigFile(sessionId, options.mcpServers) } }
-        : {}),
+      ...(mcpConfigFile ? { extraArgs: { "mcp-config": mcpConfigFile } } : {}),
       ...(options.strictMcpConfig ? { strictMcpConfig: true } : {}),
       ...(options.allowedTools?.length ? { allowedTools: options.allowedTools } : {}),
       ...(options.disallowedTools?.length ? { disallowedTools: [...options.disallowedTools] } : {}),
@@ -1057,7 +1062,13 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
     },
   })
 
-  return new RealClaudeQueryHandle(raw, input, sessionId, lifecycleAbort, redact, diagnostic)
+  const handle = new RealClaudeQueryHandle(raw, input, sessionId, lifecycleAbort, redact, diagnostic)
+  // The CLI has parsed its argv by the time it reports `init`; it keeps the servers in memory from there.
+  if (mcpConfigFile) {
+    const drop = () => { try { rmSync(mcpConfigFile, { force: true }) } catch {} }
+    void handle.ready().then(drop, drop)
+  }
+  return handle
 }
 
 function mapPermissionRequest(
@@ -1697,7 +1708,7 @@ function mapResult(raw: Record<string, unknown>): ClaudeQueryEvent {
 }
 
 // `modelUsage` → {alias: contextWindow}, defensively. Everything here degrades to "no reading": this
-// is the footer's denominator, and a malformed/absent field must cost the readout, never the result
+// is the context reading's denominator, and a malformed/absent field must cost the readout, never the result
 // event (mapAssistant's incident note is the standing rule — a telemetry field may not kill a session).
 // Bounded at 32 aliases so a pathological payload cannot grow the per-turn event.
 function mapModelContextWindows(raw: unknown): Record<string, number> | undefined {

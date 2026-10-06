@@ -9,7 +9,7 @@ import { projectRpc, rpc } from "../api/rpc.ts"
 import { store } from "../store.ts"
 import { useBoard } from "../hooks.ts"
 import { prefs } from "../lib/prefs.ts"
-import { displayTitle, futureSnoozedUntil, lastActiveLabelAt, queued, queueLabelAt, sessionIndicatorKind, type SessionIndicatorKind } from "../groups.ts"
+import { displayTitle, futureSnoozedUntil, lastActiveLabelAt, queued, queueLabelAt, restIsWorking, sessionIndicatorKind, type SessionIndicatorKind } from "../groups.ts"
 import { ageSpan, spanUntil } from "../lib/activityTime.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { projectSlug } from "../lib/base-path.ts"
@@ -136,8 +136,10 @@ function AlarmMark({ size = 18 }: { size?: number }) {
   )
 }
 
-/** One kind → one mark. The kinds are the rail's; only the drawing is the phone's. */
-function ThreadMark({ kind, userSnoozed }: { kind: SessionIndicatorKind; userSnoozed?: boolean }) {
+/** One kind → one mark. The kinds are the rail's; only the drawing is the phone's. `moving` is the rail's
+ *  spinner question for an at-rest wait (inMotion below): a shell or PR rest plays only while its worker
+ *  called it `working`, and stays at rest in the queue and the Snoozed tab. */
+function ThreadMark({ kind, userSnoozed, moving }: { kind: SessionIndicatorKind; userSnoozed?: boolean; moving?: boolean }) {
   if (kind === "needs-input") return <AskMark />
   if (kind === "stalled") {
     return (
@@ -146,7 +148,7 @@ function ThreadMark({ kind, userSnoozed }: { kind: SessionIndicatorKind; userSno
       </StatusBox>
     )
   }
-  if (kind === "working" || kind === "background") return <PlayMark />
+  if (kind === "working" || moving) return <PlayMark />
   // Killed by a usage limit, auto-resume promised: the rail's yellow hourglass — accent like the stalled
   // [!] above, an hourglass because a wake is coming.
   if (kind === "limit") {
@@ -186,7 +188,10 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
   const kind = sessionIndicatorKind(t)
   // A rest time dates a HANDOFF, so a row that is still going has nothing to date — the rail's own rule,
   // read off the MARK (upstream MobileBoard): a row that reads at-rest carries the time that goes with it.
-  const inMotion = t.runtime === "running" || t.runtime === "spawning" || kind === "working" || kind === "background"
+  // A shell or PR rest is in motion only when its worker called it `working` (groups.restIsWorking,
+  // 2026-10-05): the same rest in the queue or the Snoozed tab is a handoff, and carries its rest time.
+  const waitMoving = (kind === "background" || kind === "pr") && restIsWorking(t)
+  const inMotion = t.runtime === "running" || t.runtime === "spawning" || kind === "working" || waitMoving
   const wakes = tab === "snoozed" ? spanUntil(wakeAt(t, now), now) : null
   const at = tab === "queue" && queued(t) ? queueLabelAt(t) : lastActiveLabelAt(t)
   const right = tab === "snoozed" ? (wakes ? `wakes ${wakes}` : null) : inMotion ? null : ageSpan(at, now)
@@ -201,7 +206,7 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
         className="flex w-full items-start gap-3 px-4 py-[11px] text-left active:bg-hover"
       >
         <CapSlot size={18} fontSize={TITLE_PX}>
-          <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} />
+          <ThreadMark kind={kind} userSnoozed={futureSnoozedUntil(t) !== undefined} moving={waitMoving} />
         </CapSlot>
         <span className="flex min-w-0 flex-1 flex-col gap-px self-baseline">
           <span className="flex min-w-0 items-baseline gap-2.5">

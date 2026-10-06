@@ -196,8 +196,10 @@ test("the resting card owns the heading, the glyph, the prose and the chips", ()
   // THE VERBS ARE THE ONLY THINGS THE RUNTIME MAY CHANGE, and each is withheld rather than re-styled: a
   // thread already bg-snoozed has no rest for the Snooze to park, and a thread that has left the rest its
   // steps were posted at has nobody waiting on the steps' Done (2026-10-03). A steps card takes no Snooze
-  // at all — the reader is what it waits on.
-  assert.match(code, /const snoozable = thread !== undefined && steps\.length === 0 && showsRestingCard\(thread\) && threadLifecycleAvailability\(thread\)\.snooze/)
+  // at all — the reader is what it waits on — and neither does a `watching` rest (2026-10-05): its worker
+  // already parked it in Snoozed, which is the park the button would make.
+  assert.match(code, /const restOwned = thread !== undefined && steps\.length === 0 && showsRestingCard\(thread\) && threadLifecycleAvailability\(thread\)\.snooze/)
+  assert.match(code, /const snoozable = restOwned && thread!\.waitStatus !== "watching"/)
   assert.match(code, /const stepsLive = thread !== undefined && restingOnSteps\(thread, steps\)/)
   // Nothing else may key on the runtime. A second `showsRestingCard` call inside this card is how a
   // heading, a glyph or a truncation rule would start varying with it again.

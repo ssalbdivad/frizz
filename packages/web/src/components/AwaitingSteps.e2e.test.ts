@@ -13,7 +13,9 @@ const baseUrl = process.env.FRIZZ_AWAITING_STEPS_E2E_URL
 // answers are stubbed, in the fixture; the send itself goes through the composer's own eager follow-up,
 // which is the point:
 //
-//   1. The card states the steps in order, as markdown, under the worker's heading — with Done as its
+//   1. The card states the steps in order, as markdown, under a "To do" chip and the worker's heading
+//      (the chip alone when the worker named none), ruled off from the body — in the paragraph's own
+//      colour, every item on the same line height whether or not it carries a command — with Done as its
 //      only control: no Snooze, no second verb, no text box of its own (anything else the human has to
 //      say goes through the prompt box like any steer).
 //   2. Done sends ONE ordinary reply, the word itself, bound to the thread's session, and the card
@@ -36,10 +38,14 @@ test("a steps card states the steps over one Done, and Done sends one ordinary r
     page.on("pageerror", (e) => errors.push(String(e)))
     await page.setViewport({ width: 900, height: 900 })
 
-    // ---- an untitled card is headed for the reader ----
+    // ---- an untitled card is headed by its chip alone ----
     await page.goto(`${baseUrl}/awaiting-bg-fixture.html?steps=1`, { waitUntil: "networkidle0" })
     await page.waitForSelector(`${CARD} [data-awaiting-steps] li`)
-    assert.equal(await page.$eval(`${CARD} svg + span`, (el) => (el as HTMLElement).innerText.trim()), "For you to do")
+    const untitled = await page.$eval(CARD, (el) => ({
+      chip: (el.querySelector("[data-card-chip]") as HTMLElement | null)?.innerText.trim(),
+      title: !!el.querySelector("[data-card-title]"),
+    }))
+    assert.deepEqual(untitled, { chip: "To do", title: false }, "the chip already says what the card is for")
 
     // ---- 1. the statement ----
     await page.goto(`${baseUrl}/awaiting-bg-fixture.html?steps=titled`, { waitUntil: "networkidle0" })
@@ -50,18 +56,32 @@ test("a steps card states the steps over one Done, and Done sends one ordinary r
         ;(window as unknown as { __rpc: unknown[] }).__rpc.push((e as CustomEvent).detail)
       })
     })
-    const card = await page.$eval(CARD, (el) => ({
-      title: (el.querySelector("svg + span") as HTMLElement | null)?.innerText.trim(),
-      glyph: el.querySelector("svg")?.getAttribute("class") ?? "",
-      steps: [...el.querySelectorAll("[data-awaiting-steps] li")].map((li) => (li as HTMLElement).innerText.trim()),
-      code: [...el.querySelectorAll("[data-awaiting-steps] li code")].map((c) => c.textContent),
-      strong: [...el.querySelectorAll("[data-awaiting-steps] li strong")].map((c) => c.textContent),
-      snooze: !!el.querySelector("[data-awaiting-snooze]"),
-      buttons: [...el.querySelectorAll("button")].map((b) => (b as HTMLElement).innerText.trim()),
-      textBoxes: el.querySelectorAll("textarea, input").length,
-    }))
-    assert.equal(card.title, "Sign in to npm so the acme 4.2.0 release can publish", "the worker's own heading")
-    assert.match(card.glyph, /lucide-list-todo/, "the to-do glyph, not the hourglass")
+    const card = await page.$eval(CARD, (el) => {
+      const top = (sel: string) => el.querySelector(sel)?.getBoundingClientRect().top ?? NaN
+      return {
+        chip: (el.querySelector("[data-card-chip]") as HTMLElement | null)?.innerText.trim(),
+        title: (el.querySelector("[data-card-title]") as HTMLElement | null)?.innerText.trim(),
+        glyph: el.querySelector("[data-card-chip] svg")?.getAttribute("class") ?? "",
+        // chip → title → rule → body, top to bottom
+        order: [top("[data-card-chip]"), top("[data-card-title]"), top("[data-card-rule]"), top(".card-md")],
+        proseColour: getComputedStyle(el.querySelector(".card-md p") as Element).color,
+        stepColour: getComputedStyle(el.querySelector("[data-awaiting-steps] li") as Element).color,
+        stepHeights: [...el.querySelectorAll("[data-awaiting-steps] li")].map((li) => li.getBoundingClientRect().height),
+        steps: [...el.querySelectorAll("[data-awaiting-steps] li")].map((li) => (li as HTMLElement).innerText.trim()),
+        code: [...el.querySelectorAll("[data-awaiting-steps] li code")].map((c) => c.textContent),
+        strong: [...el.querySelectorAll("[data-awaiting-steps] li strong")].map((c) => c.textContent),
+        snooze: !!el.querySelector("[data-awaiting-snooze]"),
+        buttons: [...el.querySelectorAll("button")].map((b) => (b as HTMLElement).innerText.trim()),
+        textBoxes: el.querySelectorAll("textarea, input").length,
+      }
+    })
+    assert.equal(card.chip, "To do", "the card's kind, in its chip")
+    assert.equal(card.title, "Sign in to npm so the acme 4.2.0 release can publish", "the worker's own heading, under the chip")
+    assert.match(card.glyph, /lucide-list-todo/, "the to-do glyph rides inside the chip, not the hourglass beside a title")
+    assert.ok(card.order.every(Number.isFinite), "the chip, the title, the rule and the body are all drawn")
+    assert.deepEqual([...card.order].sort((a, b) => a - b), card.order, "chip, title, rule, body — top to bottom")
+    assert.equal(card.stepColour, card.proseColour, "one body is one colour: the steps are not brighter than the paragraph above them")
+    assert.equal(new Set(card.stepHeights).size, 1, `a step carrying a command is no taller than one without (${card.stepHeights.join(", ")})`)
     assert.deepEqual(card.steps, [
       "Run npm login --auth-type=web in a terminal on this machine.",
       "Approve the browser prompt with the acme-bot account.",

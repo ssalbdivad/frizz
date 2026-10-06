@@ -50,7 +50,8 @@ test("the drawer header sets the token between the time and the status, which st
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   const header = source.slice(source.indexOf("export function ThreadHeader("), source.indexOf("THREAD_HEADER_CONTROLS_CLASS}"))
   const at = (needle: string) => header.indexOf(needle)
-  assert.ok(at("<LastActive") >= 0 && at("<ThreadCheckoutToken") > at("<LastActive"), "after the time")
+  // The time is ThreadHeaderFacts' (with the context and the Goal's loop); the token is its first child.
+  assert.ok(at("<ThreadHeaderFacts") >= 0 && at("<ThreadCheckoutToken") > at("<ThreadHeaderFacts"), "after the time")
   assert.ok(at("<ThreadStatusLine") > at("<ThreadCheckoutToken"), "before the status")
   assert.match(header, /<ThreadCheckoutToken checkout=\{thread\.checkout\}/)
 })

@@ -46,19 +46,21 @@ test("a Windows path keeps the separator before a dot-directory, in prose and in
 })
 
 // The sanitizer half of these behaviours is pinned in markdownSanitizer.e2e.test.ts (it needs a DOM);
-// what's checkable here is that marked EMITS the markup the sanitizer now has to preserve.
+// what's checkable here is that marked EMITS the markup the sanitizer now has to preserve. The box and
+// the text are ADJACENT, with no space between: the box is an in-line, zero-advance mark, so a space
+// there would push the first line of the text right of every wrapped line under it.
 test("task-list items emit a state-carrying marker, not a bare bullet", () => {
   const html = renderBlock("- [x] shipped\n- [ ] pending")
-  assert.match(html, /<span class="md-task md-task-checked" title="Done"><\/span> <span class="md-task-text">shipped<\/span>/)
-  assert.match(html, /<span class="md-task" title="To do"><\/span> <span class="md-task-text">pending<\/span>/)
+  assert.match(html, /<span class="md-task md-task-checked" title="Done"><\/span><span class="md-task-text">shipped<\/span>/)
+  assert.match(html, /<span class="md-task" title="To do"><\/span><span class="md-task-text">pending<\/span>/)
   assert.doesNotMatch(html, /<input/, "an interactive control has no place in a transcript")
 })
 
 test("Obsidian-flavoured task states render as inert status marks", () => {
   const html = renderBlock("- [/] active\n- [-] cancelled\n- [?] blocked")
-  assert.match(html, /<span class="md-task md-task-in-progress" title="In progress"><\/span> <span class="md-task-text">active<\/span>/)
-  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span> <span class="md-task-text">cancelled<\/span>/)
-  assert.match(html, /<span class="md-task md-task-blocked" title="Blocked"><\/span> <span class="md-task-text">blocked<\/span>/)
+  assert.match(html, /<span class="md-task md-task-in-progress" title="In progress"><\/span><span class="md-task-text">active<\/span>/)
+  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span><span class="md-task-text">cancelled<\/span>/)
+  assert.match(html, /<span class="md-task md-task-blocked" title="Blocked"><\/span><span class="md-task-text">blocked<\/span>/)
   assert.doesNotMatch(html, /\[\/\]|\[-\]|\[\?\]/)
 })
 
@@ -67,7 +69,7 @@ test("Obsidian-flavoured task states render as inert status marks", () => {
 // struck through a live sub-task nested under a cancelled parent.
 test("a task item's own text is wrapped, and a nested sub-list stays outside that wrapper", () => {
   const html = renderBlock("- [-] dropped\n  - [ ] still live")
-  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span> <span class="md-task-text">dropped<\/span>/)
+  assert.match(html, /<span class="md-task md-task-cancelled" title="Cancelled"><\/span><span class="md-task-text">dropped<\/span>/)
   // The sub-list is a SIBLING of the wrapper, never inside it.
   assert.doesNotMatch(html, /<span class="md-task-text">[^<]*<ul/)
   assert.match(html, /<span class="md-task-text">dropped<\/span>\s*<ul>/)

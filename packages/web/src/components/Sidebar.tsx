@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, RotateCcw } from "lucide-react"
 import { questionsOwed, type ThreadView } from "@frizz/shared"
 import { showToast } from "../store.ts"
-import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents } from "../groups.ts"
+import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents, restIsWorking } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
 import { useNowMs } from "../lib/liveClock.ts"
@@ -216,7 +216,8 @@ export const ThreadRow = memo(function ThreadRow({
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
-  // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active.
+  // A thread awaiting its OWN live sub-agent/Monitor is not Snoozed and stays fully active — unless its
+  // worker called that rest `watching` (2026-10-05), which parks it here like any other watcher.
   const snoozed = isSnoozed(t)
   // A DONE THREAD IS GRAYED WHEREVER IT ROWS — the Done band, and the pinned band just the same
   // (maintainer 2026-09-11: "a thread that's marked as done should always be grayed out, even if it's
@@ -757,13 +758,14 @@ export function ThreadIndicator({ t }: { t: ThreadView }) {
 //                     should always have this spinner animation going"): empty for an own turn, the
 //                     ellipsis for a parent at rest with a live SUB-AGENT out (restingOnSubAgents — the
 //                     children spin on their own rows), the blue dot below for a shell, the octocat for
-//                     a PR whose checks are running (prChecksRunning).
+//                     a PR. SINCE 2026-10-05 A REST SPINS ONLY WHEN ITS WORKER CALLED IT `working`
+//                     (groups.restIsWorking): a queued rest and a `watching` one draw the same glyph in
+//                     the static box, because the Running band is the only band that moves.
 //   [•] background  — at rest with only a detached background SHELL still running (never a sub-agent —
-//                     maintainer 2026-08-01): a SOLID blue dot inside the spinner. It was a pulsing dot in
-//                     a static box until 2026-09-20; the motion moved to the frame and the dot went solid
-//                     ("a solid, non-pulsing blue dot"). The row holds its place in the running band — and
-//                     keeps this same mark once the human snoozes its card into the Snoozed band, because
-//                     the shell is the fact and the park is only how the row is presented (see shellDot).
+//                     maintainer 2026-08-01): a SOLID blue dot. It was a pulsing dot in a static box until
+//                     2026-09-20; the motion moved to the frame and the dot went solid ("a solid,
+//                     non-pulsing blue dot"). Inside the spinner on a `working` rest, in the static box
+//                     everywhere else — the queue, and the Snoozed band (see shellDot).
 //   [?] needs input — a question / native ask / permission prompt (accent box + "?")
 //   [!] stalled     — the agent's PROCESS EXITED with the work unfinished (accent box + "!"), whether
 //                     it died mid-turn or exited after resting without a done fence. Same mark either
@@ -825,10 +827,10 @@ function stackParked(tip: string | null, parked: string): string {
 // THE DOT MUST NEVER CLAIM LIFE THAT IS NOT THERE (see restingOnLiveBackgroundWork's long note in
 // groups.ts, where a green PR wearing this dot was the bug). It cannot here: every arm that draws it is
 // already gated on the server's own `awaitingBackground` verdict — an honoured park, checked against
-// telemetry the browser cannot see — so by the time either arm runs, the work behind it is live. That
-// same gate is why the `agent` hint rides along on the shell's blue rather than the accent-yellow a
-// sub-agent pulses elsewhere: a LIVE sub-agent makes isSnoozed false outright (hasLiveSubAgents), so
-// the arm is reachable only on a park the server honoured for something else in the same fence.
+// telemetry the browser cannot see — so by the time either arm runs, the work behind it is live. The
+// `agent` hint rides along on the shell's blue rather than the accent-yellow a sub-agent pulses
+// elsewhere: in the Snoozed band it marks a sub-agent its worker called a WATCHER (`status: watching`,
+// 2026-10-05) — the only shape that parks with a live child — and the child spins on its own row.
 //
 // SINCE 2026-09-20 THE DOT SITS INSIDE THE SPINNER AND NO LONGER PULSES. The maintainer's rule for the
 // Running band is that every row spins and the mark inside says what is alive ("an empty square if the
@@ -836,9 +838,14 @@ function stackParked(tip: string | null, parked: string): string {
 // dot"). The motion moved from the dot to the frame: the spinner says "something will wake this", the
 // solid dot says "it is a shell". The pulse was the dot's way of saying alive-not-moving while the box
 // stood still; with the box tracing, a pulsing dot inside it would be two animations for one fact.
-// It keeps this same frame in the Snoozed band — the band's own dim (opacity-65 on the row) is what
-// says "parked", and the shell really is still running.
+//
+// AND SINCE 2026-10-05 THE FRAME SPINS ONLY IN THE RUNNING BAND. The same dot sits in the static box on a
+// queued shell rest and in the Snoozed band (`restingShellDot`): a spinner there claimed the thread was
+// working when its worker had stopped for the human or parked on a watcher (maintainer 2026-10-03:
+// "it looks like it's actively working on stuff, but it's obviously not"). StatusBox and the spinner's
+// children slot share one 13px content box, so the dot lands on the same pixels in both frames.
 const shellDot = <BoxSpinner><span aria-hidden className="frizz-rail-dot" data-running-indicator="thread-background" /></BoxSpinner>
+const restingShellDot = <StatusBox><span aria-hidden className="frizz-rail-dot" /></StatusBox>
 
 // THE OCTOCAT IS THE ONE MARK IN THIS FAMILY WHOSE INK IS NOT CENTRED IN ITS OWN VIEWBOX, so it is the
 // one that needs a correction rather than just an odd size. `items-center justify-center` centres the
@@ -940,15 +947,15 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     if (restingOnSubAgents(t)) return { node: <BoxSpinner>{ellipsisGlyph}</BoxSpinner>, tip: "At rest — waiting on its sub-agents" }
     return { node: <BoxSpinner />, tip: "Working" }
   }
-  // The thread has stopped and nothing is going to wake it — only a detached shell it launched is still
-  // running — so the row simply stays alive. The mark is `shellDot` (the solid blue dot inside the
-  // spinner), shared with the parked arm below; see its note for why one mark serves both.
+  // The thread has stopped and only a shell it launched is still running. The mark is the solid blue dot
+  // — inside the spinner when its worker called the rest `working`, in the static box when the row is in
+  // the queue; see shellDot for why one dot serves every band.
   if (kind === "background") {
     // The fence, when there is one, names the shell itself (and any PR riding beside it), so the lead
     // drops to a bare "At rest" rather than saying "an agent terminal" twice in one sentence.
     const fenced = t.lastFence?.kind === "awaiting" && awaitingWaitClause(t.lastFence.hints) !== null
     return {
-      node: shellDot,
+      node: restIsWorking(t) ? shellDot : restingShellDot,
       tip: popover(t, fenced ? "At rest" : "At rest — an agent terminal is still running"),
     }
   }
@@ -981,15 +988,14 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
   // where MOST PR waits actually live, and until 2026-09-04 every one of them wore either the shell's
   // blue dot (checks still running) or the bare-rest ellipsis (checks settled). The tooltip is the
   // fence's own clause, which names the ref — "waiting on acme/app#391" — so the hover reaches the PR.
-  // WHILE CHECKS RUN THE OCTOCAT SPINS (2026-09-20). CI running is the one PR reading that is motion with
-  // a known end — the server already holds such a thread in the Running band for exactly that reason
-  // (board.heldByRunningChecks, maintainer 2026-08-14) — so the row wears the spinner around GitHub's
-  // mark there, and drops back to the static octocat in the queue once the checks settle and the wait
-  // is for a person. prChecksRunning refuses a gated PR, so a maintainer's approval gate never spins.
+  // THE OCTOCAT SPINS ON A `working` REST (2026-09-20 for running checks; 2026-10-05 for the rule). CI
+  // running is the PR reading that is motion with a known end, so the server reads it as `working` and
+  // holds such a thread in the Running band (board.deriveWaitStatus); the row wears the spinner around
+  // GitHub's mark there, and the static octocat in the queue — checks or no checks, a queued row never
+  // spins. A gated PR is not motion (the server's ciInMotion refuses it), so an approval gate never spins.
   if (kind === "pr") {
-    return prChecksRunning(t)
-      ? { node: <BoxSpinner>{githubGlyph}</BoxSpinner>, tip: popover(t, "At rest — checks are running") }
-      : { node: githubMark, tip: popover(t, "At rest") }
+    const tip = popover(t, prChecksRunning(t) ? "At rest — checks are running" : "At rest")
+    return restIsWorking(t) ? { node: <BoxSpinner>{githubGlyph}</BoxSpinner>, tip } : { node: githubMark, tip }
   }
   // AWAITING A TIMER, IN THE QUEUE — the same hourglass the Snoozed arm draws, on the rows that never
   // park. A timer park queues (board.deriveNeedsYou), so this is where MOST timer waits actually live,
@@ -1055,7 +1061,13 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       // The event-snooze reaches here for a rest on a shell, a timer OR a registered PR watch, and only
       // the first of those is a shell. A watch the worker never fenced has no hints to read, so the dot
       // was the default by omission rather than by decision.
-      if (eventSnoozed) return { node: waitNamesPr(t) ? github : shellDot, tip: eventSnoozed }
+      if (eventSnoozed) return { node: waitNamesPr(t) ? github : restingShellDot, tip: eventSnoozed }
+      // A `watching` REST WITH NO FENCE TO READ (2026-10-05): a worker that rested behind a watch it
+      // registered, which the board reads as a watcher. The mark is the watch's own, as above.
+      if (t.waitStatus === "watching") {
+        const shell = (t.bgShells ?? []).some((s) => s.state === "running")
+        return { node: waitNamesPr(t) ? github : shell ? restingShellDot : hourglass, tip: "Snoozed until its watch reports back" }
+      }
       const timed = typeof t.revalidate === "string" ? formatAutoSnoozedUntil(t.revalidate) : null
       return { node: hourglass, tip: timed ?? "Auto-snoozed until a scheduled check" }
     }
@@ -1081,7 +1093,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     const mark = waitNamesPr(t)
       ? github
       : hk === "shell" || hk === "agent"
-        ? shellDot
+        ? restingShellDot
         : hourglass
     return { node: mark, tip: popover(t, eventSnoozed ?? "Snoozed", hk === "timer" ? timerWake(t) : null) }
   }

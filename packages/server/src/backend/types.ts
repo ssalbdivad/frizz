@@ -71,7 +71,7 @@ export type NormalizedEvent =
   // Tokens occupying the model's context after its latest request (codex token_count). Pure telemetry:
   // it moves no turn state. It exists so a consumer can bracket a compaction it can't measure directly —
   // the codex reading is the token_count immediately before/after the `compacted` envelope — and so the
-  // footer can render how full the context is. `window` is the model's context size AS THE PROVIDER
+  // header can render how full the context is. `window` is the model's context size AS THE PROVIDER
   // REPORTS IT on the same event (codex: `info.model_context_window`), never a table we maintain: a
   // hardcoded window goes stale on exactly the schedule the codex version pin did. Optional because a
   // backend may measure the numerator without naming the denominator.
@@ -240,7 +240,7 @@ export interface FoldState {
   // match — and cleared by the next real assistant text OR any user record. That clearing rule is
   // what makes a delivered "continue" supersede the fault it was fired for.
   limitFault?: LimitFault
-  // ---- context occupancy (the footer's fullness readout) ----
+  // ---- context occupancy (the header's fullness readout) ----
   // How many tokens the model's LAST request actually carried — i.e. how full its context is right
   // now. Both providers measure this themselves and both write it to their transcript, so this is
   // always a reading, never an estimate: codex reports `last_token_usage.total_tokens`; Claude's
@@ -259,7 +259,7 @@ export interface FoldState {
   // Claude Code's effective window is `min` of the two — so the room this session has is 500K and
   // dividing by 1M reported it a comfortable 25% full at the moment it was half full (2026-09-01). The
   // lowering happens once, in ClaudeRuntimeIngest.contextWindow, so every reader downstream of it —
-  // this field, ThreadView.context, the footer dial — carries one number with one meaning.
+  // this field, ThreadView.context, the header's context reading — carries one number with one meaning.
   contextWindow?: number
   // Newest context compaction — the post-compaction trigger's clock (see NormalizedTail.lastCompactionAt).
   // The two backends observe it differently and neither has a second signal: Claude injects its

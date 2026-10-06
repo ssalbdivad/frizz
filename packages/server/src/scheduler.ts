@@ -1,8 +1,8 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { AGENT_PARK_FOR_MAX_MS, awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
-import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
+import { AGENT_PARK_FOR_MAX_MS, awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, carriedQuestionsNudgeMessage, strayShellsMessage, type SignoffLiveOps, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, parkOnHuman, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -13,7 +13,7 @@ import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from
 import { isReplyWait } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
-import { answersInFlight, childJustReturned, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
+import { answersInFlight, carriedQuestionRows, childJustReturned, owedQuestionRows, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { liveShellBudget, SHELL_BUDGET_GRACE_MS, shellBudgetWarningMessage, type ShellStopReason } from "./shell-budget.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
@@ -829,7 +829,7 @@ function armedRest(row: RecurringRow): ArmedRest | undefined {
 // the emptied window. That made the pad a load-bearing file every worker had to maintain whether or not
 // it wanted one. The recurring prompt already solves the same problem better: the worker writes whatever
 // doc it likes in its scratch directory and LINKS it here, and the link comes back at exactly the moment
-// the context is gone. The row is durable, it is visible in the thread footer, and the operator can edit
+// the context is gone. The row is durable, it is visible in the thread's Goal panel, and the operator can edit
 // it — none of which a hook injection was.
 //
 // IT DOES NOT WAIT FOR REST, and that is the one place it deliberately parts company with SOURCE 5. A
@@ -2157,9 +2157,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // into what this pass reads as a bare one — so the nudge took the rest ("you rested without a
       // fence", to a worker whose question frizz itself had just cancelled) and the Goal stood down for
       // it. The armed-rest flag scopes it to exactly the threads whose dismissals wake on their own.
-        // …any open one the human has not typed past. One they have is set aside — answerable where it was
-        // asked, but no sign-off for a rest after their message unless the worker `keep`s it (shared
-        // questionRepliedPast, 2026-09-30).
+      //
+      // AN OPEN QUESTION IS A SIGN-OFF ONLY AT THE REST THAT ASKED IT (upstream 2026-10-05). A question
+      // CARRIED from an earlier rest is not this rest's sign-off: its card stays where it was asked, so the
+      // worker names it under `questions:` in an awaiting fence (evalParkIntegrity) or withdraws it, and is
+      // told so below (carriedQuestionsNudgeMessage). One the human typed past is set aside and holds
+      // nothing — it is withdrawn at this rest unless the worker `keep`s it, and a keep counts as asking
+      // it again (board.carriedQuestionRows, shared questionRepliedPast).
         // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
         // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
         // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
@@ -2185,7 +2189,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // a user record, because frizz's own delivery is one, and anchoring on that let the nudge reset its
       // own counter with its own message.
       //
-      // UNDER THE `needs_input:` CONTRACT (2026-10-01) the worker's fence decides the queue, so the reminder
+      // UNDER THE ANSWER-REQUIRED CONTRACT (2026-10-01; `status:` since 10-05) the fence decides the queue, so the reminder
       // teaches the key (signoffNudgeMessage) and a running child no longer excuses the rest from it
       // (board.signoffNudgeVerdict), and neither does a registered `watch`: it says when the worker wakes,
       // not whether the human is needed meanwhile.
@@ -2208,39 +2212,41 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // Bound to the AGENT'S OWN last word, so one nudge per rest falls out of delivery-id uniqueness.
       // Deliberately NOT `lastActivityAt`, which frizz's own delivery advances — see the guard above.
       if (outbox.get(deliveryId)) continue
+      // THIS THREAD's live ops and their ids, so the agent can write a correct fence without going looking
+      // for an id it cannot see. Shells are named by `taskId` — the handle the runtime actually showed the
+      // worker — because that is the string it will naturally reach for, and the one the fence's own
+      // integrity check matches on. RUNNING WORK SELECTS THE SHORT WAITING VARIANT
+      // (signoffWaitingNudgeMessage): the shells (and, on a Goal thread, the children) and their fence,
+      // already written, instead of sixty lines about unfinished work.
+      const ops: SignoffLiveOps = {
+        shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
+        // DIRECT children only — the only ones an `agents:` line can name (board.liveWaitHandles); this
+        // listed a Workflow's own agents and a retired child's grandchildren too, ids a fence that
+        // copied them would have been refused for. Empty except on a thread with a Goal armed at rest: a
+        // running direct child parks any other thread, so the verdict never reaches a send behind one,
+        // while a Goal thread is asked for the `agents:` fence because only a fence holds its Goal.
+        subAgents: (tele.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
+        // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
+        // than the two the fold happens to know about — a worker told about half its work writes half
+        // a fence, and the half it left out is not what gets it bumped.
+        timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
+          .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
+        prs: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind !== "issue")
+          .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
+        issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
+          .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
+      }
+      // A question CARRIED from an earlier rest takes the carried variant instead (upstream 2026-10-05):
+      // the worker names it under `questions:` or withdraws it (board.carriedQuestionRows).
+      const carried = carriedQuestionRows(deps.storage.listThreadQuestions(row.slug), tele)
       const item = outbox.enqueue({
         id: deliveryId,
         slug: row.slug,
         sessionId: row.session_id,
         fenceId,
         hintKey: SIGNOFF_HINT_KEY,
-        // The reminder plus THIS THREAD's live ops and their ids, so the agent can write a correct
-        // fence without going looking for an id it cannot see. Shells are named by `taskId` —
-        // the handle the runtime actually showed the worker — because that is the string it will
-        // naturally reach for, and the one the fence's own integrity check matches on.
-        //
-        // RUNNING WORK SELECTS THE SHORT WAITING VARIANT (signoffWaitingNudgeMessage): the shells (and,
-        // on a Goal thread, the children) and their fence, already written, instead of sixty lines about
-        // unfinished work.
-        message: withClock(signoffNudgeMessage({
-          shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
-          // DIRECT children only — the only ones an `agents:` line can name (board.liveWaitHandles); this
-          // listed a Workflow's own agents and a retired child's grandchildren too, ids a fence that
-          // copied them would have been refused for. Empty except on a thread with a Goal armed at rest: a
-          // running direct child parks any other thread, so the verdict never reaches a send behind one,
-          // while a Goal thread is asked for the `agents:` fence because only a fence holds its Goal.
-          subAgents: (tele.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
-          // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
-          // than the two the fold happens to know about — a worker told about half its work writes half
-          // a fence, and the half it left out is not what gets it bumped.
-          timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
-            .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
-          prs: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind !== "issue")
-            .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
-          issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
-            .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
-        }, needsInput), spokeAt),
-        reason: "rested without signing off",
+        message: withClock(carried.length > 0 ? carriedQuestionsNudgeMessage(carried.map((q) => ({ id: q.id, question: questionLine(q.spec) })), ops, needsInput) : signoffNudgeMessage(ops, needsInput), spokeAt),
+        reason: carried.length > 0 ? `rested with ${carried.length} earlier question(s) neither named nor withdrawn` : "rested without signing off",
       }, nowMs).delivery
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
@@ -2353,11 +2359,13 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!spokeAt) continue
       if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= Date.parse(spokeAt)) continue
       if (tele.authFault || tele.apiFault) continue
-      // A fence beside the question is SOURCE 12's to correct (a park is refused while a question
-      // stands), and its correction already sends the worker back to rewrite this sign-off.
+      // A fence beside the question names its shells or is SOURCE 12's to correct (a park must name every
+      // open question under `questions:`), so only a bare rest on a question is this case.
       if (tele.lastFence) continue
-      const onQuestion = Boolean(tele.pendingQuestion) || deps.storage.listThreadQuestions(row.slug)
-        .some((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
+      // …and only a rest the question SIGNS OFF: one carried from an earlier rest draws SOURCE 9's carried
+      // reminder instead (board.carriedQuestionRows), which lists the live shells itself.
+      const questionRows = deps.storage.listThreadQuestions(row.slug)
+      const onQuestion = Boolean(tele.pendingQuestion) || (owedQuestionRows(questionRows, tele).length > 0 && carriedQuestionRows(questionRows, tele).length === 0)
       if (!onQuestion) continue
       const watched = deps.storage.listThreadWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "shell").map((w) => w.target)
       const stray = (tele.bgShells ?? []).filter((sh) => sh.state === "running" && ![sh.id, sh.taskId, sh.label].some((h) => h !== undefined && watched.includes(h)))
@@ -2440,38 +2448,55 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // the four passes that read "the agent spoke last" agree on what a failed turn is.)
       if (tele.authFault || tele.apiFault) continue
 
-      // AN OPEN QUESTION REFUSES THE PARK OUTRIGHT, before any look at what the fence names. A question
-      // outranks a wait everywhere else — deriveNeedsYou queues the thread on the open row before any
-      // park excusal, and the resting card yields to it (deriveAwaitingBackground) — so a fence here
-      // declares a park frizz will not honour, and the two used to render stacked: a parked-looking
-      // card, hourglass and shell table, above the ask (maintainer 2026-08-28: "Weird that there's both
-      // an awaiting block and open questions"; a first fix drew the fence as plain prose and was
-      // rejected the same day — "it should not be allowed, basically"). So it is refused like any
-      // other bad park: the correction folds out of the transcript, un-draws the fence (fenceRefused),
-      // and the worker rewrites its sign-off without it — prose, with the question's card drawn under
-      // it, which is what the contract asks for. Counted against PARK_BUMP_MAX like the other
-      // corrections, because a worker whose contract froze before this rule cannot learn it, and keyed
-      // on the rest so one fence draws one bump. Checked BEFORE the honoured-park reset below on
-      // purpose: live names do not make this park honoured.
-      // Every open question the human has not typed past — one they have is set aside and holds nothing
-      // (shared questionRepliedPast, 2026-09-30).
-      const openQuestions = deps.storage.listThreadQuestions(row.slug).filter((q) => q.state === "open" && !questionRepliedPast(q, tele.lastHumanAt))
-      if (openQuestions.length > 0) {
+      // AN OPEN QUESTION THE FENCE DOES NOT NAME REFUSES THE PARK, before any look at the rest of it.
+      //
+      // Until 2026-10-05 ANY open question refused it outright. A question outranks a wait everywhere —
+      // deriveNeedsYou queues the thread on the open row before any park excusal — and a fence beside one
+      // drew a parked-looking card above the ask (maintainer 2026-08-28: "Weird that there's both an
+      // awaiting block and open questions"; then "it should not be allowed, basically"). That rule had a
+      // cost nobody priced: it forced every later rest of a thread with an old question open to be a bare
+      // one, and the old card was redrawn under it as the sign-off, whatever the worker had actually said
+      // (maintainer 2026-10-05: "the pending questions that may or may not be relevant kind of supersede
+      // how the agent actually signed off").
+      //
+      // So the fence may stand beside open questions by NAMING every one under `questions:` — which is
+      // the worker saying it still needs those answers — and the cards it names are drawn at this rest.
+      // One it leaves out is refused here, and the worker either names it or withdraws it with `unask`:
+      // nothing stale survives a rest silently. A name that is not an open question of this thread is
+      // refused too, unless it settled AFTER the rest — answered or withdrawn while the park stood, which
+      // its own wake carries. Counted against PARK_BUMP_MAX like the other corrections, keyed on the rest
+      // so one fence draws one bump, and checked BEFORE the honoured-park reset below on purpose.
+      const park = readAwaitingPark(tele.lastFence.hints)
+      const questionRows = deps.storage.listThreadQuestions(row.slug)
+      // Every open question the human has not typed past — one they have is set aside, holds nothing, and
+      // is withdrawn at the next rest unless the worker `keep`s it (board.owedQuestionRows, 2026-09-30).
+      const openQuestions = owedQuestionRows(questionRows, tele)
+      const named = new Set(park.questions)
+      const unnamed = openQuestions.filter((q) => !named.has(q.id.toLowerCase()))
+      const spokeMs = Date.parse(spokeAt)
+      const notOpen = park.questions.filter((id) => {
+        const q = questionRows.find((r) => r.id.toLowerCase() === id)
+        if (q?.state === "open") return false
+        return !q || q.settled_at === null || q.settled_at <= spokeMs
+      })
+      if (unnamed.length > 0 || notOpen.length > 0) {
         if ((row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
         const fenceId = parkFenceId("question", spokeAt)
         const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
         if (outbox.get(deliveryId)) continue
-        const one = openQuestions.length === 1
+        const one = unnamed.length === 1
+        const head = unnamed.length > 0
+          ? `${one ? "a question of yours was" : `${unnamed.length} questions of yours were`} still OPEN and it does not name ${one ? "it" : "them"}, so frizz refused the park.`
+          : `it names ${notOpen.length === 1 ? "a question that is" : "questions that are"} not open, so frizz refused the park.`
         const message = [
-          `${PARK_CORRECTION_QUESTION_LEAD}${one ? "a question of yours was" : "questions of yours were"} still OPEN, so frizz refused the park — a question outranks a wait, and this thread sits in the human's queue on ${one ? "it" : "them"}.`,
+          `${PARK_CORRECTION_QUESTION_LEAD}${head}`,
+          ...(unnamed.length > 0 ? ["", "Open, and not named under `questions:`:", ...unnamed.map((q) => `- \`${q.id}\` — ${questionLine(q.spec)}`)] : []),
+          ...(notOpen.length > 0 ? ["", "Named, but not an open question of yours:", ...notOpen.map((id) => `- \`${id}\``)] : []),
           "",
-          ...openQuestions.map((q) => `- \`${q.id}\` — ${questionLine(q.spec)}`),
-          "",
-          "Never fence ```awaiting while a question stands. Rewrite your sign-off WITHOUT the fence: your",
-          "handoff prose — each open question draws its own card BELOW it, so write the reasoning that",
-          "leads up to the ask, never the ask again. Your running work is watched and listed either way: a shell, a",
-          "sub-agent, a timer or a registered PR wakes you fence or no fence. A question you no longer need",
-          "answered is one you withdraw with `mcp__frizz__unask` — only then can a park take.",
+          "A fence beside open questions names EVERY one you still need answered — `questions: [qst_…]` —",
+          "and you withdraw the rest with `mcp__frizz__unask`. A named question's card is drawn at this rest;",
+          "an unnamed one stays where you asked it. Fix the list (or unask), re-send the fence, and the park",
+          "takes. A fence on questions needs no other name and no `for:`.",
         ].join("\n")
         const item = outbox.enqueue({
           id: deliveryId,
@@ -2480,7 +2505,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fenceId,
           hintKey: fenceId,
           message: `${message}\n\n${wakeTimeHeader(nowMs, spokeAt)}`,
-          reason: `awaiting fence beside ${openQuestions.length} open question(s)`,
+          reason: `awaiting fence leaves ${unnamed.length} open question(s) unnamed${notOpen.length ? `, names ${notOpen.length} that are not open` : ""}`,
         }, nowMs).delivery
         deps.storage.countParkBump(row.slug, fenceId)
         log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2488,7 +2513,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         continue
       }
 
-      const park = readAwaitingPark(tele.lastFence.hints)
       const live = liveActivityOf(
         tele,
         registeredPrWatchesOf(deps.storage, row.slug),
@@ -2523,40 +2547,47 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // `steps:` NAME THE HUMAN (2026-10-03), so a fence carrying only steps is not this case: it waits on
       // the one party whose reply wakes the thread, from the queue it is already in. With no `for:` it
       // falls through the malformed-fence skip below and is simply honoured; with one, it expires.
-      const nameless = park.items.length === 0 && park.steps.length === 0
+      // `questions:` name the human the same way (2026-10-05), and the answer is the wake.
+      const nameless = park.items.length === 0 && !parkOnHuman(park)
       // HONOURED ⇒ the corrective allowance comes back. A park frizz can actually honour is the one
       // event that proves a correction landed, and — unlike any activity signal — not one frizz can
       // cause by correcting. Guarded on a non-zero count so this is a transition, not a write on every
       // tick, exactly as the sign-off nudge's reset is. It deliberately does NOT `continue`: an honoured
       // park can still have run out, and that bump is owed.
       //
-      // NO ANSWER (2026-10-01). A worker dispatched under the `needs_input:` contract owes every park an
-      // answer to "does the human need to look now?" (NEEDS_INPUT_REQUIRED_AT in @frizz/shared). A fence
-      // without one — or with a value that is neither `true` nor `false` — is not a park frizz may honour
-      // (the board queues the thread: needsInputParkHolds), so it does not give the allowance back either:
-      // a worker that keeps leaving the line out would otherwise reset its own cap on every rest.
+      // NO ANSWER (2026-10-01). A worker dispatched under the answer-required contract owes every park an
+      // answer to "where does this rest sit?" (NEEDS_INPUT_REQUIRED_AT in @frizz/shared) — `status:` since
+      // 2026-10-05, `needs_input:` before it and still read. A fence without one — or with a value frizz
+      // cannot read — is not a park frizz may honour (the board queues the thread: needsInputParkHolds), so
+      // it does not give the allowance back either: a worker that keeps leaving the line out would
+      // otherwise reset its own cap on every rest.
       const unanswered = needsInputRequired(row.spawned_at) && awaitingNeedsInput(tele.lastFence.hints) === null
       if (parkIsHonoured(park, live) && !unanswered && (row.park_bumps ?? 0) > 0) deps.storage.resetParkBumps(row.slug)
       if (dead.length === 0 && !expired && !nameless) {
         // The answer is corrected only once the ITEMS are right. A fence that names dead work or none is
-        // told about that first — adding `needs_input:` would not make it a park, and a worker waiting on
+        // told about that first — adding `status:` would not make it a park, and a worker waiting on
         // nothing should end in ```done or a question, not be taught one more line of a fence it should
         // not be writing. Counted against PARK_BUMP_MAX like every other correction, keyed on the rest.
         if (!unanswered || (row.park_bumps ?? 0) >= PARK_BUMP_MAX) continue
         const fenceId = parkFenceId("needs-input", spokeAt)
         const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
         if (outbox.get(deliveryId)) continue
-        // Quoted back when the worker wrote SOMETHING, so it sees the exact value frizz could not read.
-        const written = tele.lastFence.hints.find((h) => h.kind === "needs_input")?.value
+        // Quoted back when the worker wrote SOMETHING, so it sees the exact value frizz could not read —
+        // the `status:` line it wrote, or else the older `needs_input:` one.
+        const written = [...tele.lastFence.hints].reverse().find((h) => h.kind === "status") ?? [...tele.lastFence.hints].reverse().find((h) => h.kind === "needs_input")
         const message = [
-          `${PARK_CORRECTION_NEEDS_INPUT_LEAD}\`needs_input: true\` or \`needs_input: false\`${written ? ` (it says \`needs_input: ${written}\`)` : ""}, so frizz did not park it — your thread is in the human's queue.`,
+          `${PARK_CORRECTION_NEEDS_INPUT_LEAD}\`status:\` that frizz can read — \`working\`, \`watching\` or \`needs_input\`${written ? ` (it says \`${written.kind}: ${written.value}\`)` : ""} — so frizz did not park it, and your thread is in the human's queue.`,
           "",
-          "Every ```awaiting fence answers one question: does the human need to look NOW?",
+          "Every ```awaiting fence answers one question: where does this rest sit while the work runs?",
           "",
-          "- `needs_input: false` — nothing for them yet. The thread stays out of their queue until the work",
-          "  wakes you, and the fence alone is the whole message: no write-up.",
-          "- `needs_input: true` — they can act on something now while the work runs. The thread goes into",
-          "  their queue, and the prose under `---` says what to look at.",
+          "- `status: working` — the work finishes by itself: a test run, a build, CI, a sub-agent doing a job.",
+          "  The thread shows as running until the work wakes you.",
+          "- `status: watching` — the wait is on something outside the thread: a review, a release, a",
+          "  reporter, another agent's merge. The thread is snoozed until the watch wakes you.",
+          "- `status: needs_input` — the human can act on something now while the work runs. The thread goes",
+          "  into their queue, and the prose under `---` says what to look at.",
+          "",
+          "With `working` or `watching` the fence alone is the whole message: no write-up.",
           "",
           "Re-send the same fence with that line added.",
         ].join("\n")
@@ -2567,7 +2598,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           fenceId,
           hintKey: fenceId,
           message: `${message}\n\n${wakeTimeHeader(nowMs, spokeAt)}`,
-          reason: "awaiting fence gives no needs_input answer",
+          reason: "awaiting fence gives no status answer",
         }, nowMs).delivery
         deps.storage.countParkBump(row.slug, fenceId)
         log(`waker: queued ${row.slug} — ${item.reason}`)
@@ -2594,6 +2625,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       for (const a of tele.subAgents ?? []) {
         if (a.state !== "rested") continue
         for (const h of [a.taskId, a.id, a.label]) if (h) finishedHandles.add(h)
+      }
+      // A DEMOTED shell is a third case, neither finished nor missing: frizz has its launch, saw no
+      // completion notice, and can no longer find its process (tailer.ts probeShellsAlive). Calling that
+      // "nothing by that name" sent a worker hunting for a typo in an id it had copied exactly — and,
+      // before 2026-10-05, said so of a shell that was still running.
+      const staleShellHandles = new Set<string>()
+      for (const sh of tele.bgShells ?? []) {
+        if (sh.state !== "stale") continue
+        for (const h of [sh.taskId, sh.id, sh.label]) if (h) staleShellHandles.add(h)
       }
       const firedTimers = new Set(
         deps.storage.listThreadTimers(row.slug).filter((t) => t.state === "fired").map((t) => t.id),
@@ -2630,6 +2670,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ? "FINISHED — its result is waiting for you"
           : silentItem(i)
           ? `SILENT — nothing from it since ${silentSince.get(i.value) ?? "it started"}, longer than any call it has pending declared. It may be hung; frizz stopped nothing. Read its transcript, then wait on it again or \`TaskStop\` it`
+          : i.kind === "shell" && staleShellHandles.has(i.value)
+          ? "GONE WITHOUT A COMPLETION NOTICE — frizz knows this shell, but nothing holds its output file and no process it could be is still running; read its output to see how it ended"
           : i.kind === "pr"
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
           : i.kind === "issue"
@@ -2645,6 +2687,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // check the world rather than to re-post the same steps blind.
       if (park.steps.length > 0) {
         status.push(`- \`steps:\` (${park.steps.length}) — the human has not replied; check whether they were done anyway before you post them again`)
+      }
+      if (park.questions.length > 0) {
+        status.push(`- \`questions:\` (${park.questions.length}) — not answered yet; name the ones you still need in your next fence and withdraw the rest`)
       }
       // When EVERY dead name simply finished, the news is not "your fence is wrong" — it is "the thing
       // you were waiting for is done". Different fact, different next action.
@@ -4229,7 +4274,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // in the emptied window, and a compaction happens while it is working. Nor does it consult whether the
   // thread signed off — a ```done fence answers "you stopped, is there more?", which is not the question
   // a compaction asks. A worker that genuinely wants these to stop clears the Goal, or the operator does
-  // it in the footer.
+  // it in the Goal panel.
   function evalCompactPrompts(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue

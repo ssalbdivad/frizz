@@ -30,12 +30,12 @@ import { contextLine, displayUrl, effortWord, isLoopbackUrl } from "../lib/mobil
 import { useBackDismiss } from "../lib/backDismiss.ts"
 import { MobileBottomSheet } from "./MobileBottomSheet.tsx"
 import { GoalMark, PromptPanel } from "./RecurringPromptControl.tsx"
-import { StateButton } from "./ThreadLifecycleFooter.tsx"
+import { StateButton } from "./ThreadLifecycle.tsx"
 
 // THE PHONE'S ⋯ SHEET — everything a thread can do that is not the bottom bar's one verb.
 //
-// What the desktop keeps in two places — the header's icon strip and the lifecycle footer — is ONE list
-// here (mockup v2 §4): Snooze, Goal, Files and links, a rule, then Rename, Copy link and the conditional
+// What the desktop keeps in two places — the header (its icon strip, the context reading, snooze and mark
+// as done) and the prompt box's rail (the Goal) — is ONE list here (mockup v2 §4): Snooze, Goal, Files and links, a rule, then Rename, Copy link and the conditional
 // recovery verbs. A row that does not apply to this thread is not drawn, rather than drawn disabled: a
 // phone list has no room for things you cannot do.
 //
@@ -161,7 +161,7 @@ function ActionsList({ thread, title, setView, dismiss, onArchived }: {
       )}
       {/* A RUNNING thread's Done lives here, not in the bottom bar: finishing a turn in flight is a
           decision with a dialog behind it (mockup v2, "Working"). Same button, same confirmation path
-          as the desktop footer — only the chrome is a row. */}
+          as the desktop header's check — only the chrome is a row. */}
       {running && lifecycle.archive && (
         <StateButton
           thread={thread}
@@ -190,8 +190,9 @@ function ActionsList({ thread, title, setView, dismiss, onArchived }: {
 
 // ── snooze ────────────────────────────────────────────────────────────────────────────────────────
 
-// The desktop footer's snooze, as a list: the same presets, the same preference (the preset you pick
-// becomes the default the board's swipe uses too), the same `setThreadSnooze` and the same toasts.
+// The desktop header's snooze menu, as a list: the same presets, the same `setThreadSnooze` and the same
+// toasts. Unlike that menu it keeps the phone's "Snooze length" preference: the preset picked here
+// becomes the default the board's swipe uses, which is the one gesture with no menu to choose from.
 function useSnoozeApply(thread: ThreadView, dismiss: (then?: () => void) => void) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
@@ -313,7 +314,7 @@ function GoalView({ thread, back }: { thread: ThreadView; back: () => void }) {
   return (
     <div data-thread-actions-goal>
       <SubTitle back={back}>Goal</SubTitle>
-      {/* The panel is drawn at the footer popover's 11–12px scale; the phone reads at 13–16. The fields go
+      {/* The panel is drawn at the desktop popover's 11–12px scale; the phone reads at 13–16. The fields go
           to 16px because iOS zooms the whole page into any field set smaller. */}
       <div className="px-[18px] text-[13.5px] leading-relaxed text-fg [&_input]:!text-[16px] [&_textarea]:!min-h-[6rem] [&_textarea]:!text-[16px] [&_textarea]:!leading-[22px]">
         <PromptPanel thread={thread} armed={thread.recurringPrompt} close={back} heading={false} />

@@ -526,6 +526,28 @@ test("a runtime with no stop path still clears the row, but SAYS the work may su
 const RUNNING_SHELL = () => ({ outputFile: "/tmp/sh.log", state: "running" as const, direct: false, taskId: "bshell1" })
 const SHELL_LOOKUP = () => ({ command: "npx vite --port 5231", outputFile: "/tmp/sh.log", state: "running" as const })
 
+// A shell the OS has confirmed GONE (tailer shellIsGone) reads `stale` on the board, and its × is the
+// strip's CLEAR, not a stop: nothing is running. The gate used to read only the lookup, which never
+// carries that verdict, so the × attempted a real stop on a dead task — a throw (and a row it could not
+// clear) without a live daemon, and otherwise a kill notice to the worker for a kill that never happened.
+test("the × on a shell the OS reports gone CLEARS it — no stop attempted, no kill notice", async () => {
+  const h = harness(RUNNING_SHELL, {
+    backgroundShell: SHELL_LOOKUP,
+    bgShells: [{ id: "toolu_sh", label: "Watching CI", state: "stale" }],
+    stopThrows: new Error("This sub-agent's session is no longer running, so it cannot be stopped"),
+  })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.stopBackgroundOp.handler({ input: { slug: "t", id: "toolu_sh" } })
+    assert.deepEqual(result, { stopped: false, dismissed: true, note: null, descendantsStopped: 0 })
+    assert.deepEqual(h.stops, [], "no provider stop was sent for a process that no longer exists")
+    assert.deepEqual(h.notices, [], "and the worker is not told its shell was killed")
+    assert.deepEqual(h.dismissals, [{ slug: "t", id: "toolu_sh" }], "the row leaves tracking — the ×'s whole job here")
+  } finally {
+    h.cleanup()
+  }
+})
+
 test("the × STOPS a background shell for real, retires the row, and TELLS the worker", async () => {
   const h = harness(RUNNING_SHELL, {
     backgroundShell: SHELL_LOOKUP,

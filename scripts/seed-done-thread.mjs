@@ -1,11 +1,11 @@
 // Seed a disposable adhoc stack with two SIMULATED workers that differ in exactly one axis — one is
-// archived (Done), one is still open — so the lifecycle footer can be judged on the REAL app: real
+// archived (Done), one is still open — so the lifecycle controls can be judged on the REAL app: real
 // tailer, real board projection of the `state` column, real push, real browser.
 //
-// The pair exists because the footer's behavior on a DONE thread is the whole question. Before
+// The pair exists because the controls' behavior on a DONE thread is the whole question. Before
 // 2026-07-29 an archived thread rendered NO lifecycle strip, which left its /full view with nothing
-// anywhere that said the thread was finished. It now keeps the strip and reads "Done" where the verbs
-// were. Both threads carry the same ```done fence in their transcript, so the same run also proves the
+// anywhere that said the thread was finished. It now keeps them and reads "Done" where the verbs
+// were — at the end of the header's action strip since 2026-10-05, when the footer that held them went. Both threads carry the same ```done fence in their transcript, so the same run also proves the
 // in-transcript fence card drops its redundant Mark-as-done button once the thread is actually archived.
 //
 // Archiving goes through the REAL setThreadState mutation rather than a hand-written UPDATE: that is

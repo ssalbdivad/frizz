@@ -259,17 +259,20 @@ const SlugInput = z.object({ slug: ThreadSlug }).strict()
 // boundary. This intentionally rejects stale model/effort pairs; neither is normalized, clamped, or
 // replaced with Settings defaults. Permission is NOT part of the tuple: dispatch stamps it server-side
 // (workerDispatchPermission — the non-interactive floor, raised to bypass only when Settings asks).
-export function validateGithubDispatchProfile(input: z.infer<typeof GithubBatchInput>): void {
+export function validateGithubDispatchProfile(
+  input: z.infer<typeof GithubBatchInput>,
+  codexModels?: readonly z.infer<typeof CodexModel>[],
+): void {
   // An ACP profile carries no effort, and its "model" is an `acp:<agent>` slug the dispatcher resolves
   // itself (refusing an agent that is not on PATH) — there is no model/effort catalogue to check.
   if (input.backend === "acp") return
   if (input.effort === undefined) throw new Error(`Unsupported ${input.backend} model/effort pair: ${input.model} / (no effort)`)
   // "auto" is resolved per dispatch from the model's own ladder, so it is valid on any model; only the model is checked.
   if (input.effort === "auto") {
-    if (!threadProfileOptions(input.backend).options.some((option) => option.model === input.model)) throw new Error(`Unsupported ${input.backend} model: ${input.model}`)
+    if (!threadProfileOptions(input.backend, undefined, codexModels).options.some((option) => option.model === input.model)) throw new Error(`Unsupported ${input.backend} model: ${input.model}`)
     return
   }
-  validateThreadProfile(input.backend, input.model, input.effort)
+  validateThreadProfile(input.backend, input.model, input.effort, codexModels)
 }
 
 export function githubDispatcherRequest(
@@ -514,8 +517,9 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
   if (telemetry.permPrompt || telemetry.pendingAsk) return undefined
 
   // Only ACTIVELY-running work holds Done back. A `stale` sub-agent — its completion signal lost AND its
-  // transcript silent past the 15-min staleness ceiling (which already clears Claude's 600s foreground
-  // cap) — is far closer to finished/dead than to working, and counting it here contradicted the queue:
+  // transcript silent 15 min past its last write, or past the deadline of a Bash wait it declared
+  // (pending-call.ts `transcriptQuietPast`) — is far closer to finished/dead than to working, and counting it here
+  // contradicted the queue:
   // hasLiveBackgroundWork (board.ts) holds a thread out of the queue on `running` ONLY, so a stale-only
   // parent read as at-rest in the rail yet Mark-as-done warned it was busy. The two must agree, so match
   // it — running only. (The parenthetical here read "bgShells have no stale state; this narrows
@@ -3404,7 +3408,10 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not editable`)
-        return threadProfileOptions(row.backend, row.backend === "claude" ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: workDir }) : undefined)
+        const claudeModels = row.backend === "claude"
+          ? await readClaudeModels({ claudeBin: ctx.claudeBin, cwd: workDir })
+          : undefined
+        return threadProfileOptions(row.backend, claudeModels, readCodexModels(undefined, ctx.codexVersion))
       },
     }),
 
@@ -3697,7 +3704,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5), from the footer panel. One mutation for the
+    // THE RECURRING PROMPT (scheduler.ts SOURCES 4 and 5), from the Goal panel. One mutation for the
     // text, both triggers and the cadence, because they are all views of one row: split apart, a tab
     // holding a stale copy of one field would clobber the rest on save.
     //
@@ -3721,7 +3728,7 @@ export function createRouter(ctx: AppContext) {
           throw new Error("This thread moved on; reopen it and try again")
         }
         // TURNING IT ON CANCELS WHAT THE THREAD WAS WAITING TO BE TOLD. Checked as a TRANSITION, not as
-        // a state: every edit in the footer panel rewrites this whole row (the text, the three triggers
+        // a state: every edit in the Goal panel rewrites this whole row (the text, the three triggers
         // and the cadence are one save), so re-firing on an unrelated cadence edit would quietly bin a
         // question the worker registered a moment ago.
         //
@@ -3736,7 +3743,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // The WORKER arming its own, from `mcp__frizz__goal`. Same row the footer panel writes;
+    // The WORKER arming its own, from `mcp__frizz__goal`. Same row the Goal panel writes;
     // different caller, and therefore a different guard.
     //
     // Unguarded on session/generation ON PURPOSE — see SetOwnThreadRecurringPromptInput. The MCP server
@@ -3778,7 +3785,7 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // The READ. A worker had no way to see the row it was writing: not after a compaction took the text
-    // with it, and not after the human edited it in the footer panel — so every arming was blind, and a
+    // with it, and not after the human edited it in the Goal panel — so every arming was blind, and a
     // `start` meant to adjust one trigger silently rewrote the human's words. This answers with the same
     // projection the board shows, so the two readers can never disagree.
     //
@@ -5172,7 +5179,7 @@ export function createRouter(ctx: AppContext) {
     // hand-maintained list. Degrades to a minimal fallback (never throws) when the cache is absent.
     codexModels: query({
       output: z.array(CodexModel),
-      handler: async () => readCodexModels(),
+      handler: async () => readCodexModels(undefined, ctx.codexVersion),
     }),
 
     // The Claude aliases with the EDITION the pinned runtime resolves each to ("Opus 5.5"), asked of the
@@ -5206,7 +5213,7 @@ export function createRouter(ctx: AppContext) {
     quota: query({
       input: z.object({ force: z.boolean().optional() }).strict().optional(),
       output: QuotaSnapshot,
-      handler: async ({ input }) => readQuota({ claudeBin: ctx.claudeBin, force: input?.force }),
+      handler: async ({ input }) => readQuota({ claudeBin: ctx.claudeBin, codexBin: ctx.codexBin, force: input?.force }),
     }),
 
     // Per-provider LOCAL credential presence for the new-thread dispatch gate. Distinct from `quota`
@@ -5695,13 +5702,13 @@ export function createRouter(ctx: AppContext) {
 
     dispatchPreferencesGet: query({
       output: DispatchPreferences,
-      handler: async () => ctx.getDispatchPreferences(readCodexModels()),
+      handler: async () => ctx.getDispatchPreferences(readCodexModels(undefined, ctx.codexVersion)),
     }),
 
     dispatchPreferenceSet: mutation({
       input: SetDispatchPreferenceInput,
       output: DispatchPreferences,
-      handler: async ({ input }) => ctx.setDispatchPreference(input, readCodexModels()),
+      handler: async ({ input }) => ctx.setDispatchPreference(input, readCodexModels(undefined, ctx.codexVersion)),
     }),
 
     // The shipped GitHub batch-dispatch prompt template (single source of truth: server/github.ts).
@@ -5766,7 +5773,7 @@ export function createRouter(ctx: AppContext) {
       input: GithubBatchInput,
       output: GithubBatchResult,
       handler: async ({ input }) => {
-        validateGithubDispatchProfile(input)
+        validateGithubDispatchProfile(input, readCodexModels(undefined, ctx.codexVersion))
         const repo = await resolveRepo()
         if (!repo) throw new Error("not a GitHub repo")
         // Read the template ONCE per batch: the user's Settings override (githubPrompt) when non-blank,

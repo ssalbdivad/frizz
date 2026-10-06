@@ -12,6 +12,11 @@ import { sessionIndicatorFor } from "./Sidebar.tsx"
 // the family while its checks run (maintainer: it "should just stay in the running rail if it's actively
 // waiting on checks") and drops back to the static octocat once they settle.
 //
+// AND SINCE 2026-10-05 AN AT-REST MARK SPINS ONLY ON A `working` REST (ThreadView.waitStatus, groups
+// .restIsWorking). The dot and the octocat keep their glyphs everywhere; the frame around them moves only
+// in the Running band. A queued rest stands still whatever is running behind it, and a `watching` rest
+// stands still in Snoozed (maintainer 2026-10-03: a watcher "shouldn't show up as actively running").
+//
 // The spinner is identified by its <animate> child — the one element in the family that only the
 // BoxSpinner renders — and the inner marks by lucide's stamped class or the dot's own class. Asserting
 // on rendered markup rather than on element types is what pins the COMPOSITION: an ellipsis and a
@@ -64,16 +69,31 @@ test("a parent whose OWN turn runs keeps the empty spinner even with a child out
   assert.ok(!html.includes("lucide-ellipsis"), "the ellipsis says 'at rest', and this thread is not")
 })
 
-test("resting on a live background shell: the solid blue dot inside the spinner", () => {
-  const html = markup({ awaitingBackground: true, bgShells: liveShell })
-  assert.ok(spins(html), "something will wake this, so the box traces")
-  assert.ok(html.includes("frizz-rail-dot"), "the dot says it is a shell")
+test("resting on a live background shell: the solid blue dot, inside the spinner only on a `working` rest", () => {
+  const working = markup({ awaitingBackground: true, bgShells: liveShell, waitStatus: "working" })
+  assert.ok(spins(working), "the work finishes by itself, so the box traces")
+  assert.ok(working.includes("frizz-rail-dot"), "the dot says it is a shell")
+  // The same shell behind a queued rest: the human has the thread, so nothing on its row moves.
+  const queued = markup({ needsYou: true, awaitingBackground: true, bgShells: liveShell })
+  assert.ok(queued.includes("frizz-rail-dot") && !spins(queued), "a queue row never spins")
+  // …and behind a watcher, parked in Snoozed — fenced, and resting on a registered watch with no fence.
+  const fenced = { kind: "awaiting", body: "", hints: [{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "23h" }, { kind: "status", value: "watching" }] }
+  for (const lastFence of [fenced, undefined]) {
+    const html = markup({ awaitingBackground: true, bgShells: liveShell, waitStatus: "watching", lastFence: lastFence as never })
+    assert.ok(html.includes("frizz-rail-dot"), `${lastFence ? "fenced" : "unfenced"}: still the shell's mark`)
+    assert.ok(!spins(html), `${lastFence ? "fenced" : "unfenced"}: still — the wait is on the world`)
+    assert.ok(!html.includes("data-running-indicator"), "and it does not claim to be running")
+  }
 })
 
-test("awaiting a PR: the octocat spins while checks run, and stands still once they settle", () => {
-  const running = markup({ needsYou: false, awaitingBackground: true, watches: prWatch({}) as never })
+test("awaiting a PR: the octocat spins while checks run on a `working` rest, and stands still otherwise", () => {
+  const running = markup({ needsYou: false, awaitingBackground: true, waitStatus: "working", watches: prWatch({}) as never })
   assert.ok(running.includes("lucide-github"), "GitHub's mark")
   assert.ok(spins(running), "inside the spinner while CI runs")
+  // Checks running behind a QUEUED rest: the worker asked for the human, so the row stands still.
+  const queued = markup({ needsYou: true, awaitingBackground: true, watches: prWatch({}) as never })
+  assert.ok(queued.includes("lucide-github") && !spins(queued), "a queue row never spins, checks or no checks")
+  assert.equal(sessionIndicatorFor({ ...base, needsYou: true, awaitingBackground: true, watches: prWatch({}) } as never).tip, "At rest — checks are running", "the tooltip still says the checks are going")
   for (const [what, github] of [
     ["passing", { checks: "passing", running: 0, passed: 3 }],
     ["failing", { checks: "failing", running: 0, failed: 1 }],
@@ -91,8 +111,8 @@ test("gated CI reads `running` but does not spin — nothing moves until a maint
   const gated = markup({ needsYou: true, watches: prWatch({ running: 0, gated: 3, gating: ["Test Linux", "Test macOS", "Linters"] }) as never })
   assert.ok(gated.includes("lucide-github"))
   assert.ok(!spins(gated), "a spinner over a gate would promise motion for as long as nobody notices")
-  const partlyGated = markup({ needsYou: false, awaitingBackground: true, watches: prWatch({ running: 1, gated: 2, gating: ["Test macOS", "Linters"] }) as never })
-  assert.ok(spins(partlyGated), "one live run beside the gate is real motion")
+  const partlyGated = markup({ needsYou: false, awaitingBackground: true, waitStatus: "working", watches: prWatch({ running: 1, gated: 2, gating: ["Test macOS", "Linters"] }) as never })
+  assert.ok(spins(partlyGated), "one live run beside the gate is real motion — the server reads it as working")
 })
 
 test("a plain rest keeps the static box with the ellipsis — no spinner, nothing of this thread is out", () => {

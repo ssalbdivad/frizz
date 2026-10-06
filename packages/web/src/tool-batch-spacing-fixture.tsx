@@ -200,6 +200,11 @@ window.fetch = async (input, init) => {
       headers: { "content-type": "application/json" },
     })
   }
+  // The transcript reads its settled registered questions; `{}` would leave that query's data undefined,
+  // which React Query reports to the console and the no-errors assertion trips on.
+  if (url.pathname === "/_frizz/rpc/threadSettledQuestions") {
+    return new Response(JSON.stringify({ result: { questions: [] } }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }

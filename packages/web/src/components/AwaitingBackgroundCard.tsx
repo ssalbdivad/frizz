@@ -26,16 +26,16 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { Fragment, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, SquareTerminal, TerminalSquare } from "lucide-react"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, SquareTerminal, TerminalSquare, X } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadTerminal, ThreadView, ThreadWatchView } from "@frizz/shared"
 import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
 import { subAgentName } from "../groups.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_FALLBACK_TITLE } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_CHIP } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed, liveAgeSince } from "../lib/durationLabels.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
-import { AGENT_GLYPH_STROKE } from "../lib/childOps.ts"
+import { AGENT_GLYPH_STROKE, CHILD_DISMISS_NOUN, CHILD_DISMISS_TITLE, CHILD_DISMISS_VERB, CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { pushBackgroundShellDrawer, pushSubAgentDrawer, pushTerminalDrawer, showToast } from "../store.ts"
@@ -153,7 +153,7 @@ export function awaitingBackgroundLabel(
   thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">,
   hints: readonly AwaitingHint[],
 ): string {
-  return awaitingFenceTitle(hints) ?? (awaitingSteps(hints).length > 0 ? STEPS_FALLBACK_TITLE : shellsAlone(thread) ? SHELLS_ALONE_TITLE : AWAITING_FALLBACK_TITLE)
+  return awaitingFenceTitle(hints) ?? (shellsAlone(thread) ? SHELLS_ALONE_TITLE : AWAITING_FALLBACK_TITLE)
 }
 
 /** The shell-only rest's title. The maintainer named this shape "Background shells running" (2026-08-04);
@@ -450,7 +450,7 @@ function Chevron() {
   return <ChevronRight size={13} aria-hidden className={`${ON_CAP} ml-[3px] -mr-[4px] text-muted-35 transition-colors group-hover:text-muted-70`} />
 }
 
-export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent }: {
+export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, href, ghRef, title, testKind, testId, indent, dismiss }: {
   mark: ReactNode
   name: string
   /** A terminal row's folder hint (ThreadTerminals' FolderHintToken). It leads the STATUS, as the strip's
@@ -472,6 +472,10 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
   mono?: boolean
   status: ReactNode
   onOpen?: () => void
+  /** The ops strip's stop/clear × (ChildOpRow), for the rows that REPLACE that strip: the /full rail's
+   *  sub-agents and shells (maintainer 2026-07-30: "the X button to stop a sub-agent should show up
+   *  everywhere sub-agents are listed"). Absent ⇒ no ×; the card leaves it to the strip beneath it. */
+  dismiss?: { onDismiss: () => void; title: string; label: string }
   /** Left inset in px for a row in a TREE (the rail's edited files). Switches the row from the shared
    *  subgrid to its own flex line — see ROW_FLEX for why subgrid cannot indent. */
   indent?: number
@@ -521,15 +525,37 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
     )
     : <span className={nameClass} title={title}>{label}</span>
   const interactive = !!(href || onOpen)
+  // DIRECTLY AFTER THE NAME and always visible, quietly — the strip's placement and tone (ChildOpRow:
+  // at the far right it read as too subtle to find). `relative` lifts it over the name's stretched
+  // overlay, as the PR row's failures link is lifted, so pressing it never opens the row.
+  // `ml-0.5`, not the strip's 6px gap, and measured (ink-gaps.mjs, dsf 4, sans): 6.6–7.1px of ink after
+  // an untruncated name, the row's tight mark-to-name figure, because the × is the name's handle. A
+  // TRUNCATED name — the rail's usual case — adds its ellipsis remainder, which no margin removes:
+  // 8.6–13.6px, against 16.75px from the × to the widest status. At 6px the rows read 12.5–15.7px, the
+  // worst all but halfway to the status. Its ink centre is 0.23px under the cap band's: no nudge.
+  const x = dismiss && (
+    <button
+      type="button"
+      onClick={dismiss.onDismiss}
+      onMouseDown={(e) => e.stopPropagation()}
+      title={dismiss.title}
+      aria-label={dismiss.label}
+      className="relative ml-0.5 shrink-0 self-center rounded-sm p-0.5 text-muted-45 outline-none transition-colors hover:text-fg focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+    >
+      <X size={11} />
+    </button>
+  )
   // EVERY ROW, hint or not: the name and the status tracks as ONE flex line — the name at its natural width (it
-  // truncates, last), then the hint's zero-based box or a plain spacer growing into what is left, then the
-  // status at the grid's right edge. A row without a hint kept the two subgrid tracks for one round, so its
-  // name ended where the WIDEST status in the grid began while a hinted row's ran to its own status: two
-  // layouts in one group, label widths differing row to row by ~50px of dead space (1400px rail, 2026-09-30).
-  // The statuses still share one right edge — the grid's — which is what the subgrid was for.
+  // truncates, last), then the × (the name's handle), then the hint's zero-based box or a plain spacer growing
+  // into what is left, then the status at the grid's right edge. A row without a hint kept the two subgrid
+  // tracks for one round, so its name ended where the WIDEST status in the grid began while a hinted row's ran
+  // to its own status: two layouts in one group, label widths differing row to row by ~50px of dead space
+  // (1400px rail, 2026-09-30). The statuses still share one right edge — the grid's — which is what the
+  // subgrid was for.
   const body = (
     <span className={`${tree ? "flex-1" : "col-span-2"} flex min-w-0 items-baseline`}>
       {open}
+      {x}
       {hint ?? <span aria-hidden className="ml-3 flex-1" />}
       <span data-wait-status className={STATUS}>{status}</span>
     </span>
@@ -693,11 +719,23 @@ function ShellWatchRow({ watch, thread, slug, now }: {
   )
 }
 
-/** A running AGENT TERMINAL as a row — the declared-watch row above once its target resolved, and the
- *  fullscreen rail's row for EVERY running one, declared or not (a dev server the worker walked away from
+/** The strip's × for a rail row: STOP while the op runs, CLEAR once it does not — ChildOpRow's two
+ *  meanings and words. Whether there is a × at all is the caller's `childOpDismisser`, as on the strip. */
+function railDismiss(onDismiss: (() => void) | undefined, running: boolean, kind: "AGENT" | "SHELL", label: string) {
+  if (!onDismiss) return undefined
+  const tone = running ? "running" : "settled"
+  return { onDismiss, title: CHILD_DISMISS_TITLE[tone], label: `${CHILD_DISMISS_VERB[tone]} ${CHILD_DISMISS_NOUN[kind]}: ${label}` }
+}
+
+/** An AGENT TERMINAL as a row — the declared-watch row above once its target resolved, and the fullscreen
+ *  rail's row for EVERY one the thread tracks, declared or not (a dev server the worker walked away from
  *  is still what is going on in the thread). The bot is the owner mark the ops strip gives the same row
- *  (ThreadTerminals.tsx ProcessRow); a human terminal's row beside it wears the terminal square. */
-export function BgShellRow({ shell, slug, now, testId, hint }: {
+ *  (ThreadTerminals.tsx ProcessRow); a human terminal's row beside it wears the terminal square.
+ *
+ *  A STALE shell is a process the OS has confirmed gone (CHILD_STALE_SHELL_TITLE), so it drops the
+ *  shell blue and says "stale". It read as running here until 2026-10-05: a declared watch keeps its row
+ *  after the shell it names dies, and that row is the reason the thread is back in the queue. */
+export function BgShellRow({ shell, slug, now, testId, hint, onDismiss }: {
   shell: ThreadView["bgShells"][number]
   slug: string
   now: number
@@ -705,27 +743,33 @@ export function BgShellRow({ shell, slug, now, testId, hint }: {
   /** Where it runs, when that is not where the thread's header says the agent is (ThreadTerminals'
    *  processFolderHint) — the strip's own hint, on the rail's rows too. */
   hint?: ReactNode
+  onDismiss?: () => void
 }) {
   const elapsed = liveAgeSince(shell.startedAt, now)
+  const running = shell.state === "running"
   // Every row with an id opens the drawer — a Codex exec's too. Codex keeps that exec's output inside its
   // own session, and the drawer says so, but its command, its folder and its Stop are all real.
   const openable = Boolean(shell.id)
+  const state = running ? `running for ${elapsed}` : CHILD_STALE_SHELL_TITLE
   return (
     <WaitRow
       testKind="shell"
       testId={testId ?? shell.id ?? shell.label}
-      mark={<Bot size={12} strokeWidth={AGENT_GLYPH_STROKE} className={`${ON_CAP} text-shell`} />}
+      mark={<Bot size={12} strokeWidth={AGENT_GLYPH_STROKE} className={`${ON_CAP} ${running ? "text-shell" : "text-muted-60"}`} />}
       name={shell.label}
       onOpen={openable ? () => pushBackgroundShellDrawer(slug, shell.id!, { label: shell.label, startedAt: shell.startedAt }) : undefined}
-      title={openable ? `Open agent terminal — running for ${elapsed}` : shell.label}
+      title={openable ? `Open agent terminal — ${state}` : running ? shell.label : `${shell.label} — ${state}`}
       // Where one was declared, what is left of its budget (lib/shellBudget.ts), then its age — the strip's
       // order, so one shell reads one way on neighbouring surfaces (it read `1m · 13m left` here beside the
-      // strip's `13m left · 1m`). No "running": every row in this group is running (a finished shell leaves
-      // it), the sub-agent rows above state no such word either, and on the 308px fullscreen rail the word
-      // is what pushed "46m left" — the one reading with a deadline — past the status track's half-width
-      // cap into an ellipsis.
+      // strip's `13m left · 1m`). No "running": a running row is the default, the sub-agent rows above
+      // state no such word either, and on the 308px fullscreen rail the word is what pushed "46m left" —
+      // the one reading with a deadline — past the status track's half-width cap into an ellipsis. A
+      // STALE one leads with the word, because that is the news.
       hint={hint}
-      status={[shellBudgetLabel(shell.budgetEndsAt, now), elapsed || "running"].filter(Boolean).join(" · ")}
+      status={running
+        ? [shellBudgetLabel(shell.budgetEndsAt, now), elapsed || "running"].filter(Boolean).join(" · ")
+        : ["stale", elapsed].filter(Boolean).join(" · ")}
+      dismiss={railDismiss(onDismiss, running, "SHELL", shell.label)}
     />
   )
 }
@@ -787,24 +831,31 @@ export function liveAgents(thread: Pick<ThreadView, "subAgents">) {
   return (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running")
 }
 
-export function AgentRow({ agent, slug, now }: { agent: ThreadView["subAgents"][number]; slug: string; now: number }) {
+export function AgentRow({ agent, slug, now, onDismiss }: { agent: ThreadView["subAgents"][number]; slug: string; now: number; onDismiss?: () => void }) {
   const elapsed = compactElapsedSince(agent.startedAt, now)
   // The profile without its namespace: `frizz:opus-high` is how it is dispatched, `opus-high` is how the
   // maintainer says it, and the row has no width to spend on a prefix every row would repeat.
   const profile = agent.subagentType?.replace(/^frizz:/, "")
+  // STALE reaches the fullscreen rail only (this card's set is `liveAgents`): a child whose completion
+  // never arrived and whose transcript has gone quiet past its window (tailer `quietPastWindow`). It does
+  // not spin. It wears the flat dot every other surface gives a stale child, in a box the size of the
+  // spinner so the column keeps one footprint, and its status leads with the word.
+  const stale = agent.state === "stale"
   return (
     <WaitRow
       testKind="agent"
       testId={agent.id ?? agent.label}
-      // A sub-agent is ALWAYS in motion while it is on this card — it returns and re-invokes its parent —
-      // so it is always the spinner, never a static mark. Accent-yellow rather than the checks' amber,
-      // matching the rail's one-hue-per-runtime-concern (a sub-agent pulses accent, a shell pulses blue).
-      mark={<Spinner tone="border-accent" />}
+      // A running sub-agent is in motion — it returns and re-invokes its parent — so it is the spinner.
+      // Accent-yellow rather than the checks' amber, matching the rail's one-hue-per-runtime-concern (a
+      // sub-agent pulses accent, a shell pulses blue). A RESTED one (rail only) spins too: the rail rows
+      // direct children alone, so it stands for the fan-out still running beneath it.
+      mark={stale ? <span aria-hidden className={`inline-block size-3 p-[3px] ${ON_CAP}`}><span className={CHILD_STALE_DOT_CLASS} /></span> : <Spinner tone="border-accent" />}
       // Its handle (`cache-keys`), as on every row that shows a child as itself (groups.ts subAgentName).
       name={subAgentName(agent.label)}
       onOpen={agent.id ? () => pushSubAgentDrawer(slug, agent.id!, { label: agent.label, subagentType: agent.subagentType, startedAt: agent.startedAt }) : undefined}
-      title={agent.id ? `Open this sub-agent — working for ${elapsed}` : agent.label}
-      status={[profile, elapsed].filter(Boolean).join(" · ")}
+      title={agent.id ? `Open this sub-agent — ${stale ? CHILD_STALE_TITLE : `working for ${elapsed}`}` : agent.label}
+      status={[stale ? "stale" : undefined, profile, elapsed].filter(Boolean).join(" · ")}
+      dismiss={railDismiss(onDismiss, agent.state === "running", "AGENT", agent.label)}
     />
   )
 }
@@ -1184,14 +1235,14 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
   // fence's prose is this card's opening stratum, so the card reads it directly off the thread.
   // `kind`/`foreign`/`state`/`archived`/`sessionId` joined the Pick on 2026-08-31, when the card took
   // ownership of its own Snooze: the control renders for an actionable owned thread and for nothing
-  // else, on the SAME test the lifecycle footer uses (threadLifecycleAvailability).
+  // else, on the SAME test the header's lifecycle verbs use (threadLifecycleAvailability).
   // `awaitingBackground`/`runtime`/`bgSnoozed` joined on 2026-09-04, when the card took ownership of
   // WHETHER to draw the Snooze at all rather than being drawn only where one applied (showsRestingCard).
   //
   // OPTIONAL since 2026-09-04: a fence card in a SUB-AGENT's own transcript has no owning thread, so it
   // has no rows and no verb — but it is still this card, at this heading, with this prose.
   // `checkout` joined on 2026-09-30: an agent terminal's row names its folder where the strip would.
-  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence" | "checkout" | "lastAssistantAt">
+  thread?: Pick<ThreadView, "id" | "sessionId" | "kind" | "foreign" | "state" | "archived" | "awaitingBackground" | "waitStatus" | "runtime" | "bgSnoozed" | "subAgents" | "bgShells" | "watches" | "lastFence" | "checkout" | "lastAssistantAt">
   /** The fence this card STATES, when it is not the one the board is holding. Defaults to the thread's
    *  own `lastFence` — which is the at-rest case, and the only one until 2026-09-04.
    *
@@ -1217,6 +1268,7 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
   // `steps:` — the fence is waiting on the HUMAN to perform these (2026-10-03). Drawn under the prose on
   // every surface; the verbs that answer them only while the thread rests on them (restingOnSteps).
   const steps = awaitingSteps(hints)
+  const stepsTitle = steps.length > 0 ? awaitingFenceTitle(hints) : null
   const stepsLive = thread !== undefined && restingOnSteps(thread, steps)
   const waiting = awaitsResults(work)
   // THE WORKER'S OWN HANDOFF, opening the card (maintainer 2026-08-24: "the rendered message at the
@@ -1249,18 +1301,26 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
   //
   // NOT ON A STEPS CARD. The thread is waiting on the reader, so the footer carries the steps' own verbs;
   // an event-snooze ("until new activity") would hide a card whose only new activity is the reader's own
-  // reply. The lifecycle footer's wall-clock Snooze still parks it for anyone who means "not now".
-  const snoozable = thread !== undefined && steps.length === 0 && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  // reply. The header's wall-clock snooze (the alarm clock) still parks it for anyone who means "not now".
+  //
+  // NOT ON A `watching` REST EITHER (2026-10-05): its worker already parked it in Snoozed until the watch
+  // wakes it, which is the very park this button would make.
+  //
+  // `restOwned` is that gate without the `watching` exclusion: a parked rest the human owns, which the
+  // "Ask for update" below shares (the runtime is read ONCE in this card, here).
+  const restOwned = thread !== undefined && steps.length === 0 && showsRestingCard(thread) && threadLifecycleAvailability(thread).snooze
+  const snoozable = restOwned && thread!.waitStatus !== "watching"
   // THE STOP IS NOT GATED ON THE REST. Ending a shell is valid whenever one is running and the server can
   // reach it — a bg-snoozed thread drawn through ChatView's fence block still has live shells worth
   // stopping, even though it has no rest left to park. Owned and not archived, though: a foreign thread
   // is another tool's session, and an archived one has no verbs at all (threadLifecycleAvailability).
   const stopIds = thread !== undefined && threadLifecycleAvailability(thread).archive ? stoppableShellIds(thread, hints) : []
-  // ASK FOR UPDATE rides the same gate as the Snooze — a parked rest the human owns — and additionally
-  // needs the board's own awaiting fence: a card drawn from a fence the thread has moved past has no
-  // park left to check in on.
-  const askable = snoozable && fence === undefined && thread?.lastFence?.kind === "awaiting"
-  const footer = snoozable || stopIds.length > 0
+  // ASK FOR UPDATE needs a parked rest the human owns on the board's own awaiting fence: a card drawn from
+  // a fence the thread has moved past has no park left to check in on. It is NOT gated on the snooze: a
+  // `watching` rest (Snoozed, no event snooze to offer) is the very orchestration whose sub-agents report
+  // only at the check-in, so it is where asking early matters most.
+  const askable = restOwned && fence === undefined && thread!.lastFence?.kind === "awaiting"
+  const footer = snoozable || askable || stopIds.length > 0
   return (
     // The SAME shell as every transcript card (TranscriptCard). This card stacks directly under an
     // awaiting fence card on a queue card, and it used to be a visibly different object there —
@@ -1273,14 +1333,19 @@ export function AwaitingBackgroundCard({ thread, fence, onReplied, onReplyFailed
       // watcher genuinely IS waiting on something to come back. A per-kind glyph would rebuild the
       // per-kind card the consolidation removed, exactly as a per-kind title did.
       // STEPS TAKE A THIRD, and only because their wait is of a different kind: the reader is the one
-      // being waited on, so the card is a to-do rather than a status.
+      // being waited on, so the card is a to-do rather than a status. It rides a KIND CHIP rather than
+      // the title (2026-10-05, TranscriptCard's KindChip): "To do" over the worker's own title, which is
+      // left out when the worker named none — the chip already says what the card is for.
       icon={steps.length > 0 ? ListTodo : shellsAlone(work) ? TerminalSquare : Hourglass}
+      chip={steps.length > 0 ? STEPS_CHIP : undefined}
       // WRAPPED AT ANY CHARACTER, because this heading can now be WORKER-AUTHORED. Every other card in
       // the family carries a code-authored label, so the header's wrap-don't-truncate rule never had to
       // survive an unbreakable token; a `title:` naming a branch, a URL or a base64 id is one. Measured
       // at the queue card's narrowest (368px content box, sans): a 40-character single token bled 135.64px
       // PAST the card's right edge without this, and wraps inside it with it.
-      label={<span className="[overflow-wrap:anywhere]">{awaitingBackgroundLabel(work, hints)}</span>}
+      label={steps.length > 0
+        ? (stepsTitle ? <span className="[overflow-wrap:anywhere]">{stepsTitle}</span> : null)
+        : <span className="[overflow-wrap:anywhere]">{awaitingBackgroundLabel(work, hints)}</span>}
       // ONE watched PR the table does not already row rides the title, as the GitHub wake card's ref
       // does; SEVERAL take a row of their own under the prose (see unrowedWatchRefs).
       aside={unrowed.length === 1 ? <WatchedRef watch={unrowed[0]} /> : undefined}

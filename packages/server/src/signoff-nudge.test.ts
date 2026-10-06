@@ -11,7 +11,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
-import { NEEDS_INPUT_REQUIRED_AT, QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn, SIGNOFF_NUDGE_MESSAGE } from "@frizz/shared"
+import { NEEDS_INPUT_REQUIRED_AT, QUESTION_FENCE_RETIRED_AT, retiredAwaitingKindsIn, SIGNOFF_NUDGE_MARKER, SIGNOFF_NUDGE_MESSAGE } from "@frizz/shared"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { applyRecord, createTailer, newTailState, type SessionTelemetry, type Tailer } from "./tailer.ts"
@@ -26,7 +26,7 @@ import { createWakeDeliveryStore } from "./wake-store.ts"
 // path. In PRODUCTION the runtime is always knowable, so the sent-and-confirm-later path is the only one
 // that ever runs. A cap that is only spent on the path tests take is not a cap; see the two tests at the
 // bottom of this file.
-// A dispatch instant BEFORE the `needs_input:` cut, for the cases that pin the legacy contract.
+// A dispatch instant BEFORE the answer-required cut, for the cases that pin the legacy contract.
 const LEGACY_SPAWN = new Date(Date.parse(NEEDS_INPUT_REQUIRED_AT) - 86_400_000).toISOString()
 
 function nudger(tele: Partial<SessionTelemetry>, opts: { setting?: string; runtime?: "alive" | "dead"; spawnedAt?: string } = {}) {
@@ -109,14 +109,15 @@ test("a rest with no fence is told how to sign off, and the text names all three
     // workers read before writing a fence, so a stale example here teaches the wrong syntax to exactly
     // the audience that most needs the right one.
     //
-    // This fixture spawns NOW, so it is a `needs_input:` thread (NEEDS_INPUT_REQUIRED_AT) and is taught
-    // the key with a fence that needs no prose; the legacy example is pinned against the legacy text.
+    // This fixture spawns NOW, so it is an answer-required thread (NEEDS_INPUT_REQUIRED_AT) and is taught
+    // `status:` with a fence that needs no prose; the legacy example is pinned against the legacy text.
     assert.match(h.delivered[0], /agents: \[<the id your runtime gave you>\]/)
-    assert.match(h.delivered[0], /needs_input: false/)
-    assert.match(h.delivered[0], /you owe NO write-up/)
+    assert.match(h.delivered[0], /status: working/)
+    for (const word of ["working", "watching", "needs_input"]) assert.match(h.delivered[0], new RegExp(`- \`${word}\` — `))
+    assert.match(h.delivered[0], /`working` and `watching` owe NO write-up/)
     assert.match(SIGNOFF_NUDGE_MESSAGE, /shells: \[<the id your runtime gave you>\]/)
     assert.match(SIGNOFF_NUDGE_MESSAGE, /prs: \[owner\/repo#123\]/)
-    assert.doesNotMatch(SIGNOFF_NUDGE_MESSAGE, /needs_input/, "a pre-cut worker is not taught a key its contract never had")
+    assert.doesNotMatch(SIGNOFF_NUDGE_MESSAGE, /needs_input|status:/, "a pre-cut worker is not taught a key its contract never had")
     // …and never the SINGULAR keys the 2026-08-24 YAML cutover retired. The example kept them for a
     // month after the park check started refusing them by name, so a worker that copied the reminder's
     // own fence was bumped for it.
@@ -273,7 +274,7 @@ for (const [what, arrange] of [
     st.armThreadWatch({ id: "wch_x", slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })],
 ] as Array<[string, (st: ReturnType<typeof createStorage>, slug: string) => unknown]>) {
   test(`${what} is already a sign-off, so nothing is injected`, async () => {
-    // A watch is a sign-off only for a thread dispatched BEFORE the `needs_input:` cut — see the next
+    // A watch is a sign-off only for a thread dispatched BEFORE the answer-required cut — see the next
     // test — so that case runs on a legacy thread; `done` and `ask` are sign-offs on every contract.
     const h = nudger({}, what === "a registered watch" ? { spawnedAt: LEGACY_SPAWN } : {})
     try {
@@ -303,18 +304,64 @@ test("a prose-only reply to the human after a registered done is not nudged; one
   } finally { talked.close(); worked.close() }
 })
 
-// UNDER THE `needs_input:` CONTRACT A WATCH IS NOT A SIGN-OFF (2026-10-01). It says when the worker
-// wakes; whether the human is needed meanwhile is the fence's answer, so a rest behind a watch with no
-// fence queues (board.needsInputQueues) — and is told about the fence that would have kept it out.
-test("a registered watch alone is NOT a sign-off for a needs_input thread — the rest is taught the fence", async () => {
+// A QUESTION IS A SIGN-OFF ONLY AT THE REST THAT ASKED IT (2026-10-05). Until then any open question
+// silenced the nudge at every later rest too, and the web drew the old card under the newest handoff as
+// if it were that rest's ask — superseding what the worker actually said (maintainer 2026-10-05). A
+// question carried past a human turn or a wake is now the worker's to restate under `questions:` or to
+// withdraw, and a later rest that does neither is told so.
+const ASKED_EARLIER = Date.parse("2026-08-11T23:00:00.000Z")
+const LAST_TURN = "2026-08-11T23:59:00.000Z" // a CI wake or a reply, before the rest at 00:00
+
+test("a question carried from an EARLIER rest is not this rest's sign-off — the worker is told to name it or withdraw it", async () => {
+  const h = nudger({ lastUserAt: LAST_TURN })
+  try {
+    h.storage.askThreadQuestion({ id: "qst_old1", slug: h.slug, spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }), askedAtMs: ASKED_EARLIER })
+    await h.s.tick()
+    const nudges = h.nudges()
+    assert.equal(nudges.length, 1)
+    assert.ok(nudges[0].message.startsWith(SIGNOFF_NUDGE_MARKER), "the nudge's own marker, so it folds like every reminder")
+    assert.match(nudges[0].message, /A question you registered at an EARLIER rest is still open/)
+    assert.match(nudges[0].message, /- `qst_old1` — SQLite or a JSON file\?/, "named, with its own words")
+    assert.match(nudges[0].message, /`questions: \[qst_…\]`/)
+    assert.match(nudges[0].message, /mcp__frizz__unask/)
+  } finally { h.close() }
+})
+
+test("a question asked at THIS rest is still its sign-off, even after an earlier turn", async () => {
+  const h = nudger({ lastUserAt: LAST_TURN })
+  try {
+    h.storage.askThreadQuestion({ id: "qst_new1", slug: h.slug, spec: JSON.stringify({ question: "Which dist-tag?", kind: "question" }), askedAtMs: Date.parse("2026-08-11T23:59:30.000Z") })
+    await h.s.tick()
+    assert.deepEqual(h.nudges(), [])
+  } finally { h.close() }
+})
+
+test("a new question does not cover an old one: the nudge lists only the carried question", async () => {
+  const h = nudger({ lastUserAt: LAST_TURN })
+  try {
+    h.storage.askThreadQuestion({ id: "qst_old1", slug: h.slug, spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }), askedAtMs: ASKED_EARLIER })
+    h.storage.askThreadQuestion({ id: "qst_new1", slug: h.slug, spec: JSON.stringify({ question: "Which dist-tag?", kind: "question" }), askedAtMs: Date.parse("2026-08-11T23:59:30.000Z") })
+    await h.s.tick()
+    const nudges = h.nudges()
+    assert.equal(nudges.length, 1)
+    assert.match(nudges[0].message, /qst_old1/)
+    assert.doesNotMatch(nudges[0].message, /qst_new1/)
+  } finally { h.close() }
+})
+
+// UNDER THE ANSWER-REQUIRED CONTRACT A WATCH IS NOT A SIGN-OFF (2026-10-01). It says when the worker
+// wakes; where the thread sits meanwhile is the fence's answer, so a rest behind a watch with no fence
+// queues (board.needsInputQueues) — and is told about the fence that would have kept it out.
+test("a registered watch alone is NOT a sign-off for an answer-required thread — the rest is taught the fence", async () => {
   const h = nudger({ bgShells: [{ label: "the suite", startedAt: "2026-08-12T00:00:00.000Z", state: "running", id: "toolu_x", taskId: "bzvtnt3ig" }] as SessionTelemetry["bgShells"] })
   try {
     h.storage.armThreadWatch({ id: "wch_x", slug: h.slug, kind: "shell", target: "bzvtnt3ig", createdAtMs: Date.now(), expiresAtMs: Date.now() + 7_200_000 })
     await h.s.tick()
     const nudges = h.nudges()
     assert.equal(nudges.length, 1)
-    assert.match(nudges[0].message, /shells: \[bzvtnt3ig\]\nneeds_input: false\n/, "the fence to write, the id and the answer in it")
-    assert.match(nudges[0].message, /make it `true`/, "and when the answer is true")
+    assert.match(nudges[0].message, /shells: \[bzvtnt3ig\]\nstatus: working\n/, "the fence to write, the id and the answer in it")
+    assert.match(nudges[0].message, /make it `watching`/, "and when it is a watch")
+    assert.match(nudges[0].message, /make it `needs_input`/, "and when the human is needed")
   } finally { h.close() }
 })
 
@@ -560,7 +607,7 @@ test("a Goal and the reminder are due for one rest: the reminder goes, the Goal 
     last_read_at: null, unread: 0, exited: 0, archived: 0, rested_at: null, title_auto: 1,
     title: slug, state: "open", meta: null, seen_at: null, transcript_id: null,
   } as SessionRow)
-  // An ordinary armed Goal — the stop hook and nothing else, which is what the footer panel arms when an
+  // An ordinary armed Goal — the stop hook and nothing else, which is what the Goal panel arms when an
   // operator flips one switch.
   storage.setRecurringPromptBySlug(slug, {
     prompt: "keep going", stopHook: true, heartbeat: false, postCompaction: false,
@@ -621,7 +668,7 @@ test("a cancellation on its way holds BOTH sources — the wake is the one deliv
   } as Partial<SessionTelemetry>)
   try {
     // The field sequence: the worker registered a question and rested; the operator armed a stop hook
-    // in the footer panel, whose handler cancelled the question and kicked the sweep.
+    // in the Goal panel, whose handler cancelled the question and kicked the sweep.
     h.storage.askThreadQuestion({
       id: "qst_cancelled", slug: h.slug,
       spec: JSON.stringify({ question: "SQLite or a JSON file?", kind: "question" }),
@@ -836,14 +883,14 @@ test("a Workflow's own agents and a retired child's grandchildren do not park, a
   } finally { h.close() }
 })
 
-test("under needs_input a running child no longer parks: the rest gets the short variant, its fence answering needs_input", async () => {
+test("under the answer-required contract a running child no longer parks: the rest gets the short variant, its fence answering status", async () => {
   const h = nudger({ subAgents: [child()], bgShells: [shell()] } as Partial<SessionTelemetry>)
   try {
     await h.s.tick()
     assert.equal(h.nudges().length, 1)
     const msg = h.nudges()[0].message
-    assert.match(msg, /```awaiting\nshells: \[bzvtnt3ig\]\nagents: \[a01b2d20b32feab11\]\nneeds_input: false\nfor: 1h\n```/, "a quiet park, the fence alone")
-    assert.match(msg, /make it `true`/, "and when to say true")
+    assert.match(msg, /```awaiting\nshells: \[bzvtnt3ig\]\nagents: \[a01b2d20b32feab11\]\nstatus: working\nfor: 1h\n```/, "a quiet park, the fence alone")
+    assert.match(msg, /make it `needs_input`/, "and when the human is needed")
     assert.doesNotMatch(msg, /keeps you out of the queue on its own/, "no promise the contract withdrew")
     // The fence it hands over is one the needs_input park check honours while the work runs.
     const { parseSignalFence } = await import("./tailer.ts")

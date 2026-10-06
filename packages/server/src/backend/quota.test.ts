@@ -1,10 +1,13 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises"
+import { chmod, mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises"
+import { createHash } from "node:crypto"
 import { join } from "node:path"
 import { tmpdir } from "node:os"
 import { parseCodexQuotaFromRollout, parseCodexQuotaFromRateLimits, readCodexQuota, resetCodexQuotaMemo } from "./codex-quota.ts"
 import { parseClaudeUsage, parseClaudeUsageOutput, tokenFromCredentialsJson, readClaudeQuota, refreshClaudeQuotaInBackground, claudeQuotaRefreshSettled } from "./claude-quota.ts"
+import { frizzRoots, resetFrizzRoots } from "../frizz-paths.ts"
+import { readQuota } from "../quota.ts"
 
 // ---- Codex rollout parsing ----
 
@@ -152,6 +155,61 @@ test("codex: a failed live read with no rollouts stays a clean unavailable", asy
     assert.deepEqual(q.windows, [])
   } finally {
     resetCodexQuotaMemo()
+    await rm(dir, { recursive: true, force: true })
+  }
+})
+
+test("codex: the configured binary is spawned for the live quota read", { skip: process.platform === "win32" }, async () => {
+  // A POSIX executable is intentional here. On Windows an arbitrary script cannot stand in for an
+  // executable without adding a production-only cwd/argv seam; resolveCodexExecutable's Windows
+  // launcher behavior is covered separately in codex-executable.test.ts.
+  const dir = await mkdtemp(join(tmpdir(), "frizz-codex-quota-"))
+  const marker = join(dir, "spawned.txt")
+  const bin = join(dir, "codex-stand-in")
+  const envNames = ["HOME", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "XDG_CACHE_HOME", "FRIZZ_QUOTA_FIXTURE", "FRIZZ_TEST_CODEX_MARKER"] as const
+  const savedEnv = Object.fromEntries(envNames.map((name) => [name, process.env[name]]))
+  try {
+    await writeFile(bin, `#!/bin/sh
+printf '%s' "$*" > "$FRIZZ_TEST_CODEX_MARKER"
+while IFS= read -r line; do
+  case "$line" in
+    *'"id":1'*) printf '%s\\n' '{"id":1,"result":{}}' ;;
+    *'"id":2'*) printf '%s\\n' '{"id":2,"result":{"rateLimits":{"planType":"pro","primary":{"usedPercent":17,"windowDurationMins":300,"resetsAt":7},"secondary":null}}}' ;;
+  esac
+done
+`)
+    await chmod(bin, 0o755)
+
+    // Keep the other half of readQuota deterministic and offline: a fresh shared Claude reading
+    // means this integration test reaches the Codex process boundary without touching credentials.
+    process.env.HOME = dir
+    process.env.CODEX_HOME = dir
+    process.env.CLAUDE_CONFIG_DIR = join(dir, "claude")
+    process.env.XDG_CACHE_HOME = join(dir, "cache")
+    process.env.FRIZZ_TEST_CODEX_MARKER = marker
+    delete process.env.FRIZZ_QUOTA_FIXTURE
+    resetFrizzRoots()
+    const cacheDir = join(frizzRoots().cache, "quota-cache")
+    await mkdir(cacheDir, { recursive: true })
+    const profile = createHash("sha256").update(process.env.CLAUDE_CONFIG_DIR).digest("hex").slice(0, 12)
+    await writeFile(join(cacheDir, `claude-${profile}.json`), JSON.stringify({
+      at: Date.now(),
+      quota: { status: "ok", windows: [{ key: "5h", label: "5h", usedPercent: 1 }] },
+    }))
+
+    resetCodexQuotaMemo()
+    const q = await readQuota({ codexBin: bin })
+    assert.equal(await readFile(marker, "utf8"), "app-server")
+    assert.equal(q.codex.status, "ok")
+    assert.equal(q.codex.windows[0]?.usedPercent, 17)
+  } finally {
+    resetCodexQuotaMemo()
+    for (const name of envNames) {
+      const value = savedEnv[name]
+      if (value === undefined) delete process.env[name]
+      else process.env[name] = value
+    }
+    resetFrizzRoots()
     await rm(dir, { recursive: true, force: true })
   }
 })

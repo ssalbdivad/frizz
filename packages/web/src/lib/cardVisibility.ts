@@ -258,15 +258,10 @@ function keepAtEnd(): void {
   if (window.scrollY < end - 1) window.scrollTo({ top: end, left: 0, behavior: "instant" })
   endHoldY = window.scrollY
 }
-function drawOnScreen(): void {
-  const scroller = scrollerOf()
-  if (endHoldUntil !== 0 && !gliding()) {
-    const atEndNow = window.scrollY >= scroller.scrollHeight - window.innerHeight - 1
-    // Up, and off the end: the reader's scroll. (A page that got shorter is clamped up, but onto its end.)
-    if (!atEndNow && window.scrollY < endHoldY - 1) endHoldUntil = 0
-    else if (atEndNow) endHoldY = window.scrollY
-  }
-  let atEnd: boolean | undefined
+/** Build every unbuilt slot inside the window, again until a pass finds none (DRAW_PASSES, above). `read`
+ *  runs inside each pass after its box reads, so a caller can read layout without forcing another. True
+ *  when anything was built. */
+function buildOnScreen(read?: () => void): boolean {
   let built = false
   for (let pass = 0; pass < DRAW_PASSES; pass++) {
     const viewport = window.innerHeight
@@ -276,12 +271,26 @@ function drawOnScreen(): void {
       const rect = slot.getBoundingClientRect()
       if (rect.bottom > 0 && rect.top < viewport) due.push(slot)
     }
-    // Read with the layout the box reads above just made: no extra layout.
-    atEnd ??= window.scrollY >= scroller.scrollHeight - viewport - 1
+    read?.()
     if (due.length === 0) break
     for (const slot of due) markNear(slot)
     built = true
   }
+  return built
+}
+function drawOnScreen(): void {
+  const scroller = scrollerOf()
+  if (endHoldUntil !== 0 && !gliding()) {
+    const atEndNow = window.scrollY >= scroller.scrollHeight - window.innerHeight - 1
+    // Up, and off the end: the reader's scroll. (A page that got shorter is clamped up, but onto its end.)
+    if (!atEndNow && window.scrollY < endHoldY - 1) endHoldUntil = 0
+    else if (atEndNow) endHoldY = window.scrollY
+  }
+  let atEnd: boolean | undefined
+  const built = buildOnScreen(() => {
+    // Read with the layout the first pass's box reads just made: no extra layout.
+    atEnd ??= window.scrollY >= scroller.scrollHeight - window.innerHeight - 1
+  })
   // At the end with nothing built here, but cards still to be re-drawn (a width change, content that arrived
   // while they were skipped): those heights are about to change too, so the end is held all the same.
   // Not during a glide: it owns the scroll. A glide to a card whose target was reckoned on guessed heights can
@@ -431,6 +440,12 @@ function place(): void {
     return rect.bottom > -viewport && rect.top < viewport * 2
   })
   for (const slot of near) markNear(slot)
+  // The near set was read off stand-ins at the 540px guess, and the cards just built are rarely that tall:
+  // shorter ones pull the next stand-in onto the screen, where the first frame would paint it as a stand-in.
+  // So the same until-nothing-new pass a jump takes (`buildOnScreen`), still before paint. Exposed when the
+  // lifecycle footer left the card (2026-10-06, upstream's header redesign): ~45px shorter per card, and
+  // the 60-card fixture's fifth card came on screen unbuilt at 1440x900 (queueCardVisibility.e2e).
+  buildOnScreen()
   scheduleStep()
   if (prefetchers.size > 0) idle(prefetch)
 }

@@ -151,6 +151,11 @@ window.fetch = async (input, init) => {
     }
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }
+  // The queue card reads its settled registered questions; an empty `{}` leaves the query's data
+  // undefined, which React Query reports to the console and the no-errors assertion then trips on.
+  if (url.pathname === "/_frizz/rpc/threadSettledQuestions") {
+    return new Response(JSON.stringify({ result: { questions: [] } }), { headers: { "content-type": "application/json" } })
+  }
   return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
 }
 

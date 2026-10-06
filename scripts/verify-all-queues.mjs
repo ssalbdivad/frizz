@@ -240,9 +240,12 @@ try {
 
   await step("Snooze on a tenant's card snoozes ITS thread, not the launcher's namesake", async () => {
     const scope = card("marketing-site", "fix-flaky-login-test")
-    const snooze = await page.$(`${scope} [data-thread-lifecycle-footer] button:not([aria-label="Snooze options"])`) ?? await page.$(`${scope} footer button`)
+    // The header's alarm clock (SnoozeMenu) opens every preset; pick one.
+    const snooze = await page.$(`${scope} [data-snooze-menu]`)
     if (!snooze) throw new Error("no snooze button")
     await snooze.click()
+    await page.waitForSelector(`[role="menu"] [data-value="tomorrow"]`, { timeout: 3000 })
+    await page.click(`[role="menu"] [data-value="tomorrow"]`)
     const tenant = await waitFor("the tenant thread to snooze", async () => { const t = await threadOf("marketing-site", "fix-flaky-login-test"); return t?.snoozedUntil ? t : null })
     const namesake = await threadOf("acme-api", "fix-flaky-login-test")
     check("Snooze on a tenant's card snoozes ITS thread, not the launcher's namesake", Boolean(tenant.snoozedUntil) && !namesake?.snoozedUntil && (await wrote("marketing-site", "setThreadSnooze")), `tenant until ${tenant.snoozedUntil}, namesake ${namesake?.snoozedUntil ?? "untouched"}`)

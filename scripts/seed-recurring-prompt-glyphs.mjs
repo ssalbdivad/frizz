@@ -1,5 +1,5 @@
 // Seed a disposable adhoc stack so the RECURRING-PROMPT marks can be judged in the REAL app: the
-// footer trigger in both of its states (armed ⇒ amber, idle ⇒ muted) and both transcript wake dividers
+// prompt box's Goal mark in both of its states (armed ⇒ amber, idle ⇒ muted) and both transcript wake dividers
 // (a delivered stop hook, a delivered heartbeat) in one scroll.
 //
 // Follows the frizz-stack recipe: a session row + a JSONL the REAL tailer reads, with the delivered text
@@ -43,8 +43,8 @@ const CASES = [
     slug: "recur-armed",
     sessionId: "11111111-1111-4111-8111-111111111111",
     title: "Recurring prompts · both armed",
-    // Both features on ⇒ the footer trigger is amber. The transcript carries one delivery of each, so
-    // the two dividers and the footer mark are all visible in one shot.
+    // Both features on ⇒ the Goal mark is amber. The transcript carries one delivery of each, so
+    // the two dividers and the Goal mark are all visible in one shot.
     hook: "Keep going until the test suite is green.",
     beat: { prompt: "Check whether the deploy finished.", seconds: 1800 },
   },

@@ -352,9 +352,13 @@ export function QuestionBlockCard({
         <div className="mt-2 text-[11px] text-muted-70">Not answered</div>
       )}
       {/* A "Note: …" footnote the worker wrote AFTER the options — rendered below the chips (muted) so
-          the choices stay answerable instead of swallowing them (the old parser dropped the chips). */}
+          the choices stay answerable instead of swallowing them (the old parser dropped the chips).
+          Muted on a WRAPPER and sized by `[data-question-note] .md-body` (styles.css), for the reason the
+          question's own wrapper gives above: utilities on the element lose to `.card-md .md-body`. */}
       {parsed.trailingMd && (
-        <LinkedHtml className={`mt-2 md-body text-[12px] text-muted-70${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={trailingHtml} />
+        <div data-question-note className="mt-2 text-muted-70">
+          <LinkedHtml className={`md-body${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={trailingHtml} />
+        </div>
       )}
       {/* The caption fallback survives ONLY when the recommendation didn't match an option. */}
       {parsed.recommendation && recIdx === null && (
@@ -516,9 +520,10 @@ function Chip({
           <LinkedHtml as="span" className="md-inline" html={labelHtml} />
         </div>
         {/* The body inherits the chip's colour state (selected/read-only/settled) and steps down HALF
-            a size, not to the muted tone: it is the substance of the choice, not a caption on it. */}
+            a size, not to the muted tone: it is the substance of the choice, not a caption on it. The
+            size is `[data-question-option] .md-body` in styles.css — a utility here loses to `.md-body`. */}
         {bodyMd !== undefined && (
-          <LinkedHtml className={`md-body mt-1.5 text-[11.5px] opacity-90${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={bodyHtml} />
+          <LinkedHtml className={`md-body mt-1.5 opacity-90${wrap ? ` ${QUEUE_WRAP}` : ""}`} html={bodyHtml} />
         )}
       </div>
     </div>

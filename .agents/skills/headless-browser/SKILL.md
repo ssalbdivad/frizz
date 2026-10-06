@@ -1,6 +1,6 @@
 ---
 name: headless-browser
-description: Drive a local page in Chrome and capture it WITHOUT putting a window on the maintainer's screen — `scripts/shot.mjs` (isolated headless puppeteer, screenshot + in-page evaluate + page-error report) as the default, Chrome DevTools MCP when you must genuinely drive rather than photograph, plus the browser process hygiene that keeps concurrent agents from killing each other's runs and the rules for embedding screenshots so Frizz actually renders them. Load this whenever you need to SEE a page — proving something renders, responsive/overflow checks, console and network inspection, capturing evidence for a handoff, or any change judged by eye. Popping a visible browser is the single most disruptive thing an agent does here and is never necessary. Pair with `frizz-stack` for something to point it at, and `visual-review` / `optical-spacing` for how to JUDGE the shot.
+description: Drive a local page in Chrome and capture it WITHOUT putting a window on the maintainer's screen — `scripts/shot.mjs` (isolated headless puppeteer, screenshot + in-page evaluate + page-error report) as the default, Chrome DevTools MCP when you must genuinely drive rather than photograph, plus the browser process hygiene that keeps concurrent agents from killing each other's runs, why a headless run stalls while the Mac's display sleeps (`Runtime.callFunctionOn timed out`, screenshots that never return), and the rules for embedding screenshots so Frizz actually renders them. Load this whenever you need to SEE a page — proving something renders, responsive/overflow checks, console and network inspection, capturing evidence for a handoff, or any change judged by eye. Popping a visible browser is the single most disruptive thing an agent does here and is never necessary. Pair with `frizz-stack` for something to point it at, and `visual-review` / `optical-spacing` for how to JUDGE the shot.
 version: 0.1.0
 metadata:
   internal: true
@@ -111,6 +111,17 @@ identity, and you clean up only YOUR identity.
   session id you created.
 - Never leave a Chrome DevTools MCP helper, `agent-browser` daemon, puppeteer browser, or
   Chrome/Chromium helper process running after the task that started it.
+
+---
+
+## 3b. A sleeping display stops every headless frame
+
+**While the Mac's display is asleep, headless Chrome draws nothing, and nothing says so.** Script calls keep answering (`page.evaluate`, DOM queries, computed styles), so the page looks alive. Everything that waits for a FRAME waits forever: `requestAnimationFrame`, an `IntersectionObserver`'s first callback, `waitForSelector` with `visible: true` (puppeteer polls a visibility wait on animation frames), `page.click()` (puppeteer first scrolls the target into view through an IntersectionObserver), and every screenshot. Puppeteer then reports `Runtime.callFunctionOn timed out` or a bare `TimeoutError`, which reads like a hung page. It is the whole browser, not the page: a fresh tab on a blank `data:` page stalls too.
+
+Measured 2026-10-05 on this machine (Apple M1 Max, Chrome compositing on ANGLE Metal with Skia Graphite). Six runs of a published-package e2e between 17:11 and 17:58 stalled, and every stall began inside a display-off window in `pmset -g log` (off at 17:05:56, on at 17:57:19). One stuck screenshot completed at 17:22:43, the exact second of a 16-second wake. The next two runs, with the display on, passed with GPU compositing on and with `--disable-gpu`; `--disable-gpu` has not been run with the display asleep. A new browser draws normally for its first one to three seconds, so a quick smoke test passes while a longer run stalls.
+
+- **Check the display before you debug the page:** `pmset -g log | grep 'Display is turned' | tail -3`. If the last line says `off`, the stall is the display. Re-run once it is on.
+- **Make a stall fail fast:** launch with a short `protocolTimeout` (30s rather than puppeteer's 180s default), so the stall surfaces in seconds rather than minutes.
 
 ---
 

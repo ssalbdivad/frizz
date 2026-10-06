@@ -17,7 +17,7 @@
 // side. On a uniform `gap-2` that drew 20px of ink between the gear and the reload icon against 8px
 // between the divider and the first quota chip, and the maintainer read the widest of them straight
 // off the pixels (2026-08-14: "there's too much space between these two icons"). Collapsing the box
-// onto the ink is the same fix lib/iconRhythm.ts documents for the thread footer, and it leaves the
+// onto the ink is the same fix lib/iconRhythm.ts documents for the old thread footer, and it leaves the
 // two squares exactly touching at the row's `gap-3` rather than overlapping.
 //
 // RE-MEASURE, DON'T RE-GUESS, if STATUS_ROW_ICON or the square changes, or if a row action ever

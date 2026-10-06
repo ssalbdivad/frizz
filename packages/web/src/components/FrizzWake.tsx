@@ -176,7 +176,7 @@ function WakeProse({ text, wrap }: { text: string; wrap?: boolean }) {
 // of it. This one carries the WORKER'S OWN prose — whatever it asked frizz to hand back at this instant —
 // so a bare hairline would be the only place in the app that text has ever been rendered, and it would
 // destroy it. The Goal prompt collapses to a bare label for a reason that does not reach here: its text
-// is the ARMED text, still sitting legible and editable in the footer panel (see RecurringPromptLine).
+// is the ARMED text, still sitting legible and editable in the Goal panel (see RecurringPromptLine).
 // A one-off's registration is gone the moment it delivers.
 //
 // So: the family's shape, with the body one click away (maintainer 2026-08-19, over both a card and a

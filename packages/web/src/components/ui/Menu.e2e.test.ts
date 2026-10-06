@@ -25,7 +25,9 @@ test("Snooze menu stays non-modal and preserves anchored menu interactions", {
   page.on("pageerror", (error) => errors.push(String(error)))
 
   const cardSelector = `[data-queue-card="${threadSlug}"]`
-  const triggerSelector = `${cardSelector} button[aria-label="Snooze options"]`
+  // The header's alarm clock (SnoozeMenu). Addressed by its data attribute, not its label: the label is
+  // the snooze state ("Snoozed until …") whenever one is set.
+  const triggerSelector = `${cardSelector} button[data-snooze-menu]`
 
   async function openMenu(selector = triggerSelector): Promise<void> {
     await page.focus(selector)
@@ -97,8 +99,11 @@ test("Snooze menu stays non-modal and preserves anchored menu interactions", {
       triggerSelector,
     )
 
-    // Compact layout keeps the menu within the viewport without making the page behind it modal.
-    await page.setViewport({ width: 390, height: 844, deviceScaleFactor: 1 })
+    // Compact layout keeps the menu within the viewport without making the page behind it modal. 768 is
+    // the narrowest width that still draws queue cards and a modal thread drawer with this menu in them:
+    // below it the phone layout takes over, with no cards on the board and the drawer's verbs in its ⋯
+    // sheet instead (MobileThreadActionsSheet), so a 390px viewport finds no trigger at all.
+    await page.setViewport({ width: 768, height: 844, deviceScaleFactor: 1 })
     await page.evaluate((selector) => document.querySelector(selector)?.scrollIntoView({ block: "center" }), triggerSelector)
     await openMenu()
     await expectNonModalRoot()
@@ -112,10 +117,10 @@ test("Snooze menu stays non-modal and preserves anchored menu interactions", {
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector('[role="menu"]'))
 
-    // In the mobile drawer, one Escape belongs to the menu; the actual modal drawer stays open.
+    // In the modal drawer, one Escape belongs to the menu; the drawer itself stays open.
     await page.goto(`${baseUrl}/thread/${encodeURIComponent(drawerSlug!)}`, { waitUntil: "domcontentloaded" })
     await page.waitForSelector('[role="dialog"][aria-modal="true"]')
-    const drawerTrigger = '[role="dialog"] button[aria-label="Snooze options"]'
+    const drawerTrigger = '[role="dialog"] button[data-snooze-menu]'
     await openMenu(drawerTrigger)
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector('[role="menu"]'))

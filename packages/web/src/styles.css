@@ -173,6 +173,9 @@ html[data-host-colors] :focus-visible {
    belongs. */
 html {
   scrollbar-width: none; /* Firefox */
+  /* The queue's docked prompt boxes cover this band of the screen (lib/queueDockInset.ts), so a control
+     focused under one is scrolled clear of it rather than left hidden behind it. 0 off the queue. */
+  scroll-padding-bottom: var(--queue-dock-inset, 0px);
 }
 html::-webkit-scrollbar {
   width: 0;
@@ -222,6 +225,26 @@ body {
 }
 .ops-column-optical-inset {
   margin-bottom: var(--ops-column-optical-inset);
+}
+
+/* The header's lifecycle rule (ThreadLifecycleActions) after the Retry PILL. The rule's `mx-2.5` is
+   sized for a bare icon before it, whose 28px square carries ~8px of dead space: 20px of ink each side.
+   A bordered pill paints its whole box, so the same margin drew 11.96px of ink on its left against
+   19.5px on its right (scripts/ink-gaps.mjs, dsf 4, 2026-10-05). 17.5px is the 10px margin plus the
+   7.5px the pill lacks. It reaches across component boundaries (HeaderActions renders the pill as the
+   last item of its own row), which is why it is a selector and not a utility. In the drawer header the
+   fullscreen icon sits between the two, so this does not match there, as intended. */
+:has(> [data-header-pill]:last-child) + [data-thread-lifecycle] > [data-lifecycle-rule] {
+  margin-left: 17.5px;
+}
+
+/* In the queue card's ops panel (QueueOpsSummary) the saved files and links can be the panel's first
+   rows. ThreadLinks rules itself off from the rows above it, which is right in the drawer's strip and
+   a stray line across the panel's top edge here, where nothing is above it. */
+[data-queue-ops-panel] > [data-background-ops]:first-child > [data-thread-links]:first-child {
+  margin-top: 0;
+  border-top-width: 0;
+  padding-top: 0;
 }
 
 /* System sans-serif already centres small label icons optically: measured nudge 0px. */
@@ -495,11 +518,15 @@ body {
    live child record — and the right-hand slot is words only. Do not reintroduce a second indicator here
    without a signal that can actually go false. */
 
-/* QUIET-LIVE dot: a background subshell / Monitor that is still a live process but has not touched its
-   output in a while (a dev server waiting, a Monitor with no output file at all). It is ALIVE, not
-   idle — a flat gray dot mislabels it. So it BREATHES: a slow, soft in/out that reads as a calm,
-   resting pulse (distinct from the brighter, faster accent pulse that signals fresh output). Muted
-   tone keeps the accent reserved for active work; the motion alone carries "still alive". */
+/* QUIET-LIVE dot — THE PRODUCT NO LONGER DRAWS IT. Only the mobile mockup kit's `LiveDot quiet` does
+   (mobile-mockup-kit.tsx, a design record from 2026-08-17). It marked a background shell that was still
+   a live process but had not touched its output in a while: the July meaning of a "stale" shell. Since
+   2026-08-19 a shell reads stale only once the OS confirms its process is gone (tailer `shellIsGone`),
+   so breathing drew a DEAD process as a live one, and since 2026-10-05 the card, the drawer and the
+   transcript give that shell the flat stale dot instead (CHILD_STALE_SHELL_TITLE, lib/childOps.ts). Do
+   not bring it back for a shell without a signal that can tell "alive and quiet" from "gone".
+   As designed, it BREATHES: a slow, soft in/out that reads as a calm, resting pulse (distinct from the
+   brighter, faster accent pulse that signals fresh output), muted, with the motion alone saying alive. */
 .frizz-live-dot-quiet {
   display: block;
   width: 6px;
@@ -728,10 +755,20 @@ a[href] {
    CARD_BODY's 13px — the exact "a two-line explanation in one card is visibly larger than the same
    sentence in the card above it" inconsistency the shared chrome exists to kill. Colour is inherited
    so the card's own description strength wins; --md-step follows the size so the paragraph rhythm
-   stays proportional. */
+   stays proportional.
+
+   THE LINE HEIGHT FOLLOWS TOO (2026-10-05): CARD_BODY's 20px, not the transcript's 1.7. The size was
+   matched and the leading was not, so a card's markdown set its 13px lines 22.1px apart while the plain
+   sentence in the card above it set them 20px apart — the same inconsistency one property over, and it
+   is most of why prose inside a card read loose (maintainer: "in terms of prose rendering inside of
+   these cards … The spacing isn't quite right"). Measured on the steps card, ink to ink: 9.75px between
+   a paragraph's lines and 16px between list items at 1.7; 7.75px and 14px at 20px.
+   Written as a RATIO (20px at this 13px) so it inherits the way the transcript's 1.7 does: a smaller
+   inline code chip or table cell takes proportionally smaller leading instead of a pinned 20px. */
 .card-md .md-body {
   --md-step: 13px;
   font-size: 13px;
+  line-height: calc(20 / 13);
   color: inherit;
 }
 .md-body > :first-child {
@@ -832,9 +869,6 @@ a[href] {
      MIXED list (task items beside plain bullets) widens as a whole, so one list keeps one text
      column rather than two. */
   --md-task-gutter: 1.75em;
-  /* Must track this block's own line-height — the box is positioned, so it has no line box of its
-     own to ride and the first line's geometry has to be reconstructed from these two numbers. */
-  --md-task-line: 1.7em;
 }
 .md-body ul:has(> li > .md-task),
 .md-body ul:has(> li > p > .md-task),
@@ -842,33 +876,54 @@ a[href] {
 .md-body ol:has(> li > p > .md-task) {
   padding-left: var(--md-task-gutter);
 }
-/* The box gets its OWN column and is taken out of the inline flow — it is not a character in the
-   sentence (maintainer 2026-07-31: "checkbox on left, text on right. the checkbox should not be
-   inlined"). Two things follow, and both were broken while it was inline: every wrapped line now
-   starts under the TEXT instead of under the box, and the space marked emits after the span is
-   dropped as leading whitespace, so line one no longer starts ~0.6em right of line two.
-   `> p >` catches the loose-list shape, where the span lands inside a paragraph. */
+/* The box gets its OWN column — it is not a character in the sentence (maintainer 2026-07-31:
+   "checkbox on left, text on right. the checkbox should not be inlined"), so every wrapped line
+   starts under the TEXT, never under the box. It is still IN the line, though, as a zero-advance
+   inline-block: its negative margins add up to minus its own width, which hangs it in the gutter
+   and leaves the text where a plain bullet's text starts. `> p >` catches the loose-list shape,
+   where the span lands inside a paragraph.
+
+   IN THE LINE ON PURPOSE (2026-10-05). It was `position: absolute` until then, with its `top`
+   rebuilt from the line height plus two constants measured in MONO (the em box centred in the line,
+   the cap band's centre 0.331em below the em box top). The app renders only in sans since
+   2026-09-19, and in `system-ui` (SF Pro here) those constants are wrong: the box rode HIGH by
+   +2.62px in a card (13px, 20px leading), +2.54px in transcript prose (14px/1.7) and +5.07px at
+   28px. No CSS unit says where the baseline sits inside the line box, so no `top` can be right in
+   every font — but `vertical-align` is measured FROM the baseline. An empty inline-block's baseline
+   is its bottom margin edge, so raising it by `0.5cap − box/2` puts its centre exactly on
+   baseline − 0.5cap, the middle of the cap band, with `cap` resolved from whatever face the OS
+   picked. Re-measured 2026-10-05, cap-band centre minus box centre: against canvas `H` metrics,
+   +0.01px in a card, at 14px and at 28px, and within 0.02px with the face forced to Menlo, Georgia
+   and Helvetica Neue; against RENDERED ink at dsf 8 (box border rows vs the capitals' rows), −0.05px
+   in a card, +0.06px at 14px, +0.14px at 28px, where the old rule read +2.95 / +2.06 / +5.14. A
+   CSS-drawn mark's ink IS its border box, so this one correction serves all five states.
+
+   Because it is in the line, an EMPTY item (`- [ ]`) keeps one line's height with no `min-height`:
+   an inline-block alone still makes a line box. And the renderer emits no space after the span,
+   which would otherwise sit between box and text and push line one right of line two. */
 .md-body li:has(> .md-task),
 .md-body li:has(> p > .md-task) {
   list-style: none;
-  position: relative;
-  /* An EMPTY item (`- [ ]`, an unfilled task-list entry) has no in-flow content once the box is
-     positioned out, so its `<li>` would collapse to zero height and hide the box. One line's worth. */
-  min-height: 1.7em;
+}
+/* An atomic inline is a soft wrap opportunity on both sides, so a first word too long for the line
+   (an item that opens with a URL) broke AFTER the box, leaving the box alone on a line of its own and
+   the text starting on the next. Whether that boundary may break is decided by its nearest common
+   ancestor — the element holding the box — so that one goes `nowrap` and everything after the box
+   wraps again. `pre` is left out: its own `nowrap` is the UA's, which any author rule would beat. */
+.md-body li:has(> .md-task),
+.md-body li > p:has(> .md-task) {
+  text-wrap-mode: nowrap;
+}
+.md-body .md-task ~ :not(pre) {
+  text-wrap-mode: wrap;
 }
 .md-body .md-task {
-  position: absolute;
-  left: calc(0.3em - var(--md-task-gutter));
-  /* Centres the box's ink on the CAP BAND of the first line — not on the line box, which is what
-     `(line - box) / 2` alone gives and which left the box 2.64px LOW at 14px (the eye reads a mark
-     against baseline→cap-height, and the em box hangs a descender's worth below that). Built from
-     measured, purely font-relative terms so it scales exactly:
-       (line − 1em) / 2   half-leading: the em box's top inside the line box
-       + 0.331em          the cap band's centre below the em box top (baseline 0.714em, cap 0.638em)
-       − box / 2          centre the box on it
-     Re-measured at 14px and 28px; residual 0.00px at both. A CSS-drawn mark's ink IS its border box,
-     so this one correction serves all five states — there is no per-glyph term to add. */
-  top: calc((var(--md-task-line) - 1em) / 2 + 0.331em - var(--md-task-box) / 2);
+  display: inline-block;
+  /* The containing block for the inner glyph's `::after`. */
+  position: relative;
+  margin-left: calc(0.3em - var(--md-task-gutter));
+  margin-right: calc(var(--md-task-gutter) - 0.3em - var(--md-task-box));
+  vertical-align: calc(0.5cap - var(--md-task-box) / 2);
   box-sizing: border-box;
   width: var(--md-task-box);
   height: var(--md-task-box);
@@ -1057,6 +1112,17 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
   border-radius: 4px;
   padding: 0.05em 0.3em;
 }
+/* An inline chip must not make its LINE taller. The mono stack's metrics push a code fragment's line
+   box past the sans strut, so every line carrying a code span stood ~1.8px taller than the lines around
+   it — 25.59px against 23.8px in transcript prose (14px/1.7), 21.98px against 20px in a card's markdown,
+   22px against 20px in an inline run (measured 2026-10-05, sans) — and any paragraph or list mixing the
+   two spaced its lines unevenly. A steps card, where some items carry a command and some do not, showed
+   it most. `line-height: 1` keeps the fragment inside the strut; the chip's fill paints the content
+   area, which leading does not touch. Fenced code is left alone: its lines are the `<pre>`'s own. */
+.md-body :not(pre) > code,
+.md-inline code {
+  line-height: 1;
+}
 /* …except INSIDE A TRANSCRIPT CARD, whose own fill is panel-2 too (TranscriptCard): there the chip
    vanished into the card and left only its padding, so a command read as mono text with stray gaps on
    either side — most visibly in a steps list, where nearly every item carries one (2026-10-03). The
@@ -1152,6 +1218,20 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
    `.md-body pre code { background: none }`, and fenced code must stay chipless. */
 [data-question-option] .md-body pre code {
   background: none;
+}
+/* An option's DETAIL steps down half a size from its 12px label (QuestionBlockCard's Chip), and its
+   paragraph rhythm follows. The `text-[11.5px]` that said so sat on the element and never applied:
+   `.md-body` and `.card-md .md-body` are unlayered, so they outrank every Tailwind utility, and the
+   detail rendered at the card's 13px — LARGER than the label it explains (measured 2026-10-05). The
+   worker's trailing "Note: …" lost its 12px the same way. Both rules match `.card-md .md-body`'s
+   specificity and come after it. */
+[data-question-option] .md-body {
+  --md-step: 11.5px;
+  font-size: 11.5px;
+}
+[data-question-note] .md-body {
+  --md-step: 12px;
+  font-size: 12px;
 }
 [data-question-option] .md-body table,
 [data-question-option] .md-body th,

@@ -2623,6 +2623,32 @@ test("a queued bubble older than the ceiling stops rendering gray, whatever its 
   assert.equal(retireStaleQueuedBubbles(msgs, sent + QUEUED_STALE_MS + 1)[0].queued, false, "past it, it renders as an ordinary message")
 })
 
+// …but not while the worker is still inside the FOREGROUND call it was in when the message was sent.
+// Claude Code hands a queued message over between tool calls, and since 2026-08-11 one Bash call may
+// block for up to 24h — so at 2h the backstop un-grayed a message the worker had not seen.
+test("a message queued behind a foreground call still running stays queued past the ceiling, up to one call's 24h", () => {
+  const issued = "2026-07-01T00:00:00.000Z"
+  const sentAt = "2026-07-01T00:00:05.000Z"
+  const sent = Date.parse(sentAt)
+  const threeHours = sent + 3 * 60 * 60_000
+  const call = (id: string, input: Record<string, unknown>) =>
+    JSON.stringify({ type: "assistant", timestamp: issued, message: { id: `m-${id}`, content: [{ type: "tool_use", id, name: "Bash", input }] } })
+  const resultOf = (id: string, content: string) =>
+    JSON.stringify({ type: "user", timestamp: "2026-07-01T00:00:01.000Z", message: { content: [{ type: "tool_result", tool_use_id: id, content }] } })
+  const ask = enqueueLine("are you still there?", sentAt)
+  const queuedAt = (lines: string[], now: number) => retireStaleQueuedBubbles(parseTranscript(lines.join("\n")), now).find((m) => m.role === "user")?.queued
+
+  const wait = call("bash-wait", { command: "until [ -e /tmp/gate ]; do sleep 15; done", description: "Wait for the gate", timeout: 3 * 60 * 60_000 })
+  assert.equal(queuedAt([wait, ask], threeHours), true, "3h in, the worker has not reached a tool boundary, so the message is still queued")
+  assert.equal(queuedAt([wait, ask], sent + 25 * 60 * 60_000), false, "past one call's 24h ceiling the backstop applies again")
+
+  // CONTROLS — each one a way the worker DID pass a boundary, and each retires at the 2h ceiling as before.
+  assert.equal(queuedAt([wait, resultOf("bash-wait", "WAIT-DONE"), ask], threeHours), false, "the call's result is in: the turn moved on")
+  const bg = call("bash-bg", { command: "npx vite", description: "Run vite", run_in_background: true })
+  assert.equal(queuedAt([bg, resultOf("bash-bg", "Command running in background"), ask], threeHours), false, "a background launch is pending too, but never held the turn")
+  assert.equal(queuedAt([wait, ask, assistantLine("still here", "2026-07-01T00:01:00.000Z")], threeHours), false, "the worker spoke after the message, so the transcript is past it")
+})
+
 test("the ceiling clears the longest legitimately-queued message in the corpus by a wide margin", () => {
   // Measured over 3223 real deliveries: p50 0.1s, p99 2.5min, p99.9 5.2min, max 54min, none above 1h.
   // A mid-turn queue lasts as long as its turn, so this must never fire on a message still genuinely

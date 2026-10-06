@@ -63,10 +63,10 @@ const thread: ThreadView = {
   bgShells: [
     { label: "Watch CI", startedAt: agoIso(34), state: "running", lastActivityAt: agoIso(1) },
     { label: "Tail build log", startedAt: agoIso(33), state: "running", lastActivityAt: agoIso(0) },
-    // Alive but quiet: a dev server waiting for requests, and a Monitor (which has no output file, so
-    // it is ALWAYS reported stale). Both are live processes — they breathe, never a dead gray dot.
-    { label: "Dev server (waiting, no recent output)", startedAt: agoIso(94), state: "stale", lastActivityAt: agoIso(78) },
-    { label: "Monitor: PR checks", startedAt: agoIso(64), state: "stale" },
+    // GONE: the OS confirmed nobody holds this shell's output open, and no completion ever arrived (tailer
+    // `shellIsGone`) — the only way a shell reads "stale". A quiet live one (a dev server waiting, a
+    // Monitor, which has no output file to probe) reads "running", so it pulses like any other.
+    { label: "Dev server", startedAt: agoIso(94), state: "stale", lastActivityAt: agoIso(78) },
   ],
   watches: [],
   questions: [],
@@ -196,9 +196,9 @@ createRoot(document.getElementById("root")!).render(
         <ThreadSlugContext.Provider value={thread.id}>
           {/* Live detached shell: pulsing BLUE mark leading the row, "running" in the reading. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Watch CI", desc: "Watch CI", command: "gh run watch 12345", backgroundState: "background", status: "pending", count: 1 }} />
-          {/* Alive but quiet (a dev server waiting, a Monitor with no output file): the breathing muted
-              mark — never a dead gray dot, and never nothing at all. */}
-          <ToolCardRouter t={{ name: "Monitor", detail: "Monitor: PR checks", desc: "Monitor: PR checks", backgroundState: "background", status: "pending", count: 1 }} />
+          {/* Tracked, but its process is GONE (the "Dev server" entry above): the flat stale dot beside
+              the word "stale", although the call itself still reads pending. */}
+          <ToolCardRouter t={{ name: "Bash", detail: "Dev server", desc: "Dev server", command: "nub run dev", backgroundState: "background", status: "pending", count: 1 }} />
           {/* Detached, but frizz tracks no live op behind it: the mark is the pending-background dot. */}
           <ToolCardRouter t={{ name: "Bash", detail: "Untracked background job", desc: "Untracked background job", command: "node worker.mjs", backgroundState: "background", status: "pending", count: 1 }} />
           {/* FOREGROUND pending, running a while: the SAME blue mark in the SAME slot. Detachment is not

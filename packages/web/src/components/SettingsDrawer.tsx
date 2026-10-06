@@ -369,8 +369,8 @@ function WorktreeDirField({ value, onCommit }: { value: string; onCommit: (dir: 
 //     are what a phone opens Settings to check.
 //   · IT HOLDS ONLY WHAT MEANS SOMETHING ON A PHONE. The project sidebar, diff density and local file
 //     links are desktop-only rows and do not render here; the SERVER values behind them are untouched,
-//     so the desktop reads exactly what it did. Snooze length is here instead: it was only settable from
-//     the thread footer's Snooze ▾, which the phone's thread page no longer has.
+//     so the desktop reads exactly what it did. Snooze length is here instead: it sets the preset the
+//     board's swipe and the ⋯ sheet use, and the phone has no other place to choose it.
 //
 // Plain full-width rows under section labels — no grouped-inset cards, no iOS chrome.
 

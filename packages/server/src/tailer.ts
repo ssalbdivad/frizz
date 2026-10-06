@@ -4,7 +4,7 @@ import { createHash } from "node:crypto"
 import { promisify } from "node:util"
 import { basename, dirname, isAbsolute, join, resolve, win32 } from "node:path"
 import { homedir, tmpdir } from "node:os"
-import type { AskQuestion, AwaitingHint, LiveTool, SubAgentDirectoryEntry, WorkCheckout } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, CodexModel, LiveTool, SubAgentDirectoryEntry, WorkCheckout } from "@frizz/shared"
 import { insideFence, isAllInjectedNoise, isInterruptMarker, isWakeDelivery, parseAskUserQuestionInput, PermissionMode, questionFencesLive, saysAllDone, splitAwaitingFrontmatter } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { permMarkerPath, workDirOf, type Project } from "./project.ts"
@@ -179,6 +179,18 @@ export const SUBAGENT_STALE_MS = 15 * 60_000
 // reader with the file open for the drawer momentarily reads as alive, which costs a TTL, never a
 // verdict; any other outcome is "unknown", which is never dead; and only a clean exclusive open of an
 // existing file is "free", i.e. gone. That last one is the only thing that ever demotes a shell.
+//
+// "NOBODY HOLDS IT" IS NOT "NOBODY IS RUNNING IT" (2026-10-05). A command that `exec`s AND redirects
+// its own output — `exec nub e2e.mjs > e2e.out 2>&1`, the shape the frizz-stack skill teaches plus the
+// `exec` workers add — replaces the shell with a process whose fds 1 and 2 point somewhere else, so
+// `<taskId>.output` is closed within milliseconds of launch while the work runs for an hour. lsof found
+// zero holders for exactly that shell while its nub and node were alive, and the board demoted it to
+// stale, the activity list dropped it, and a park naming it was refused "nothing by that name".
+//
+// So on POSIX an unheld file is a QUESTION for a second instrument, not a verdict: is there still a
+// process that could be this shell? findShellProcesses answers it from the process table, with no pid
+// plumbing either — see there. Only both instruments agreeing demotes a shell. When the second one
+// cannot run at all, the first one's answer stands, which is exactly the behaviour before it existed.
 const SHELL_PROBE_TTL_MS = 30_000
 const SHELL_PROBE_GRACE_MS = 60_000 // a just-launched shell is alive by construction; do not pay for it
 
@@ -195,12 +207,29 @@ const execFileAsync = promisify(execFile)
 // therefore lands on the NEXT tick rather than this one — at most a second later, and the surrounding
 // contract was already built for exactly that: an unknown answer leaves the shell running, so a
 // not-yet-probed shell is treated the same as an unprobeable one.
+/** What the probe knows about one background shell. A bare output path (no launch facts) is asked only
+ *  the holder question, which is all the probe could ask before 2026-10-05. */
+export interface ShellLaunch {
+  outputFile: string
+  /** The Claude session that launched it. Its CLI names the id in its own argv (`--session-id=<id>` on a
+   *  fresh broker session, `--resume <id>` on a resumed one), which is how the probe recognises it. */
+  sessionId?: string
+  /** The launch tool_use's transcript timestamp: the shell's process was forked no earlier than this. */
+  launchedAtMs?: number
+  /** The launch ack's transcript timestamp: forked no later than this. Absent (an entry restored from a
+   *  cache written before this field, or a file learned from the SDK's task stream) ⇒ the window stays
+   *  open to the probe's own clock, which can only keep a shell alive, never kill one. */
+  ackedAtMs?: number
+}
+
 export async function probeShellsAlive(
-  outputFiles: readonly string[],
-  opts: { platform?: NodeJS.Platform; exec?: typeof execFileAsync; env?: NodeJS.ProcessEnv } = {},
+  shells: readonly (string | ShellLaunch)[],
+  opts: { platform?: NodeJS.Platform; exec?: typeof execFileAsync; env?: NodeJS.ProcessEnv; nowMs?: number } = {},
 ): Promise<Map<string, boolean | undefined>> {
   const platform = opts.platform ?? process.platform
   const exec = opts.exec ?? execFileAsync
+  const launches = shells.map((s) => (typeof s === "string" ? { outputFile: s } : s))
+  const outputFiles = launches.map((l) => l.outputFile)
   const verdicts = new Map<string, boolean | undefined>()
   if (platform === "win32") {
     // No realpath dance: the exclusive open is by path, and Windows resolves it. Only existence is
@@ -268,6 +297,101 @@ export async function probeShellsAlive(
   const held = new Set<string>()
   for (const line of stdout.split("\n")) if (line.startsWith("n")) held.add(line.slice(1))
   for (const f of live) verdicts.set(f.requested, held.has(f.real))
+  // The second instrument, for the unheld only — a held file already proved its shell alive, and the
+  // common case (every shell held) never pays for a process listing.
+  const unheld = launches.filter((l) => verdicts.get(l.outputFile) === false && l.sessionId && l.launchedAtMs !== undefined)
+  if (unheld.length === 0) return verdicts
+  const running = await findShellProcesses(unheld, { exec, nowMs: opts.nowMs ?? Date.now(), env: opts.env })
+  for (const [file, alive] of running) if (alive !== undefined) verdicts.set(file, alive)
+  return verdicts
+}
+
+// IS ANY PROCESS STILL RUNNING THAT COULD BE THIS SHELL? The second half of the probe above, for a shell
+// whose output file nobody holds. Asked of the process table, because the process itself is still
+// identifiable after an `exec` even though its file descriptors are not:
+//
+//   * Claude Code forks each Bash command as a DIRECT CHILD of its own CLI process, and `exec` keeps
+//     the pid, the parent and the fork time — it replaces only the image. Measured 2026-10-05 on a real
+//     broker worker: `exec sleep 300 > /tmp/x.log 2>&1` ran as pid 24562, parent the session's
+//     `claude` (13299), forked at 22:42:11 — between its tool_use (22:42:10.955) and its launch ack
+//     (22:42:11.492) — with zero holders of its `<taskId>.output`.
+//   * That CLI names its session in its own argv: `--session-id=<id>` (a broker session; `--resume <id>`
+//     when resumed), the same id that names the transcript the shell came from.
+//
+// So the shell's process is a live process forked inside its launch window — after the tool_use, before
+// the ack — whose parent's argv names this session. That is an identity, not a threshold: nothing about
+// age or output enters it, and the `until …; do sleep 5; done` waiter frizz's own contract recommends is
+// as alive here as anywhere. `ps` reports fork time to the SECOND, so the window is widened by one
+// second each way: the instrument's resolution, not a tolerance for slow work.
+//
+// IT IS BIASED ALIVE, LIKE EVERYTHING ELSE HERE. Two shells the same session launched in the same
+// second share a window, so a dead one reads alive while its sibling runs; a foreground command still
+// running from that second does the same. Each costs a slower demotion, never a false one. And a shell
+// whose CLI has died reads gone even if its process lingers as an orphan — correctly, since nothing will
+// ever deliver its completion notice, and the board's owner-death rule (paneDead) agrees.
+//
+// Returns per path: true = such a process exists, false = none does, undefined = `ps` could not answer
+// (BusyBox `ps` has no `lstart`, for one), which the caller reads as "keep the holder verdict".
+export async function findShellProcesses(
+  shells: readonly ShellLaunch[],
+  opts: { exec?: typeof execFileAsync; nowMs?: number; env?: NodeJS.ProcessEnv } = {},
+): Promise<Map<string, boolean | undefined>> {
+  const exec = opts.exec ?? execFileAsync
+  const nowMs = opts.nowMs ?? Date.now()
+  const verdicts = new Map<string, boolean | undefined>()
+  // C locale, so `lstart` is the fixed English `Mon Oct  5 15:42:11 2026` the parser below reads, and the
+  // inherited TZ, so it is the same local time `Date.parse` will assume.
+  const env = { ...(opts.env ?? process.env), LC_ALL: "C" }
+  const run = async (args: string[]): Promise<string | undefined> => {
+    try {
+      return (await exec("ps", args, { encoding: "utf8", timeout: 8000, maxBuffer: 16 * 1024 * 1024, env })).stdout
+    } catch (err) {
+      // procps exits 1 when a `-p` pid has gone in the meantime, with the rest still on stdout; any other
+      // failure (no `ps`, an unknown column, the timeout) is no answer at all.
+      const e = err as NodeJS.ErrnoException & { stdout?: string; code?: string | number; killed?: boolean }
+      return typeof e.code === "number" && !e.killed && e.stdout ? e.stdout : undefined
+    }
+  }
+  const table = await run(["-ax", "-o", "pid=,ppid=,lstart="])
+  if (table === undefined) {
+    for (const s of shells) verdicts.set(s.outputFile, undefined)
+    return verdicts
+  }
+  const forks: Array<{ pid: number; ppid: number; at: number }> = []
+  for (const line of table.split("\n")) {
+    const m = /^\s*(\d+)\s+(\d+)\s+(\S.*?)\s*$/.exec(line)
+    const at = m ? Date.parse(m[3]!) : NaN
+    if (m && Number.isFinite(at)) forks.push({ pid: Number(m[1]), ppid: Number(m[2]), at })
+  }
+  // A table that parsed to nothing is a format this parser does not know, not an empty machine.
+  if (forks.length === 0) {
+    for (const s of shells) verdicts.set(s.outputFile, undefined)
+    return verdicts
+  }
+  const candidates = new Map<string, Array<{ pid: number; ppid: number }>>()
+  for (const s of shells) {
+    const from = Math.floor(s.launchedAtMs! / 1000) * 1000 - 1000
+    const to = (s.ackedAtMs ?? nowMs) + 1000
+    candidates.set(s.outputFile, forks.filter((f) => f.at >= from && f.at <= to))
+  }
+  const parents = [...new Set([...candidates.values()].flat().map((c) => c.ppid))]
+  let argvOf = new Map<number, string>()
+  if (parents.length > 0) {
+    const listing = await run(["-ww", "-o", "pid=,command=", "-p", parents.join(",")])
+    if (listing === undefined) {
+      for (const s of shells) verdicts.set(s.outputFile, candidates.get(s.outputFile)!.length === 0 ? false : undefined)
+      return verdicts
+    }
+    argvOf = new Map(
+      listing.split("\n").flatMap((line) => {
+        const m = /^\s*(\d+)\s(.*)$/.exec(line)
+        return m ? [[Number(m[1]), m[2]!] as const] : []
+      }),
+    )
+  }
+  for (const s of shells) {
+    verdicts.set(s.outputFile, candidates.get(s.outputFile)!.some((c) => argvOf.get(c.ppid)?.includes(s.sessionId!) ?? false))
+  }
   return verdicts
 }
 
@@ -491,6 +615,9 @@ interface SubAgentEntry {
   toolUseId: string
   label: string // the dispatch's input.description (shell: falls back to the command's first-line summary)
   startedAt: string // ISO8601 — the dispatch record's timestamp
+  // ISO8601 — the launch ACK's timestamp. Shell only: with startedAt it brackets the instant the shell's
+  // process was forked, which is how the liveness probe recognises that process (findShellProcesses).
+  ackAt?: string
   command?: string // shell only: raw launch command for the read-only output drawer
   // Shell only: the Bash `timeout` the launch carried, RAW (ms) — the worker's declared runtime budget
   // (shell-budget.ts). Stored raw and clamped in the view, so a change to the clamp needs no re-fold.
@@ -1867,6 +1994,9 @@ function trackLaunchResults(state: TailState, rec: Record): void {
         if (!entry.promotedAck) state.launchTasksDir = state.tasksDir
       }
     }
+    // The launch ACK's instant, beside startedAt: together they bracket the shell's fork, which is how the
+    // liveness probe recognises an exec'd shell's process (findShellProcesses).
+    if (entry.kind === "shell" && !entry.ackAt && typeof rec.timestamp === "string") entry.ackAt = rec.timestamp
     if (LAUNCH_ACK_RE.test(text)) continue // background launch ack — the child/shell is alive, keep tracking
     if (entry.kind === "shell") {
       state.subAgents.delete(id) // synchronous launch failure: no notification will ever arrive
@@ -2327,7 +2457,7 @@ export function applyRecord(state: TailState, rec: Record): void {
   if (compactSummaryRec && typeof rec.timestamp === "string") state.lastCompactionAt = rec.timestamp
   // The boundary's own `postTokens` is the context reading after the summary. An AUTO-compaction does
   // not need it — it fires mid-turn, and the next request's usage reports the smaller context anyway —
-  // but a MANUAL `/compact` (the footer's "Compact now") runs at rest and makes no model request at all,
+  // but a MANUAL `/compact` (the context panel's "Compact now") runs at rest and makes no model request at all,
   // so without this the dial kept showing the pre-compaction fill until the thread's next turn
   // (measured 2026-09-26: 40,467 tokens before and after a compaction whose boundary said 4,304).
   if (type === "system" && rec.subtype === "compact_boundary" && rec.isSidechain !== true) {
@@ -2711,7 +2841,7 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       break
     case "context-usage":
       // Pure telemetry — see the activity-clock note above. Read by the transcript projection (which
-      // brackets a compaction with the readings either side of it) and by the footer's fullness
+      // brackets a compaction with the readings either side of it) and by the header's fullness
       // readout. The window is latched rather than overwritten-to-absent: codex names it on every
       // token_count, but a build that stops doing so must not silently erase a real reading.
       state.contextTokens = ev.tokens
@@ -2922,11 +3052,12 @@ export interface TailerDeps {
   // so a host that slept is not a child that died. Defaults to the process's own clock — unless `now` is
   // injected, when it is plain wall time, because a test's clock jumping is not the host sleeping.
   awakeBetween?: (fromMs: number, toMs: number) => number
-  /** Is a background shell still alive? EXACT, not a heuristic: a shell's stdout is redirected to its
-   *  `<taskId>.output`, so whichever process holds that file open IS the shell. Returns undefined when
-   *  liveness cannot be established (probe unavailable, path unknown) — never a guess. Injectable for
-   *  tests; the default shells out to `lsof`. */
-  shellAlive?: (outputFile: string) => boolean | undefined
+  /** Is a background shell still alive? EXACT, not a heuristic: whichever process holds its
+   *  `<taskId>.output` open IS the shell, and when nobody does (an `exec` with its own redirect), a live
+   *  process forked in its launch window under this session's CLI is. Returns undefined when liveness
+   *  cannot be established (probe unavailable, path unknown) — never a guess. Injectable for tests; the
+   *  default is probeShellsAlive (`lsof`, then `ps`). */
+  shellAlive?: (outputFile: string, launch: ShellLaunch) => boolean | undefined
   /** Where a running background shell's process is, by its output file — the OS's answer, which
    *  outranks the transcript's (shell-cwd-probe.ts). Undefined when it cannot be established. Injectable
    *  for tests, and answered inline when injected; the default shells out to `lsof` off the event loop. */
@@ -2944,6 +3075,9 @@ export interface TailerDeps {
   // composition layer; when absent (tests) the single `backend`/default Claude fold covers every row —
   // byte-identical to before. Takes precedence over `backend` when both are set.
   backendFor?: (kind?: string) => AgentBackend
+  // The same version-checked catalogue the composer uses. Keep this as a reader rather than a boot
+  // snapshot so a compatible cache refresh can become authoritative without restarting the server.
+  codexModels?: () => readonly CodexModel[]
   // The structured PermissionRequest signal (Claude workers with the cc-worker plugin): the worker's
   // perm-observe.mjs hook drops `<stateDir>/perm-requests/<slug>.json` the instant Claude creates a
   // tool-approval prompt. Injectable for tests; the default reads that file. Absent stateDir (narrow
@@ -3709,7 +3843,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       // between its tool_use (which creates the entry) and its launch ack (which names the task).
       // `taskId` travels as well as gating `stoppable`: it is the handle the RUNTIME hands the model, so
       // it is the id a worker registers a `shell` watcher against (see BgShellView.taskId).
-      // LIVENESS, asked of the OS and cached — see probeShellAlive. A shell inside its grace window, or
+      // LIVENESS, asked of the OS and cached — see probeShellsAlive. A shell inside its grace window, or
       // one we cannot establish an answer for, stays "running": this only ever DEMOTES a shell we have
       // positively confirmed nobody is running. `ToolStatusMeta` and the drawer have rendered a "stale"
       // shell all along; nothing ever produced one, because this was a literal "running".
@@ -4329,7 +4463,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   // Paths this tick wanted a verdict for and the cache could not answer. Assembly is synchronous, so
   // every shellIsGone call of one tick has landed here by the time the flush below runs — which is what
   // makes ONE lsof per tick enough for all of them, rather than one per shell.
-  const shellProbeWanted = new Set<string>()
+  const shellProbeWanted = new Map<string, ShellLaunch>()
   let shellProbeInFlight = false
   let shellProbeArmed: ReturnType<typeof setTimeout> | undefined
   /** Arm the flush from whatever filled the queue. `shellIsGone` is reached through board ASSEMBLY, not
@@ -4346,7 +4480,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
   function flushShellProbes(): void {
     if (shellProbeInFlight || shellProbeWanted.size === 0) return
-    const batch = [...shellProbeWanted]
+    const batch = [...shellProbeWanted.values()]
     shellProbeWanted.clear()
     shellProbeInFlight = true
     void probeShellsAlive(batch)
@@ -4373,7 +4507,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     return ackPathTrusted(e.outputFile, state.launchTasksDir, e.promotedAck.sessionId) ? e.outputFile : undefined
   }
 
-  function shellIsGone(state: TailState, e: { outputFile?: string; promotedAck?: PromotedAck; startedAt: string }): boolean {
+  function shellIsGone(state: TailState, e: { outputFile?: string; promotedAck?: PromotedAck; startedAt: string; ackAt?: string }): boolean {
     const file = shellOutputFile(state, e)
     // A promoted ack whose path is refused (ackPathTrusted) has no file to ask the OS about, so the probe
     // below never ran and the row pulsed "running" for good. Refused means the ack was, almost surely, a
@@ -4388,17 +4522,21 @@ export function createTailer(deps: TailerDeps): Tailer {
     const cached = shellAliveCache.get(file)
     // A DEAD verdict is terminal — a process cannot come back — so it is never re-probed.
     if (cached && (cached.alive === false || now() - cached.at < SHELL_PROBE_TTL_MS)) return !cached.alive
+    // What the probe needs to recognise the shell's PROCESS when nobody holds its file — see
+    // findShellProcesses. The ack bounds the fork from above; without one the window stays open.
+    const acked = e.ackAt ? Date.parse(e.ackAt) : NaN
+    const launch: ShellLaunch = { outputFile: file, sessionId: state.sessionId, launchedAtMs: started, ...(Number.isFinite(acked) ? { ackedAtMs: acked } : {}) }
     // An INJECTED probe is answered inline. It is the test seam, and a caller who supplies one is
     // saying the answer is cheap; the batching below exists solely because the real one is not.
     if (deps.shellAlive) {
-      const alive = deps.shellAlive(file)
+      const alive = deps.shellAlive(file, launch)
       if (alive === undefined) return false // cannot tell ⇒ unchanged
       shellAliveCache.set(file, { at: now(), alive })
       return !alive
     }
     // The real probe costs ~300ms of blocked event loop, so it does NOT happen here. Queue it and
     // report the shell unchanged; the verdict lands in the cache and this reads it next tick.
-    shellProbeWanted.add(file)
+    shellProbeWanted.set(file, launch)
     armShellProbeFlush()
     return false
   }
@@ -5796,11 +5934,13 @@ export function createTailer(deps: TailerDeps): Tailer {
       if (profileRecordLanded && state.model && state.profileAt) {
         const observedAt = Date.parse(state.profileAt)
         const spawnedAt = Date.parse(row.spawned_at)
-        const model = normalizeObservedThreadModel(row.backend ?? "claude", state.model)
+        const backendKind = row.backend ?? "claude"
+        const codexModels = backendKind === "codex" ? deps.codexModels?.() : undefined
+        const model = normalizeObservedThreadModel(backendKind, state.model, codexModels)
         const effort = state.effort?.trim() || row.effort?.trim()
         if (model && effort && Number.isFinite(observedAt) && Number.isFinite(spawnedAt) && observedAt >= spawnedAt) {
           try {
-            validateThreadProfile(row.backend ?? "claude", model, effort)
+            validateThreadProfile(backendKind, model, effort, codexModels)
             deps.storage.setObservedProfileIfCurrent(
               row.slug,
               { sessionId: row.session_id, generation: runtimeGeneration },

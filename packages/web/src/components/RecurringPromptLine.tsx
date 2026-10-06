@@ -23,7 +23,7 @@ import { WakeDivider } from "./WakeDivider.tsx"
 // optical nudge for free, which is the whole reason that component exists.
 //
 // The label is the WHOLE notification: no disclosure, no prompt body. The delivered text is the armed
-// text, and the armed text is already legible and editable in the footer panel — so repeating it inline
+// text, and the armed text is already legible and editable in the Goal panel — so repeating it inline
 // on every delivery adds nothing a reader cannot already get, which is the failure both earlier
 // renderings shared.
 export function RecurringPromptLine({ bump, sourceId, at }: { bump: RecurringPrompt; sourceId?: string; at?: string }) {
@@ -40,11 +40,11 @@ export function RecurringPromptLine({ bump, sourceId, at }: { bump: RecurringPro
       </WakeDivider>
     )
   }
-  // WHICH TRIGGER FIRED is the whole label, because it is the one thing the footer panel cannot tell you
+  // WHICH TRIGGER FIRED is the whole label, because it is the one thing the Goal panel cannot tell you
   // about THIS delivery — the text is shared, so "the agent stopped" and "an hour elapsed" are otherwise
   // indistinguishable in the transcript. The cadence rides along for the same reason: it names the
   // schedule that was in force when this one fired, not the one armed now.
-  // "Goal", because that is what the panel, the footer mark and the delivered trailer all call it since
+  // "Goal", because that is what the panel, the prompt box's mark and the delivered trailer all call it since
   // 2026-08-11. The divider kept the old name for a day and was the only surface still saying it.
   const label = scheduled
     ? `Goal${bump.every ? ` · every ${bump.every}` : ""}`
@@ -54,8 +54,8 @@ export function RecurringPromptLine({ bump, sourceId, at }: { bump: RecurringPro
       // TWO glyphs, one per TRIGGER, because a divider marks ONE delivery and the two triggers answer
       // different questions: a clock for the scheduled one, a loop for the rest one (which has no clock
       // — it fired because the thread stopped, again). They survived the merge of the two features into
-      // one prompt precisely because the trigger is what a reader still cannot infer. The footer's own
-      // glyph is deliberately a THIRD mark — a heart with a pulse — because it stands for both at once.
+      // one prompt precisely because the trigger is what a reader still cannot infer. The Goal control's own
+      // glyph is deliberately a THIRD mark — a target with an arrow — because it stands for both at once.
       //
       // The rest trigger's was `CircleStop`, and in a wake line that is backwards: this divider exists to
       // say the agent was RE-INVOKED, and a stop button in the transcript reads as the run ending here.

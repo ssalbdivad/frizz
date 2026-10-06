@@ -1,5 +1,5 @@
 import { createRequire } from "node:module"
-import { chmodSync, copyFileSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
+import { chmodSync, copyFileSync, existsSync, mkdtempSync, readFileSync, rmSync, statSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { delimiter, dirname, isAbsolute, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -1606,9 +1606,13 @@ test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers
     assert.ok(!argv.some((arg) => arg.includes(token)), "no credential on the CLI argv")
     const path = argv[argv.indexOf("--mcp-config") + 1]!
     assert.ok(isAbsolute(path), `--mcp-config is a path, not JSON: ${path}`)
-    assert.equal(statSync(path).mode & 0o777, 0o600)
     assert.equal(statSync(dirname(path)).mode & 0o777, 0o700)
-    const cfg = JSON.parse(readFileSync(path, "utf8"))
+    // The CLI reads it once at startup; after init it is a stray copy of the tokens, so it is removed.
+    assert.ok(!existsSync(path), "the config file is deleted once the session has initialized")
+    const startup = records.find((row) => row.kind === "startup") as CaptureRecord & { mcpConfigFileContent?: string; mcpConfigFileMode?: number }
+    assert.ok(startup.mcpConfigFileContent, "the CLI could read the file at startup")
+    assert.equal(startup.mcpConfigFileMode, 0o600, "owner-only while it exists")
+    const cfg = JSON.parse(startup.mcpConfigFileContent!)
     assert.deepEqual(Object.keys(cfg.mcpServers).sort(), ["Neon", "frizz"])
     assert.equal(cfg.mcpServers.Neon.headers.Authorization, token)
   } finally {

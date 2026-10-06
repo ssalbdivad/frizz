@@ -431,10 +431,10 @@ const WATCH = {
     "and frizz brings you back when it finishes, or when `for` runs out.\n\n" +
     "IT IS A ROW, NOT A SENTENCE. A ```awaiting fence has the lifetime of the message carrying it; this " +
     "survives your turn ending, a compaction and a frizz restart.\n\n" +
-    "IT DOES NOT REPLACE THE FENCE. Whether the human is needed while you wait is an answer about each " +
-    "REST, so every rest on running work still ends with a ```awaiting fence that names the work and " +
-    "answers `needs_input: true|false` — `false` keeps the thread out of the human's queue, and a rest " +
-    "with no fence lands in it.\n\n" +
+    "IT DOES NOT REPLACE THE FENCE. Where the thread sits while you wait is an answer about each REST, " +
+    "so every rest on running work still ends with a ```awaiting fence that names the work and answers " +
+    "`status: working|watching|needs_input` — `working` and `watching` keep the thread out of the " +
+    "human's queue, and a rest with no fence lands in it.\n\n" +
     "`for` IS REQUIRED and it is a DURATION, never an instant. When it runs out the row is CANCELLED " +
     "and you are woken to re-decide — that is deliberate, and it is what stops a wait outliving the " +
     "reason you made it. Register again if you still mean it.\n\n" +
@@ -679,12 +679,16 @@ const ASK = {
     "depend on the answer FIRST, then ask, then stop. If what is left is substantial work you would do " +
     "on your recommended option anyway, the call was yours: take it, say which way you went, and do not " +
     "ask at all.\n\n" +
-    "AND WHEN YOU DO STOP, THE OPEN QUESTION IS YOUR SIGN-OFF — rest normally. Frizz draws every open " +
-    "question at the BOTTOM of your handoff, below its last line, whether you mention it or not — so " +
+    "AND WHEN YOU DO STOP, THE QUESTION IS THAT REST'S SIGN-OFF — rest normally. Frizz draws its card " +
+    "at the BOTTOM of that rest's handoff, below its last line, whether you mention it or not — so " +
     "nothing you write can hide one, and nothing you write comes after it. PUT EVERY WORD OF " +
     "EXPLANATION BEFORE IT: what you found, what the choice turns on, what each answer would set in " +
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
+    "AT EVERY LATER REST IT IS NO LONGER YOUR SIGN-OFF, and frizz does not redraw it under your newer " +
+    "handoff — it stays where you asked it. Name it under `questions:` in an ```awaiting fence while you " +
+    "still need the answer (its card is then drawn at that rest), or withdraw it with `unask`. A rest " +
+    "that does neither is bumped, and so is any ```awaiting fence that leaves an open question out.\n\n" +
     "AN UNANSWERED QUESTION DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
     "`recommended` option for the human and delivers that as the answer, noting it was the default. A " +
     "`danger`, `multi` or free-text question, or one with no recommendation, waits for the human.\n\n" +
@@ -693,7 +697,8 @@ const ASK = {
     "does not block `done`, and does not follow you to your next handoff; its card stays answerable only " +
     "while you work on the message. The message comes with a note naming them. Only one DIRECTLY " +
     "RELEVANT to what the human wrote earns `keep` — reworded if the direction changed, above all to name " +
-    "an option the conversation has since raised — and it rides to the bottom of your next handoff again. " +
+    "an option the conversation has since raised — and a keep asks it again: it is that next rest's " +
+    "sign-off, its card drawn at the bottom of that handoff. " +
     "Let the rest go; if the work later needs one, ask a new question then. Never ask again a question the " +
     "human dismissed, or one you yourself withdrew after their newest message — `ask` refuses both.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL — register them together, so they render as one stack. Each must stand " +
@@ -1215,8 +1220,9 @@ async function activity() {
     : ""
   const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
-  // THE QUESTIONS ARE NOT PART OF THE FENCE, so they are printed in their own section and never fed to
-  // the fence builder below. A question waits on a person; there is no `questions:` key to write it into.
+  // THE QUESTIONS GET THEIR OWN SECTION, because they are not running work: a question waits on a
+  // person. Since 2026-10-05 a fence names the ones still needed under `questions:` (and must name every
+  // open one), so the ready-to-paste fence below carries the OWED ones too.
   //
   // OWED vs SET ASIDE (2026-09-30). A typed message sets every open question aside: it holds nothing
   // until the worker `keep`s it, and the worker's next rest withdraws it (2026-10-02). The readout lists
@@ -1230,9 +1236,11 @@ async function activity() {
     `\n\n${owed.length} question${owed.length === 1 ? "" : "s"} still owed an answer:\n\n` +
     owed.map(questionLine).join("\n") +
     "\n\nEach one blocks `done` until it is answered, dismissed or withdrawn, and draws its own card at the " +
-    "BOTTOM of your newest handoff, below every word of it — never write it into a handoff, and put the " +
+    "BOTTOM of the handoff of the rest that asked it — never write it into a handoff, and put the " +
     "explanation above it. Answers arrive one question at a time; act on each as it lands. `unask` the " +
-    "ones since decided. A question is never named in an ```awaiting fence."
+    "ones since decided. Any ```awaiting fence names EVERY owed one under `questions:` or is refused, and " +
+    "at a rest after the one that asked, a question you neither name nor withdraw gets you bumped. In a " +
+    "fence: `questions: [" + owed.map((q) => q.id).join(", ") + "]`"
   )
   const passedBlock = passed.length === 0 ? "" : (
     `\n\n${passed.length} question${passed.length === 1 ? "" : "s"} set aside — the human wrote to you since, without answering:\n\n` +
@@ -1247,8 +1255,9 @@ async function activity() {
     if (owed.length > 0) {
       return selfLine + (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
-        "registered PRs. So an ```awaiting fence would have nothing to name, and a fence naming nothing " +
-        "is not a park." + askedBlock + linksBlock
+        "registered PRs. An ```awaiting fence can still wait on your open questions alone — " +
+        "`questions:` names the human as the wait, so it needs no other name and no `for:`." +
+        askedBlock + linksBlock
       )
     }
     return selfLine + (
@@ -1278,16 +1287,26 @@ async function activity() {
   const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
+  // Every OWED question rides the fence too: a fence that leaves one out is refused, and a fence on
+  // questions always queues, so its `status:` answer is `needs_input` whatever else it names. A set-aside
+  // one is left out — it holds nothing, and the next rest withdraws it. Otherwise the template guesses
+  // from the kinds — a shell or a sub-agent is usually work that finishes by itself, a PR, an issue or a
+  // timer a watch — and the prose tells the worker to correct it.
+  const questionIds = owed.map((q) => q.id).filter(Boolean)
+  if (questionIds.length > 0) block.push(`  questions: [${questionIds.join(", ")}]`)
+  const status = questionIds.length > 0 ? "needs_input" : byKind.shell.length + byKind.agent.length > 0 ? "working" : "watching"
   return selfLine + (
     `${items.length} thing${items.length === 1 ? "" : "s"} running on this thread:\n\n${lines.join("\n")}\n\n` +
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
-    "PLURAL key per kind, taking a list — plus a required `for:` duration and a required " +
-    "`needs_input:` answer. `needs_input: false` (the human has nothing to act on yet) keeps the thread " +
-    "out of their queue and needs no prose at all; `needs_input: true` puts it in their queue, with what " +
-    "to look at BELOW a `---` line (there is no `reason:` key).\n\nEverything above, as a fence:\n\n" +
+    "PLURAL key per kind, taking a list — plus a required `for:` duration and a required `status:` " +
+    "answer: `working` (the work finishes by itself; the thread shows as running), `watching` (the wait " +
+    "is on something outside the thread; it is snoozed) or `needs_input` (the human can act on something " +
+    "now; it goes in their queue, with what to look at BELOW a `---` line — there is no `reason:` key). " +
+    "`working` and `watching` need no prose at all.\n\nEverything above, as a fence:\n\n" +
     "```awaiting\n" +
-    `${block.join("\n")}\n  needs_input: false\n  for: 2h\n` +
-    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait." +
+    `${block.join("\n")}\n  status: ${status}\n  for: 2h\n` +
+    "```\n\nDrop the lines you are not actually waiting on — a dev server you left running is not a wait " +
+    "— and change `status:` if it names the wrong place." +
     "\n\nA `watch` registration (marked `[watched as …]` above) keeps the WAKE across a compaction and a " +
     "restart, but it does not replace the fence: name the work in the fence all the same." +
     askedBlock + linksBlock

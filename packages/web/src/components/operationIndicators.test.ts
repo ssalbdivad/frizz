@@ -56,9 +56,14 @@ test("no second liveness glyph exists — the left-hand mark is the only one", (
   assert.doesNotMatch(css, /^\.frizz-tool-spinner \{/m, "the dispatch spinner must stay removed")
   assert.doesNotMatch(css, /@keyframes frizz-tool-spin\b/, "…along with its animation")
   assert.doesNotMatch(css, /^\.frizz-live-dot-done/m, "a completed op is marked by the ABSENCE of a mark")
-  // The genuinely-live glyphs remain: pulsing for running, breathing for alive-but-quiet.
+  // The genuinely-live glyph remains: pulsing for running.
   assert.match(css, /\.frizz-live-dot \{[^}]*animation: frizz-live-pulse/)
-  assert.match(css, /\.frizz-live-dot-quiet \{[^}]*animation: frizz-live-breathe/)
+  // …and NOTHING breathes for a shell any more. The only shell that is not running is one the OS has
+  // confirmed gone (tailer `shellIsGone`), and the breathing mark drew that dead process as a live one
+  // on the card, the drawer and the transcript, titled "running — no recent output", until 2026-10-05.
+  for (const file of ["ChildOpRow.tsx", "ChatView.tsx"]) {
+    assert.doesNotMatch(readFileSync(new URL(`./${file}`, import.meta.url), "utf8"), /frizz-live-dot-quiet/, `${file} must not draw a breathing mark`)
+  }
 })
 
 // THE THRESHOLD is a noise filter: nearly every call resolves in well under a second, and marking those
@@ -120,13 +125,14 @@ test("running shells pulse blue and running sub-agents pulse the accent-yellow",
   assert.match(css, /\.frizz-live-dot \{[^}]*--live-dot: var\(--color-accent\)/)
   assert.match(css, /\.frizz-live-dot--shell \{ --live-dot: var\(--color-shell\); \}/)
   assert.match(css, /\.frizz-live-dot--agent \{ --live-dot: var\(--color-accent\); \}/)
-  // The quiet-but-alive shell dot follows the shell blue too.
-  assert.match(css, /\.frizz-live-dot-quiet--shell \{ --live-dot: var\(--color-shell\); \}/)
 })
 
-test("a quiet-but-alive background shell breathes, and stays visible as a static ring under reduced motion", () => {
+// The product no longer draws the quiet dot (see the test above); the mobile mockup kit's `LiveDot quiet`
+// still does, so its look stays pinned for that design record.
+test("the mockup kit's quiet dot breathes in the shell blue, and stays visible as a static ring under reduced motion", () => {
   const css = readFileSync(new URL("../styles.css", import.meta.url), "utf8")
-  // It must ANIMATE (breathe) rather than sit as a dead gray dot…
+  assert.match(css, /\.frizz-live-dot-quiet--shell \{ --live-dot: var\(--color-shell\); \}/)
+  // It must ANIMATE (breathe) rather than sit as a flat gray dot…
   assert.match(css, /\.frizz-live-dot-quiet \{[^}]*animation: frizz-live-breathe/)
   assert.match(css, /@keyframes frizz-live-breathe/)
   // …and degrade to a static ring (never fully disappear) when motion is reduced.

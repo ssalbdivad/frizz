@@ -3,7 +3,7 @@ import test, { after, before } from "node:test"
 
 // THE PAGE'S QUEUE CARD (components/AllQueuesCard.tsx) in the states its tests covered on the board's card
 // until 098de26d deleted them with their fixture (2026-09-28). The behaviour never went: it lives in the
-// shared StateButton (ThreadLifecycleFooter.tsx), which the card wires with onArchived/onDismissCancel, and
+// shared StateButton (ThreadLifecycle.tsx), which the card wires with onArchived/onDismissCancel, and
 // in the page's own exit hook (AllQueues.tsx useLeavingCards) — both run here for real, on
 // queue-card-states-fixture.html, with only the network stubbed.
 //
@@ -70,7 +70,7 @@ async function open(query: string) {
 const rpcLog = (): Promise<RpcLog> => page!.evaluate(() => (window as unknown as { __rpc: RpcLog }).__rpc)
 const leavingOf = (sel: string): Promise<string> =>
   page!.evaluate((s) => document.querySelector(s)?.getAttribute("data-queue-leaving") ?? "unmounted", sel)
-const clickDone = () => page!.$eval(`${FIRST} footer button[aria-label="Mark as done"]`, (button) => (button as HTMLButtonElement).click())
+const clickDone = () => page!.$eval(`${FIRST} [data-thread-lifecycle] button[aria-label="Mark as done"]`, (button) => (button as HTMLButtonElement).click())
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
 
 // Records, IN THE PAGE, the first moment the card turns leaving and whether completeThread had resolved by
@@ -151,7 +151,7 @@ test("a failed completeThread rolls the faded card back and says why", { skip: !
   // this wait still passed at ~10s untimed).
   await page!.waitForFunction((sel) => document.querySelector(sel)?.getAttribute("data-queue-leaving") === "false", { timeout: 2_000 }, FIRST)
   const state = await page!.evaluate((sel) => ({
-    disabled: (document.querySelector(`${sel} footer button[aria-label="Mark as done"]`) as HTMLButtonElement | null)?.disabled,
+    disabled: (document.querySelector(`${sel} [data-thread-lifecycle] button[aria-label="Mark as done"]`) as HTMLButtonElement | null)?.disabled,
     toast: (window as unknown as { __store: { toast?: { text: string } } }).__store.toast?.text ?? "",
   }), FIRST)
   assert.equal(state.disabled, false, "Mark as done can be pressed again")
@@ -279,7 +279,7 @@ test("a park queued only for its reply reads Replied, and Mark as read records i
   const text = await page!.$eval(FIRST, (card) => card.textContent ?? "")
   assert.match(text, /Replied/, "the header says why it is here")
   assert.doesNotMatch(text, /Ready/)
-  await page!.$eval(`${FIRST} footer button[data-mark-read]`, (button) => (button as HTMLButtonElement).click())
+  await page!.$eval(`${FIRST} [data-thread-lifecycle] button[data-mark-read]`, (button) => (button as HTMLButtonElement).click())
   await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)
   const seen = (await rpcLog()).calls.filter((c) => /\/rpc\/threadSeen$/.test(c.path)).map((c) => c.path)
   assert.deepEqual(seen, ["/_frizz/fixture-card/rpc/threadSeen"], "seen is recorded in the card's own project")

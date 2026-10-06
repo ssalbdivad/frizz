@@ -21,6 +21,17 @@ test("a bare rest in the queue draws the card; a stall draws it whatever the mes
   assert.equal(showsRestedCard({ ...bare, needsYou: false }, "**Fixed** — landed."), false, "…where a thread merely out of the queue draws nothing")
 })
 
+// A question asked at an EARLIER rest is not this rest's ending since 2026-10-05: its card stays where
+// it was asked unless a later fence names it, so a bare rest beside it would otherwise draw nothing at
+// all — the 2026-08-31 report ("Why was this able to come to rest without a proper handoff?").
+test("an open question counts as this rest's ending only where the caller says it renders here", () => {
+  const text = "Changelog updated."
+  const asked = { ...bare, questions: [{ id: "q", spec: { question: "?", kind: "question" as const }, askedAt: "2026-08-27T20:00:00.000Z" }] }
+  assert.equal(showsRestedCard(asked, text, false), true, "carried from an earlier rest, named nowhere here: still a bare rest")
+  assert.equal(showsRestedCard(asked, text, true), false, "asked or named at this rest: the question is the ending")
+  assert.equal(showsRestedCard(asked, text), false, "no transcript reading: any open question counts, as before")
+})
+
 test("every ending with a card of its own keeps this one off", () => {
   const text = "**Fixed** — landed."
   assert.equal(showsRestedCard({ ...bare, lastFence: { kind: "done", body: "x", hints: [], registered: true } }, text), false)

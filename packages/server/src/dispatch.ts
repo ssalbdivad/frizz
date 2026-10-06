@@ -850,6 +850,9 @@ export interface DispatchDeps {
   // Resolves an "auto" effort to a concrete level from the prompt (effort-chooser.ts) before launch.
   // Absent (tests) ⇒ "auto" launches on the fallback level, so nothing ever spawns with "auto".
   chooseEffort?: ChooseEffort
+  // The Codex catalogue "auto" reads a model's ladder from, gated on the provisioned runtime's version
+  // (backend/codex-models.ts). Absent (tests) ⇒ the ungated machine-wide read.
+  codexModels?: () => ReturnType<typeof readCodexModels>
   // Failure cleanup targets only the exact freshly-spawned slug and its session-id-keyed files
   // (cleanupDispatchFiles), so a failed dispatch can never disturb a neighbouring thread.
   // Provider auth preflight (claude-auth plan, Slice A): resolves the target provider's credential
@@ -894,7 +897,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
   async function concreteEffort(kind: BackendKind, model: string | undefined, effort: Settings["effort"], prompt: string): Promise<Settings["effort"]> {
     if (effort !== AUTO_EFFORT) return effort
     if (kind === "acp") return undefined
-    const codex = kind === "codex" ? readCodexModels().find((candidate) => candidate.slug === model) : undefined
+    const codex = kind === "codex" ? (deps.codexModels?.() ?? readCodexModels()).find((candidate) => candidate.slug === model) : undefined
     const efforts = kind === "codex" ? codex?.efforts ?? [] : claudeEffortsFor(model ?? "")
     const fallback = efforts.includes("high") ? "high" : codex?.defaultEffort ?? efforts[0]
     if (!fallback) return undefined
@@ -1058,7 +1061,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // armed, because a worker that rested without signing off had nothing to bring it back. The built-in
           // handoff bump does that now — it fires on exactly the rests that need it, carries the three terminal
           // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
-          // same nudge twice, and the maintainer called it redundant. Arming one is the FOOTER PANEL's job now,
+          // same nudge twice, and the maintainer called it redundant. Arming one is the GOAL PANEL's job now,
           // and that panel prefills the default text without switching any trigger on.
           deps.storage.setBackend(slug, "codex")
           // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
@@ -1189,7 +1192,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // armed, because a worker that rested without signing off had nothing to bring it back. The built-in
           // handoff bump does that now — it fires on exactly the rests that need it, carries the three terminal
           // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
-          // same nudge twice, and the maintainer called it redundant. Arming one is the FOOTER PANEL's job now,
+          // same nudge twice, and the maintainer called it redundant. Arming one is the GOAL PANEL's job now,
           // and that panel prefills the default text without switching any trigger on.
           // In the same synchronous run as the row itself, so no tailer tick can ever see this row
           // without its anchor and fold the copied conversation as the thread's own.

@@ -11,7 +11,6 @@ import {
   isSnoozePreset,
   localDateTimeInputValue,
   parseLocalSnooze,
-  snoozePresetAction,
   snoozePresetInstant,
   snoozePresetLabel,
 } from "./snooze.ts"
@@ -26,16 +25,6 @@ test("snooze preset metadata defaults to tomorrow and keeps sentence-case labels
   assert.equal(snoozePresetLabel("tomorrow"), "tomorrow")
   assert.equal(isSnoozePreset("1w"), true)
   assert.equal(isSnoozePreset("custom"), false)
-})
-
-// You snooze FOR a duration but UNTIL an instant. Gluing the bare label on gave "Snooze tomorrow",
-// which reads as deferring the snoozing rather than naming the wake.
-test("the button says 'until' for a calendar preset and nothing extra for a duration", () => {
-  assert.equal(snoozePresetAction("tomorrow"), "Snooze until tomorrow")
-  assert.equal(snoozePresetAction("1d"), "Snooze 1d")
-  assert.equal(snoozePresetAction("1h"), "Snooze 1h")
-  assert.equal(snoozePresetAction("3d"), "Snooze 3d")
-  assert.equal(snoozePresetAction("1w"), "Snooze 1w")
 })
 
 test("snooze presets distinguish exact duration from tomorrow's local wall clock", () => {

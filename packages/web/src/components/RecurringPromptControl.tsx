@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useLayoutEffect, useRef, useState } from "react"
 import {
   RECURRING_PROMPT_MAX,
   DEFAULT_RECURRING_PROMPT,
@@ -7,20 +7,20 @@ import {
   parseGoalForSeconds,
   type ThreadView,
 } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { useThreadApi } from "../api/threadApi.tsx"
 import { formatAgo } from "../lib/durationLabels.ts"
-import { goalLimitsSentence, goalLoopParts, goalLoopReading } from "../lib/goalLoop.ts"
+import { goalLimitsSentence, goalLoopReading } from "../lib/goalLoop.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { showToast } from "../store.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
-import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
+import { Popover, PopoverAnchor, PopoverContent, POPOVER_COLLISION_PADDING as COLLISION_MARGIN } from "./ui/Popover.tsx"
 import { Switch } from "./ui/Switch.tsx"
 import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 
 // THE GOAL MARK — `target-arrow` from Tabler Icons 3.46.0 (MIT, https://tabler.io/icons/icon/target-arrow),
 // inlined rather than pulled in as a dependency: it is one glyph out of a 5,900-icon package, and this
 // file is the only caller. Tabler draws on the SAME grid as lucide — 24 viewBox, 2px stroke, round caps
-// and joins — so it sits in the footer strip as one of the family rather than as a foreign mark.
+// and joins — so it sits in the prompt box's rail beside lucide's paperclip as one of the family.
 //
 // It replaces lucide's `Target`, which the maintainer read as not-a-target at all (2026-08-13: "Targets
 // are supposed to have a filled circle in the middle. Maybe you should find a different icon that has an
@@ -61,8 +61,11 @@ export function GoalMark({ size = 12, className = "" }: { size?: number; classNa
   )
 }
 
-// THE GOAL PANEL: one glyph in the thread footer holding what this thread is TRYING TO ACHIEVE, which
-// frizz re-sends so the operator does not have to type it again.
+// THE GOAL PANEL: one glyph in the prompt box's rail, beside attach and send, holding what this thread is
+// TRYING TO ACHIEVE, which frizz re-sends so the operator does not have to type it again. It sat at the
+// left of the thread's lifecycle footer until 2026-10-05; the footer went, and a standing message is
+// something you send, so it moved to the box it is sent from (maintainer: "move the goal icon over to
+// the bottom right of the prompt box").
 //
 // It was called "the recurring prompt" until 2026-08-11, which named the MECHANISM rather than the
 // content and left the panel describing itself by how it is delivered. What an operator writes here is
@@ -85,8 +88,7 @@ export function GoalMark({ size = 12, className = "" }: { size?: number; classNa
 // the other two toggles."
 //
 // The trigger renders ALWAYS, muted when nothing is armed — a control that only appears once its own
-// feature is on cannot be used to turn the feature on. That makes it the one permanent child of the
-// footer's left cluster, where everything else is a reading that hides itself when it has nothing to say.
+// feature is on cannot be used to turn the feature on.
 export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   // THREE STATES, not two: shut, the HOVER PREVIEW, and the full panel. A single boolean cannot hold
   // them, because the preview and the panel are the same anchored surface showing different things and
@@ -95,14 +97,42 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
   const trigger = useRef<HTMLButtonElement>(null)
   const hoverTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(hoverTimer.current), [])
+  // THE PANEL STAYS ON ITS OWN THREAD'S SURFACE — the queue card, the drawer, the /full column — AND
+  // SPANS ITS PROMPT BOX. The glyph sits near the right end of the box, so an end-aligned panel grows
+  // LEFTWARD, and at its full 46rem it ran past every surface it opened on: ~60px over the sidebar from a
+  // queue card, ~100px over the board behind a drawer, ~100px into the margin beside /full. The surface is
+  // the collision boundary, its side padding is the prompt box's inset within it, and the panel's width
+  // caps at what is left (`--radix-popper-available-width`, below) — so wherever the box is narrower than
+  // 46rem the panel lands exactly on the box's two edges, as one unit with it. Measured when the panel
+  // opens rather than on mount, because a resize can move the box's inset between openings.
+  const open = mode !== "closed"
+  const [bounds, setBounds] = useState<{ surface: Element; left: number; right: number } | null>(null)
+  useLayoutEffect(() => {
+    if (!open) return
+    const surface = trigger.current?.closest('[data-queue-card-root], [data-xq-card-root], [role="dialog"], main')
+    if (!surface) {
+      setBounds(null)
+      return
+    }
+    // From the surface's INNER edges: Floating UI clips to an element boundary's padding box, so a
+    // 1px card border measured from the outer edge left the panel 1px short of the box on that side.
+    const inner = surface.getBoundingClientRect().left + surface.clientLeft
+    const b = trigger.current?.closest("[data-composer-box]")?.getBoundingClientRect()
+    setBounds({
+      surface,
+      left: Math.max(COLLISION_MARGIN, b ? b.left - inner : 0),
+      right: Math.max(COLLISION_MARGIN, b ? inner + surface.clientWidth - b.right : 0),
+    })
+  }, [open])
+  const boundaryProps = bounds
+    ? { collisionBoundary: bounds.surface, collisionPadding: { top: COLLISION_MARGIN, bottom: COLLISION_MARGIN, left: bounds.left, right: bounds.right } }
+    : {}
   const armed = thread.recurringPrompt
   // COLOURED IF ANY MECHANISM IS LIVE. The glyph answers one question — "is frizz going to re-prompt
   // this thread on its own?" — and any one of them is a yes.
   const live = armed?.stopHook === true || armed?.heartbeat === true || armed?.postCompaction === true
-  // THE LOOP'S COUNTER, beside the mark (2026-09-29): `run 7 of 20 · 1h 12m left`, or why it stopped.
-  // Null — and so absent — for a Goal with nothing to count toward; see lib/goalLoop.ts.
-  const nowMs = useNowMs()
-  const reading = goalLoopParts(armed, nowMs)
+  // THE LOOP'S COUNTER (`run 7 of 20 · 1h 12m left`) rode beside this mark in the lifecycle footer; in the
+  // rail's fixed squares it has no room, so it reads in the header's facts line (ThreadHeaderFacts).
 
   // The preview NEVER interrupts the panel: once it is open, crossing the glyph again must not swap the
   // writing surface out from under the pointer on its way there.
@@ -151,9 +181,9 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
           // what is armed, exactly as hovering it would.
           onFocus={() => setMode((m) => (m === "closed" ? "preview" : m))}
           onBlur={closePreview}
-          // `items-baseline` once a reading rides beside the mark, so the mark can seat itself on the
-          // reading's cap band (GOAL_MARK_BESIDE_TEXT below) — centring the two boxes is what reads ~1px off.
-          className={`group/goal icon-hover-outline flex rounded-md p-1 outline-none ${reading ? "items-baseline gap-[5px] pr-1.5" : "items-center"}`}
+          // The paperclip's own square, hover fill and tone beside it (Composer), so the rail reads as
+          // one family; ThreadComposerBox places it through the composer's `railLead` slot.
+          className="group/goal icon-hover-outline flex h-7 w-7 items-center justify-center rounded-lg outline-none transition-[color,background-color] hover:bg-panel-2/70"
         >
           {/* A TARGET WITH AN ARROW IN IT (see GoalMark for the geometry and why it is drawn rather
               than imported), and the ONLY surface that says this exists (the rail deliberately carries
@@ -172,17 +202,15 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               lucide's `Target` here — and it did not read as one, because its centre is a HOLE where a
               bullseye should be (maintainer 2026-08-13).
 
-              GREY by default and coloured only while something is actually armed: the footer's left
-              cluster is a status strip first, so a control with nothing to report has to read as quiet
-              as the empty slot it would otherwise leave. Amber, not the app's accent yellow, so it
-              reads as a state rather than the focus motif.
+              GREY by default and coloured only while something is actually armed, so a control with
+              nothing to report reads as quiet as the paperclip beside it. Amber, not the app's accent
+              yellow, so it reads as a state rather than the focus motif.
 
-              QUIET, NOT DIMMER THAN ITS NEIGHBOURS. This was `text-muted-45` against the meter's and
-              the hourglass's `text-muted-60`, and the left cluster consequently read as three marks
-              from three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
-              look absolutely terrible"). The cluster is one status group, so it takes one tone — the
-              armed/idle distinction is carried by the amber, which is the state worth seeing, and not
-              by holding the resting glyph a step below the readouts beside it.
+              QUIET, NOT DIMMER THAN ITS NEIGHBOURS. Its resting tone is the paperclip's `text-muted`:
+              when it sat in the footer at `text-muted-45` beside two readouts at `text-muted-60`, the
+              cluster read as three marks from three families (maintainer 2026-08-04: "the icon
+              brightnesses and spacing look absolutely terrible"). The armed/idle distinction is the
+              amber, never a dimmer resting glyph.
 
               THE GLYPH BRIGHTENS ON THE BUTTON'S HOVER, NOT ITS OWN. It carried a bare `hover:`, so the
               outline lit the moment the pointer crossed the button's padding while the glyph waited for
@@ -190,32 +218,19 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
               "As soon as I'm hovering over the box at all, the icon and the border should both
               animate"). The group is NAMED because Tailwind's `group-hover` matches ANY `.group`
               ancestor, not the nearest one. */}
+          {/* 15px with the lucide paperclip's 2-unit pen on the same 24-unit grid, so the two glyphs
+              paint the same 1.25px line. */}
           <GoalMark
-            size={12}
-            className={`${live ? "text-attention-90" : "text-muted-60 group-hover/goal:text-muted group-focus-visible/goal:text-muted"} ${reading ? GOAL_MARK_BESIDE_TEXT : ""}`}
+            size={15}
+            className={live ? "text-attention-90" : "text-muted group-hover/goal:text-fg group-focus-visible/goal:text-fg"}
           />
-          {reading && (
-            // A READOUT, in the cluster's one tone — the amber belongs to the mark, which already says
-            // whether anything is armed. Tabular digits so the count ticking over does not shift the strip.
-            //
-            // IT GIVES WAY BEFORE THE BUTTONS DO. The footer wraps, and at phone widths a full reading
-            // pushed "Mark as done" onto a second line (measured at 420px). So it reads the FOOTER's
-            // width (ThreadLifecycleFooter is an `@container`, measured on its content box): the time left
-            // goes first, below 29rem, and the whole reading below 24rem — the mark stays, and the hover and
-            // the panel still say it all. Fitted 2026-09-29: the full reading wrapped the strip at a 458px
-            // footer and fit at 470; the count alone wrapped at 392 and fit at 400 — each threshold sits
-            // ~20px above its wrap for a wider count or a longer span.
-            <span data-goal-loop className="whitespace-nowrap text-[11px] leading-none tabular-nums text-muted-60 @max-[24rem]:hidden">
-              {reading.lead}
-              {reading.tail && <span className="@max-[29rem]:hidden"> · {reading.tail}</span>}
-            </span>
-          )}
         </button>
       </PopoverAnchor>
       {mode === "preview" ? (
         <PopoverContent
           side="top"
-          align="start"
+          align="end"
+          {...boundaryProps}
           data-recurring-preview
           onPointerDownOutside={keepAnchorClicks}
           // INERT. The preview is a reading, not a surface: it must never take the pointer, because the
@@ -232,16 +247,30 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
       ) : (
         <PopoverContent
           side="top"
-          align="start"
+          align="end"
+          {...boundaryProps}
           // WIDE, and it takes the whole viewport when the viewport is small. A 21rem cap made this a
           // narrow column for prose that can run to 4000 characters, and on a phone-width screen it was
           // narrower than the space actually available. The panel is a writing surface, so it is sized
           // like one: ~110 columns where there is room, everything-minus-a-margin where there is not.
-          className="w-[min(46rem,calc(100vw-1.5rem))] p-3 text-[11px] leading-relaxed text-fg"
+          // "Where there is room" is the prompt box's span on its surface (see `bounds` above): Radix
+          // publishes the boundary's width less its collision padding, and the fallback keeps the cap if
+          // it has not.
+          className="w-[min(46rem,calc(100vw-1.5rem),var(--radix-popper-available-width,46rem))] p-3 text-[11px] leading-relaxed text-fg"
           onPointerDownOutside={keepAnchorClicks}
           // Radix otherwise autofocuses the first focusable child, which is a toggle segment — and a focus
           // ring sitting on "Off" reads as the toggle being SET to off by the act of opening the panel.
           onOpenAutoFocus={(e) => e.preventDefault()}
+          // ITS DRAGS ARE ITS OWN. The panel is portaled, but React bubbles its events up the component
+          // tree, and this control rides inside the Composer's rail — whose drop zone took a file dropped
+          // here as an attachment to the reply, and swallowed text dragged into the goal's own field.
+          // A file is still refused here rather than left to the browser, which would open it in place.
+          onDragOver={(e) => e.stopPropagation()}
+          onDragLeave={(e) => e.stopPropagation()}
+          onDrop={(e) => {
+            e.stopPropagation()
+            if (e.dataTransfer.files.length > 0) e.preventDefault()
+          }}
         >
           <PromptPanel thread={thread} armed={armed} close={() => setMode("closed")} />
         </PopoverContent>
@@ -254,8 +283,8 @@ export function RecurringPromptControl({ thread }: { thread: ThreadView }) {
 const LIMIT_INPUT =
   "w-[5ch] rounded-md border border-border bg-bg px-1 py-[3px] text-center text-[11px] leading-none tabular-nums text-fg outline-none placeholder:text-muted-50 focus:border-border-strong"
 
-// Long enough that dragging the pointer ACROSS the strip on the way to the send button does not flash a
-// panel over the footer, short enough that deliberately resting on the glyph answers immediately.
+// Long enough that dragging the pointer ACROSS the rail on the way to the send button does not flash a
+// panel over the prompt box, short enough that deliberately resting on the glyph answers immediately.
 const HOVER_DELAY_MS = 260
 
 // WHAT THE HOVER SAYS. Not the panel in miniature and not the whole prompt — the two questions you ask
@@ -311,14 +340,6 @@ function GoalPreview({ armed }: { armed: ThreadView["recurringPrompt"] }) {
 const MIN_MINUTES = 1
 const MAX_MINUTES = 24 * 60
 const DEFAULT_INTERVAL_SECONDS = 600
-
-// THE GOAL MARK BESIDE ITS COUNTER. Centring the two boxes is what reads off, so the mark takes the house
-// cap-band seat — `self-baseline` plus half an em less half a cap, computed by the browser, so nothing
-// needs re-measuring when the type scale moves. Measured 2026-09-29 in sans (scripts/shot.mjs, geometry
-// ink of the mark against the 11px reading's baseline→cap band): the mark's ink centre sits 0.12px below
-// the band's, sub-pixel and left alone. The ink gap mark → reading is 6.5px, set against the 7px the
-// footer's own "✓ Mark as done" draws at 12px — a mark and its label, scaled to the 11px reading.
-const GOAL_MARK_BESIDE_TEXT = "shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)]"
 
 interface Draft {
   text: string
@@ -427,7 +448,7 @@ function sameAsSent(next: Draft, sent: ReturnType<typeof draftAsSent>): boolean 
  *  Extracted and exported so the test beside this file can pin all three branches cheaply. Both are
  *  ALSO driven in a real browser — an archived thread's panel opens empty and its dismissal writes
  *  nothing. Watch the selector when you re-check that: `/thread/<slug>` leaves the BOARD rendered
- *  behind the drawer, and a rested thread's queue card carries its own footer, so an unscoped
+ *  behind the drawer, and a rested thread's queue card carries its own prompt box, so an unscoped
  *  `querySelector("[data-recurring-prompt]")` finds the board's heart rather than the drawer's and
  *  reports the wrong thread's panel. Scope to `[role=dialog]`. */
 export function seedsDefaults(
@@ -449,7 +470,7 @@ function triggerClauses(d: Pick<Draft, "stopHook" | "heartbeat" | "postCompactio
 }
 
 // Exported for the phone's ⋯ sheet (MobileThreadActionsSheet), which shows this same panel full-width
-// in a bottom sheet instead of a popover over the footer. Same draft, same dismissal-is-the-save: the
+// in a bottom sheet instead of a popover over the prompt box. Same draft, same dismissal-is-the-save: the
 // sheet unmounting the panel is the dismissal. `heading` is false there because the sheet's own title
 // row already says "Goal".
 export function PromptPanel({ thread, armed, close, heading = true }: {
@@ -458,6 +479,9 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
   close: () => void
   heading?: boolean
 }) {
+  // Through the thread's own project (api/threadApi.tsx): a cross-project queue card's rail carries this
+  // panel too, and `rpc` there would address the page's focused project.
+  const api = useThreadApi()
   // NO `busy` STATE. Under the old save-on-every-edit regime a busy flag put `disabled` on all four
   // switches for every write, and `disabled:opacity-45` is not transitioned, so each click dropped the
   // whole panel to 45% and snapped it back tens of milliseconds later (maintainer 2026-08-12: "there is
@@ -587,7 +611,7 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
     const prompt = next.text.trim() || null
     if (sameAsSent(next, sent.current)) return true
     try {
-      await rpc.setThreadRecurringPrompt({
+      await api.setThreadRecurringPrompt({
         slug: thread.id,
         sessionId: thread.sessionId ?? "",
         prompt,
@@ -677,7 +701,7 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
       {heading ? (
         <div className="mb-2 flex items-center gap-3">
           <span className="font-medium">Goal</span>
-          {/* The loop's reading, the same phrase the footer shows beside the mark. */}
+          {/* The loop's reading, the same phrase the header's facts line shows (ThreadHeaderFacts). */}
           {panelReading && <span data-goal-loop-panel className="tabular-nums text-muted">{panelReading}</span>}
           {lastLabel && <span className="ml-auto truncate text-muted-55">{lastLabel}</span>}
         </div>
@@ -850,7 +874,7 @@ export function PromptPanel({ thread, armed, close, heading = true }: {
         {/* THE LIMITS (2026-09-29) — what makes this Goal a bounded LOOP. No switch of their own: an empty
             field is "no limit", so the leading column holds a spacer and the row keeps its siblings' shape.
             Either limit, reached, switches every trigger above OFF by itself and leaves the text, exactly as
-            switching them off by hand would; the footer then says which limit ended it. The span is typed
+            switching them off by hand would; the header then says which limit ended it. The span is typed
             in the worker contract's `for:` grammar, the same token the worker gives the `goal` tool. */}
         <span aria-hidden />
         <span className={`font-medium ${runsField.trim() || forField.trim() ? "text-fg" : "text-muted"}`}>Limit</span>
