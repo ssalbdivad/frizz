@@ -2357,7 +2357,12 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
         "2. Steer any child that is off course, stuck or duplicating another's work. `SendMessage` reaches a",
         "   plain background sub-agent; never message a Workflow's agent (it starts a second copy).",
         "3. Report: a short progress note above the fence — what landed, what is running, what changed.",
+        "   Write it for someone who has read nothing since their last message: where the effort stands",
+        "   against its goal, in their words, with no names you coined (round numbers, phase codes, ids).",
         "   `needs_input: true` when the human can read or act on something now, else `false`.",
+        "4. Ask now. A decision the work has surfaced that is the human's to make goes to `mcp__frizz__ask`",
+        "   at this check-in — never into the note or a file \"for the human\", which nobody is prompted to",
+        "   answer. The children keep running while it waits; rest on the question, with no fence.",
         "",
       ]
       : []),
