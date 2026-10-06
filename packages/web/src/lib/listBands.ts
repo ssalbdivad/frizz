@@ -16,6 +16,9 @@ export interface LoudBands {
    *  across the gutter ties to that card (ThreadConnector). */
   carded: ReadonlySet<string>
   rows: number
+  /** Its threads at work — the Working rows and the pinned ones that would be — which ranks the project
+   *  among the busy ones (lib/activityOrder.ts). */
+  active: number
 }
 
 /**
@@ -65,5 +68,6 @@ export function loudBands(project: QueuesProject, hidden: (key: string) => boole
   // flight, which is what that band says, and the next poll puts it wherever the server does.
   const working = orderByInteraction(flight.filter((t) => (queued(t) ? hidden(threadKey(project.id, t.id)) : sectionOf(t) === "active")))
   const carded = new Set([...pinned.filter(queued), ...ready].map((t) => t.id))
-  return { pinned, ready, working, carded, rows: pinned.length + ready.length + working.length }
+  const active = working.length + pinned.filter((t) => !queued(t) && sectionOf(t) === "active").length
+  return { pinned, ready, working, carded, rows: pinned.length + ready.length + working.length, active }
 }

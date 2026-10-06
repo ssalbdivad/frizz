@@ -40,10 +40,14 @@
 // AND THE PROJECTS DRAG. A project's row is its grip: press, travel a few pixels, and the whole group —
 // row and threads — lifts and follows the pointer while the groups it passes slide aside; drop it and the
 // machine-wide order is rewritten (`projectsReorder`), so every surface that reads it moves as one.
-// A drag stays inside its run — the busy projects, or the quiet ones under them — because busy-ness, not
-// the order, decides which run a project is in: a busy project dropped among the quiet ones would
-// only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
+// A drag stays inside its run — the busy projects level with it, or the quiet ones under them — because
+// busy-ness, not the order, decides which run a project is in: a busy project dropped among the quiet ones
+// would only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
+//
+// THE BUSIEST PROJECTS FIRST. The busy run is ranked by how many threads each project has at work, the
+// machine-wide order breaking ties — calmly: never under the pointer, never on a blip, and always as a
+// glide (lib/activityOrder.ts has why each, and what churn it measured).
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus, Repeat } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
@@ -58,6 +62,7 @@ import { projectSlug } from "../lib/base-path.ts"
 import { bandKey, rememberCrossProjectFocus, setBandOpen, setBandsOpen, setProjectCollapsed, useCollapsedProjects, useOpenBands, type QuietBandKey } from "../lib/crossProject.ts"
 import { ALL_PROJECTS, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
+import { byActivity, settleCounts, tiersOf, type Settled } from "../lib/activityOrder.ts"
 import { holdLayout, type HeldSection, type HeldSlot } from "../lib/heldLayout.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useListHold } from "../lib/listHold.ts"
@@ -108,8 +113,8 @@ const PREFETCH_IDLE_MS = 1_500
 /**
  * Every project on the machine — the page's navigator, and the only place a project is managed from.
  *
- * Projects with work in flight come first, in the machine-wide order, each followed by its threads; every other
- * project is one line under them. They are separated by space, not rules: the project's own square already
+ * Projects with work in flight come first, the busiest at the top, each followed by its threads; every other
+ * project is one line under them, in the machine-wide order. They are separated by space, not rules: the project's own square already
  * starts each group, and a rule would say it twice.
  */
 export function ProjectList({
@@ -169,10 +174,13 @@ export function ProjectList({
   // render and holds from there.
   const drawnRuns = useRef<HeldSection<(typeof groups)[number]>[]>([])
   const drawnView = useRef(viewKey(view))
+  const busyNow = groups.filter((group) => group.bands.rows > 0)
+  const ranks = useSettledRanks(new Map(busyNow.map((group) => [group.project.id, group.bands.active])))
+  const rankOf = (entry: (typeof groups)[number]) => ranks.get(entry.project.id) ?? entry.bands.active
   const runs = holdLayout({
     prev: drawnRuns.current,
     target: [
-      { id: "busy", items: groups.filter((group) => group.bands.rows > 0) },
+      { id: "busy", items: byActivity(busyNow, rankOf) },
       { id: "quiet", items: groups.filter((group) => group.bands.rows === 0) },
     ],
     keyOf: (entry) => entry.project.id,
@@ -184,7 +192,8 @@ export function ProjectList({
   const run = (id: string) => (runs.find((section) => section.id === id)?.slots ?? []).map((slot) => slot.item)
   const busy = run("busy")
   const quiet = run("quiet")
-  const grip = reorder.grips([busy.map((entry) => entry.project), quiet.map((entry) => entry.project)])
+  const grip = reorder.grips([...tiersOf(busy, rankOf).map((tier) => tier.map((entry) => entry.project)), quiet.map((entry) => entry.project)])
+  const anchor = useGlide(busy.map((entry) => entry.project.id), reorder.dragging)
   const group = (entry: (typeof groups)[number], spaced: boolean) => (
     <ProjectGroup
       key={entry.project.id}
@@ -206,6 +215,7 @@ export function ProjectList({
   )
   return (
     <>
+      <span ref={anchor} hidden />
       {switcher && view.kind === "all" && (
         <div data-xq-switcher-row className={`${ROW_CLASS} after:hidden`}>
           <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div>
@@ -434,7 +444,110 @@ function useListReorder(projects: readonly QueuesProject[]) {
     }
   }
 
-  return { ordered, grips }
+  return { ordered, grips, dragging: drag !== null }
+}
+
+/**
+ * Each busy project's spinning count to rank it by, settled (lib/activityOrder.ts `settleCounts`): a
+ * count that has not yet held for the settle ranks as it did, and the list re-renders the moment it has.
+ */
+function useSettledRanks(live: ReadonlyMap<string, number>): ReadonlyMap<string, number> {
+  const settledRef = useRef(new Map<string, Settled>())
+  const [, wake] = useState(0)
+  const { settled, wakeAt } = settleCounts(settledRef.current, live, Date.now())
+  settledRef.current = settled
+  useEffect(() => {
+    if (wakeAt === null) return
+    const timer = window.setTimeout(() => wake((n) => n + 1), Math.max(0, wakeAt - Date.now()))
+    return () => window.clearTimeout(timer)
+  }, [wakeAt])
+  return new Map([...settled].map(([id, entry]) => [id, entry.ranked]))
+}
+
+/** How long a re-ranked group takes to glide to its new place. Long enough to follow, short of sluggish. */
+const GLIDE_MS = 320
+
+/**
+ * THE BUSY RUN NEVER JUMPS: when its projects change places, each group glides from where it was drawn to
+ * where it now is (FLIP), so the eye can follow the one it was reading. Only when their ORDER changes —
+ * a project joining or leaving the run, or rows coming and going above a group, move the rest as they
+ * always have — and never for a drag, whose groups are already where the drop puts them.
+ *
+ * Where each group WAS is read during the render that reorders them, while the DOM still shows the
+ * previous layout — mid-glide included, so a second re-rank picks a group up where it is — and where it
+ * IS, after the commit. Both relative to the list's own box, so a scroll between them reads as nothing.
+ * Returns the ref for a hidden anchor among the groups, which names the list's box (both lists can be
+ * mounted at once, beside the queue and stacked under it).
+ */
+function useGlide(order: readonly string[], dragging: boolean) {
+  const anchor = useRef<HTMLSpanElement>(null)
+  const drawn = useRef<readonly string[]>(order)
+  const from = useRef<Map<string, number> | null>(null)
+  const reordered = (() => {
+    const was = drawn.current.filter((id) => order.includes(id))
+    return was.join() !== order.filter((id) => was.includes(id)).join()
+  })()
+  const glide = reordered && !dragging && !justDragged() && !reducedMotion()
+  // Read before the commit moves anything: this render is the one that reorders the groups.
+  if (glide && anchor.current?.parentElement) from.current = groupTops(anchor.current.parentElement, drawn.current)
+  useLayoutEffect(() => {
+    drawn.current = order
+    const was = from.current
+    from.current = null
+    const box = anchor.current?.parentElement
+    if (!was || !box) return
+    const ground = backdrop(box)
+    for (const [id, top] of groupTops(box, order)) {
+      const before = was.get(id)
+      const element = box.querySelector<HTMLElement>(`:scope > [data-xq-rail-project="${CSS.escape(id)}"]`)
+      if (before === undefined || before === top || !element) continue
+      // `before` was read mid-glide if one was running, so the new one picks the group up where it is.
+      for (const running of element.getAnimations()) running.cancel()
+      const glide = element.animate([{ transform: `translateY(${before - top}px)` }, { transform: "translateY(0)" }], {
+        duration: GLIDE_MS,
+        easing: "cubic-bezier(0.2, 0, 0, 1)",
+      })
+      // A group RISING passes OVER the ones sinking, on the list's own ground: without it the two groups'
+      // rows interleave mid-crossing into one unreadable column (filmed at a tenth of the speed, 2026-10-06).
+      if (before > top) {
+        Object.assign(element.style, { position: "relative", zIndex: "1", backgroundColor: ground })
+      }
+      gliding.set(element, glide)
+      glide.finished
+        .finally(() => {
+          if (gliding.get(element) === glide) Object.assign(element.style, { position: "", zIndex: "", backgroundColor: "" })
+        })
+        .catch(() => {})
+    }
+  })
+  return anchor
+}
+
+/** Each group's latest glide, so an earlier one ending never strips the lift off a later one. */
+const gliding = new WeakMap<HTMLElement, Animation>()
+
+/** Each listed group's top, relative to the list's box. */
+function groupTops(box: HTMLElement, ids: readonly string[]): Map<string, number> {
+  const base = box.getBoundingClientRect().top - box.scrollTop
+  const tops = new Map<string, number>()
+  for (const id of ids) {
+    const element = box.querySelector<HTMLElement>(`:scope > [data-xq-rail-project="${CSS.escape(id)}"]`)
+    if (element) tops.set(id, element.getBoundingClientRect().top - base)
+  }
+  return tops
+}
+
+/** The colour the list is drawn on: its first ancestor's that is not transparent. */
+function backdrop(element: HTMLElement): string {
+  for (let at: HTMLElement | null = element; at; at = at.parentElement) {
+    const colour = getComputedStyle(at).backgroundColor
+    if (colour && colour !== "transparent" && colour !== "rgba(0, 0, 0, 0)") return colour
+  }
+  return "var(--color-bg)"
+}
+
+function reducedMotion(): boolean {
+  return window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false
 }
 
 /** `list` in `ids`' order; anything `ids` does not name keeps its relative place, after them. */
