@@ -2147,7 +2147,10 @@ function sessionThreadView(
     const spec = safeQuestionSpec(q.spec)
     if (spec) {
       const repliedPast = questionRepliedPast(q, rawTele?.lastHumanAt)
-      const defaultsAtMs = !repliedPast && recommendedDefaultAnswer(q.id, spec) ? questionDefaultAtMs(q, restedMs) : undefined
+      const defaultAnswer = repliedPast ? undefined : recommendedDefaultAnswer(q.id, spec)
+      const defaultsAtMs = defaultAnswer ? questionDefaultAtMs(q, restedMs) : undefined
+      const recommendedLabel = spec.options?.find((o) => o.recommended)?.label
+      const defaultsTo = defaultAnswer?.chosen[0] !== recommendedLabel ? defaultAnswer?.chosen[0] : undefined
       questions.push({
         id: q.id,
         spec,
@@ -2155,6 +2158,7 @@ function sessionThreadView(
         ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
         ...(repliedPast ? { repliedPast: true as const } : {}),
         ...(defaultsAtMs !== undefined ? { defaultsAt: new Date(defaultsAtMs).toISOString() } : {}),
+        ...(defaultsAtMs !== undefined && defaultsTo ? { defaultsTo } : {}),
       })
     }
   }

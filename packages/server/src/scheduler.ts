@@ -2352,7 +2352,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // that wakes again (a sub-agent returning) puts it back in the Active band, where nobody is prompted.
   // The human working on the card holds it off, and the countdown's × turns it off (questionDefaultAtMs).
   // The answer is stored exactly as the card would store it, so evalQuestionAnswers delivers it; its
-  // `text` says it was Frizz's default, not the human's pick. A question with nothing to take — free
+  // `text` says it was Frizz's default, not the human's pick. A recommendation marked `external` (it
+  // files, posts, merges or publishes) is never taken: the first option that stays on this machine is,
+  // and with none the question waits. A question with nothing to take — free
   // text, `multi`, no recommendation, `danger` — waits for the human as before, and so does one they
   // typed past, which evalSetAsideQuestions withdraws instead.
   function evalQuestionDefaults(nowMs: number): void {

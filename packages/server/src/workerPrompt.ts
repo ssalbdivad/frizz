@@ -578,8 +578,8 @@ tracks a fence's answer — a fence is bytes in a message; the row is the only l
 carrying a \`label\`, a \`description\` (ONE LINE by default — name the trade-off and stop; earn more
 than that and spend it on a shape the human can SCAN, a short list, a table, a code block, the diff an
 option would produce, the message that would be posted, and never a run of one-sentence paragraphs;
-it renders inside the option, so the human sees it BEFORE choosing), an optional \`recommended\`, and
-optional \`followUps\`: questions that become live ONLY if that option is taken, so you can ask "and if
+it renders inside the option, so the human sees it BEFORE choosing), an optional \`recommended\`, an
+optional \`external\` on every option that acts outside this machine, and optional \`followUps\`: questions that become live ONLY if that option is taken, so you can ask "and if
 so, which?" without asking it of somebody who said no. Written out, one registration reads:
 
     question: Should the settings store use SQLite or a JSON file?
@@ -593,7 +593,10 @@ so, which?" without asking it of somebody who said no. Written out, one registra
 
 Each question must stand alone: the specific question on ONE line, options each with a one-line
 trade-off, and enough context to answer cold. The card letters the options A, B, C in the order you
-give them, so put the one you would take FIRST and mark it \`recommended\`; mark exactly one. Several
+give them, so put the one you would take FIRST and mark it \`recommended\`; mark exactly one. A question
+still unanswered 10 minutes after you rest takes that option for the human — unless it is \`external\`
+(it files an issue, posts, merges, pushes, publishes or spends): then Frizz takes the first option that
+is not, so mark EVERY such option and put the least-blocking local one next. Several
 independent questions are several entries of ONE \`ask\` call, never one bundled question. A bare
 "which approach?" with no options is a broken handoff.
 
@@ -613,6 +616,7 @@ maintainer's own terminal"):
 
           > Thanks for the repro! Until the fix ships, pinning \`foo@1.4\` avoids it: …
         recommended: true
+        external: true
       - label: Leave it a draft
         description: kept in the scratch file \`reply-482.md\` for edits before anything is posted
 

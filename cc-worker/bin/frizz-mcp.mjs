@@ -589,7 +589,18 @@ function questionSchema(depth) {
           "This is for the fork you genuinely cannot take yourself. AND IT IS THE DEFAULT: a question " +
           "still unanswered 10 minutes after you rest on it takes this option for the human (never on " +
           "a `danger`, `multi` or free-text question), and the answer reaches you marked as Frizz's " +
-          "default — so mark only an option you would act on without them.",
+          "default — so mark only an option you would act on without them, or mark it `external`.",
+      },
+      external: {
+        type: "boolean",
+        description:
+          "Taking this option acts OUTSIDE this machine: it files an issue, posts a comment or review, " +
+          "merges, pushes, publishes, sends a message or spends money — anything that goes out under " +
+          "the human's name or that others see. MARK EVERY SUCH OPTION, recommended or not. Frizz's " +
+          "10-minute default never takes one: if the recommendation is `external`, the default takes " +
+          "the FIRST option that is not, so order the rest with the least-blocking local choice first " +
+          "(\"keep the draft in the handoff\", \"leave it for later\"). A question whose every option is " +
+          "`external` waits for the human.",
       },
       // `preview` (markdown revealed under the option once picked) is RETIRED from this schema
       // (2026-09-01): detail that decides a choice must be visible before the choice, so it belongs in
@@ -689,8 +700,12 @@ const ASK = {
     "motion. Never write the question itself into your handoff (one question, one card). There is no " +
     "placement marker: an empty ```question qst_… fence draws nothing.\n\n" +
     "AN UNANSWERED QUESTION DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
-    "`recommended` option for the human and delivers that as the answer, noting it was the default. A " +
-    "`danger`, `multi` or free-text question, or one with no recommendation, waits for the human.\n\n" +
+    "`recommended` option for the human and delivers that as the answer, noting it was the default — " +
+    "UNLESS that option is `external` (it files, posts, merges, pushes or publishes): an act outside " +
+    "this machine needs the human's own answer, so the default takes the first option that is not " +
+    "`external` instead, and you must not then do the external act anyway. A `danger`, `multi` or " +
+    "free-text question, one with no recommendation, or one whose every option is `external`, waits " +
+    "for the human.\n\n" +
     "WHEN THE HUMAN WRITES INSTEAD OF ANSWERING, THE MESSAGE SETS YOUR OPEN QUESTIONS ASIDE, AND YOUR " +
     "NEXT REST WITHDRAWS THEM. A set-aside question no longer holds your thread: it is not your sign-off, " +
     "does not block `done`, and does not follow you to your next handoff; its card stays answerable only " +
