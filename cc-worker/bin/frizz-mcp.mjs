@@ -70,6 +70,8 @@ const SPAWN_THREAD = {
     "spawned more, and three descendants independently rediscovered the same root cause over twenty hours. " +
     "Spawn only when the work genuinely cannot ride on your own card: a different repo, a different long-lived " +
     "runtime, an effort that must outlive yours. Never spawn merely to clear your own `done` fence. " +
+    "Work in a DIFFERENT REPO belongs in THAT repo's project: name it with `project`, or the thread lands on " +
+    "your board, out of sight of anyone working that repo. " +
     "You MUST deliberately choose `model` and `effort` to match the NEW thread's task complexity — they are " +
     "required, there is NO default. Do not reflexively pick the cheapest; a hard task on a weak model/effort " +
     "wastes the whole thread.",
@@ -105,6 +107,16 @@ const SPAWN_THREAD = {
         type: "string",
         enum: ["claude", "codex"],
         description: "Optional agent backend (default `claude`). If `codex`, `model` must be a codex model id.",
+      },
+      project: {
+        type: "string",
+        description:
+          "WHICH PROJECT the new thread starts in — the slug the board shows it under (`arktype`, `frizz`, " +
+          "`home`), its name, or its checkout path (`~/arktype`). Omitted ⇒ YOUR project. The thread runs in " +
+          "that project's checkout and shows on that project's board, so set it whenever the work lives in a " +
+          "different repo than yours — from the Home project above all, which holds no repo of its own. A " +
+          "prompt that names another open project's checkout by path (`~/arktype/…`) with no `project` is " +
+          "refused, and the refusal lists every open project.",
       },
       title: { type: "string", description: "Optional name for the new thread: one or two SHORT words naming its subject — its camelCase handle (\"Shell budgets\" → @shellBudgets) at most 16 characters — distinct from the project's other open threads. A longer one is ignored and frizz names the thread from the prompt instead." },
       spinoff: {
@@ -1669,10 +1681,11 @@ function rpcPath(procedure) {
 /**
  * WHICH PROJECT WE ACT ON — always the one this worker is actually running in.
  *
- * There is deliberately no tool parameter for it and no way to name another project: the id comes from
- * the server's stamp, or failing that from the tree we are standing in (`<root>/.frizz/.id`, the same
- * file project-root.ts treats as identity). Spawning a thread onto somebody else's board is therefore
- * not something a model can express, rather than something it is asked not to do.
+ * There is deliberately no tool parameter for it: the id comes from the server's stamp, or failing that
+ * from the tree we are standing in (`<root>/.frizz/.id`, the same file project-root.ts treats as
+ * identity). `spawn_thread`'s `project` argument does not change it either — the call still goes to OUR
+ * project, which routes the dispatch to the named one (router spawnTarget), so the choice is checked
+ * against the projects Frizz actually has open rather than trusted from a path.
  *
  * The walk-up is what makes this work for a worker spawned by a server that predates the stamp, and it
  * is the honest source anyway: a worker's project is wherever its cwd is, and that cannot go stale.
@@ -1709,11 +1722,18 @@ async function spawnThread(args) {
   const body = { prompt, model, effort }
   if (typeof args.title === "string" && args.title.trim()) body.title = args.title.trim()
   if (args.backend === "claude" || args.backend === "codex") body.backend = args.backend
+  if (typeof args.project === "string" && args.project.trim()) body.project = args.project.trim()
   // A spinoff names the request it fulfils, and the CALLER — read from our own identity, never from the
   // arguments — so the server can refuse a request that belongs to another thread.
   if (typeof args.spinoff === "string" && args.spinoff.trim()) {
     body.spinoff = args.spinoff.trim()
     body.spinoffFrom = threadSlug()
+  } else {
+    // The caller, from our own identity: it marks this as a WORKER's dispatch, whose prompt the server
+    // checks for another project's checkout when no `project` was named (server spawn-project.ts). A
+    // spinoff's project was the human's pick, so it carries none.
+    const caller = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
+    if (caller) body.spawnedFrom = caller
   }
 
   const payload = await postToFrizz("dispatch", rpcPath("dispatch"), body)
@@ -1739,10 +1759,14 @@ async function spawnThread(args) {
     )
   }
   const label = typeof body.title === "string" ? body.title : slug
+  // Started in ANOTHER project (`project`): its board, so the link carries that project's prefix — a bare
+  // `/thread/…` resolves against this one, where the thread is not.
+  const project = typeof payload?.result?.project === "string" ? payload.result.project : undefined
+  const href = project ? `/project/${encodeURIComponent(project)}/thread/${slug}` : `/thread/${slug}`
   return (
-    `${spawned} It is now on the board driving independently — it reports ` +
+    `${spawned} It is now on the ${project ? `\`${project}\` project's ` : ""}board driving independently — it reports ` +
     `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n` +
-    `Paste this link to let the human open it in the drawer:\n\n[${label}](/thread/${slug})`
+    `Paste this link to let the human open it in the drawer:\n\n[${label}](${href})`
   )
 }
 

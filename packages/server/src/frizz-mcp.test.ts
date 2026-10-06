@@ -213,14 +213,15 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
     req.on("end", () => {
       seen.push({ url: req.url ?? "", body: JSON.parse(body) })
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
+      const asked = JSON.parse(body) as { project?: string }
+      res.end(JSON.stringify({ result: { slug: "spawned-child", ...(asked.project ? { project: asked.project } : {}) } }))
     })
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD: "", FRIZZ_THREAD_SLUG: "caller" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -234,7 +235,21 @@ test("`spawn_thread` POSTs the real dispatch RPC and returns the thread's drawer
     assert.equal(call.result.isError, undefined)
     assert.match(call.result.content[0].text, /\[Child\]\(\/thread\/spawned-child\)/)
     assert.equal(SPAWN_THREAD_RESULT_RE.exec(call.result.content[0].text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
-    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child" } }])
+    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child", spawnedFrom: "caller" } }])
+
+    // Another project: the choice rides to OUR project's RPC (which routes it), and the link carries the
+    // target's prefix, since a bare `/thread/…` resolves against the caller's project.
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 4,
+      method: "tools/call",
+      params: { name: "spawn_thread", arguments: { prompt: "fix the docs", model: "sonnet", effort: "medium", title: "Docs", project: " arktype " } },
+    })
+    const there = await rpc.next(4)
+    assert.equal(there.result.isError, undefined)
+    assert.match(there.result.content[0].text, /on the `arktype` project's board/)
+    assert.match(there.result.content[0].text, /\[Docs\]\(\/project\/arktype\/thread\/spawned-child\)/)
+    assert.deepEqual(seen[1], { url: "/_frizz/rpc/dispatch", body: { prompt: "fix the docs", model: "sonnet", effort: "medium", title: "Docs", project: "arktype", spawnedFrom: "caller" } })
 
     // model/effort stay REQUIRED server-side, not only in the schema — a lenient client must not be
     // able to skip the deliberate choice.

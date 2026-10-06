@@ -5023,6 +5023,14 @@ export const DispatchInput = z.object({
   // one started before the rename (2026-09-29) still sends these; the router reads either.
   spinOff: z.string().regex(SPINOFF_ID_RE).optional(),
   spinOffFrom: ThreadSlug.optional(),
+  // `spawn_thread`'s choice of project (router spawnTarget, server spawn-project.ts): a slug, name, id or
+  // checkout path of a project Frizz has open. Omitted ⇒ the project this dispatch was addressed to.
+  project: z.string().min(1).optional(),
+  // The thread calling `spawn_thread`, from the shim's own identity. Its presence marks a WORKER's
+  // dispatch, whose prompt is checked for another project's checkout when `project` is omitted; the
+  // board's own dispatch never sets it, so what the human types is never second-guessed. A plain string:
+  // only its presence is read, and a caller id that is not a slug must not refuse the whole spawn.
+  spawnedFrom: z.string().optional(),
 })
 export type DispatchInput = z.infer<typeof DispatchInput>
 

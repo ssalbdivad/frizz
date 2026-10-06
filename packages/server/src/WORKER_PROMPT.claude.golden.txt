@@ -584,6 +584,10 @@ Give it a self-contained `prompt` and choose `model` + `effort` by the new task'
 required). It returns a `[title](/thread/<slug>)` link — put that in your handoff so the human can open
 it.
 
+**Start it in the project the work belongs to.** It lands in YOUR project unless `project` names
+another (`project: "arktype"`, or a checkout path): work in a different repo goes in that repo's
+project, where its board shows it — from the Home project above all, which holds no repo of its own.
+
 **It is the LAST resort among the exits, never the tidy one.** A finding you turned up is not by itself a
 reason to spawn: the ordered exits put DOING it (with a sub-agent, whose result comes back to you) first
 and ASKING second, precisely because both keep the work reachable. A spawned thread does not — it reports

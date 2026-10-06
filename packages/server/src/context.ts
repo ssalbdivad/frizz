@@ -225,6 +225,13 @@ export interface AppContext {
    */
   activeTenants?: () => ReadonlyArray<{ project: Project; board: BoardManager; ctx?: AppContext }>
   /**
+   * Open ONE registered project (or the Home workspace) by id and answer its context — the same activation
+   * its first request would trigger. For `spawn_thread` naming a project this process has not opened
+   * (router spawnTarget). Undefined for an unknown id or a project that will not open; absent under a
+   * test context or a one-project server.
+   */
+  openProject?: (projectId: string) => Promise<AppContext | undefined>
+  /**
    * Take ONE project apart while every other project keeps serving — the resource half of deleting a
    * project (router `projectRemove`). The registry half is a machine-level index file the router
    * writes itself, which is why the two are split here rather than done in one place.
@@ -329,6 +336,8 @@ export interface ContextOptions {
   database?: Database
   /** See AppContext.activeTenants — supplied by the server, which owns the tenant map. */
   activeTenants?: AppContext["activeTenants"]
+  /** See AppContext.openProject — supplied by the server, which owns the tenant map. */
+  openProject?: AppContext["openProject"]
   /** See AppContext.teardownProject — supplied by the server, which owns the tenant map. */
   teardownProject?: AppContext["teardownProject"]
   /** See AppContext.launchProjectId — supplied by the server, which knows which project launched it. */
@@ -1351,6 +1360,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     setDispatchPreference: (update, codexModels) =>
       setDispatchPreference(storage, getSettings(storage, home), home, update, codexModels),
     activeTenants: opts.activeTenants,
+    openProject: opts.openProject,
     teardownProject: opts.teardownProject,
     reopenHomeWorkspace: opts.reopenHomeWorkspace,
     launchProjectId: opts.launchProjectId,
