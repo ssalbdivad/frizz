@@ -238,3 +238,22 @@ hour`, in a question about a cron job). Strength: one run per text, one time of 
 grammar's author, so an upper bound on agreement; Sonnet's run-to-run variance was not measured. Both readers also
 read mid-text dispatches as schedules in the mode (`list every Friday release from the changelog`); the box keeps
 those dark, and the mode is entered only on purpose.
+
+**The temporal residue (fix round 3, 2026-10-06; grammar v4).** A third break-it pass found nine classes of exact
+readings that were silently wrong. Most were a word of time away from the phrase: a zone at the end of the text, a
+bound a sentence later, a count before it. No list of the words beside a phrase reaches those, so an exact reading
+now passes one more gate. If any word of a closed class of time words is left in the text it would save as the task,
+the reading is a cue. It keeps its core only when those words can only narrow it (`plans/schedule-live-reading.md`
+§3.1, fix round 3). *Measured*, v3 against v4, both scopes:
+
+| Set | Exact in v3 | Now a cue | Offers in the box | Exact offers now cue offers |
+|---|---|---|---|---|
+| Probe corpus, 133 texts | 172 | 6, 4 of them with the core | 98 → 98 | 3 |
+| Pinned cases, 297 texts | 339 | 6 | 205 → 205 | 3 |
+| 26 realistic requests | 39 | 2 | 25 → 25 | 1 |
+| History, 1,296 prompts | 4, all mid-text | 2 | 0 → 0 | 0 |
+
+- No offer went dark.
+- Every demotion in the corpora is unnecessary: a word of time that is the task's own (`… summarize overnight Sentry
+  errors`, `… what shipped this week`, `… what the agents did today`). Each costs one model read in the mode.
+- Round 3's majors: 0 of 124 reads (both scopes) are exact and wrong, against 114 in v3.

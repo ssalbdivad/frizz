@@ -302,6 +302,16 @@ by e2e case 27.
 a pause past the 800ms idle, where the screen rightly shows what the words say so far; pauses kept under the idle
 give at most 3; steady 120ms typing at most 3.
 
+*As built (fix round 3, midword-publish-at-hesitation):* a word can be finished and still be the start of another:
+one 400ms pause inside `every mon|th` published Monday and then the month, and inside `every week|day … starting
+Oct 12` a Monday and then the weekdays, 5 changes. At a REST the box now also holds when the caret's word is a strict
+prefix of a schedule word that reads differently (`scheduleWordPrefix`, shared: `mon`, `week`, `Wedn`, `even`,
+`morn`), but not an abbreviation of the one word it can finish as (`Thurs`, `Wed`, `Sat`), nor a plural or an
+adverb of a word (`Monday|s`, `month|ly`). The idle still publishes. And a cue's unread words can lie past its span
+(§3.1, fix round 3), so "the reading reaches the caret's word" counts them. Pinned in `scheduleOffer.test.ts`: with
+the pause, each of round 3's four texts shows exactly what steady typing shows (red on the old policy:
+`every mon|th` published Monday).
+
 ### 2.5 Dark (pinned as negative tests, §15.1)
 - **Pure events:** `every time …`, `each time …`, `whenever …`, `after every …`, `when the … (passes|fails|
   lands|merges)`, and `each|every <non-calendar noun>` (`each PR`, `every file`). The grammar returns `event`.
@@ -340,6 +350,10 @@ prompts under `anywhere` read 5 exact (all mid-text: `each morning` ×2, `in 4 m
 16 cues, 54 events and 3 presences. Mean 0.18ms a prompt. The two pinned residuals are not in his history; they
 stay pinned in the corpus.
 
+*As built (fix round 3), measured at v4:* still **0 offers** of 1,296 (0.09ms a prompt). The temporal residue (§3.1)
+turned 2 of the mode's mid-text exact readings into cues (`… in 4 minutes … since yesterday`, `while this is
+working … for daily tasks …`); neither was ever offered.
+
 ---
 
 ## 3. The grammar: `packages/shared/src/schedule-phrase.ts`
@@ -352,14 +366,14 @@ ambiguous kind.
 
 ### 3.1 Contract
 ```ts
-export const SCHEDULE_GRAMMAR_VERSION = 3   // 1 until fix round 1, 2 until fix round 2 (both 2026-10-06)
+export const SCHEDULE_GRAMMAR_VERSION = 4   // 1, 2 and 3 until fix rounds 1, 2 and 3 (all 2026-10-06)
 
 export type Span = { start: number; end: number }                 // into the string given
 export type Edge = "open" | "close" | "inside" | "field"
 export type Assumed =
   | { part: "time"; shown: string }                                // "9am" — nothing typed, or "morning" → 9am
   | { part: "meridiem"; shown: string; other: string; span: Span } // "at 3" → shown "3pm", other "3am"
-  | { part: "day"; shown: string }                                 // "weekly" → "Monday"
+  | { part: "day"; shown: string; tip?: string; shift?: number }  // "weekly" → "Monday"; "next Tuesday" (fix round 3)
 
 export type PhraseReading =
   | { kind: "exact"; edge: Edge; span: Span; phrase: string; rrule: string; dtstart: string
@@ -502,6 +516,117 @@ measure: 1,358 silent prefixes in 3,000 reads, 404 offered in the box). Pinned i
   York), so a zone cue carries no core either — round 1's touching zones (`Berlin time`) kept one and would have
   refused the right answer; the clock's own zone (`9 PT`) never had one.
 
+*As built (fix round 3, 2026-10-06): `SCHEDULE_GRAMMAR_VERSION = 4`.* A third break-it pass found nine more classes of
+exact-and-wrong (21 findings). Most were a word that changes WHEN sitting AWAY from the phrase: a zone at the end
+(`every Monday at 9am triage new issues (PT)`), a bound later in the sentence (`… check the deploy for the next 2
+hours`, `… Then stop.`), a count before it (`check the queue twice every Monday`), a time of day or a day it read past
+(`every Friday lunchtime`, `every month end`). Rounds 1 and 2 each closed a list of the words BESIDE a phrase, and no
+such list reaches these. Pinned in `schedule-phrase.test.ts` § "the break-it battery, round 3" (`ROUND3_MAJORS`,
+`ROUND3_CORES`, `RESIDUE_WORDS` in the corpus); each test there was red on v3.
+- **The temporal residue.** An exact reading passes one more gate. The grammar scans the text it would save as the
+  task: everything but the span, and the runs it never reads (quotes, code, a `/command`, excluded runs). It looks
+  for a closed class of words of time (`RESIDUE_RULES`, plus capitals for zone abbreviations, `Sat`, `May`):
+  - clocks and times of day;
+  - day and month names, relative days, and the ordinals that name a day;
+  - durations, and counts of a unit;
+  - frequencies;
+  - bounds, conditions, exclusions and starts;
+  - zones.
+
+  Any one of them makes the reading a cue. `unread` is the first such word, plus the words a governor reaches. `why`
+  is `zone`, `compound` (a frequency), `condition` (a condition, an exclusion or a window) or `leftover`. The adjacency
+  classes above still decide the span; this decides whether the span is all of WHEN. It does not run under `field`,
+  where every leftover word is already a cue, nor on a `spacing` reading.
+- **A core stays only when every word left can only narrow it** (`residueNarrows`), because a core that the right
+  answer adds to is the disagree state (§4.3). These keep it:
+  - a word that only narrows: `unless`, `while`, `during`, `temporarily`, holidays, business hours;
+  - a governor (`until`, `through`, `except`, `not`, `starting`, `from`, `for`, `between`), and what it reaches: the
+    days, periods, spans and clocks at most three words on, in its sentence;
+  - a period: `this week`, `next quarter`, `the past 24 hours`;
+  - a day or a span followed by `only` or `off`;
+  - one more word that constrains nothing `readingsConsistent` compares. That is one clock or time of day over an
+    ASSUMED time (`every day check the queue around 2`). `overnight` and `midnight` do not count over a core with
+    days, since they can be the next day's. Or one weekday over an assumed day (`every week …, due Friday`).
+
+  Anything else may add or move a run, and then the cue has no core. That covers a zone, a second frequency, an
+  ungoverned day (`today`, `that evening`), and a clock over a stated one. The same test now runs over every core the
+  older checks keep. Round 3's F8 was one of those: `Tuesday and Thursday afternoons` kept a core without Thursday,
+  which refused the right answer.
+- **Exempt**, because the words name a thing or are code:
+  - a time word in an adjective's slot: `the weekly digest`, `a 30-minute retro`, `the overnight Sentry errors`. At
+    the end of the text its noun is still being typed, so `… check the overnight` holds and does not flicker;
+  - a possessive: `yesterday's merged PRs`;
+  - words glued to code: `daily.yml`, `docs/weekly-report.md`, `cron_daily`, `$EOD`. The older checks that look
+    anywhere skip these now too, so `every day at 9am fix daily.yml` is exact, where v3 read a second frequency.
+- **A cue's unread words may lie outside its span.** A cue's span used to stretch from the phrase to its unread
+  words. With words of time anywhere, that cut the task away: `every Monday at 9am triage new issues (PT)` cut to
+  nothing, so Each run was empty and the mode said there was nothing to do. Now, when letters or digits of the task
+  lie between them, the span is the phrase alone and `unread` lies past it. The box dashes both, and the ledge
+  quotes both (`“every Monday at 9am”, “PT”`). This differs from the contract above, where the span holds the unread
+  words.
+- **The scan's cost.** One alternation of every rule took 19ms over 20k characters. Instead, the text is walked word
+  by word, and a rule is tried only at a word that can start one of its words of time. The walk stops at the word
+  that settles the core, and costs about 0.8ms. A test pins the walk to every rule tried at every word, over 800
+  texts.
+- *Measured*, v3 against v4, both scopes, each text at its corpus's clock (the `/tmp` harness is described in the
+  commit):
+
+  | Set | Exact in v3 | Now a cue | Offers in the box | Exact offers now cue offers |
+  |---|---|---|---|---|
+  | Probe corpus, 133 texts | 172 | 6, 4 of them with the core | 98 → 98 | 3 |
+  | Pinned cases, 297 texts | 339 | the same 6 | 205 → 205 | 3 |
+  | 26 realistic requests | 39 | 2, both with the core | 25 → 25 | 1 |
+  | His history, 1,296 prompts | 4, all mid-text | 2 | 0 → 0 | 0 |
+
+  - No offer went dark.
+  - Two realistic cues lost their core: `… before the weekend` (unnecessary) and `… after standup` (right, since
+    standup can move the run).
+  - **Unnecessary demotions.** Each is a word of time that belongs to the task:
+    - `every morning summarize overnight Sentry errors` (§3.3 row 3; with `the overnight` it is exact);
+    - `Every Friday at 4pm, write a summary of what shipped this week.`;
+    - `every evening at 6 summarize what the agents did today`, which has no core, because `today` can add a run.
+
+    In the mode each costs one model read.
+  - **Round 3's nine major classes:** 0 of 124 reads (62 texts, both scopes) are exact and wrong; v3 had 114. 109 of the 114
+    reads the findings named are now cues. Of the other 5, 3 are exact and right (`every month on the fifteenth`,
+    `on the fifteenth of every month`) and 2 read `none` in the mode (`the 2nd-to-last weekday …`, which the model
+    reads). F8: no core refuses the faithful reading.
+  - **Cores over the qualifier battery** (219 qualifiers × 6 phrases × 5 placements × 2 scopes): 574 of v3's 5,122
+    cue cores are dropped.
+    - 331 sit beside words that add or move runs. In 87 of those, v3's core was the EXCLUDED day itself: `… every
+      day at 9am but not on Fridays` offered every Friday.
+    - 243 are conservative: `every other week`, `on alternating weekdays`, `every few days`, `ahead of each sprint
+      review`.
+- **Minor findings, fixed:**
+  - A second clock that repeats one (`at 7 and 7`, `at 6, 12 and 6`) is a vague cue.
+  - Spelled ordinals (`fifteenth`, `twenty-first`) are days of the month, or a cue (`every tenth day`), never an
+    event.
+  - A day that the words name two ways is ASSUMED, so it dims, and its tooltip says which day it took. `Assumed`
+    `day` carries `tip` and `shift`, the days ahead where the other reading lies, and `readingsConsistent`
+    accepts a model reading moved by `shift`:
+    - `next Tuesday` said on a Monday is tomorrow: `“Next Tuesday” reads as Tue Oct 6. Type “Oct 13” if you meant
+      the one after.` As a bound or a start it is left unread;
+    - `tonight at 2` said after midnight is the night under way: `“Tonight” said after midnight reads as the night
+      now under way: Tue Oct 6. Say “tomorrow night” for the next one.`;
+    - `every Friday at midnight`: `“Friday at midnight” reads as the start of Friday. Say “Saturday at midnight” if
+      you meant the end of it.`
+  - A file name (`daily.yml is failing`, `Mondays.md needs …`) is code.
+  - When the phrase is the subject of a statement, the open edge offers nothing (`statesAfter`). That covers a
+    subject and its verb after it (`Quarterly OKRs are due`, `Weeknight deploys keep failing`, `Every 30 minutes,
+    pods restart.`), and a name, `I` or `a` (`Every Monday I get a flood of …`, `a cron job wipes /tmp`).
+  - These are quotes too: `„…“`, guillemets either way, `‚…‘`, the CJK corner brackets and single curly quotes.
+  - `every quarter hour` is every 15 minutes, not the quarterly copy.
+  - These hedges make a cue: `9am latest`, `or later`, `± 15m`, `randomly`, `nearly`, `almost` and `practically`.
+  - Every read is linear (§15.1).
+- **Still open:** `every weekend` still reads both days (F13, debatable). Close-edge statements (`the flaky test
+  fails every Monday at 9am`, F16) are still offered; they are the known residual class (§2.6).
+- **Deviations:**
+  - A close-edge exact reading that the residue makes a cue is no longer offered, because cues are offered at the
+    open edge only (§2.3). For example, `triage new issues for the next two sprints every Monday at 9am` was offered
+    exact, with its bound silently dropped. None of the corpora's offers went dark this way.
+  - `while`, `whilst`, `during`, `throughout` and `temporarily` are narrowing words anywhere in the text.
+  - The residue adds no field to the contract.
+
 ### 3.2 Phrase families (exact)
 | | Family | Examples | Reading |
 |---|---|---|---|
@@ -561,7 +686,7 @@ dim (assumed).
 |---|---|---|---|---|---|
 | 1 | `every Monday at 9am triage new issues` | open | exact | `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0` · 2026-10-12T09:00 | `Every Monday at 9am · next Mon Oct 12, in 6d` · each run `triage new issues` |
 | 2 | `weekdays at 8:30 summarize PRs` | open | exact | `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=30` · 2026-10-06T08:30 | `Every weekday at 8:30am · next Tue Oct 6, in 17h` |
-| 3 | `every morning summarize overnight Sentry errors` | open | exact | `FREQ=DAILY;BYHOUR=9;BYMINUTE=0` · 2026-10-06T09:00 | `Every day at` **`9am`** `· next Tue Oct 6, in 18h` (tooltip: `“Morning” reads as 9am. Add a time to change it.`) |
+| 3 | `every morning summarize overnight Sentry errors` | open | cue (leftover `overnight`), with a core — *as built (fix round 3)*; exact before | core `FREQ=DAILY;BYHOUR=9;BYMINUTE=0` · 2026-10-06T09:00 | `Every day at` **`9am`**`, “overnight”`. After Tab the model reads it. One time of day over an assumed time keeps the core (§3.1, fix round 3). `every morning summarize the overnight Sentry errors` is still exact, with the tooltip `“Morning” reads as 9am. Add a time to change it.` |
 | 4 | `Every Thursday at 3 prep the planning notes` | open | exact | `FREQ=WEEKLY;BYDAY=TH;BYHOUR=15;BYMINUTE=0` · 2026-10-08T15:00 | `Every Thursday at 3`**`pm`** `· next Thu Oct 8, in 3d` (tooltip: `Read “3” as 3pm. Type “3am” if you meant morning.`) |
 | 5 | `every other Friday at 4pm write the changelog` | open | exact | `FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=16;BYMINUTE=0` · 2026-10-09T16:00 | `Every other week on Friday at 4pm · next Fri Oct 9, in 4d` |
 | 6 | `every 2 hours on weekdays from 9 to 5 check CI` | open | exact | `FREQ=HOURLY;INTERVAL=2;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9,11,13,15,17;BYMINUTE=0` · 2026-10-05T09:00 | `Every 2 hours from 9am to 5pm on weekdays · next Mon Oct 5, 3pm, in 28m` (more than one run a day, so `next` carries the time) |
@@ -721,6 +846,12 @@ A condition, COUNT or UNTIL can only remove runs, so a faithful reading always p
 second rule, a count) or move a clock the human stated carries no `core`, so a faithful answer is never the
 disagree state (§3.1 as built, "cores").
 
+*As built (fix round 3):* one test now decides every core, whichever check made the cue: a core stays only when every
+word of time left in the text can only narrow it (`residueNarrows`, §3.1 fix round 3). An assumed `day` with a `shift`
+(`next Tuesday`, `tonight` after midnight, `Friday at midnight`) also accepts the model's runs moved by that shift,
+since the other reading is exactly that far away: the model's Oct 13 for `next Tuesday`, or Saturday 00:00 for
+`Friday at midnight`.
+
 *As built (fix round 1):*
 - **(b) holds an assumed day to the core's frequency** (X5). With both a day and a time assumed (`every week unless
   it's a holiday`), the check returned true for any rule: an hourly answer passed and created 24 runs a day. Now an
@@ -850,6 +981,17 @@ title for a CUE is `Schedule this (Tab)` (a cue has no rule to name).
 - With a core: `{Core describe}, “{unread words}”`, the quoted words at `text-muted-70` and the assumed `9am` dim.
 - With no core: `Looks like a schedule: “twice a week”`.
 - No `next` date: a condition may skip runs, and a vague count has none yet.
+
+*As built (fix round 3):* a cue's unread words can lie past the task's words (§3.1, fix round 3).
+- The box dashes them where they are.
+- With no core, it also dashes the phrase.
+- The ledge quotes both: `Looks like a schedule: “every Monday at 9am”, “PT”`.
+- With a core, the ledge reads as before: `Every Monday at 9am, “for the next two sprints”`.
+
+*Driven* on the fixture page (`schedule-live-fixture.html` over a static vite, headless, 900px, dsf 2). The box
+showed these marks and ledges for `… triage new issues (PT)`, `… for the next two sprints` and `… summarize
+overnight Sentry errors`, with no page errors. At that width the ledge's one line ellipsizes the second quote
+(`“every Monday at 9am”,…`), while the dashed `PT` stays visible in the box.
 
 ### 5.5 S3 — offer, ambiguous (open edge only)
 ```
@@ -1599,6 +1741,27 @@ prompts get an offer, or more than 0.25% get an open-edge exact offer. Print the
 round-1 grammar first; the no-silent-prefix property over `ROUND2_QUALIFIERS` (the reviewer's 56, by class),
 `ROUND2_HELD_OUT` (the two held-out sets) and `SECOND_SENTENCES`, in the five placements, both scopes and the
 field. `scheduleDraftState.test.ts` pins the carry. The history gate re-ran at v3: 0 offers in 1,296 prompts.
+
+*As built (fix round 3):* § "the break-it battery, round 3" adds twelve tests. Each was red on v3; the grammar was
+written first and the tests after, and each was then run against v3 with stubs for the two new exports. They cover:
+- round 3's majors, none exact in either scope;
+- the F8 cores, each passing its faithful reading;
+- which words of time keep a core;
+- the far span and its cut;
+- the exemptions;
+- the residue walk against every rule tried at every word, with `RESIDUE_WORDS` read as their own kinds;
+- each of the minor findings.
+
+The span property allows unread words past the task's words. Three probe items are overridden (exact 80 → 77) and
+three pins changed (§3.1, fix round 3). **Performance**, F20: three reads were quadratic in a run of one character:
+- the field's trailing-run regex: 1.4s for `every Monday at 9am` + 20k spaces + `x`;
+- a conjoined rule's `\s*,?\s*`: 836ms;
+- a zone offset's `\s*` after the leading run: 306ms.
+
+A new test reads 18 such shapes at 20k characters in each scope, warm median under 10ms. Measured after the fix, at
+a load average of 2–14: at most 5.7ms, and 80k characters cost about 3× what 20k do. The cold first read in a
+process is about 30–70ms, as before. `scheduleOffer.test.ts` pins the prefix hold (§2.4). History gate at v4: 0
+offers.
 
 ### 15.2 Real browser e2e
 **`components/composerScheduleLive.e2e.test.ts`** follows the pattern of `composerMentionTypeahead.e2e.test.ts`:
