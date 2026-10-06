@@ -122,6 +122,18 @@ These come from design 1 and are kept:
    text back, but leaves that newer mode ON (`draftAfterUndo`, `scheduleIntent.ts`). Undo is not one of the acts
    I-3 lets end a mode, and ending it here left the merged text one Enter from a dispatch. In the mode the merged
    text reads as a compound cue, so nothing exact is offered from it.
+   *As built (fix round 3, undo-into-mode-recreates-undone): X1 is reversed, and this item's decision holds in
+   every case.* X1's premise was false whenever the box held no phrase of its own: the undone words go FIRST
+   (`mergeIntoDraft`), so a mode kept on over an empty box (⌘⌥↵, M5) or over plain words the model had refused
+   (M4) read the merged text `exact` as the undone rule, the panel came back ready, and the next Enter created it
+   again — with the new words folded into its prompt (driven on the fixture: create 2, delete 1). Now
+   `draftAfterUndo(preAccept)` writes `{on: false, dismissed: preAccept}` whatever record it finds, so Undo is one
+   of the acts that END the mode (I-3). The cost, taken knowingly: Tab on the next schedule and then Undo of the
+   last one ends the new mode too; the merged text's offer is on screen with `↵ Start now`, and Tab sets the mode
+   again. Two more cases the same rule now covers: Undo waits until no create on that draft is in flight
+   (`afterDraftCreates`, I-4), so the next schedule's words have left before the undone ones come back; and
+   after a re-aim the words go back to the draft the schedule was created from, not the box on screen, whose own
+   text and mode are left alone (e2e 33).
 2. **Dismissal key.** Judge 1 wanted it keyed by rule shape. Judges 2 and 3 wanted it per edge. **Per edge**, and
    it re-arms only when that edge holds no gate word. Once the human has said "not a schedule", changing Monday to
    Tuesday is not new evidence. The glyph stays lit, so the way back is one key.
@@ -664,6 +676,19 @@ Found while computing §3.3; each one is pinned by a test.
     boundaries AND the word right before and right after it are the ones it had when read. `locatePhrase` alone
     still finds `every Monday unless it's a holiday` inside `… unless it's a holiday or a weekend post …`, whose
     meaning changed; the neighbour check drops it. Step 4 must pass the text the MODEL read as `read.text`.
+  - *Fix round 3 (relocate-blind-behind-punctuation):* the neighbour was looked for across WHITESPACE only, so
+    behind a comma both sides read "" whatever was typed there: `every day unless it's a holiday, post the
+    digest` → `…holiday, or a weekend, post the digest` kept the reading, sent no second read, and created the
+    schedule with the old condition and `or a weekend,` in the task (driven on the fixture). "Touches" is now
+    exact: **an edit touches the phrase when it changes any character of the phrase, the punctuation between
+    the phrase and the nearest word on either side (whitespace aside; a run of line breaks counts as one), or
+    that nearest word itself — on a side where a word stands now or stood when it was read.** Everything past
+    that word is the task's. So a new sentence right after it (`. Skip weekends too.`), a qualifier before it
+    (`Except weekends, …`) and words after a comma drop it; an edit inside the task (`post the weekly digest`,
+    `… to #eng`, a sentence after the task's first word) keeps it; and punctuation with no word after it on
+    either side (`…holiday.`, or `…holiday,` before its next word is typed) keeps it. It cannot tell a greeting
+    from a qualifier (`Hey, every day …` drops it), and a key typed into the task's FIRST word drops it: each
+    costs one more read, never a wrong schedule. Pinned both ways in `scheduleModelRead.test.ts`, and e2e 31.
   - The queued follow-up is only the latest text, and asking for the text already out drops it; `cancelQueued()`
     is how a box says the grammar reads its words now.
 - **Latency:** *measured* on this box (n=15, sequential, one time of day), Sonnet's full `interpret()` took a
@@ -934,7 +959,8 @@ The offer re-derives from the text, so `⇥ Schedule  ↵ Start now` is back on 
 the caret at the end.
 
 *As built (fix round 1, X1):* a mode the human entered after the create, for new text, stays on through Undo
-(§1.3.1); the dismissals are restored only when the mode is off. And the panel folding away after any exit is
+(§1.3.1); the dismissals are restored only when the mode is off. *Reversed in fix round 3* (§1.3.1 as built):
+the mode is off after Undo in every case, with the pre-accept dismissals. And the panel folding away after any exit is
 `inert` for its 160ms linger (X3): it was mounted with the handlers of the state it was drawn in, so a press that met
 its Create just after Esc created the schedule.
 
@@ -1042,6 +1068,18 @@ at the next publish point. It changes no text, so the policy never re-ran on it,
 only while the 800ms close-edge idle was still armed; a tap on the phone's `×` seconds after the last key left
 the row up.
 
+*As built (fix round 3, dialog-hidden-box-rearms-dismissal):* "a publish point" is **the editing box's own**. Every
+box on the draft steps the policy, and a box that did not make a change (the page box under the `c` dialog, a
+box that sees an Undo or a clear) takes it as a wholesale change, which is a publish point for its screen. Under
+the dialog, a typo fixed mid-word in the gate word (`every` → `ever` → `every`, which the dialog itself never
+published) read to the hidden page box as the phrase deleted, and it wrote the re-arm back to the shared draft:
+the dismissed offer came back in the dialog. The policy now tracks whether each change was the box's own
+(`OfferState.own`/`lastOwn`, an `external` flag on watched edits and on a mode flip arriving through the draft),
+and `dismissalsNow` re-arms only at a publish point of the box's own; a timer inherits the change that armed it.
+A box that only watched writes nothing back. Pinned in `scheduleOffer.test.ts` and e2e 32 (its control: the
+phrase deleted in the dialog itself still re-arms). Not changed: a REST (250ms) inside a word in the box being
+typed in is still a publish point for the re-arm, as §2.4 defines it, so pausing on `ever` there re-arms.
+
 ---
 
 ## 9. Safety invariants (each one is a test, §15)
@@ -1056,6 +1094,8 @@ the row up.
   - **Off:** Esc, ⌘⌥↵, the glyph, `Cancel`, a successful create, or a draft clear.
   - No reading change, timer, remount or model answer writes `mode.on`. A grep-level test asserts that
     `scheduleOffer.ts` imports no mode setter.
+  - *As built (fix round 3):* **Undo** is an off act too: it restores the pre-accept state, mode off, whatever
+    it finds (§1.3.1 as built).
 - **I-4. The mode is part of the draft.**
   - **Where:** `{v:1, on, dismissed}` lives in the existing `DraftStore` under
     `draftKey.dispatchSchedule(projectDir)`, the `dispatchProfile` precedent at `drafts.ts:106`.
@@ -1070,6 +1110,19 @@ the row up.
     back there straight into the mode. `carryDispatchDraft` (`scheduleDraftState.ts`) is now the one way the
     draft moves: the mode and its dismissals land in the commit the text lands in (`DraftStore.setMany`),
     replacing what the target held, and leave in the same commit. Still only into an empty box.
+  - *As built (fix round 3, reaim-during-wash and undo-during-next-create):* **a create in flight holds its
+    draft**, from the Enter that sends `createSchedule` until its words leave the box (the RPC, then the 220ms
+    wash). Re-aimed inside that window, the box carried the words and their `{on:true}` to the other project,
+    the create cleared the old project's key — already empty — and the same schedule sat one Enter away over
+    there (driven: createSchedule 2); and Undo of the previous schedule merged its words ABOVE the ones being
+    created, so `onCreated` no longer found them at the start and left them in the box (the next Enter
+    dispatched both texts). `beginDraftCreate(key)` / `afterDraftCreates(key)` / `useDraftCreating(key)`
+    (`scheduleDraftState.ts`, per mode key, so every box on the draft shares it and it outlives the box that
+    pressed Enter): `carryDispatchDraft` declines while it is held (the re-aimed box opens on its own draft and
+    the words leave with their create), Undo restores only after every create on the draft has landed or
+    failed, and every box on the draft reads `creating` (a box remounted mid-create is not M1). The create job
+    carries the draft key and the `onCreated` of the Enter that made it, so a box re-aimed or unmounted since
+    still clears the right draft.
 - **I-5. Enter's meaning is always on screen.**
   - With an offer, the ledge prints `↵ Start now`.
   - In the mode, the send button shows `Repeat` and the title `Create schedule (Enter)`.
@@ -1089,6 +1142,8 @@ the row up.
   - Exact describes never start with `on the rule`.
 - **I-12. No accent before accept.** Offer marks, ledge text and the glyph hint use fg/muted tokens only.
 - **I-13. Undo restores the pre-accept state** (§5.11), and never loses text typed since.
+  *As built (fix round 3):* in every case — mode off, dismissals as before the accept — and only after any
+  create on the same draft has landed (§1.3.1 as built, I-4 as built).
 
 ---
 
@@ -1223,6 +1278,15 @@ grammar, the publish policy and the preview rendering on real use first.
   as 9am. Both pass the consistency check (the core's 9am is assumed, so only dates count), and the dim 9am
   shows the grammar's guess, but the two tiers fill an unstated time differently. A design call: carrying the
   stored time into the grammar's `field` reading would make them agree.
+- *Fix round 3 (drawer-model-raw-rrule):* **a model reading no words cover is refused here too** (I-11 for the
+  model, as the panel has had since fix round 1). Driven on a real stack before the fix: `the second and fourth
+  Monday`, answered `FREQ=MONTHLY;BYDAY=MO;BYSETPOS=2,4;…`, previewed as `Post digest · on the rule FREQ=…` with
+  Save enabled, Enter saved it, and the drawer header and the project row then read `on the rule FREQ=…`. Now
+  the preview shows the panel's copy (`That schedule is too intricate to show here. Try saying it more simply,
+  like “every Friday at 9am”.`) and no Save, and Enter shakes. The view moved to `changeWhenView` in
+  `SchedulePreview.tsx` beside `unphrasableRule` and `UNPHRASABLE_COPY`, which the panel now imports too:
+  `ScheduleDrawer.tsx` reaches a `.css` import a node test cannot load, so the refusal is pinned in
+  `SchedulePreview.test.ts`.
 
 ---
 
@@ -1647,6 +1711,28 @@ open-edge texts and 5 of the 7 close-edge ones, 26 on "the re-aimed box is still
 and no longer a todo; the same command, after `git merge main` at `efd27ce6`: **28 pass, 0 todo** (the todo had
 failed on the line before the fix, so it is its own negative control).
 
+*Fix round 3:* case **15 rewritten** (it pinned X1's kept mode; it now pins the reversal: after Undo the mode is
+off, the ledge prints `↵ Start now`, and Enter dispatches) and cases **28–33** added, one per safety finding: 28
+Undo into a mode on an empty box and over refused words (the undone schedule comes back as an offer, Enter
+dispatches, create stays 1); 29 Undo clicked while the next create is in flight (the next one's words leave, only
+the undone ones return, Enter dispatches them alone); 30 a create in flight across a re-aim+remount (the other
+project's box opens empty, no draft is left anywhere, Enter there creates nothing) and across a plain remount
+(Enter in the remounted box is not a second create); 31 a model reading through a task edit after a comma (kept,
+1 read) and then a condition continued past the comma (dropped, a 2nd read, the stored condition whole, nothing
+of it in the task); 32 the `c` dialog's dismissed offer through a typo fixed in `every` (still dismissed), with
+its control (the phrase deleted in the dialog re-arms); 33 Undo after a re-aim (back into the schedule's own
+project, mode off; the box on screen keeps its own text and mode). Each was run against the pre-fix source (HEAD
+`a833aa02`'s seven source files copied over the fixed ones, on its own static vite): 15, 28, 29, 30, 31 and 32
+failed at the asserted line; 33 passed there (the pre-fix code already restored a re-aimed Undo into its own
+project in this flow), so it is a guard, not a repro. The fixture gained `__sched.createDelayMs`: 29 and 30 act
+inside a create's flight, and against a 0ms create plus the 220ms wash they raced the machine (in a full run,
+29 clicked the next schedule's toast and 30's Enter landed after the wash). With the knob, a probe of 30's
+remount half on the pre-fix source created twice for one Enter, 3/3. Driving it also found a race the fix had
+opened: `creating` read react-query's `isPending`, which clears a task after `onError`, while the hold's
+`useSyncExternalStore` painted the refusal's line a microtask after it, so an Enter pressed as `Updated for the
+current time` appeared was swallowed (case 20 failed 2 runs in 3); `creating` is now the hold itself.
+`FRIZZ_SCHEDULE_E2E_URL=<vite> nub --test <this file>`: **34 pass, 0 fail**; web unit tests 1973/1973.
+
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
    - the schedule row and its next lazy run exist;
@@ -1730,6 +1816,24 @@ launcher and `proj-b` tenant, Tue Oct 6 2026 ~04:08–04:30), grammar 3, no page
   on; the mode key is under `proj-b` alone; Enter created one schedule through `/_frizz/proj-b/rpc/createSchedule`
   with 0 dispatches; new text back in `proj-a` starts out of the mode. The picker path was used only for the way
   back, not with the mode on.
+
+*Fix round 3, driven* on a disposable stack (no credentials, a throwaway git project, headless puppeteer, Tue Oct 6
+2026 ~05:45), every write through the real server and read back with `listSchedules`. Crafted on the wire, and
+only these: `authStatus` (with no credentials the client's sign-in gate would stop Enter before any dispatch RPC)
+and `interpretSchedule`'s answer (no model without credentials). No page errors.
+- **create → Undo → Enter** (round 3's major): Tab, Enter created `every Monday at 9am` / `triage new issues`;
+  Undo deleted it (0 stored) and left the box with the text, the ledge, `↵ Start now` and the send arrow; Enter
+  sent **1 dispatch** with the whole text (the server refused it `AUTH_REQUIRED:claude`, as a credential-less
+  stack does) and **create stayed 1**, 0 stored at the end.
+- **The condition continued past a comma:** `every day unless it's a holiday, post the digest`, Tab, the answer
+  landed; ` to #eng` at the end asked nothing (1 read, `Each run: post the digest to #eng`); `or a weekend, `
+  typed after the comma sent a 2nd read for the new text, and the stored schedule is `every day unless it's a
+  holiday, or a weekend` / condition `unless it's a holiday or a weekend` / prompt `post the digest to #eng`.
+- **Change when, an unphrasable model rule:** `the second and fourth Monday` answered
+  `FREQ=MONTHLY;BYDAY=MO;BYSETPOS=2,4;…` showed the refusal copy with Cancel and no Save; Enter pressed on those
+  words (checked at the keypress) sent 0 `updateSchedule`, and the stored rule is still `every Monday at 9am`.
+  (A first run of this probe was void: an element screenshot taken before Enter remounted the drawer and put the
+  stored words back, so its Enter pressed on unchanged words. Re-run with Enter first.)
 
 *As built (Step 5), driven* on a disposable stack (`--creds`, a throwaway git project), headless puppeteer with
 touch emulation (`isMobile`, `hasTouch`, every press a `page.tap`), dark, `America/New_York`, Tue Oct 6 2026
