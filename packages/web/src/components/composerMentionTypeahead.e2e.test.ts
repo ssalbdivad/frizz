@@ -194,8 +194,10 @@ test("an agent's @thread and @thread.child in rendered markdown are links that o
     ["@shell-budgets", "/thread/shell-budgets", "_blank"],
     ["@shell-budgets.cache-keys", "/thread/shell-budgets#shell-budgets.cache-keys", "_blank"],
     ["@ShellBudget.capAudit", "/thread/shell-budgets#ShellBudget.capAudit", "_blank"],
+    ["#arktype", "/?project=arktype", "_blank"],
+    ["#home", "/?project=home", "_blank"],
     ["@shell-budgets", "https://example.com", "_blank"],
-  ], "code, a package, an author's own link and an unknown thread are untouched")
+  ], "code, a package, an author's own link, an unknown thread and an unknown project are untouched")
   const code = await page!.$$eval("[data-agent-prose] code", (cs) => cs.map((c) => c.textContent))
   assert.deepEqual(code, ["@shell-budgets"])
   const top = () => page!.evaluate(() => (window as unknown as { __drawers: () => string[] }).__drawers().at(-1))
@@ -235,5 +237,63 @@ test("a typed @handle that names a thread is highlighted in the box; a partial o
   await page!.keyboard.up("Control")
   await page!.keyboard.type("plain again")
   assert.deepEqual(await state(), { marks: [], textHidden: false }, "the textarea draws its own text once no mention remains")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+// `#` NAMES A PROJECT (maintainer 2026-10-06: "add # syntax for referring to projects like #home and
+// #arktype that autocompletes and is styled similarly to @thread-name"): the same menu, keyboard and tint
+// as `@`, over the machine's projects (lib/projectMentions.ts), and the same link treatment once sent.
+test("`#` offers the projects, completes one, and tints it like a thread mention", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  await page!.type(BOX, "port it to #")
+  await page!.waitForSelector(MENU)
+  assert.deepEqual(await menuRows(), ["#frizz", "#home", "#arktype", "#beanemachine"], "every project but the one whose folder is gone")
+  assert.equal(await page!.$eval(MENU, (m) => m.getAttribute("aria-label")), "Projects")
+  await page!.type(BOX, "bea")
+  assert.deepEqual(await menuRows(), ["#beanemachine"])
+  await page!.keyboard.press("Escape")
+  assert.equal(await menuVisible(), false, "Escape closes it")
+  for (let i = 0; i < 3; i++) await page!.keyboard.press("Backspace")
+  await page!.keyboard.type("ark")
+  await page!.waitForSelector(MENU)
+  await page!.keyboard.press("Enter")
+  await waitForCaretAt("port it to #arktype ".length)
+  assert.equal(await boxValue(), "port it to #arktype ")
+  assert.equal(await menuVisible(), false)
+  await page!.keyboard.type("and @shell-budgets, not #nobody or #12")
+  const marks = await page!.evaluate(() => ({
+    projects: [...document.querySelectorAll("[data-composer-project-mention]")].map((m) => [m.textContent, m.className]),
+    threads: [...document.querySelectorAll("[data-composer-mention]")].map((m) => m.className),
+  }))
+  assert.deepEqual(marks.projects.map(([text]) => text), ["#arktype"], "a finished project mention is tinted; an unknown one and a GitHub ref are not")
+  assert.equal(marks.projects[0]![1], marks.threads[0], "in exactly the thread mention's treatment")
+  await page!.keyboard.type(" #")
+  await page!.waitForSelector(MENU)
+  await page!.keyboard.type("1")
+  assert.equal(await menuVisible(), false, "a digit after # is a GitHub ref being typed")
+  assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
+})
+
+test("a sent #project links to the page focused on it", {
+  skip: !baseUrl,
+  timeout: 150_000,
+}, async () => {
+  await open()
+  const links = await page!.$$eval("[data-project-bubble] a", (as) => as.map((a) => [a.textContent, a.getAttribute("href"), a.getAttribute("title")]))
+  assert.deepEqual(links, [
+    ["#arktype", "/?project=arktype", "ArkType"],
+    ["@focus-mode", "/thread/focus-mode", "Waiting on your call about the drawer"],
+    ["#Home", "/?project=home", "Home"],
+  ], "an unknown project stays text")
+  const look = await page!.evaluate(() => {
+    const [project, thread] = ["[data-project-bubble] a[data-project-mention]", "[data-project-bubble] a[data-thread-mention]"].map((sel) => getComputedStyle(document.querySelector(sel)!))
+    return [project!.color === thread!.color, project!.textDecorationLine === thread!.textDecorationLine, project!.textUnderlineOffset === thread!.textUnderlineOffset]
+  })
+  assert.deepEqual(look, [true, true, true], "styled as a thread mention is")
+  await Promise.all([page!.waitForNavigation(), page!.click("[data-project-bubble] a[data-project-mention='arktype']")])
+  assert.equal(new URL(page!.url()).search, "?project=arktype")
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })

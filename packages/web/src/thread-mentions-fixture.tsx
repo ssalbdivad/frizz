@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import { createRoot } from "react-dom/client"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import type { BoardSnapshot, ThreadView } from "@frizz/shared"
+import type { BoardSnapshot, ProjectCard, ThreadView } from "@frizz/shared"
 import { ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { Composer } from "./components/Composer.tsx"
@@ -11,6 +11,7 @@ import { useMentionCandidates, useOwnMention } from "./hooks/useMentionCandidate
 import { useMarkdownHtml } from "./lib/useMarkdown.ts"
 import { setMentionIndex } from "./lib/mentionAutolink.ts"
 import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
+import { setProjectMentions } from "./lib/projectMentions.ts"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -29,6 +30,9 @@ import "./styles.css"
 // `[data-agent-prose]` is AGENT markdown through the real pipeline (useMarkdownHtml → marked → the
 // sanitizer) with the app's real delegated `/thread/` listener installed, so its mentions are the links
 // an assistant turn draws (lib/mentionAutolink.ts), and clicking one runs the app's own click path.
+//
+// PROJECTS (2026-10-06): `#` offers this machine's projects (stubbed below, as main.tsx feeds them from the
+// project list), a sent `#arktype` links to the page focused on it, and agent prose does the same.
 //
 // Sans only: `data-font="sans"` is on <html>, the one font the product renders.
 document.documentElement.dataset.font = "sans"
@@ -53,6 +57,9 @@ const threads = [
 store.board = { threads, projectSlug: "frizz" } as unknown as BoardSnapshot
 // What setBoard does on a real page: point the markdown mention linker at this board.
 setMentionIndex("frizz", threads)
+const projectCard = (slug: string, name: string, stale = false) =>
+  ({ id: `id-${slug}`, slug, name, path: `/home/u/${slug}`, lastOpenedAt: "", stale, iconStatus: "unknown" }) as ProjectCard
+setProjectMentions([projectCard("frizz", "Frizz"), projectCard("home", "Home"), projectCard("arktype", "ArkType"), projectCard("beanemachine", "Beane machine"), projectCard("gone", "Gone", true)])
 
 const minutesAgo = (m: number) => new Date(Date.now() - m * 60_000).toISOString()
 const DIRECTORY = {
@@ -118,6 +125,7 @@ function Box() {
 
 const AGENT_PROSE = [
   "Handed the cap to @shell-budgets; @shell-budgets.cache-keys has the key table, and @ShellBudget.capAudit.",
+  "The same bug is in #arktype, and #home has the notes; #12 is GitHub's and #nobody stays text.",
   "",
   "- `@shell-budgets` in code stays code, and so does @types/node.",
   "- [@shell-budgets](https://example.com) is the author's own link. @nobody.cache-keys stays text.",
@@ -147,6 +155,9 @@ createRoot(document.getElementById("root")!).render(
             </div>
             <div data-mention-bubble-sub className="ml-auto mt-3 max-w-[420px] rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap text-user-bubble-fg">
               <LinkifiedText text={"Compare @shell-budgets.cache-keys with @ShellBudget.capAudit. @shell-budgets.nothing opens the thread."} />
+            </div>
+            <div data-project-bubble className="ml-auto mt-3 max-w-[420px] rounded-2xl rounded-br-sm bg-user-bubble px-3.5 py-3 text-[14px] whitespace-pre-wrap text-user-bubble-fg">
+              <LinkifiedText text={"Port the fix from #arktype and ask @focus-mode. #Home has notes; #nobody stays text."} />
             </div>
           </MentionIndexProvider>
           <AgentProse />
