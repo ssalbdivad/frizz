@@ -1157,7 +1157,9 @@ interface Record {
   // cache-read is exactly what the model's context held. See applyRecord's context reading.
   // NOTE: `Record` here is this module's own transcript-record interface, which SHADOWS the global
   // `Record<K,V>` utility type — so the usage bag is written as an index signature, not Record<…>.
-  message?: { stop_reason?: string; content?: unknown; model?: string; usage?: { [key: string]: unknown } }
+  // `id` is the API message id. Claude writes one record per content block, and every record of one
+  // response shares it — which is how pendingCallDeadline tells the last message from the one before.
+  message?: { id?: string; stop_reason?: string; content?: unknown; model?: string; usage?: { [key: string]: unknown } }
   // The reasoning effort this turn ran at, stamped by claude alongside `message.model`. Read only by
   // the sub-agent profile cell, for a dispatch whose own profile names no effort to inherit from.
   effort?: string
