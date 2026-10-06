@@ -2508,7 +2508,7 @@ export function parseLimitResumeWake(text: string): { window: LimitWindow } | nu
 
 /** Scheduler SOURCE 12, cause `expired`: the `for:` ran out and nothing resolved. `status` is the live
  *  readout of what the fence named, already formatted by the caller. */
-export function parkExpiredWakeMessage(status: readonly string[], checkIn = false, requested = false): string {
+export function parkExpiredWakeMessage(status: readonly string[], checkIn = false, requested = false, prior: AwaitingStatus | null = null): string {
   return [
     requested ? PARK_REQUESTED_LEAD : "⏰ Your wait expired, nothing resolved. Check back in on everything.",
     "",
@@ -2535,7 +2535,14 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
         "3. Report: a short progress note above the fence — what landed, what is running, what changed.",
         "   Write it for someone who has read nothing since their last message: where the effort stands",
         "   against its goal, in their words, with no names you coined (round numbers, phase codes, ids).",
-        "   `status: needs_input` when the human can read or act on something now, else `working`.",
+        // KEEP THE BAND THE LAST PARK CHOSE. This line used to read "else `working`", and it overrode a
+        // worker's own `watching`: @3-0 parked `watching` on two Workflows, woke here 6m later with nothing
+        // changed, obeyed, and its row jumped from Snoozed to the spinning Working band (maintainer
+        // 2026-10-06: "went from awaiting … to working status without me interacting or seemingly any
+        // change in its state"). `prior` is that last park's own answer.
+        prior === "working" || prior === "watching"
+          ? `   \`status: needs_input\` when the human can read or act on something now; otherwise keep\n   \`status: ${prior}\`, which your last park answered, unless the wait itself changed.`
+          : "   `status: needs_input` when the human can read or act on something now, else `working` —\n   or `watching` when the children only watch the world for you.",
         "4. Ask now. A decision the work has surfaced that is the human's to make goes to `mcp__frizz__ask`",
         "   at this check-in — never into the note or a file \"for the human\", which nobody is prompted to",
         "   answer. The children keep running while it waits; rest on the question, with no fence.",

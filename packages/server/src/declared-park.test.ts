@@ -612,6 +612,28 @@ test("requestCheckIn wakes a live agent park early with the check-in, once", asy
   } finally { h.close() }
 })
 
+// THE CHECK-IN KEEPS THE BAND. It used to say "else \`working\`" whatever the worker had answered, so @3-0,
+// parked \`watching\` on two Workflows, re-parked \`working\` at its check-in with nothing changed and its row
+// jumped from Snoozed to the spinning Working band (2026-10-06).
+test("a sub-agent check-in tells the worker to keep the status its last park answered", async () => {
+  const t0 = Date.parse("2026-10-06T23:23:00.000Z")
+  const live = { id: "toolu_A", taskId: "wygmxtip8", label: "design", startedAt: "2026-10-06T23:00:00.000Z", state: "running" as const }
+  for (const status of ["watching", "working"] as const) {
+    const h = parkHarness([{ kind: "agent", value: "wygmxtip8" }, { kind: "status", value: status }, { kind: "for", value: "1h" }], {
+      agents: [live],
+      restedAt: new Date(t0).toISOString(),
+      now: () => t0 + 30 * 60_000 + 1000,
+    })
+    try {
+      await h.s.tick()
+      assert.equal(h.sent.length, 1)
+      assert.match(h.sent[0], /SUB-AGENT CHECK-IN/)
+      assert.match(h.sent[0], new RegExp(`keep\\n   \`status: ${status}\`, which your last park answered`))
+      assert.doesNotMatch(h.sent[0], /else `working`/)
+    } finally { h.close() }
+  }
+})
+
 // THE CHECK-IN IS ANCHORED ON THE LAST CHECK-IN, NOT THE LAST REST (scheduler.ts checkInAnchors). Any
 // other wake — here a PR event — makes the worker rest again, and keyed on the rest that restarted the 30
 // minutes, so a thread kept busy by its PR never reported on its children (@zod-json-validation,

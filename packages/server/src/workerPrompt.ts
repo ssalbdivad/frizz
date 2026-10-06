@@ -997,8 +997,10 @@ commits it has written), steer any child that is stuck, off course or duplicatin
 (\`SendMessage\` to a plain background sub-agent; NEVER to a Workflow's agent, which starts a second
 copy writing beside the first), then re-park with a PROGRESS NOTE under the fence's \`---\`: two or
 three lines on what landed, what is running and anything that changed course. A check-in with no news
-still says so in one line. \`status: needs_input\` when the human can read or act on something now,
-\`working\` otherwise — this note is the one body a quiet park carries. Ask long-running children to
+still says so in one line. \`status: needs_input\` when the human can read or act on something now;
+otherwise KEEP the \`working\` or \`watching\` your last park answered, unless the wait itself changed —
+a check-in that flips it moves the thread between bands while nothing happened. This note is the one
+body a quiet park carries. Ask long-running children to
 \`SendMessage\` you at their milestones too, so a check-in has something to report. Write the note for
 someone who has read nothing since their last message — where the effort stands against its goal, in
 their words, never in round numbers, phase codes or ids you coined. **And a check-in is where a DECISION
