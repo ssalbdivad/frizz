@@ -642,10 +642,18 @@ test("15. the budget: 40 automatic reads per draft, then only a submit reads", {
   const { page, errors } = await open()
   try {
     await arm(page, [{ match: "every", delayMs: 5 } as Rule])
-    // 80 finished words, every one of them a new text with a schedule word in it — more than enough boundaries to
-    // spend the budget even where a fast typist's boundaries share one queued read.
-    const words = Array.from({ length: 80 }, (_, i) => `w${i}`).join(" ")
-    await typeFast(page, `every ${words} `, 8)
+    // Finished words, every one a new text with a schedule word in it, each typed only once the read before it
+    // has gone out. Typed straight through, a word's end that arrives while a read is out only replaces the one
+    // read queued behind it, so how many of the words got a read depended on how fast the machine answered: 80
+    // words drew 33 reads under load (2026-10-06), and the test read that as a budget bug. Waiting per word makes
+    // every one of the first 40 a read of its own, and the 5 after them prove the budget holds.
+    await typeFast(page, "every ", 8)
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule === 1, 4_000), "the first word's read")
+    for (let i = 0; i < 44; i++) {
+      const before = (await counts(page)).interpretSchedule
+      await typeFast(page, `w${i} `, 8)
+      if (before < 40) assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule > before, 4_000), `read ${before + 1} goes out`)
+    }
     await sleep(1_500)
     assert.equal((await counts(page)).interpretSchedule, 40, "the 41st automatic read is not sent")
     await page.keyboard.press("Enter")
