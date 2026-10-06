@@ -246,6 +246,40 @@ test("a clock or a word half-typed through a pause never reaches the screen (fix
   assert.ok(stops.worst.n <= 5 && stops.mean < 2.6, `${stops.worst.n} changes (mean ${stops.mean.toFixed(2)}) for ${JSON.stringify(stops.worst.text)}:\n  ${stops.worst.seen.join("\n  ")}`)
 })
 
+test("a word that can still grow into a schedule word holds through a pause (fix round 3, midword-publish-at-hesitation)", () => {
+  // Every reading the screen showed, in order, typing at 120ms with ONE 400ms pause (past REST_MS, short of
+  // CLOSE_IDLE_MS) before the key at `at` — inside a word that is a whole word of its own ("mon", "week").
+  const screen = (text: string, at: number) => {
+    const box = new Box()
+    for (let i = 0; i < text.length; i++) {
+      box.advance(i === at ? 400 : 120)
+      box.edit(box.state.prose + text[i])
+    }
+    box.advance(2_000)
+    const seen: string[] = []
+    for (const step of box.log) if (seen[seen.length - 1] !== step.rule) seen.push(step.rule)
+    return seen
+  }
+  // Round 3 measured: "every mon" published Monday, then the month; "every week" Monday, then weekdays (5
+  // changes); "every week" Monday, then weekends. The pause now shows nothing steady typing does not.
+  for (const [text, word, never] of [
+    ["every month on the 15th at 10am reconcile billing", "every mon", /BYDAY=MO;/],
+    ["every weekday at 9am for 2 weeks starting Oct 12 triage new issues", "every week", /BYDAY=MO;/],
+    ["every weekend at 10am back up the laptop", "every week", /BYDAY=MO;/],
+  ] as const) {
+    const seen = screen(text, word.length)
+    assert.ok(!seen.some((x) => never.test(x)), `${text}: ${seen.join(" → ")}`)
+    assert.deepEqual(seen, screen(text, -1), text)
+  }
+  // "Mondays, Wed|nesdays": the list reads nothing until its clock (it never did, at any boundary), so the pause
+  // may show that dark — but no reading steady typing would not show. "Wed" is held for nothing: it is
+  // Wednesday either way.
+  const list = "Mondays, Wednesdays and Fridays at 7am run the full suite"
+  assert.deepEqual(screen(list, list.indexOf("Wed") + 3), screen(list, -1))
+  // An abbreviation that finishes as its own word is not held: the rest after "Thurs" shows Thursday.
+  assert.ok(screen("every Tuesday and Thursday at 9am sync", "every Tuesday and Thurs".length).includes("exact open FREQ=WEEKLY;BYDAY=TU,TH;BYHOUR=9;BYMINUTE=0 2026-10-06T09:00 ~time"))
+})
+
 test("negatives never offer at any prefix", () => {
   for (const text of [
     "every time the build fails, fix it",

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react"
-import { isScheduleOffer, readSchedulePhrase, scheduleEdgeGates, type PhraseReading, type Span } from "@frizz/shared"
+import { isScheduleOffer, readSchedulePhrase, scheduleEdgeGates, scheduleWordPrefix, type PhraseReading, type Span } from "@frizz/shared"
 
 // THE PROMPT BOX'S PUBLISH POLICY (plans/schedule-live-reading.md §2.4, §8). The local grammar may run on every
 // keystroke — it costs a millisecond — but what it says must not reach the screen on every keystroke: read at
@@ -150,16 +150,21 @@ const CLOCK_FRAGMENT = /^\d{1,2}(?::\d{0,2})?(?:[ap]\.?)?$/i
  *     alone, where "Thurs" had read both) has not read that word at all, and no offer ("every Mond" reads as an
  *     event) in a word the shown offer runs into is not one either: what is on screen (`shown`, carried) stays —
  *     except at the IDLE when the reading is the one on screen: the caret's word is then the task's, and only
- *     `Each run` changes (end-to-end round 2).
+ *     `Each run` changes (end-to-end round 2);
+ *   - a word that can still grow into a schedule word that reads differently ("every mon|th", "every week|day",
+ *     "Mondays, Wed|nesdays") holds at a REST like a clock fragment (fix round 3: a 400ms pause published
+ *     Monday, then the month).
+ * A cue's unread words may lie past its span (fix round 3: words of time far from the phrase), and they are
+ * part of what it read.
  */
 export function pausePublishes(ev: "rest" | "idle", reading: PhraseReading, prose: string, caret: number | null, shown: Published | null): boolean {
   if (caret === null || caret <= 0) return true
   const word = /\S*$/.exec(prose.slice(0, caret))![0]
   if (!word) return true
   const wordStart = caret - word.length
-  if (ev === "rest" && CLOCK_FRAGMENT.test(word)) return false
+  if (ev === "rest" && (CLOCK_FRAGMENT.test(word) || scheduleWordPrefix(word))) return false
   if (reading.kind === "exact" || reading.kind === "cue" || reading.kind === "ambiguous") {
-    if (reading.span.end >= wordStart) return true
+    if (readEnd(reading) >= wordStart) return true
     // The reading stops short of the caret's word. At a REST that word may still be joining the phrase
     // ("Thursda"), so the screen holds. At the IDLE the human has stopped, and if the phrase reads exactly as
     // the screen already shows it, the word is the TASK's: publishing changes no reading, only the text it was
@@ -171,7 +176,12 @@ export function pausePublishes(ev: "rest" | "idle", reading: PhraseReading, pros
   // No offer at all ("every Mond" reads as an event, "every Tuesd" as nothing): a word the shown offer runs
   // into is still being typed.
   const on = shown?.reading
-  return !on || on.kind === "none" || on.span.end < wordStart
+  return !on || on.kind === "none" || readEnd(on) < wordStart
+}
+
+/** Where the words a reading read end: its span's end, or a cue's unread words' past it. */
+function readEnd(r: Exclude<PhraseReading, { kind: "none" }>): number {
+  return r.kind === "cue" ? Math.max(r.span.end, r.unread.end) : r.span.end
 }
 
 // ---- carrying a shown reading across an edit ---------------------------------------------------------------

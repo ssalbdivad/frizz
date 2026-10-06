@@ -193,6 +193,8 @@ export function needsModel(p: Published, promptOf: (cut: string) => string): boo
 
 const capitalize = (s: string) => (s ? s[0]!.toUpperCase() + s.slice(1) : s)
 const firstLine = (s: string) => s.split("\n")[0] ?? ""
+/** Whether `inner` lies inside `outer`: a cue's unread words in its span, or far from the phrase (fix round 3). */
+const within = (inner: Span, outer: Span) => inner.start >= outer.start && inner.end <= outer.end
 
 /** The panel's view of the text (pure, given the reader's state). */
 export function modeViewOf(a: {
@@ -679,7 +681,11 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
       const edges = [cuts.start, ...cuts.cuts, cuts.end]
       for (let i = 0; i + 1 < edges.length; i++) marks.push({ start: edges[i]!, end: edges[i + 1]!, tone: "offer", key: `m:${edges[i]}` })
     } else cutsRef.current = null
-    if (r.kind === "cue") marks.push(r.core ? { start: r.unread.start, end: r.unread.end, tone: "unread", key: `u:${r.unread.start}` } : { start: r.span.start, end: r.span.end, tone: "unread", key: `u:${r.span.start}` })
+    // A cue's unread words may lie past its span, far from the phrase (fix round 3): dashed where they are.
+    if (r.kind === "cue") {
+      if (!r.core) marks.push({ start: r.span.start, end: r.span.end, tone: "unread", key: `u:${r.span.start}` })
+      if (r.core || !within(r.unread, r.span)) marks.push({ start: r.unread.start, end: r.unread.end, tone: "unread", key: `u:${r.unread.start}` })
+    }
     if (r.kind === "ambiguous") marks.push({ start: r.span.start, end: r.span.end, tone: "unread", key: `u:${r.span.start}` })
   } else {
     cutsRef.current = null
@@ -697,6 +703,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     }
     if (view.kind === "reading") {
       if (view.core) marks.push({ ...view.core.span, tone: "accepted", key: `m:${view.core.span.start}` })
+      else if (view.span && view.unread && !within(view.unread, view.span)) marks.push({ ...view.span, tone: "reading", key: `r:${view.span.start}` })
       if (view.unread) marks.push({ ...view.unread, tone: "reading", key: `u:${view.unread.start}` })
     }
     if (view.kind === "disagree") {
@@ -969,7 +976,7 @@ function offerReading(shown: Published, prose: string, nowMs: number, tz: string
     reading ??= (
       <>
         {"Looks like a schedule: "}
-        <span className="text-muted-70">{`“${prose.slice(r.span.start, r.span.end)}”`}</span>
+        <span className="text-muted-70">{within(r.unread, r.span) ? `“${prose.slice(r.span.start, r.span.end)}”` : `“${prose.slice(r.span.start, r.span.end)}”, “${quoted}”`}</span>
       </>
     )
   } else if (r.kind === "ambiguous") {

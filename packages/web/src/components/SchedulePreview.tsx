@@ -96,7 +96,8 @@ function timeTip(a: Extract<Assumed, { part: "time" }>): string {
 }
 
 function dayTip(a: Extract<Assumed, { part: "day" }>): string {
-  return `No day given, so ${a.shown}. Add a day to change it.`
+  // A day the words name two ways ("next Tuesday", "Friday at midnight") says which it took (fix round 3).
+  return a.tip ?? `No day given, so ${a.shown}. Add a day to change it.`
 }
 
 function meridiemTip(a: Extract<Assumed, { part: "meridiem" }>): string {
