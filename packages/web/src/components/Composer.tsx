@@ -16,6 +16,7 @@ import { DROPPED_URI_TYPES, droppedUris, fileQueryAt, insertFileReference, inser
 import { basename, dirnameLike } from "../lib/paths.ts"
 import { draftStart, insertSlashCommand, matchSlashItems, slashQueryAt, slashSegments } from "../lib/slashCommands"
 import { insertMention, matchMentions, mentionQueryAt, mentionSegments, resolveMention, splitMentionQuery, subAgentMentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
+import { insertProjectMention, matchProjects, projectQueryAt, scanProjectMentions, useProjectMentions, type ProjectMentionCandidate } from "../lib/projectMentions.ts"
 import { useSubAgentDirectory } from "../hooks/useSubAgentDirectory.ts"
 import { useKeyboardInset } from "../lib/keyboardInset.ts"
 import { inSkippedCard, whenCardRendered } from "../lib/cardVisibility.ts"
@@ -76,8 +77,10 @@ const MENU_ROW_INSET = "pl-3.5 pr-1.5"
 // The `@` menu with the editor's files in it (the `fileMentions` prop): one row per thread or file, in
 // one keyboard order. While files are offered the threads give way to a few, and the files to the most
 // the menu shows without scrolling far; a narrower query is a keystroke away.
-type MentionRow = { kind: "thread"; thread: MentionCandidate } | { kind: "file"; file: EmbedPickedFile }
+// A `#` query fills the same menu with the machine's projects instead (lib/projectMentions.ts).
+type MentionRow = { kind: "thread"; thread: MentionCandidate } | { kind: "file"; file: EmbedPickedFile } | { kind: "project"; project: ProjectMentionCandidate }
 const THREADS_BESIDE_FILES = 4
+const NO_PROJECTS: readonly ProjectMentionCandidate[] = []
 const FILE_ROWS = 12
 /** How long the menu waits after a keystroke before asking the editor for files. */
 const FILE_QUERY_DEBOUNCE_MS = 60
@@ -609,6 +612,10 @@ export function Composer({
     () => (ownMention ? [...(mentionCandidates ?? []), ownMention] : mentionCandidates ?? []),
     [mentionCandidates, ownMention],
   )
+  // `#slug` PROJECT MENTIONS ride the same boxes as `@` ones — every prompt box that offers threads —
+  // and resolve against the machine's projects, whichever project the box writes into.
+  const allProjects = useProjectMentions()
+  const projectMentions = mentionCandidates !== undefined ? allProjects : NO_PROJECTS
   const backdrop = useMemo(() => {
     let hasMention = false
     let hasToken = false
@@ -645,20 +652,36 @@ export function Composer({
           const segStart = segAt
           segAt += seg.text.length
           if (seg.kind === "text") {
-            // A `/name` the thread can run takes the same treatment as a mention in its OWN colour
-            // (lib/slashCommands.ts), so a skill never reads as a thread.
-            for (const run of slashSegments(seg.text, slashItems, segStart, opensAt)) {
-              if (run.kind === "text") {
-                out.push(run.text)
-                continue
+            // A `#slug` naming a project is tinted exactly as a thread mention is: both name a place
+            // on the board, where a skill (below) is something the thread runs.
+            let projectAt = 0
+            const pushCommands = (text: string, at: number) => {
+              // A `/name` the thread can run takes the same treatment as a mention in its OWN colour
+              // (lib/slashCommands.ts), so a skill never reads as a thread.
+              for (const run of slashSegments(text, slashItems, at, opensAt)) {
+                if (run.kind === "text") {
+                  out.push(run.text)
+                  continue
+                }
+                hasMention = true
+                out.push(
+                  <span key={out.length} data-composer-command className="rounded-[3px] bg-command/12 py-px -mx-px px-px text-command">
+                    {run.text}
+                  </span>,
+                )
               }
+            }
+            for (const hit of scanProjectMentions(seg.text, projectMentions)) {
+              if (hit.start > projectAt) pushCommands(seg.text.slice(projectAt, hit.start), segStart + projectAt)
               hasMention = true
               out.push(
-                <span key={out.length} data-composer-command className="rounded-[3px] bg-command/12 py-px -mx-px px-px text-command">
-                  {run.text}
+                <span key={out.length} data-composer-project-mention className="rounded-[3px] bg-accent/10 py-px -mx-px px-px text-accent">
+                  {hit.text}
                 </span>,
               )
+              projectAt = hit.start + hit.text.length
             }
+            if (projectAt < seg.text.length) pushCommands(seg.text.slice(projectAt), segStart + projectAt)
             continue
           }
           hasMention = true
@@ -672,7 +695,7 @@ export function Composer({
     }
     const paintsText = hasMention || fences !== null
     return paintsText || hasToken ? { segments: out, paintsText } : null
-  }, [prose, stagedTokens, allMentions, slashItems, opensAt])
+  }, [prose, stagedTokens, allMentions, projectMentions, slashItems, opensAt])
   const backdropSegments = backdrop?.segments
   // The schedule phrase, marked behind its own words (the `marks` prop) — only the marks that still fit the
   // prose: a mark over the wrong words is worse than none.
@@ -826,10 +849,19 @@ export function Composer({
     }
   }, [fileMentions, fileQuery?.start, fileQuery?.query])
   const fileMatches = fileQuery && filePicks?.start === fileQuery.start && dismissedFor !== prose ? filePicks.files.slice(0, FILE_ROWS) : []
-  const mentionRows: MentionRow[] = [
-    ...(fileMatches.length ? mentionMatches.slice(0, THREADS_BESIDE_FILES) : mentionMatches).map((thread) => ({ kind: "thread" as const, thread })),
-    ...fileMatches.map((file) => ({ kind: "file" as const, file })),
-  ]
+  // `#` — THE PROJECTS MENU, in the same box. Disjoint from the `@` menu by construction: each opens on
+  // its own trigger character at the caret.
+  const projectQuery = projectMentions.length > 0 && !suggestOpen && !phone ? projectQueryAt(prose, caret) : undefined
+  const projectMatches = useMemo(
+    () => (projectQuery && dismissedFor !== prose ? matchProjects(projectMentions, projectQuery.query) : []),
+    [projectQuery?.start, projectQuery?.query, projectMentions, dismissedFor, prose],
+  )
+  const mentionRows: MentionRow[] = projectMatches.length
+    ? projectMatches.map((project) => ({ kind: "project" as const, project }))
+    : [
+        ...(fileMatches.length ? mentionMatches.slice(0, THREADS_BESIDE_FILES) : mentionMatches).map((thread) => ({ kind: "thread" as const, thread })),
+        ...fileMatches.map((file) => ({ kind: "file" as const, file })),
+      ]
   const mentionOpen = mentionRows.length > 0
   // WHICH WAY THE MENUS OPEN. Up by default — a prompt box usually sits at the bottom of its surface —
   // but All projects puts its box at the TOP of the page, where a menu floated above opened off-screen
@@ -844,6 +876,13 @@ export function Composer({
   function acceptMention(item: MentionCandidate) {
     if (!mention || caret === null) return
     const next = insertMention(prose, mention.start, caret, item.handle)
+    setProse(next.prose)
+    setCaret(next.caret)
+    requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
+  }
+  function acceptProject(project: ProjectMentionCandidate) {
+    if (!projectQuery || caret === null) return
+    const next = insertProjectMention(prose, projectQuery.start, caret, project.slug)
     setProse(next.prose)
     setCaret(next.caret)
     requestAnimationFrame(() => taRef.current?.setSelectionRange(next.caret, next.caret))
@@ -864,6 +903,7 @@ export function Composer({
     }
     const row = mentionRows[suggestSel] ?? mentionRows[0]!
     if (row.kind === "thread") acceptMention(row.thread)
+    else if (row.kind === "project") acceptProject(row.project)
     else acceptFile(row.file)
   }
   function acceptSuggestion(item: { name: string }) {
@@ -1358,7 +1398,7 @@ export function Composer({
           ref={suggestListRef}
           data-mention-menu
           role="listbox"
-          aria-label={fileMatches.length ? (mentionRows.length > fileMatches.length ? "Threads and files" : "Files") : dotted ? "Sub-agents" : "Threads"}
+          aria-label={projectMatches.length ? "Projects" : fileMatches.length ? (mentionRows.length > fileMatches.length ? "Threads and files" : "Files") : dotted ? "Sub-agents" : "Threads"}
           className={`absolute ${menuBelow ? "top-full mt-1.5" : "bottom-full mb-1.5"} left-0 right-0 z-20 max-h-56 overflow-y-auto rounded-lg border border-border bg-bg py-1 shadow-lg`}
         >
           {mentionRows.map((row, i) => {
@@ -1380,6 +1420,25 @@ export function Composer({
             >
               <span className="shrink-0 text-[12px] font-medium text-fg">{basename(row.file.label)}{row.file.folder ? "/" : ""}</span>
               {dirnameLike(row.file.label) && <span className="min-w-0 truncate text-[11px] text-muted">{dirnameLike(row.file.label)}</span>}
+            </button>
+            )
+            // A project's row: `#slug` where a thread's handle stands — exactly what will land — and its
+            // display name, dimmed, where a thread's status stands, when it says something the slug does not.
+            if (row.kind === "project") return (
+            <button
+              key={`project:${row.project.slug}`}
+              type="button"
+              role="option"
+              aria-selected={i === suggestSel}
+              data-suggest-index={i}
+              data-mention-project={row.project.slug}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => acceptProject(row.project)}
+              onMouseEnter={() => setSuggestSel(i)}
+              className={`flex w-full items-baseline gap-2 ${MENU_ROW_INSET} py-1.5 text-left ${i === suggestSel ? "bg-panel-2" : ""}`}
+            >
+              <span className="shrink-0 text-[12px] font-medium text-fg">#{row.project.slug}</span>
+              {row.project.name.toLowerCase() !== row.project.slug && <span className="min-w-0 truncate text-[11px] text-muted">{row.project.name}</span>}
             </button>
             )
             const m = row.thread
