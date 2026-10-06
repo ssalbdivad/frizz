@@ -1777,16 +1777,18 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
    phrase its own padding and its own underline.
 
    The readings it is set from (scratch/optics-live-box.ts, the real page, 13px sans — system-ui, which
-   resolves to DejaVu Sans on the Linux box measured; dark; dsf 6; 2026-10-06):
-     pad 0.18em → the dots cleared the `y` of "every" by 2.17px (pixels), 5.5px under the baseline: they
-                  read as a line of their own, detached from the words;
-     pad 0.11em → 1.07px clear of the deepest descender (canvas `g y p j q`, geometry) and 1.17px (pixels),
-                  the dots' centre 0.359em under the baseline: attached, and still clear of every
-                  descender. The pixel reading wanders ±1px between runs with the textarea's subpixel
-                  placement over this mirror, which is why geometry is the number to trust.
+   resolves to DejaVu Sans on the Linux box measured; dark; dsf 6; 2026-10-06). The dots are drawn in the
+   MIRROR, but the text the eye reads is the TEXTAREA's, and the two land up to ~0.6px apart depending on
+   where the box falls on the subpixel grid (baseline 107.0 in one layout, 107.56 in another), so the
+   clearance is set for the unlucky placement, read in pixels:
+     pad 0.18em → 2.17px clear of the `y` of "every" (lucky placement), 5.5px under the baseline: a line of
+                  its own, detached from the words;
+     pad 0.11em → 1.17px lucky but 0.17–0.4px unlucky (seen at 24x: the dots all but touching the tail);
+     pad 0.15em → 1.59px clear of the deepest descender in geometry (canvas `g y p j q`), 1.17px in pixels
+                  at the UNLUCKY placement, three runs identical; dot centre 0.399em under the baseline.
    Re-measure, never re-guess, if the box's font size or the family changes. */
 [data-composer-mark] {
-  --sched-underline-pad: 0.11em;
+  --sched-underline-pad: 0.15em;
   --sched-dot: color-mix(in srgb, var(--color-fg) 40%, transparent);
   --sched-dash: color-mix(in srgb, var(--color-fg) 25%, transparent);
   color: transparent;
