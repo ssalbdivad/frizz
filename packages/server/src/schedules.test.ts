@@ -110,6 +110,8 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
   } as unknown as AppContext
   return {
     storage, service, router: createRouter(ctx), spawned, readings,
+    // A thread written down unstarted, as the lazy plugin writes one (plugins/lazy/server.ts create).
+    writeDown: async (input: { prompt: string; title?: string }) => dispatcher.createHeldThread(input, { holder: "lazy" }),
     at: (ms: number) => { clock = ms },
     now: () => clock,
     tick: async () => { service.evalDue(clock); await service.drain() },
@@ -421,7 +423,7 @@ test("sending the next run early (followUp) starts it with the header; Run now o
     const view = h.service.create(WEEKLY)
     const next = view.nextRun!
     // The human edits this run's note, then sends it.
-    await h.router.updateLazyPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Only the bug reports this time." } })
+    await h.router.updateHeldPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Only the bug reports this time." } })
     await h.router.followUp.handler({ input: { slug: next.slug, sessionId: next.sessionId, message: "Only the bug reports this time." } } as never)
     assert.equal(h.spawned.length, 1)
     assert.ok(parseScheduledRunPrompt(h.spawned[0]!.prompt.slice(h.spawned[0]!.prompt.indexOf("<scheduled-run"))))
@@ -470,9 +472,9 @@ test("a quiet done files a scheduled run under Done with its summary; on any oth
     assert.equal(got.history[0]!.summary, "Nothing new — no issues since Oct 5.")
     assert.equal(got.history[0]!.label, "Nothing new — no issues since Oct 5.")
     assert.equal(got.schedule.counts.unreviewed, 0)
-    // An ordinary thread: the lazy one the human wrote down, started.
-    const plain = await h.router.createLazyThread.handler({ input: { prompt: "plain work", title: "Plain work" } })
-    await h.router.startLazyThread.handler({ input: { slug: plain.slug, sessionId: plain.sessionId, prompt: "plain work" } })
+    // An ordinary thread: one written down unstarted (as the lazy plugin does), then started.
+    const plain = await h.writeDown({ prompt: "plain work", title: "Plain work" })
+    await h.router.startHeldThread.handler({ input: { slug: plain.slug, sessionId: plain.sessionId, prompt: "plain work" } })
     await assert.rejects(
       h.router.markOwnDone.handler({ input: { slug: plain.slug, body: "done", quiet: true } }),
       /`quiet` is only for a scheduled run/,
@@ -487,7 +489,7 @@ test("a worker proposes; only the human turns it on; skip_next and move_next act
   const h = harness()
   try {
     // The caller must be a registered thread.
-    const caller = await h.router.createLazyThread.handler({ input: { prompt: "x", title: "Caller" } })
+    const caller = await h.writeDown({ prompt: "x", title: "Caller" })
     const spec = { slug: caller.slug, title: "Dep bumps", prompt: "Bump the deps.", when: "first weekday of the month at 10", rrule: "FREQ=MONTHLY;BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1;BYHOUR=10;BYMINUTE=0", dtstart: "2026-10-05T10:00", tz: "UTC", model: "sonnet", effort: "medium" as const }
     const dry = await h.router.ownSchedule.handler({ input: { action: "dry_run", ...spec } })
     assert.match(dry.text, /^Dry run — nothing was saved/)
@@ -503,7 +505,7 @@ test("a worker proposes; only the human turns it on; skip_next and move_next act
     const id = made.schedule!.id
     await h.router.ownSchedule.handler({ input: { action: "update", slug: caller.slug, id, prompt: "Bump the deps, then run the tests." } })
     // …but not anyone else's, and not once it is on.
-    const other = await h.router.createLazyThread.handler({ input: { prompt: "y", title: "Other" } })
+    const other = await h.writeDown({ prompt: "y", title: "Other" })
     await assert.rejects(h.router.ownSchedule.handler({ input: { action: "update", slug: other.slug, id, title: "Hijack" } }), /only change a schedule you proposed/)
     const on = h.service.setState(id, "active")
     assert.equal(on.state, "active")
@@ -546,7 +548,7 @@ test("an edit re-points the next run: a new rule re-snoozes it, a new prompt rea
     assert.equal(edited.nextRun!.at, "2026-10-06T10:00:00.000Z")
     assert.equal(h.storage.getSession(slug)!.lazy_prompt, "New prompt.")
     // The human edits this run's note; a later prompt change leaves it alone.
-    await h.router.updateLazyPrompt.handler({ input: { slug, sessionId: edited.nextRun!.sessionId, prompt: "Just this once." } })
+    await h.router.updateHeldPrompt.handler({ input: { slug, sessionId: edited.nextRun!.sessionId, prompt: "Just this once." } })
     h.service.update({ id: view.id, prompt: "Newer prompt." })
     assert.equal(h.storage.getSession(slug)!.lazy_prompt, "Just this once.")
     assert.throws(() => h.service.update({ id: view.id, revision: 0, title: "Stale" }), /changed while you were editing/)
@@ -611,7 +613,7 @@ test("a rule edit moves the next run but keeps the note the human wrote for it",
   try {
     const view = h.service.create(WEEKLY)
     const next = view.nextRun!
-    await h.router.updateLazyPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Just this once: only the bug reports." } })
+    await h.router.updateHeldPrompt.handler({ input: { slug: next.slug, sessionId: next.sessionId, prompt: "Just this once: only the bug reports." } })
     const edited = h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am" })
     assert.equal(edited.nextRun!.slug, next.slug)
     assert.equal(edited.nextRun!.at, "2026-10-06T10:00:00.000Z")

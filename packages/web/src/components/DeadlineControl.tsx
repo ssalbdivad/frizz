@@ -254,8 +254,8 @@ function parseOk(raw: string, nowMs: number): number {
 // ---- THE COUNTDOWN ---------------------------------------------------------------------------------
 
 /** A thread whose limit is worth reading: one set, and not Done — a finished thread's clock is history. */
-export function liveDeadline(thread: Pick<ThreadView, "deadline" | "state" | "lazyPrompt">): ThreadDeadlineView | undefined {
-  if (!thread.deadline || thread.state === "archived" || thread.lazyPrompt !== undefined) return undefined
+export function liveDeadline(thread: Pick<ThreadView, "deadline" | "state" | "held">): ThreadDeadlineView | undefined {
+  if (!thread.deadline || thread.state === "archived" || thread.held !== undefined) return undefined
   return Number.isFinite(Date.parse(thread.deadline.at)) ? thread.deadline : undefined
 }
 

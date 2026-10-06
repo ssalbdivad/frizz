@@ -75,6 +75,19 @@ export function pluginThreadRow(row: SessionRow): PluginThreadRow {
   }
 }
 
+/**
+ * What BASE threw while doing what a plugin asked — a double click on Start ("already starting"), a signed-out
+ * provider, a broker that would not come up. It reaches the human exactly as it would from base's own verb,
+ * but as a refusal: it is not the plugin's fault, so it must not count toward the strikes that fail it (three
+ * double clicks would otherwise turn the lazy plugin off). The original rides along as `cause`.
+ */
+function baseRefusal(error: unknown): Error {
+  if (isPluginRefusal(error)) return error as Error
+  const refusal = pluginRefusal(error instanceof Error ? error.message : String(error))
+  Object.defineProperty(refusal, "cause", { value: error })
+  return refusal
+}
+
 const eventOf = (row: Pick<SessionRow, "slug" | "session_id" | "held_by">): PluginThreadEvent => ({
   slug: row.slug,
   sessionId: row.session_id,
@@ -99,7 +112,12 @@ export function createProjectPlugins(deps: ProjectPluginsDeps): ProjectPlugins {
         },
         held: () => storage.allSessions().filter((row) => row.held_by === id).map(pluginThreadRow),
         create(input) {
-          const created = deps.dispatcher.createHeldThread(input, { holder: id })
+          let created: { slug: string; sessionId: string }
+          try {
+            created = deps.dispatcher.createHeldThread(input, { holder: id })
+          } catch (error) {
+            throw baseRefusal(error)
+          }
           deps.refresh()
           return created
         },
@@ -108,12 +126,21 @@ export function createProjectPlugins(deps: ProjectPluginsDeps): ProjectPlugins {
           const current = storage.getSession(row.slug)
           if (!current || current.session_id !== row.sessionId) throw pluginRefusal("This thread is gone")
           if (current.held_by !== id) throw pluginRefusal("This thread has already started")
-          return deps.startHeld(current, prompt, profile)
+          try {
+            return await deps.startHeld(current, prompt, profile)
+          } catch (error) {
+            throw baseRefusal(error)
+          }
         },
         legacyNote(row) {
           const current = storage.getSession(row.slug)
           if (!current || current.session_id !== row.sessionId || current.held_by !== id) return undefined
           return current.lazy_prompt?.length ? current.lazy_prompt : undefined
+        },
+        setPrompt(row, prompt) {
+          const current = storage.getSession(row.slug)
+          if (!current || current.session_id !== row.sessionId || current.held_by !== id) return false
+          return storage.setHeldPrompt(row.slug, row.sessionId, prompt)
         },
       },
       refresh: () => deps.refresh(),

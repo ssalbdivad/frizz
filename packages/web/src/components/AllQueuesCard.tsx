@@ -60,7 +60,7 @@ import { UpdateRequestedMarker } from "./FrizzWake.tsx"
 import { SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
-import { LazyThreadBox } from "./LazyThreadBox.tsx"
+import { HeldThreadComposer } from "./HeldThreadBox.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
@@ -458,8 +458,8 @@ function CardArticle({
             ) : (
               <Fact>
                 <LastActive
-                  at={thread.lazyPrompt !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
-                  label={thread.lazyPrompt !== undefined ? "Added" : queueLabelWord(thread)}
+                  at={thread.held !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
+                  label={thread.held !== undefined ? "Added" : queueLabelWord(thread)}
                   fallbackAt={thread.spawnedAt}
                   lead={<FactSep />}
                   className="min-w-0 truncate"
@@ -553,7 +553,7 @@ function CardArticle({
             thread, which still needs the hand-back. */}
         <div className="flex min-w-0 flex-col mb-[calc(-1*var(--queue-card-header-h,0px))]">
         {/* A lazy thread has no conversation, handoff or process to show: its note is the box below. */}
-        {thread.lazyPrompt === undefined && (
+        {thread.held === undefined && (
         <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
           {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
               inside the queue, and the queue is ONE page: whether a page loaded on a press or on a
@@ -689,7 +689,7 @@ function CardArticle({
           data-queue-dock={thread.id}
           // A lazy card has nothing between its header and the dock, so the dock can never leave the header's
           // bottom edge — and the header's own rule is already there; a second would draw a 2px line.
-          className={`sticky bottom-0 z-10 mt-[var(--queue-card-header-h,0px)] shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} ${thread.lazyPrompt !== undefined ? "" : "border-t border-border/60"} bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
+          className={`sticky bottom-0 z-10 mt-[var(--queue-card-header-h,0px)] shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} ${thread.held !== undefined ? "" : "border-t border-border/60"} bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
         >
           <QueueOpsSummary counts={queueOpsCounts(thread, { agents: !drawsSubAgentWait })}>
             <div data-queue-card-ops={thread.id} className="flex min-w-0 flex-col gap-0.5">
@@ -709,9 +709,9 @@ function CardArticle({
               <ThreadLinks links={thread.links ?? []} scope={projectMarkdownScope(project)} />
             </div>
           </QueueOpsSummary>
-          {/* A LAZY THREAD's box is its note, and sending it starts the agent (LazyThreadBox). */}
-          {thread.lazyPrompt !== undefined
-            ? <LazyThreadBox thread={thread} surface="queueComposer" className="min-w-0" />
+          {/* A HELD THREAD's box is what it will start with, and sending it starts the agent (HeldThreadBox.tsx). */}
+          {thread.held !== undefined
+            ? <HeldThreadComposer thread={thread} surface="queueComposer" className="min-w-0" />
             : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
         </div>
       </ThreadProjectScope>

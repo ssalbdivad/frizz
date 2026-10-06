@@ -334,11 +334,11 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
     projects: projects ?? [],
   })
   if (target.kind === "refused") return { ok: false, reason: target.reason }
-  // A LAZY THREAD's box is its note (LazyThreadBox), held by the server, with no draft and no chips: a chip
+  // A HELD THREAD's box (a lazy thread's note, HeldThreadBox.tsx) is kept by its holder, with no draft and no chips: a chip
   // written to its follow-up draft was answered "added", never appeared, and turned up in the reply box
   // once the thread had started (sweep 2026-10-01). So it is refused, saying what to do instead.
-  // (Putting the chip into the note itself needs staged context that survives startLazyThread.)
-  if (target.kind === "thread" && store.board?.threads.some((candidate) => candidate.id === target.slug && candidate.lazyPrompt !== undefined)) {
+  // (Putting the chip into the note itself needs staged context that survives the thread's start.)
+  if (target.kind === "thread" && store.board?.threads.some((candidate) => candidate.id === target.slug && candidate.held !== undefined)) {
     return { ok: false, reason: "Start the thread to add code to it." }
   }
   const edit = composeEdit({ value: draftStore.get(target.key), staged: stagedItems(target.key), item, projectDir: target.projectDir, note: request.note })

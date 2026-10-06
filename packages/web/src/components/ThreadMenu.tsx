@@ -195,9 +195,9 @@ export function ThreadMenu({ thread, onDoc, restart = true, card = false, classN
   const [info, setInfo] = useState(false)
   // THE TIME LIMIT (DeadlineControl): set one on a thread that has none, or change the one it has. A thread
   // with a limit also wears it as a chip on the header's facts line, which opens the same panel. Not on a
-  // Done thread, whose clock is history, nor a lazy one, which has no agent to tell.
+  // Done thread, whose clock is history, nor a held one, which has no agent to tell.
   const [timeLimit, setTimeLimit] = useState(false)
-  const offersTimeLimit = ownSession && thread.state !== "archived" && thread.lazyPrompt === undefined
+  const offersTimeLimit = ownSession && thread.state !== "archived" && thread.held === undefined
   // Review changes: in the editor's sidebar always, in a browser while an editor that can show them is
   // connected (lib/reviewChanges.ts says why only there).
   const { editorWindows } = useSnapshot(store)

@@ -1,14 +1,14 @@
 import { createContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
-import { ArrowUp, FileText, Loader2, Paperclip, Plus, Repeat, Snail, X } from "lucide-react"
+import { ArrowUp, FileText, Loader2, Paperclip, Plus, Repeat, X } from "lucide-react"
 import { ATTACHMENT_ACCEPT, ATTACHMENT_MAX_BYTES, isAllowedAttachmentName, type EmbedPickedFile, type ThreadSkill } from "@frizz/shared"
 import { showToast } from "../store.ts"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { splitProseByTokens } from "../lib/composerContext.ts"
 import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
-import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
+import { shouldInterruptSubmitComposerEnter, shouldSubmitAltComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_ALT_ACTION_OFFSET, RAIL_ALT_OFFSET, RAIL_ALT_PAPERCLIP_OFFSET, RAIL_ALT_PAPERCLIP_PLAIN_OFFSET, RAIL_ALT_RESERVE_PLAIN, RAIL_ALT_RESERVE_WITH_ACTION, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -128,6 +128,19 @@ const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring 
  */
 export type ComposerMarkTone = "pending" | "accepted" | "wash"
 export type ComposerMark = { start: number; end: number; tone: ComposerMarkTone; key?: string }
+
+/** The new-thread box's ALTERNATE SUBMIT, as a Frizz plugin offers it (NewThreadModal binds the slot). */
+export interface ComposerSubmitAlt {
+  /** The offering plugin's id — `data-composer-alt`. */
+  id: string
+  /** The button's accessible name. */
+  label: string
+  /** Its tooltip; the chord is appended. */
+  title: string
+  /** The glyph, already fenced in the plugin's error boundary. */
+  icon: ReactNode
+  onSubmit: () => void
+}
 
 /**
  * The runs of the prose where a schedule word never makes the box read for a schedule
@@ -259,7 +272,7 @@ export function Composer({
   fileMentions,
   onInterruptSubmit,
   onPushQueued,
-  onSaveLazy,
+  submitAlt,
   marks,
   onInputEvent,
   onEscape,
@@ -355,10 +368,11 @@ export function Composer({
   // the caller owns the "is a follow-up actually queued behind a running turn" check, so with nothing
   // queued it returns false and the keypress keeps its default.
   onPushQueued?: () => boolean
-  // SAVE AS A LAZY THREAD — the new-thread box only (plans/lazy-threads.md). ⌘/Ctrl-Shift-Enter, or the
-  // snail glyph beside Send, writes the prompt down as a thread with no agent behind it instead of
-  // starting one. (A footer text hint did this job until 2026-10-01; the maintainer wanted it gone.)
-  onSaveLazy?: () => void
+  // THE ALTERNATE SUBMIT — the new-thread box only, offered by a Frizz plugin (`newThread.submitAlt`): a glyph
+  // beside Send and ⌘/Ctrl-Shift-Enter. The lazy plugin's snail writes the prompt down as a thread with no
+  // agent behind it instead of starting one (`onSaveLazy` until 2026-10-06, when lazy threads became a plugin;
+  // a footer text hint did this job until 2026-10-01, and the maintainer wanted it gone).
+  submitAlt?: ComposerSubmitAlt
   // Runs of the PROSE marked behind the text (ComposerMark): the schedule the box read in it, so the human sees
   // which words are WHEN and that the rest is the prompt, verbatim. Offsets into the prose the box shows; a mark
   // that no longer fits it draws nothing.
@@ -916,23 +930,23 @@ export function Composer({
 
   const hasContent = value.trim().length > 0
   const interruptChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⏎" : "Ctrl+Enter"), [])
-  const lazyChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
+  const altChord = useMemo(() => (detectPlatform() === "mac" ? "⌘⇧⏎" : "Ctrl+Shift+Enter"), [])
   // ONE rail slot. Reserving it must track what is actually rendered — the padding/offset classes below
   // key off `railAction`, and a truthy element that renders null would carve out an empty hole (the bug
   // GithubTrigger's `useGithubTriggerVisible` exists to prevent). Its only filler now is `leftAction`
   // (the dispatch composer's GitHub picker); interrupt-and-send gave up its button here and kept only
   // ⌘/Ctrl-Enter — see the `onInterruptSubmit` prop doc.
   const railAction = leftAction ?? null
-  // The lazy-save glyph (new-thread box only) takes the slot beside Send and pushes the rest of the rail
+  // The alternate-submit glyph (new-thread box only) takes the slot beside Send and pushes the rest of the rail
   // one slot left, so the reserve and the left-hand offsets all follow it. The Goal (`railLead`, the
   // thread composer only) sits beyond the paperclip on the plain rail; the two never share a box — no
   // surface passes both — so the lead's offsets are the plain rail's.
-  const railReserve = onSaveLazy
-    ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
+  const railReserve = submitAlt
+    ? railAction ? RAIL_ALT_RESERVE_WITH_ACTION : RAIL_ALT_RESERVE_PLAIN
     : railAction && railLead ? RAIL_RESERVE_WITH_BOTH : railAction || railLead ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
-  const railActionOffset = onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
-  const paperclipOffset = onSaveLazy
-    ? railAction ? RAIL_LAZY_PAPERCLIP_OFFSET : RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET
+  const railActionOffset = submitAlt ? RAIL_ALT_ACTION_OFFSET : RAIL_ACTION_OFFSET
+  const paperclipOffset = submitAlt
+    ? railAction ? RAIL_ALT_PAPERCLIP_OFFSET : RAIL_ALT_PAPERCLIP_PLAIN_OFFSET
     : railAction ? RAIL_PAPERCLIP_OFFSET : RAIL_PAPERCLIP_PLAIN_OFFSET
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
@@ -1014,10 +1028,10 @@ export function Composer({
       onSubmit()
       return
     }
-    if (onSaveLazy && shouldSaveLazyComposerEnter(keyboardEvent, canSend)) {
+    if (submitAlt && shouldSubmitAltComposerEnter(keyboardEvent, canSend)) {
       e.preventDefault()
       e.stopPropagation()
-      onSaveLazy()
+      submitAlt.onSubmit()
       return
     }
     // ⌘/Ctrl-Enter — the FORCED send. With a worker mid-turn it preempts what the worker is doing so
@@ -1622,20 +1636,21 @@ export function Composer({
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
-      {/* SAVE AS A LAZY THREAD, beside Send so the act is discoverable without its chord. Muted like the
-          paperclip: it is the secondary submit, and Send stays the one filled button. */}
-      {onSaveLazy && (
+      {/* THE ALTERNATE SUBMIT (a Frizz plugin's — the lazy plugin's snail), beside Send so the act is
+          discoverable without its chord. Muted like the paperclip: it is the secondary submit, and Send stays
+          the one filled button. */}
+      {submitAlt && (
         <button
           type="button"
-          data-composer-lazy
+          data-composer-alt={submitAlt.id}
           onMouseDown={(e) => e.preventDefault()}
-          onClick={onSaveLazy}
+          onClick={submitAlt.onSubmit}
           disabled={!hasContent || busy || uploading}
-          title={`Add as lazy thread, without starting an agent (${lazyChord})`}
-          aria-label="Add as lazy thread"
-          className={`icon-hover-outline absolute bottom-2 ${RAIL_LAZY_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
+          title={`${submitAlt.title} (${altChord})`}
+          aria-label={submitAlt.label}
+          className={`icon-hover-outline absolute bottom-2 ${RAIL_ALT_OFFSET} flex h-7 w-7 items-center justify-center rounded-lg text-muted transition-[color,background-color] enabled:hover:bg-panel-2/70 enabled:hover:text-fg disabled:opacity-50`}
         >
-          <Snail size={15} strokeWidth={2} />
+          {submitAlt.icon}
         </button>
       )}
       <button

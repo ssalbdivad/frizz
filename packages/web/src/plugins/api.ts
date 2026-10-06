@@ -15,12 +15,29 @@
 // Each slot renders inside a per-plugin error boundary, and `activate` itself is caught: a web half that
 // throws loses its own slots and is listed as failed in Settings → Frizz plugins; the page carries on.
 import type * as React from "react"
-import type { BoardSnapshot, ThreadView } from "@frizz/shared"
+import type { BoardSnapshot, DispatchInput, ThreadView } from "@frizz/shared"
 
 export type { BoardSnapshot, ThreadView }
 
 /** Call one of THIS plugin's procedures (`plugin.<id>.<name>`) on a project. */
 export type PluginCall = (name: string, input?: unknown) => Promise<unknown>
+
+/** The prompt box base draws for a thread with no agent yet (HeldThreadBox.tsx), handed to plugins. */
+export interface HeldThreadBoxProps {
+  thread: ThreadView
+  surface: "queueComposer" | "chatComposer"
+  className?: string
+  id?: string
+  /** The box's text: what sending it starts the thread with. A change from elsewhere replaces it unless typed over. */
+  note: string
+  /** Saves the text as it is typed (debounced). Omitted: the box keeps its text to itself. */
+  save?: (text: string) => Promise<unknown>
+  /** Starts the thread with the box's text. A throw is shown as a toast and leaves the box as it was. */
+  start: (text: string) => Promise<unknown>
+  placeholder?: string
+  /** The hint under the box. */
+  footer?: string
+}
 
 export interface WebPluginHost {
   readonly id: string
@@ -33,6 +50,44 @@ export interface WebPluginHost {
   /** The page project's board, live. A hook: call it from a slot component's body. */
   useBoard(): BoardSnapshot | null
   toast(message: string, options?: { link?: { label: string; slug: string; project?: string } }): void
+  /** Base's own components, so a plugin's box is base's box rather than a copy that drifts. */
+  readonly ui: {
+    HeldThreadBox: React.ComponentType<HeldThreadBoxProps>
+  }
+}
+
+/** A draft in the new-thread box, as `newThread.submitAlt` receives it. */
+export interface NewThreadDraft {
+  /** The prompt as a dispatch would send it, chips included and the editor's context block not. */
+  prompt: string
+  /** The prompt box's profile pick: what the thread starts on, unless changed then. */
+  model?: string
+  backend?: "claude" | "codex" | "acp"
+  effort?: NonNullable<DispatchInput["effort"]>
+}
+
+/**
+ * The new-thread box's ALTERNATE SUBMIT: a glyph beside Send, and ⌘/Ctrl-Shift-Enter. Base clears the box as
+ * a dispatch does, puts the words back if `submit` throws, and toasts the result with a link to the thread.
+ */
+export interface SubmitAltSlot {
+  /** The button's accessible name — "Add as lazy thread". */
+  label: string
+  /** Its tooltip; base appends the chord. */
+  title: string
+  Icon: React.ComponentType<{ size: number; strokeWidth: number }>
+  /** The toast after it lands — "Lazy thread added". */
+  done: string
+  submit(draft: NewThreadDraft): Promise<{ slug: string }>
+}
+
+export interface ThreadComposerSlotProps {
+  thread: ThreadView
+  surface: "queueComposer" | "chatComposer"
+  className?: string
+  id?: string
+  /** This plugin's procedures on the THREAD's project (a card on All projects may be another project's). */
+  call: PluginCall
 }
 
 export interface SettingsSectionSlotProps {
@@ -47,6 +102,10 @@ export interface WebPluginSlots {
   "queue.head"?: React.ComponentType
   /** Under the plugin's entry in Settings → Frizz plugins. */
   "settings.section"?: React.ComponentType<SettingsSectionSlotProps>
+  /** The new-thread box's alternate submit. The first plugin, in id order, to offer one gets the glyph and chord. */
+  "newThread.submitAlt"?: SubmitAltSlot
+  /** The prompt box of a thread THIS plugin holds unstarted (`thread.held === id`); base's box when absent. */
+  "thread.composer"?: React.ComponentType<ThreadComposerSlotProps>
 }
 
 export interface WebPluginActivation {

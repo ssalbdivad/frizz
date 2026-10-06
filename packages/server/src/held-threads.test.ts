@@ -123,3 +123,26 @@ test("base never queues a held thread whose holder has not said so", () => {
   assert.equal(view.runtime, "turn-idle", "never reads as a dispatch still spinning up")
   assert.equal(view.crashed, false, "never reads as a worker that died")
 })
+
+// From lazy-threads.test.ts (2026-10-01), kept with the migration it now feeds: the build that called the
+// column `todo` left its lazy threads there, ensureStorageSchema moves them to `lazy_prompt`, and the held
+// migration then hands each to the `lazy` plugin.
+test("a database from the build that named the column `todo` keeps its lazy threads", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-lazy-migrate-"))
+  try {
+    const file = join(dir, "ui.db")
+    const first = createStorage(file, "p")
+    first.upsertSession(row("renew"))
+    first.close()
+    // What that build left behind: its own column, holding the prompt, and nothing in the new one.
+    const raw = new Database(file)
+    raw.exec("ALTER TABLE session ADD COLUMN todo TEXT")
+    raw.exec("UPDATE session SET todo = 'Renew the domain', lazy_prompt = NULL")
+    raw.close()
+    const reopened = createStorage(file, "p")
+    assert.equal(reopened.getSession("renew")?.lazy_prompt, "Renew the domain")
+    assert.equal(isHeldRow(reopened.getSession("renew")), true)
+    assert.equal(reopened.getSession("renew")?.held_by, "lazy")
+    reopened.close()
+  } finally { rmSync(dir, { recursive: true, force: true }) }
+})

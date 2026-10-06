@@ -23,7 +23,7 @@ import type { TranscriptData } from "../hooks.ts"
 import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 import { composerTerminalLine } from "../lib/threadTerminals.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
-import { LazyThreadBox } from "./LazyThreadBox.tsx"
+import { HeldThreadComposer } from "./HeldThreadBox.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
 import { threadLifecycleAvailability } from "../lib/threadLifecycle.ts"
 import { PhoneDoneButton } from "./PhoneDoneButton.tsx"
@@ -247,11 +247,12 @@ export function ThreadComposerBox({
     deliver()
   }
 
-  // A LAZY THREAD has no agent to steer yet: its box is the note, and sending it starts one (LazyThreadBox).
-  if (thread?.lazyPrompt !== undefined) {
+  // A HELD THREAD has no agent to steer yet: its box is what it will start with, and sending it starts one —
+  // its holder's box (a Frizz plugin's `thread.composer`), or base's (HeldThreadBox.tsx).
+  if (thread?.held !== undefined) {
     return (
       <div {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})} className={className}>
-        <LazyThreadBox thread={thread as ThreadView} surface={surface} id={id} />
+        <HeldThreadComposer thread={thread as ThreadView} surface={surface} id={id} />
       </div>
     )
   }

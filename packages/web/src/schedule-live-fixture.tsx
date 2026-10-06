@@ -23,7 +23,7 @@ import "./styles.css"
 
 // THE SCHEDULE IN THE WORDS, on the real prompt box (plans/schedule-live-reading.md). It mounts the real
 // <DispatchForm> — Composer, useLiveSchedule, the strip, the draft store — over a stubbed RPC seam that COUNTS
-// every call the box can make that matters (dispatch, createLazyThread, createSchedule, deleteSchedule,
+// every call the box can make that matters (dispatch, the lazy plugin's plugin.lazy.create, createSchedule, deleteSchedule,
 // interpretSchedule) and records their bodies, so composerScheduleLive.e2e.test.ts can say "Enter dispatched
 // once and created nothing" as a fact about the wire.
 //
@@ -45,7 +45,7 @@ import "./styles.css"
 // button that opens the box in a sheet through the same store flag the phone uses (`store.phoneNewThread`), and
 // a dispatch or a created schedule closes it — so what happens AFTER the box is gone (Undo) can be driven.
 
-type Counted = "dispatch" | "createLazyThread" | "createSchedule" | "deleteSchedule" | "interpretSchedule"
+type Counted = "dispatch" | "plugin.lazy.create" | "createSchedule" | "deleteSchedule" | "interpretSchedule"
 /** What the stub model says about a text that contains `match`. */
 type ModelRule = {
   match: string
@@ -91,8 +91,8 @@ declare global {
 const PROJECT_ID = "fixture-schedule-live"
 const PROJECT_DIR = "/fixture/schedule-live"
 
-const zero = (): Record<Counted, number> => ({ dispatch: 0, createLazyThread: 0, createSchedule: 0, deleteSchedule: 0, interpretSchedule: 0 })
-const empty = (): Record<Counted, Record<string, unknown>[]> => ({ dispatch: [], createLazyThread: [], createSchedule: [], deleteSchedule: [], interpretSchedule: [] })
+const zero = (): Record<Counted, number> => ({ dispatch: 0, "plugin.lazy.create": 0, createSchedule: 0, deleteSchedule: 0, interpretSchedule: 0 })
+const empty = (): Record<Counted, Record<string, unknown>[]> => ({ dispatch: [], "plugin.lazy.create": [], createSchedule: [], deleteSchedule: [], interpretSchedule: [] })
 
 let gateWaiters: Array<() => void> = []
 let inFlight = 0
@@ -234,7 +234,7 @@ window.fetch = async (input, init) => {
       }
       // Acknowledged, never acted on: there is no server behind this page.
       return json({ slug: "fixture-started-thread", sessionId: "fixture-session" })
-    case "createLazyThread": return json({ slug: "fixture-lazy-thread" })
+    case "plugin.lazy.create": return json({ slug: "fixture-lazy-thread" })
     case "interpretSchedule": {
       // Parsed as the server parses it: `text` is TRIMMED, and the answer's offsets index the trimmed text.
       const parsed = InterpretScheduleInput.parse(body)

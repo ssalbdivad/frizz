@@ -4015,13 +4015,15 @@ export const ThreadView = z.object({
   // There is no third kind. Terminal COMMAND threads (`kind: "command"`, 2026-09-23) were rows of their
   // own until 2026-09-29; a terminal now belongs to a session thread (`terminals` below).
   kind: z.enum(["session", "legacy"]).optional(),
-  // An UNSTARTED thread's note (plans/lazy-threads.md): present ⇒ no agent has ever run for this thread. It
-  // rests in the queue like a bare rest, and the first message sent to it starts the agent.
-  lazyPrompt: z.string().optional(),
   // A HELD thread (server SessionRow.held_by): present ⇒ no agent has ever run for it, and it names who holds
   // it — `schedules` for a schedule's next run, or a Frizz plugin's id (`lazy`). A message sent to it goes to
-  // that holder, and starts it when the holder is gone. Base never queues one; its holder may.
+  // that holder, and starts it when the holder is gone. Base never queues one; its holder may. (Until
+  // 2026-10-06 a lazy thread's `lazyPrompt` meant this; lazy threads are the `lazy` Frizz plugin now.)
   held: z.string().optional(),
+  // A held thread's OPENING PROMPT as base keeps it (server SessionRow.lazy_prompt): a schedule's next run's
+  // prompt, which the human may edit for that run alone, and for a plugin's thread the text base would start
+  // it on if the plugin were gone. Present exactly when `held` is. A plugin's own note is under `plugins`.
+  heldPrompt: z.string().optional(),
   // What each FRIZZ PLUGIN wrote for this thread (its `threadView`), keyed by plugin id — read only by that
   // plugin's own web half. Absent when no plugin wrote anything.
   plugins: z.record(z.string(), z.unknown()).optional(),
@@ -4422,7 +4424,7 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // A SCHEDULE'S NEXT RUN is parked until the scheduler starts it — including the seconds after its wake
   // time passes and before the tick that starts it (a post-boot grace, the start cap). Reading its clock
   // here would drop it into Active for exactly that window (plans/scheduled-threads.md §4).
-  if (t.schedule?.pending === true && t.lazyPrompt !== undefined) return true
+  if (t.schedule?.pending === true && t.held !== undefined) return true
   // THE RESTING CARD'S EVENT-SNOOZE IS A PARK THE HUMAN MADE, and it parks into Snoozed exactly as the
   // wall-clock snooze does. It arrives as `bgSnoozed` (server truth: bg_snooze_rested_at equals the
   // current rest) on a thread resting behind a shell, a PR watch or a timer — the three shapes whose
@@ -5077,14 +5079,12 @@ export const CreateHeldThreadInput = z.object({
   effort: Settings.shape.effort,
 })
 export type CreateHeldThreadInput = z.infer<typeof CreateHeldThreadInput>
-// The lazy thread's create, until the lazy plugin takes it (packages/server/src/plugins).
-export const CreateLazyThreadInput = CreateHeldThreadInput
-export type CreateLazyThreadInput = CreateHeldThreadInput
-export const UpdateLazyPromptInput = z.object({ slug: ThreadSlug, sessionId: z.string().min(1), prompt: z.string() }).strict()
-export type UpdateLazyPromptInput = z.infer<typeof UpdateLazyPromptInput>
-// Start a lazy thread's agent: `prompt` is its opening message (the note, usually edited first). The profile
-// fields default to the ones the lazy thread was written down with.
-export const StartLazyThreadInput = z.object({
+// Rewrite a held thread's opening prompt (ThreadView.heldPrompt) — a schedule's next run's, edited for that run.
+export const UpdateHeldPromptInput = z.object({ slug: ThreadSlug, sessionId: z.string().min(1), prompt: z.string() }).strict()
+export type UpdateHeldPromptInput = z.infer<typeof UpdateHeldPromptInput>
+// Start a held thread's agent: `prompt` is its opening message (the held prompt, usually edited first). The
+// profile fields default to the ones the thread was written down with.
+export const StartHeldThreadInput = z.object({
   slug: ThreadSlug,
   sessionId: z.string().min(1),
   prompt: z.string().min(1),
@@ -5092,7 +5092,7 @@ export const StartLazyThreadInput = z.object({
   backend: Backend.optional(),
   effort: Settings.shape.effort,
 }).strict()
-export type StartLazyThreadInput = z.infer<typeof StartLazyThreadInput>
+export type StartHeldThreadInput = z.infer<typeof StartHeldThreadInput>
 
 // ---- SPINOFFS (2026-09-29) -----------------------------------------------------------------------
 // A new thread the HUMAN asks for from an existing one — "fix this", "investigate perf" — with the

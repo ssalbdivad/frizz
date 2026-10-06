@@ -8,7 +8,6 @@ import {
   BoardSnapshot,
   AdoptThreadInput,
   AdoptThreadResult,
-  CreateLazyThreadInput,
   DispatchInput,
   SetThreadDeadlineInput,
   OwnDeadlineInput,
@@ -61,8 +60,8 @@ import {
   PLUGIN_API,
   PluginSettingsInput,
   SetPluginSettingsInput,
-  StartLazyThreadInput,
-  UpdateLazyPromptInput,
+  StartHeldThreadInput,
+  UpdateHeldPromptInput,
   TranscriptMessage,
   WorkflowAgentView,
   TranscriptPage,
@@ -2859,17 +2858,14 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // LAZY THREADS (plans/lazy-threads.md): a thread written down without starting an agent. Creating one spawns
-    // nothing; it rests in the queue as an ordinary thread row whose note stands where a transcript would.
-    createLazyThread: mutation({
-      input: CreateLazyThreadInput,
-      output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
-      handler: async ({ input }) => ctx.dispatcher.createHeldThread(input, { holder: "lazy" }),
-    }),
-
-    // Rewrite a lazy thread's note. Refused once the thread has started: the note was its first message by then.
-    updateLazyPrompt: mutation({
-      input: UpdateLazyPromptInput,
+    // HELD THREADS (SessionRow.held_by) — base's two verbs on a thread written down with no agent, whoever holds
+    // it. Creating one is the holder's (a schedule, a Frizz plugin's `threads.create`); lazy threads, which
+    // had createLazyThread / updateLazyPrompt / startLazyThread here until 2026-10-06, are the `lazy` plugin's.
+    //
+    // Rewrite a held thread's opening prompt — a schedule's next run's, edited for that run alone, or the text
+    // base would start an orphaned plugin thread on. Refused once it has started: it was the first message.
+    updateHeldPrompt: mutation({
+      input: UpdateHeldPromptInput,
       handler: async ({ input }) => {
         currentOwnedSession(input.slug, input.sessionId)
         if (!ctx.storage.setHeldPrompt(input.slug, input.sessionId, input.prompt)) throw new Error("This thread has already started")
@@ -2877,10 +2873,10 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Start a lazy thread's agent with `prompt` as its opening message — usually the note, edited in the prompt
-    // box first. The profile defaults to the one the lazy thread was written down with.
-    startLazyThread: mutation({
-      input: StartLazyThreadInput,
+    // Start a held thread's agent with `prompt` as its opening message — usually the held prompt, edited in
+    // the prompt box first. The profile defaults to the one it was written down with.
+    startHeldThread: mutation({
+      input: StartHeldThreadInput,
       output: z.object({ slug: ThreadSlug, sessionId: z.string() }),
       handler: async ({ input }) => startHeldThreadRow(currentOwnedSession(input.slug, input.sessionId), input.prompt, input),
     }),
@@ -6156,7 +6152,7 @@ const HUMAN_THREAD_ACTS = [
   "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
   "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "holdQuestionDefault", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
-  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateLazyPrompt", "startLazyThread",
+  "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateHeldPrompt", "startHeldThread",
   "setThreadDeadline",
 ] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]
 

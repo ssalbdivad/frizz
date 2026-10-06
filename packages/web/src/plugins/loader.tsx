@@ -6,6 +6,10 @@ import { callProcedure, rpc } from "../api/rpc.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { showToast, store } from "../store.ts"
 import type { ActivateWebPlugin, PluginCall, WebPluginHost, WebPluginSlots } from "./api.ts"
+// A cycle, and a safe one: HeldThreadBox mounts the holder's slot from this module, and this module hands
+// HeldThreadBox to plugins. Neither reads the other at module evaluation — only when a host is built or a
+// box renders — so the order the two load in does not matter.
+import { HeldThreadBox } from "../components/HeldThreadBox.tsx"
 
 // THE PAGE'S HALF OF FRIZZ PLUGINS (plans/upstream-superset.md §7).
 //
@@ -64,6 +68,7 @@ function hostFor(summary: PluginSummary): WebPluginHost {
     call: pluginCaller(summary, apiBase),
     useBoard: () => useSnapshot(store).board as BoardSnapshot | null,
     toast: (message, options) => showToast(message, options),
+    ui: { HeldThreadBox },
   }
 }
 

@@ -27,9 +27,8 @@ import type {
   ScheduleView,
   SetScheduleStateInput,
   UpdateScheduleInput,
-  CreateLazyThreadInput,
-  StartLazyThreadInput,
-  UpdateLazyPromptInput,
+  StartHeldThreadInput,
+  UpdateHeldPromptInput,
   EditorComposeInput,
   EditorComposeItem,
   EditorFront,
@@ -245,10 +244,10 @@ export interface Api {
   // lib/eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS for what that costs without one.
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
   spinoff(input: SpinoffInput): Promise<SpinoffResult>
-  // Lazy threads (plans/lazy-threads.md): a thread written down without an agent, its note edited, and its agent started.
-  createLazyThread(input: CreateLazyThreadInput): Promise<{ slug: string; sessionId: string }>
-  updateLazyPrompt(input: UpdateLazyPromptInput): Promise<void>
-  startLazyThread(input: StartLazyThreadInput): Promise<{ slug: string; sessionId: string }>
+  // Held threads (ThreadView.held): a thread written down without an agent — a schedule's next run, a Frizz plugin's
+  // (the lazy plugin's note) — its opening prompt edited, and its agent started. Lazy threads' own verbs are the plugin's.
+  updateHeldPrompt(input: UpdateHeldPromptInput): Promise<void>
+  startHeldThread(input: StartHeldThreadInput): Promise<{ slug: string; sessionId: string }>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
   // The × (and Edit) on a FAILED send's bubble — see DismissFailedFollowUpInput.
   dismissFailedFollowUp(input: DismissFailedFollowUpInput): Promise<DismissFailedFollowUpResult>
@@ -565,9 +564,8 @@ export const PROCEDURES = {
   adoptThread: "mutation",
   followUp: "mutation",
   spinoff: "mutation",
-  createLazyThread: "mutation",
-  updateLazyPrompt: "mutation",
-  startLazyThread: "mutation",
+  updateHeldPrompt: "mutation",
+  startHeldThread: "mutation",
   unqueueFollowUp: "mutation",
   dismissFailedFollowUp: "mutation",
   deliverQueuedNow: "mutation",

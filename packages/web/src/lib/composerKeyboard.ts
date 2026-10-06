@@ -26,8 +26,8 @@ export type ComposerKeyboardEvent = {
 // Enter and the forced chord — a question card exists while the worker waits, so there is nothing to
 // interrupt and "send now" and "send" are the same act.
 //
-// A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter saves the prompt as a lazy thread instead of
-// starting it (shouldSaveLazyComposerEnter). There is no schedule chord: the new-thread box reads its words for
+// A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter is its ALTERNATE SUBMIT — a Frizz plugin's
+// (the lazy plugin saves the prompt as a lazy thread instead of starting it) — shouldSubmitAltComposerEnter. There is no schedule chord: the new-thread box reads its words for
 // a schedule, and Enter creates it when there is one (plans/schedule-live-reading.md).
 function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
@@ -57,11 +57,12 @@ export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent,
 }
 
 /**
- * SAVE AS A LAZY THREAD — ⌘/Ctrl-Shift-Enter in the new-thread box: the prompt is written down as a thread with
- * no agent behind it (plans/lazy-threads.md) instead of being dispatched. Disjoint from the other three, every
- * one of which refuses Shift (isEnter). Same `canSubmit` gate and the same IME guard as every send.
+ * THE ALTERNATE SUBMIT — ⌘/Ctrl-Shift-Enter in the new-thread box, where a Frizz plugin offers one
+ * (`newThread.submitAlt`; the lazy plugin writes the prompt down as a thread with no agent behind it instead of
+ * dispatching it). Disjoint from the other three, every one of which refuses Shift (isEnter). Same `canSubmit`
+ * gate and the same IME guard as every send.
  */
-export function shouldSaveLazyComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
+export function shouldSubmitAltComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
   return canSubmit && event.key === "Enter" && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey
     && !event.isComposing && event.keyCode !== 229
 }

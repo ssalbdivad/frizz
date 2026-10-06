@@ -1,6 +1,7 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
+import { Snail } from "lucide-react"
 import { Composer } from "./components/Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./components/GithubTrigger.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -19,8 +20,9 @@ import "./styles.css"
 const params = new URLSearchParams(location.search)
 const authed = !params.has("unauthed")
 const heals = params.has("heals")
-// `?lazy` passes `onSaveLazy`, as the new-thread box does: the lazy-save glyph joins the rail beside send.
-const lazy = params.has("lazy")
+// `?alt` passes `submitAlt` as the new-thread box binds the lazy plugin's (its snail): the alternate-submit glyph
+// joins the rail beside send. (`?lazy` until 2026-10-06, when lazy threads became a Frizz plugin; still read.)
+const alt = params.has("alt") || params.has("lazy")
 // `?send=schedule` draws Send as it reads when Enter will create a schedule (the repeat glyph in place of the
 // arrow, ScheduleComposer.tsx), and `?send=pending` as it reads while Enter is held for a schedule check.
 const send = params.get("send")
@@ -49,7 +51,7 @@ function Fixture() {
           value={value}
           onChange={setValue}
           onSubmit={() => {}}
-          {...(lazy ? { onSaveLazy: () => {} } : {})}
+          {...(alt ? { submitAlt: { id: "lazy", label: "Add as lazy thread", title: "Add as lazy thread, without starting an agent", icon: <Snail size={15} strokeWidth={2} />, onSubmit: () => {} } } : {})}
           {...(send === "schedule" ? { sendGlyph: "schedule" as const } : {})}
           {...(send === "pending" ? { sendPending: true } : {})}
           placeholder="Describe the task…"

@@ -129,6 +129,13 @@ export interface ProjectHost {
      * thread written down before plugins existed carried. For a one-time import; undefined when empty.
      */
     legacyNote(row: PluginThreadRow): string | undefined
+    /**
+     * Keep base's copy of what a thread this plugin holds would start with in step with the plugin's own
+     * (the same `session.lazy_prompt`). The plugin's database stays the truth; base's copy is what the thread
+     * starts on if the plugin is removed or fails, and what an older Frizz shows after a rollback. False when
+     * the thread is not (or no longer) this plugin's to write.
+     */
+    setPrompt(row: PluginThreadRow, prompt: string): boolean
   }
   /** Re-assemble this project's board (after a write `threadView` reads), so open pages redraw. */
   refresh(): void

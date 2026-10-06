@@ -1,11 +1,13 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useIsMutating, useMutation, useQuery } from "@tanstack/react-query"
-import { expandUserCommandDraft, type AccountBackend, type CreateLazyThreadInput, type CreateScheduleInput, type DispatchInput } from "@frizz/shared"
+import { expandUserCommandDraft, type AccountBackend, type CreateScheduleInput, type DispatchInput } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
 import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
-import { Composer, composerExcludeRuns } from "./Composer.tsx"
+import { Composer, composerExcludeRuns, type ComposerSubmitAlt } from "./Composer.tsx"
+import { PluginBoundary, usePluginSlots } from "../plugins/loader.tsx"
+import type { NewThreadDraft } from "../plugins/api.ts"
 import { EditorContextBar } from "./EditorContextBar.tsx"
 import { EditorLine } from "./EditorLine.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
@@ -206,17 +208,21 @@ function PromptForm({
     },
   })
 
-  // SAVE AS A LAZY THREAD (plans/lazy-threads.md): the same prompt, written down as a thread with no agent behind it.
-  // No auth gate — nothing is started, so no provider is contacted; the sign-in, if one is needed, comes
-  // when the lazy thread is launched. The draft clears like a dispatch's and comes back on failure the same way.
-  const saveLazy = useMutation({
-    mutationFn: (input: CreateLazyThreadInput) => {
+  // THE ALTERNATE SUBMIT (a Frizz plugin's `newThread.submitAlt`; the first in id order). The lazy plugin's
+  // writes the same prompt down as a thread with no agent behind it — "Add as lazy thread" was hard-wired here
+  // (submitLazy, createLazyThread) until 2026-10-06. No auth gate: nothing is started, so no provider is
+  // contacted; the sign-in, if one is needed, comes when the thread is launched. The draft clears like a
+  // dispatch's and comes back on failure the same way.
+  const altSlot = usePluginSlots("newThread.submitAlt")[0]
+  const submitAltSlot = useMutation({
+    mutationFn: (input: NewThreadDraft) => {
+      if (!altSlot) return Promise.reject(new Error("Its plugin is no longer loaded"))
       const project = projectSlug()
-      return rpc.createLazyThread(input).then((res) => ({ ...res, project }))
+      return altSlot.slot.submit(input).then((res) => ({ ...res, project }))
     },
     onSuccess: (res) => {
       onDispatched?.()
-      showToast("Lazy thread added", { link: { label: "Open", slug: res.slug, project: res.project } })
+      showToast(altSlot?.slot.done ?? "Added", { link: { label: "Open", slug: res.slug, project: res.project } })
     },
     onError: (e, input) => {
       restoreSubmitted(submittedDraftRef.current || input.prompt)
@@ -224,28 +230,28 @@ function PromptForm({
       submittedContextRef.current = []
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
       restoreLimit()
-      showToast(`Could not add the lazy thread: ${(e as Error).message.slice(0, 80)}`)
+      showToast(`Could not add the thread: ${(e as Error).message.slice(0, 80)}`)
     },
   })
 
-  function submitLazy() {
-    // A schedule being created from these words owns them until they leave the box: saving them lazily
-    // too would make the same words two things.
+  function submitAlt() {
+    // A schedule being created from these words owns them until they leave the box: handing them to the
+    // alternate submit too would make the same words two things.
     if (schedule.creating) return
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
-    const input: CreateLazyThreadInput = {
+    const input: NewThreadDraft = {
       // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
       // A lazy thread is written down for later. The block says what the editor showed "when they sent
       // this"; baked into the note it would be read hours later as the moment of launch, and it sat in an
       // editable note the human never typed. Attached at launch instead, it would describe whatever the
       // editor happens to show then — unrelated to a note written earlier, more often than not — from a box
-      // (LazyThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
+      // (HeldThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
       // If the note means the editor ("fix this"), the agent reads it then through its editor tool.
       prompt: outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim(),
       // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,
-      effort: (resolved.effort || undefined) as CreateLazyThreadInput["effort"],
+      effort: (resolved.effort || undefined) as NewThreadDraft["effort"],
     }
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
@@ -255,8 +261,21 @@ function PromptForm({
     submittedLimitRef.current = draftStore.get(limitKey)
     submittedContextRef.current = takeContextItems(promptKey)
     clearDispatchDraft(projectDir)
-    saveLazy.mutate(input)
+    submitAltSlot.mutate(input)
   }
+  const composerAlt: ComposerSubmitAlt | undefined = altSlot
+    ? {
+        id: altSlot.plugin.id,
+        label: altSlot.slot.label,
+        title: altSlot.slot.title,
+        icon: (
+          <PluginBoundary id={altSlot.plugin.id} slot="newThread.submitAlt">
+            <altSlot.slot.Icon size={15} strokeWidth={2} />
+          </PluginBoundary>
+        ),
+        onSubmit: submitAlt,
+      }
+    : undefined
 
   // Fire the dispatch and do the one-shot UI bookkeeping (optimistic toast + prompt clear). Called both
   // on a clean submit and after the sign-in gate is cleared, so the prompt is only cleared once the
@@ -563,7 +582,7 @@ function PromptForm({
         value={prompt}
         onChange={setPrompt}
         onSubmit={submit}
-        onSaveLazy={submitLazy}
+        submitAlt={composerAlt}
         marks={schedule.marks}
         onInputEvent={schedule.onInputEvent}
         onEscape={schedule.onEscape}
@@ -581,7 +600,7 @@ function PromptForm({
         slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending || saveLazy.isPending || savingSettings}
+        busy={dispatch.isPending || submitAltSlot.isPending || savingSettings}
         onUploadingChange={setUploading}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}

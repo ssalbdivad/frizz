@@ -553,8 +553,9 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
               <span className="flex items-center gap-2"><Dots /> Loading…</span>
             ) : running ? (
               <span className="flex items-center gap-2"><Dots /> Session starting…</span>
-            ) : thread?.lazyPrompt !== undefined ? (
-              // A lazy thread: no agent has run, so there is nothing to read. Its note is the prompt box below.
+            ) : thread?.held !== undefined ? (
+              // A held thread (a lazy thread, a schedule's next run): no agent has run, so there is nothing to read.
+              // What it will start with is the prompt box below.
               "Not started yet."
             ) : canAdoptThread(thread) ? (
               // A thread frizz never originated (pre-existing .frizz board): no session, no

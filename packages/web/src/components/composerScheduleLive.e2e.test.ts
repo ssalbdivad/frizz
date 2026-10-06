@@ -12,7 +12,7 @@ import { SCHEDULE_SPACING_COPY } from "@frizz/shared"
 // on the wire for every branch — and never the other thing.
 //
 // Drives schedule-live-fixture (the real DispatchForm, the `c` dialog and the Toaster over a stubbed RPC seam
-// that COUNTS dispatch, createLazyThread, createSchedule, deleteSchedule and interpretSchedule, at a fixed clock:
+// that COUNTS dispatch, plugin.lazy.create, createSchedule, deleteSchedule and interpretSchedule, at a fixed clock:
 // Mon Oct 5 2026, 2:32pm New York). The model is the fixture's stub, armed per case with canned answers, delays,
 // a gate that holds every answer until released, failures and calls that never answer.
 //
@@ -34,7 +34,7 @@ const READING = "Every Monday at 9am · next Mon Oct 12, in 6d"
 type PuppeteerModule = typeof import("puppeteer")
 type Browser = Awaited<ReturnType<PuppeteerModule["launch"]>>
 type Page = Awaited<ReturnType<Browser["newPage"]>>
-type Counts = Record<"dispatch" | "createLazyThread" | "createSchedule" | "deleteSchedule" | "interpretSchedule", number>
+type Counts = Record<"dispatch" | "plugin.lazy.create" | "createSchedule" | "deleteSchedule" | "interpretSchedule", number>
 const ATTACHED = "/fixture/.frizz/attachments/1-abcdef12-shot.png"
 type Rule = { match: string; delayMs?: number } & Record<string, unknown>
 
@@ -236,7 +236,7 @@ test("1. no schedule word: the box looks as it always has, asks the model nothin
     assert.equal((await counts(page)).interpretSchedule, 0, "no model call")
     await page.keyboard.press("Enter")
     assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000), "Enter dispatched")
-    assert.deepEqual({ ...(await counts(page)), dispatch: 1 }, { dispatch: 1, createLazyThread: 0, createSchedule: 0, deleteSchedule: 0, interpretSchedule: 0 })
+    assert.deepEqual({ ...(await counts(page)), dispatch: 1 }, { dispatch: 1, "plugin.lazy.create": 0, createSchedule: 0, deleteSchedule: 0, interpretSchedule: 0 })
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })

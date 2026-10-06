@@ -535,7 +535,7 @@ function useOpenRun(schedule: ScheduleView): (slug: string, title?: string) => v
     const here = projectSlug() === schedule.projectSlug && store.board?.projectSlug === schedule.projectSlug
     if (here) {
       const thread = store.board?.threads.find((t) => t.id === slug)
-      pushDrawer(thread && thread.runtime === "none" && thread.lazyPrompt === undefined ? "doc" : "thread", slug, { drillIn: true })
+      pushDrawer(thread && thread.runtime === "none" && thread.held === undefined ? "doc" : "thread", slug, { drillIn: true })
       return
     }
     openInPlace({ slug: schedule.projectSlug, id: schedule.projectId, name: schedule.projectName }, slug, title)
