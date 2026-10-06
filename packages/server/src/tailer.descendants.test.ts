@@ -251,7 +251,7 @@ test("nesting: a quiet descendant with something LIVE under it keeps its row", (
 // A descendant is RUNNING-only on the board, so for one the stale misreading was worse than a grey
 // dot: a grandchild blocked in a wait it sized itself (`timeout: 3600000`, say) left the tree at minute
 // 15 while it was still working. It is live until that call's declared bound, the same as a direct child.
-test("nesting: a descendant blocked in a Bash wait it sized itself keeps its row until that call's deadline passes", () => {
+test("nesting: a descendant blocked in a Bash wait it sized itself keeps its row until 15 minutes past the deadline", () => {
   // One fixture per reading: the subtree is memoized per second, so a second reading inside the same
   // fixture would only read the first one back.
   const grand = (call: { [key: string]: unknown }, issuedMinutesAgo: number) => {

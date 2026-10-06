@@ -246,8 +246,7 @@ import { parseIssueRef, parsePrRef, readGithubIssueStatusBook, readGithubStatusB
 import { isBrokerClaudeRow, isHeldRow, isScheduleHeldRow, type RecurringWrite, type SessionRow, type Storage, type SubAgentSteerRow, type ThreadQuestionRow } from "./storage.ts"
 import { createHeldThreadStarter, type HeldStartProfile } from "./held-start.ts"
 import { scheduleProcedures } from "./schedule-router.ts"
-import { SUBAGENT_STALE_MS, unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
-import { workflowAgentViews } from "./workflow-runs.ts"
+import { unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
 import { postToAgentInbox, workflowSessionDir } from "./agent-inbox.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
@@ -535,7 +534,7 @@ export function completionConfirmationHold(telemetry: SessionTelemetry | undefin
 
   // Only ACTIVELY-running work holds Done back. A `stale` sub-agent — its completion signal lost AND its
   // transcript silent 15 min past its last write, or past the deadline of a Bash wait it declared
-  // (pending-call.ts `transcriptQuietPast`) — is far closer to finished/dead than to working, and counting it here
+  // (tailer `quietPastWindow`) — is far closer to finished/dead than to working, and counting it here
   // contradicted the queue:
   // hasLiveBackgroundWork (board.ts) holds a thread out of the queue on `running` ONLY, so a stale-only
   // parent read as at-rest in the rail yet Mark-as-done warned it was busy. The two must agree, so match
@@ -2589,7 +2588,7 @@ export function createRouter(ctx: AppContext) {
             steerNote: null,
             stoppable: stop.sessionId !== null,
             stopNote: stop.sessionId === null ? stop.note : null,
-            workflow: workflowAgentViews(info.workflow.runDir, info.workflow.live, Date.now(), SUBAGENT_STALE_MS),
+            workflow: info.workflow.agents,
           }
         }
         if (!info) return { messages: [], state: "gone" as const, steerable: false, steerNote: null, stoppable: false, stopNote: null }

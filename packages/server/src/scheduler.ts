@@ -2774,9 +2774,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const finishedItem = (i: { kind: string; value: string }) =>
         finishedHandles.has(i.value) || (i.kind === "timer" && firedTimers.has(i.value))
       // SILENT IS NOT MISSING EITHER. A sub-agent that has written nothing for longer than its allowance —
-      // 15 minutes of awake time, or what its pending call declared (pending-call.ts) — reads `stale`. The
-      // id is right and the child may well be alive; what frizz knows is that it has gone quiet past what it
-      // said it would. Saying "nothing by that name" sent the parent hunting for a typo. This wake IS the
+      // 15 minutes of awake time, counted from the deadline of a Bash wait it declared (tailer.ts
+      // pendingCallDeadline) — reads `stale`. The id is right and the child may well be alive; what frizz
+      // knows is that it has gone quiet past what it said it would. Saying "nothing by that name" sent the parent hunting for a typo. This wake IS the
       // regular-update expectation on a child: nothing is stopped, the parent is told, and it decides.
       const silentSince = new Map<string, string | undefined>()
       for (const a of tele.subAgents ?? []) {

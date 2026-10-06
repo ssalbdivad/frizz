@@ -13,7 +13,7 @@ import { createStorage } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { createTailer } from "./tailer.ts"
-import { workflowAgentViews, workflowLabel } from "./workflow-runs.ts"
+import { workflowLabel } from "./workflow-runs.ts"
 
 const SESSION = "11111111-2222-3333-4444-555555555555"
 const SLUG = "workflow"
@@ -102,7 +102,7 @@ test("the drill-in resolves the run to its tree and each agent to its own transc
     assert.equal(run?.workflow?.runDir, f.runDir)
     assert.equal(run?.workflow?.live, true)
     assert.equal(run?.direct, false, "a workflow is not a conversation: no steer may be addressed to it")
-    assert.deepEqual(workflowAgentViews(run!.workflow!.runDir, true, Date.now(), 15 * 60_000).map((a) => [a.id, a.phase, a.state]), [
+    assert.deepEqual(run!.workflow!.agents.map((a) => [a.id, a.phase, a.state]), [
       ["aImpl1", "Implement", "done"],
       ["aImpl2", "Implement", "running"],
       ["aReview", "Review", "failed"],

@@ -1,7 +1,5 @@
 import { readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
-import { transcriptQuietPast } from "./pending-call.ts"
-import { processAwakeClock } from "./awake-clock.ts"
 
 // ── CLAUDE CODE WORKFLOW RUNS, read off disk ─────────────────────────────────────────────────────────
 //
@@ -163,40 +161,43 @@ function str(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
+/** The tailer's staleness rule for one transcript (tailer.ts quietPastWindow): quiet past its window, in
+ *  awake time, and past the deadline of any Bash wait it ends in. Injected rather than imported, because
+ *  the tailer imports this module and owns the clock, the stat and the tail cache the rule runs on. */
+export type QuietPast = (path: string, lastWriteMs: number, nowMs: number) => boolean
+
 // One agent's liveness. "running" only while the RUN is live: a run that died with its process leaves
-// agents journalled as started forever. Quiet past `staleMs` of awake time — and past whatever its pending
-// call declared (pending-call.ts) — reads "stale", the rule every tracked child follows. `mtimeMs` and
-// `awakeBetween` are injected so the tailer can use its own (test-controllable) clock and stat.
+// agents journalled as started forever. Quiet past its window (`quietPast`) reads "stale", the rule every
+// tracked child follows. `mtimeMs` is the tailer's own (test-controllable) stat.
 export function workflowAgentState(
   agent: WorkflowAgent,
   runLive: boolean,
   nowMs: number,
-  staleMs: number,
-  mtimeMs: (path: string) => number | undefined = statMtime,
-  awakeBetween: (fromMs: number, toMs: number) => number = processAwakeClock.awakeBetween,
+  mtimeMs: (path: string) => number | undefined,
+  quietPast: QuietPast,
 ): "running" | "stale" | "done" | "failed" {
   if (agent.status !== "running") return agent.status
   if (!runLive) return "done"
   const m = mtimeMs(agent.transcript) ?? agent.startedAtMs
-  return m === undefined || transcriptQuietPast(agent.transcript, m, nowMs, staleMs, awakeBetween) ? "stale" : "running"
+  return m === undefined || quietPast(agent.transcript, m, nowMs) ? "stale" : "running"
 }
 
+export type WorkflowAgentListing = { id: string; label: string; phase?: string; state: "running" | "stale" | "done" | "failed"; startedAt?: string }
+
 // The drawer's listing of a run: every agent it started, finished ones included.
-export function workflowAgentViews(runDir: string | undefined, runLive: boolean, nowMs: number, staleMs: number): Array<{ id: string; label: string; phase?: string; state: "running" | "stale" | "done" | "failed"; startedAt?: string }> {
+export function workflowAgentViews(
+  runDir: string | undefined,
+  runLive: boolean,
+  nowMs: number,
+  mtimeMs: (path: string) => number | undefined,
+  quietPast: QuietPast,
+): WorkflowAgentListing[] {
   if (!runDir) return []
   return readWorkflowRun(runDir).map((agent) => ({
     id: agent.agentId,
     label: agent.label,
     ...(agent.phase ? { phase: agent.phase } : {}),
-    state: workflowAgentState(agent, runLive, nowMs, staleMs),
+    state: workflowAgentState(agent, runLive, nowMs, mtimeMs, quietPast),
     ...(agent.startedAtMs === undefined ? {} : { startedAt: new Date(agent.startedAtMs).toISOString() }),
   }))
-}
-
-function statMtime(path: string): number | undefined {
-  try {
-    return statSync(path).mtimeMs
-  } catch {
-    return undefined
-  }
 }

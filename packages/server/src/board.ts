@@ -368,8 +368,8 @@ function hasLiveBackgroundWork(tele: SessionTelemetry | undefined): boolean {
 
 // The same question asked of a thread whose owning process is PROVABLY GONE, where `stale` stops being
 // ambiguous. Everywhere else `stale` means only "we lost this child's completion signal and its
-// transcript has been quiet past its window" — 15 minutes, or past the declared bound of the call it is
-// blocked in (pending-call.ts). It could equally be a finished
+// transcript has been quiet past its window" — 15 minutes, counted from the deadline of the Bash wait it
+// declared when it is blocked in one (tailer.ts pendingCallDeadline). It could equally be a finished
 // child whose notification never landed, which is why hasLiveBackgroundWork deliberately counts
 // `running` alone.
 // Against a dead daemon there is nothing left to be ambiguous about: an Agent child ran IN-PROCESS

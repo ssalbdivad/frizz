@@ -11,7 +11,7 @@ import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow, isHeldRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, mtimeOfNonEmpty, DISCOVERY_GRACE_MS } from "./discover.ts"
-import type { AgentBackend, FoldState, NormalizedEvent, NormalizedTail, OpenCall } from "./backend/types.ts"
+import { CLAUDE_WORKER_ENV, type AgentBackend, type FoldState, type NormalizedEvent, type NormalizedTail, type OpenCall } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
@@ -46,8 +46,7 @@ export { leadingCd }
 import { codexToolWorkdir } from "./transcript.ts"
 import { probeShellCwds } from "./shell-cwd-probe.ts"
 import { threadNameProblem } from "./thread-names.ts"
-import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent } from "./workflow-runs.ts"
-import { transcriptQuietPast } from "./pending-call.ts"
+import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAgentViews, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent, type WorkflowAgentListing } from "./workflow-runs.ts"
 import { processAwakeClock, wallSpan } from "./awake-clock.ts"
 import { forkPointOf, isInheritedSessionMetadata } from "./fork-point.ts"
 import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning, type SideTurn } from "./spinoff-side-turn.ts"
@@ -126,25 +125,138 @@ const MAX_POLL_MS = 10_000
 // treated as "stale" — a liveness fallback for a completion record we somehow missed (the child
 // died, or the worker session ended before the <task-notification> landed).
 //
-// The window MUST exceed the longest a LIVE child can legitimately stay silent, and that has a hard
-// ceiling: a child writes its tool_use record, then blocks, and Claude's foreground Bash timeout is
-// capped at 600000 ms — so one tool call buys at most ~10 minutes of silence. The old 5-minute window
-// sat UNDER that ceiling and therefore declared healthy children dead: a child dispatched to own a CI
-// wait (the contract's prescribed way to wait) flipped to "stale" at 312s while blocked in its
-// watcher, dropping hasLiveBackgroundWork and queueing its parent mid-wait — measured on the live
-// board 2026-07-22. 15 minutes clears the ceiling with headroom and still clears a genuinely dead
-// child promptly; across 1366 real child transcripts (176k inter-record gaps) only 0.04% exceed it,
-// while the p99 gap is 95s.
+// The window MUST exceed the longest a LIVE child can legitimately stay silent. A child writes its
+// tool_use record, then blocks, and a foreground Bash call that names no `timeout` is moved to the
+// background at BASH_DEFAULT_TIMEOUT_MS (60 s in a frizz worker) — so a call the child did not size
+// buys at most a minute of silence. The old 5-minute window sat UNDER the 10-minute ceiling any Bash
+// call had then (Claude's own BASH_MAX_TIMEOUT_MS) and therefore declared healthy children dead: a
+// child dispatched to own a CI wait (the contract's prescribed way to wait) flipped to "stale" at 312s
+// while blocked in its watcher, dropping hasLiveBackgroundWork and queueing its parent mid-wait —
+// measured on the live board 2026-07-22.
+// 15 minutes clears that with headroom and still clears a genuinely dead child promptly; across 1366
+// real child transcripts (176k inter-record gaps) only 0.04% exceed it, while the p99 gap is 95s.
 //
-// THAT CEILING IS GONE. Frizz lifted it to 24 hours on 2026-08-11 (backend/types.ts BASH_MAX_TIMEOUT_MS),
-// so this window is now the floor of a child's allowance, not the whole of it: a child whose latest call
-// is still pending is judged against that call's own declared bound (pending-call.ts), and silence is
-// measured in awake time (awake-clock.ts). Re-measured 2026-09-29 over 1944 child transcripts since the
-// lift (486,680 gaps): 23 exceeded 15 minutes, 15 of them inside a pending Bash call declaring ≥ 15m.
+// A call that DOES name a `timeout` is the exception, and it has no fixed ceiling any more: frizz lifted
+// BASH_MAX_TIMEOUT_MS to 24 hours on 2026-08-11. Such a call sets its own window — see
+// pendingCallDeadline.
+//
+// Every span here is AWAKE time (awake-clock.ts, the tailer's `awakeBetween`): a suspended host is not a
+// silent agent, and the harness's own timeout timer did not run through the suspension either. Re-measured
+// 2026-09-29 over 1944 child transcripts since the lift (486,680 gaps): 23 exceeded 15 minutes, 15 of them
+// inside a pending Bash call declaring ≥ 15m.
 //
 // AGENTS ONLY: a child appends on every step, so silence there is a real (if coarse) liveness signal.
 // A background SHELL has no such property and is not judged this way at all — see bgShellViews.
-export const SUBAGENT_STALE_MS = 15 * 60_000
+const SUBAGENT_STALE_MS = 15 * 60_000
+
+// A CHILD BLOCKED IN A WAIT IT SIZED ITSELF IS QUIET BY DECLARATION, NOT DEAD (2026-10-03).
+//
+// The window above rested on Claude's 600_000 ms ceiling for a foreground Bash call, and frizz lifted
+// that ceiling to 24 hours on 2026-08-11 so a worker may block on a wait it sized itself. A child that
+// does exactly that — `until grep -q '^DONE' gates.log; do sleep 15; done` with `timeout: 3600000`,
+// waiting on a Rust build — writes its tool_use and then nothing for the hour it asked for. At minute
+// 15 it read "stale": a flat grey dot on every surface, and no longer live work its parent could rest
+// on, while it was working (maintainer 2026-10-03: "It looks like it's come to rest or perhaps has
+// frozen or died"). Measured over this machine's last 14 days of sub-agent transcripts: 104 Bash calls
+// held a child silent past 15 minutes, 98 of them under a declared `timeout` longer than that, and none
+// returned later than 1.2 s past the deadline it declared — the harness writes the result AT the
+// deadline ("Command did not complete within its 900s timeout and was moved to the background").
+//
+// So when a child's transcript ENDS in such a call, the staleness window opens at that call's deadline
+// instead of at the last append. A child quiet for any other reason keeps the plain clock, and a call
+// that names no `timeout` changes nothing (it bounces at BASH_DEFAULT_TIMEOUT_MS, well inside the
+// window). The returned deadline is clamped to the worker's own ceiling, so no record can buy more.
+const BASH_TIMEOUT_CEILING_MS = Number(CLAUDE_WORKER_ENV.BASH_MAX_TIMEOUT_MS)
+
+/**
+ * The deadline of the Bash call a Claude transcript is blocked in, read from the transcript's TAIL.
+ *
+ * Only the LAST assistant message can hold a call that is still running — the model cannot write
+ * another message until every call of the previous one has its result — so this walks back over that
+ * message's records (Claude writes one record per content block, all sharing `message.id`) and the
+ * tool results written after them, and stops at the message before it or at a prompt.
+ *
+ * `settled: false` means the window held no verdict (it began inside the last message's records or
+ * the results after them), and the caller may retry with more of the file. `deadline` is the latest
+ * deadline among the unresolved calls that declared one, or absent when none did.
+ */
+export function pendingCallDeadline(tail: string): { settled: boolean; deadline?: number } {
+  const resolved = new Set<string>()
+  const lines = tail.split("\n")
+  let messageId: string | undefined
+  let seenAssistant = false
+  let deadline: number | undefined
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const record = parseLine(lines[i]!)
+    if (!record) continue
+    const content = record.message?.content
+    if (record.type === "user") {
+      // A prompt, not a result: the last message (if any was seen) ended before it.
+      if (!Array.isArray(content) || !content.some(isToolResultBlock)) return { settled: true, ...(deadline === undefined ? {} : { deadline }) }
+      for (const block of content) if (isToolResultBlock(block)) resolved.add(block.tool_use_id)
+      continue
+    }
+    if (record.type !== "assistant") continue // attachments, system records, queue bookkeeping
+    const id = typeof record.message?.id === "string" ? record.message.id : undefined
+    if (seenAssistant && (id === undefined || id !== messageId)) break // an earlier message: all resolved
+    seenAssistant = true
+    messageId = id
+    if (!Array.isArray(content)) continue
+    for (const block of content) {
+      const end = declaredBashDeadline(block, record.timestamp)
+      if (end !== undefined && !resolved.has(end.id)) deadline = Math.max(deadline ?? end.at, end.at)
+    }
+  }
+  return { settled: seenAssistant, ...(deadline === undefined ? {} : { deadline }) }
+}
+
+function isToolResultBlock(block: unknown): block is { type: "tool_result"; tool_use_id: string } {
+  return !!block && typeof block === "object" && (block as { type?: unknown }).type === "tool_result" &&
+    typeof (block as { tool_use_id?: unknown }).tool_use_id === "string"
+}
+
+// A Bash tool_use's own deadline: the instant it was issued plus the `timeout` it names. Undefined for
+// any other block, and for a Bash call that names none (or an unusable one) — that call is the
+// harness's to bound, and the plain window already covers it.
+function declaredBashDeadline(block: unknown, timestamp: string | undefined): { id: string; at: number } | undefined {
+  if (!block || typeof block !== "object") return undefined
+  const call = block as { type?: unknown; name?: unknown; id?: unknown; input?: { timeout?: unknown } }
+  if (call.type !== "tool_use" || call.name !== "Bash" || typeof call.id !== "string") return undefined
+  const timeout = call.input?.timeout
+  if (typeof timeout !== "number" || !Number.isFinite(timeout) || timeout <= 0) return undefined
+  const issued = timestamp ? Date.parse(timestamp) : Number.NaN
+  if (!Number.isFinite(issued)) return undefined
+  return { id: call.id, at: issued + Math.min(timeout, BASH_TIMEOUT_CEILING_MS) }
+}
+
+// How much of a quiet child's transcript pendingCallDeadline is handed: a first read that holds the
+// usual tail (the call's own record is ~2 KB) and one retry for the rare tail a huge tool result fills.
+const PENDING_CALL_TAIL_BYTES = [256 * 1024, 8 * 1024 * 1024] as const
+
+// The last `window` bytes of a file of `size` bytes, as text. A read that starts mid-file starts
+// mid-line, so the fragment before the first newline is dropped rather than handed to a parser.
+// Telemetry-grade: any failure is "cannot tell" (undefined), never a throw.
+function readTranscriptTail(path: string, size: number, window: number): string | undefined {
+  const length = Math.min(size, window)
+  let fd: number | undefined
+  try {
+    fd = openSync(path, "r")
+    const buffer = Buffer.alloc(length)
+    const read = readSync(fd, buffer, 0, length, size - length)
+    const text = buffer.toString("utf8", 0, read)
+    return length < size ? text.slice(text.indexOf("\n") + 1) : text
+  } catch {
+    return undefined
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd)
+      } catch {
+        // already gone; nothing to release
+      }
+    }
+  }
+}
 
 // IS A BACKGROUND SHELL STILL ALIVE? Asked of the OPERATING SYSTEM, not guessed from age or output.
 //
@@ -2929,8 +3041,9 @@ export interface SubAgentLookup {
   outcome?: "completed" | "failed" | "killed"
   // Set when the id names a WORKFLOW run: its agents live in `runDir` (see workflow-runs.ts), and `live`
   // says whether the run itself is still tracked as running — the only thing that makes a journalled
-  // "started" agent trustworthy as running.
-  workflow?: { runDir?: string; live: boolean }
+  // "started" agent trustworthy as running. `agents` is the drawer's listing of the run, each agent's
+  // state read by the tailer's own staleness rule and clock.
+  workflow?: { runDir?: string; live: boolean; agents: WorkflowAgentListing[] }
   // Set when the id names one AGENT of a workflow run, resolved through the journal in `runDir`.
   workflowAgent?: { runDir: string }
 }
@@ -3615,10 +3728,8 @@ export function createTailer(deps: TailerDeps): Tailer {
     return meta ? descendantTranscript(state, meta) : undefined
   }
 
-  // A CHILD BLOCKED IN ONE LONG FOREGROUND CALL IS NOT A DEAD ONE (pending-call.ts). Its transcript takes
-  // the tool_use and then nothing until the call returns, and since 2026-08-11 a call may declare up to 24
-  // hours — so silence is judged against what the child's pending call declared, not a flat 15 minutes,
-  // and in awake time. Three children were read dead this way on 2026-09-29 with their processes alive.
+  // A child's staleness: its transcript gone quiet past its window (quietPastWindow). A WORKFLOW is
+  // judged by its run instead, and before its ack names the run there is nothing to measure.
   function entryStale(state: TailState, e: SubAgentEntry, nowMs: number): boolean {
     if (e.workflow) {
       if (!e.workflow.runDir) return false // before its ack: nothing to measure, so never stale
@@ -3626,13 +3737,49 @@ export function createTailer(deps: TailerDeps): Tailer {
     }
     const path = entryTranscript(state, e)
     if (!path) return false
-    return quietPast(path, nowMs)
+    // Only an agent's file is a Claude transcript: a shell's is its raw output, and a codex child's is
+    // its rollout, which records calls in codex's own schema.
+    return quietPastWindow(path, mtimeMs(path), nowMs, e.kind === "agent" && e.outputFormat !== "codex")
   }
 
-  // The one staleness rule every tracked transcript answers to: gone quiet past SUBAGENT_STALE_MS of awake
-  // time, and past whatever its pending call declared. A file that no longer stats is stale.
-  function quietPast(path: string, nowMs: number, lastWriteMs = mtimeMs(path)): boolean {
-    return lastWriteMs === undefined || transcriptQuietPast(path, lastWriteMs, nowMs, SUBAGENT_STALE_MS, awakeBetween)
+  // Has a child's transcript been quiet past its window? The plain clock — SUBAGENT_STALE_MS since the
+  // last append — opened instead at the deadline of the Bash wait the transcript ends in, when that call
+  // named one (see pendingCallDeadline). A transcript that no longer stats is past it: a completion we
+  // missed. The deadline is only looked for once the plain clock has run out, so a working child never
+  // pays for the read. Both spans are AWAKE time (`awakeBetween`, awake-clock.ts): a host asleep through
+  // the window is not a child silent through it, and the call's own timeout timer slept too.
+  function quietPastWindow(path: string, m: number | undefined, nowMs: number, claudeTranscript = true): boolean {
+    if (m === undefined) return true
+    if (awakeBetween(m, nowMs) <= SUBAGENT_STALE_MS) return false
+    const deadline = claudeTranscript ? blockedUntil(path, m) : undefined
+    return deadline === undefined || awakeBetween(deadline, nowMs) > SUBAGENT_STALE_MS
+  }
+
+  // The deadline a QUIET child transcript is blocked until, cached per path and invalidated by the
+  // file's mtime and size: a transcript that has not moved cannot have changed its answer, so a child
+  // blocked for an hour is read once, not once per tick. Bounded; the oldest path falls out first.
+  const blockedUntilCache = new Map<string, { m: number; size: number; deadline: number | undefined }>()
+  function blockedUntil(path: string, m: number): number | undefined {
+    let size: number
+    try {
+      size = statSync(path).size
+    } catch {
+      return undefined
+    }
+    const cached = blockedUntilCache.get(path)
+    if (cached && cached.m === m && cached.size === size) return cached.deadline
+    let deadline: number | undefined
+    for (const window of PENDING_CALL_TAIL_BYTES) {
+      const tail = readTranscriptTail(path, size, window)
+      if (tail === undefined) break
+      const verdict = pendingCallDeadline(tail)
+      deadline = verdict.deadline
+      if (verdict.settled || window >= size) break
+    }
+    blockedUntilCache.delete(path)
+    blockedUntilCache.set(path, { m, size, deadline })
+    if (blockedUntilCache.size > 64) blockedUntilCache.delete(blockedUntilCache.keys().next().value!)
+    return deadline
   }
 
   // A WORKFLOW is live while its journal moved recently or ANY running agent is live by its own reading —
@@ -3643,7 +3790,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     for (const agent of readWorkflowRun(runDir)) {
       if (agent.status !== "running") continue
       const m = mtimeMs(agent.transcript)
-      if (m !== undefined && !quietPast(agent.transcript, nowMs, m)) return false
+      if (m !== undefined && !quietPastWindow(agent.transcript, m, nowMs)) return false
     }
     return true
   }
@@ -3662,7 +3809,11 @@ export function createTailer(deps: TailerDeps): Tailer {
   }
 
   function workflowAgentState(agent: WorkflowAgent, runLive: boolean, nowMs: number): "running" | "stale" | "done" | "failed" {
-    return sharedWorkflowAgentState(agent, runLive, nowMs, SUBAGENT_STALE_MS, mtimeMs, awakeBetween)
+    return sharedWorkflowAgentState(agent, runLive, nowMs, mtimeMs, quietPastWindow)
+  }
+
+  function workflowLookup(runDir: string | undefined, live: boolean): NonNullable<SubAgentLookup["workflow"]> {
+    return { runDir, live, agents: workflowAgentViews(runDir, live, now(), mtimeMs, quietPastWindow) }
   }
 
   // The workflow run a tracked or retained entry names, live runs first. Used to resolve a workflow
@@ -4063,7 +4214,7 @@ export function createTailer(deps: TailerDeps): Tailer {
   //  2. This thread's own transcript: the descendant's terminal <task-notification>, folded by
   //     trackCompletions into `descendantTerminals`. Available on EVERY backend, because it rides the
   //     file the tailer already reads. See recordDescendantTerminal for why it exists.
-  //  3. Silence, the coarse fallback — the same rule every tracked child uses (quietPast).
+  //  3. Silence, the coarse fallback — the same rule every tracked child uses (quietPastWindow).
   //
   // (2) is measured against the transcript rather than trusted outright, because the same task-id
   // notifies again each time a resumable descendant stops: a transcript still advancing WELL past its
@@ -4079,7 +4230,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     const at = mtimeMs(path)
     const notified = state.descendantTerminals?.get(meta.agentId)
     if (notified !== undefined && (at === undefined || at <= notified + DESCENDANT_NOTIFY_GRACE_MS)) return "done"
-    return quietPast(path, now(), at) ? "stale" : "running"
+    return quietPastWindow(path, at, now()) ? "stale" : "running"
   }
 
   // How deep the surfaced tree goes. A bound, not an opinion: `parentAgentId` comes off an unvalidated
@@ -4376,7 +4527,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       state: entryStale(state, live, now()) ? "stale" : "running",
       // A workflow is not a conversation: a steer addressed to its tool_use id reaches nobody.
       direct: live.kind === "agent" && !live.workflow,
-      ...(live.workflow ? { workflow: { runDir: live.workflow.runDir, live: true } } : {}),
+      ...(live.workflow ? { workflow: workflowLookup(live.workflow.runDir, true) } : {}),
       ...(live.taskId ? { taskId: live.taskId } : {}),
       startedAt: live.startedAt,
     }
@@ -4389,7 +4540,7 @@ export function createTailer(deps: TailerDeps): Tailer {
       ...(dead.startedAt ? { startedAt: dead.startedAt } : {}),
       ...(dead.finishedAt ? { finishedAt: dead.finishedAt } : {}),
       outcome: dead.status,
-      ...(dead.workflow ? { workflow: { runDir: dead.workflow.runDir, live: false } } : {}),
+      ...(dead.workflow ? { workflow: workflowLookup(dead.workflow.runDir, false) } : {}),
     }
     // A DESCENDANT — a child of a child, of a child, at any depth. Its dispatch is in an ANCESTOR's
     // transcript rather than this thread's, so neither map above can hold it; the flat sidecar index

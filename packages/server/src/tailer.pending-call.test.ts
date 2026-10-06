@@ -14,12 +14,14 @@ import { createStorage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
 import { createTailer } from "./tailer.ts"
-import { PENDING_CALL_GRACE_MS } from "./pending-call.ts"
 
 const MIN = 60_000
 const T = (iso: string) => Date.parse(iso)
 const CALL_AT = "2026-07-01T00:01:00.000Z"
 const BOUND = 40 * MIN
+// The staleness window opens AT the pending call's deadline (tailer.ts pendingCallDeadline) and runs the
+// ordinary 15 minutes from there.
+const WINDOW = 15 * MIN
 
 const lines = (...recs: object[]) => recs.map((r) => JSON.stringify(r) + "\n").join("")
 const IN_FLIGHT = { type: "user", timestamp: "2026-07-01T00:00:00.000Z", message: { role: "user", content: "go" } }
@@ -93,11 +95,26 @@ test("a child 20 minutes into a 40-minute foreground call is RUNNING, not stale"
   } finally { h.close() }
 })
 
-test("NEGATIVE CONTROL: a dead child with a pending call still goes stale once that call's bound passes", () => {
+test("NEGATIVE CONTROL: a dead child with a pending call still goes stale once the window past that call's bound runs out", () => {
   const h = harness([bashCall(BOUND), hook, hook])
   try {
-    assert.equal(h.at(T(CALL_AT) + BOUND + PENDING_CALL_GRACE_MS - 1000)[0]?.state, "running", "inside the grace")
-    assert.equal(h.at(T(CALL_AT) + BOUND + PENDING_CALL_GRACE_MS + 1000)[0]?.state, "stale", "past bound + grace, nothing written")
+    assert.equal(h.at(T(CALL_AT) + BOUND + WINDOW - 1000)[0]?.state, "running", "inside the window that opens at the deadline")
+    assert.equal(h.at(T(CALL_AT) + BOUND + WINDOW + 1000)[0]?.state, "stale", "past it, nothing written")
+  } finally { h.close() }
+})
+
+test("a pending call's window is AWAKE time too: a host asleep past the deadline does not end it", () => {
+  // 30 minutes suspended a minute after the deadline: 25 wall minutes past it is 1 awake minute past it,
+  // where the wall clock alone (the test above) would already read stale.
+  const deadline = T(CALL_AT) + BOUND
+  const slept = (from: number, to: number) => {
+    const suspended = { from: deadline + MIN, to: deadline + 31 * MIN }
+    return to - from - Math.max(0, Math.min(to, suspended.to) - Math.max(from, suspended.from))
+  }
+  const h = harness([bashCall(BOUND), hook, hook], { awakeBetween: slept })
+  try {
+    assert.equal(h.at(deadline + 25 * MIN)[0]?.state, "running", "1 awake minute past the deadline")
+    assert.equal(h.at(deadline + 31 * MIN + WINDOW)[0]?.state, "stale", "16 awake minutes past it")
   } finally { h.close() }
 })
 
@@ -170,8 +187,8 @@ test("a workflow whose only running agent is deep in a long call stays running, 
   try {
     assert.deepEqual(at(T(CALL_AT) + 20 * MIN), [["toolu_wf", "running"], ["aVerify1", "running"]],
       "journal quiet 20m, but its agent is inside a 40m call: the run and its row both read running")
-    assert.deepEqual(at(T(CALL_AT) + BOUND + PENDING_CALL_GRACE_MS + 1000), [["toolu_wf", "stale"]],
-      "past the agent's bound the run reads stale, and the stale agent leaves the live rows")
+    assert.deepEqual(at(T(CALL_AT) + BOUND + WINDOW + 1000), [["toolu_wf", "stale"]],
+      "past the window that opens at the agent's bound the run reads stale, and the stale agent leaves the live rows")
   } finally {
     tailer.stop()
     storage.close()
