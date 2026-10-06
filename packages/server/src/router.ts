@@ -216,6 +216,7 @@ import {
 } from "./transcript.ts"
 import { readThreadStats, unrecordedStats } from "./thread-stats.ts"
 import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
+import { isDirectory } from "./path-probe.ts"
 import { reviewTargetOf } from "./review-target.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { editorKindsForOpener, folderEditor, mainCheckoutCopy, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
@@ -1408,14 +1409,6 @@ export function createRouter(ctx: AppContext) {
       edited: page.editedFiles ?? [],
       working: threadWorkingDir(slug),
     })
-  }
-
-  function isDirectory(path: string): boolean {
-    try {
-      return statSync(path).isDirectory()
-    } catch {
-      return false
-    }
   }
 
   // Every folder "Open in editor" can offer: the thread's own first, then each other checkout its recent

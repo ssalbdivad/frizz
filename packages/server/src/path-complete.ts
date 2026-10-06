@@ -1,6 +1,7 @@
 import { readdirSync, statSync } from "node:fs"
 import { homedir } from "node:os"
 import { join, resolve } from "node:path"
+import { expandHome, isDirectory } from "./path-probe.ts"
 
 // THE ADD-PROJECT DIALOG'S AUTOCOMPLETE — what is at the path being typed, and which folders continue it.
 //
@@ -19,11 +20,6 @@ export type PathCompletion = {
 }
 
 const MAX_SUGGESTIONS = 8
-
-/** `~` is what a person types; it is not a path any filesystem call understands. */
-function expandHome(typed: string, home: string): string {
-  return typed === "~" || typed.startsWith("~/") ? join(home, typed.slice(1)) : typed
-}
 
 export function completePath(input: string, home = homedir()): PathCompletion {
   const typed = input.trimStart()
@@ -61,12 +57,4 @@ export function completePath(input: string, home = homedir()): PathCompletion {
     .slice(0, MAX_SUGGESTIONS)
     .map((name) => `${parentTyped}${name}/`)
   return { status, suggestions }
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
 }

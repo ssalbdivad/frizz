@@ -1,7 +1,8 @@
-import { mkdirSync, statSync } from "node:fs"
+import { mkdirSync } from "node:fs"
 import { homedir } from "node:os"
 import { projectStateDir } from "./frizz-paths.ts"
 import { canonicalFolder, expandHomeFolder } from "./home-folder.ts"
+import { isDirectory } from "./path-probe.ts"
 import { cwdSlug, projectFromRegistryEntry, type Project } from "./project.ts"
 import { findById, findProjectBySegment, listProjects, readRegistry, reorderProjects, writeRegistry, type RegistryEntry } from "./project-registry.ts"
 import { readMachineSettings } from "./settings.ts"
@@ -75,14 +76,6 @@ export function homeWorkspaceEntry(home = homedir(), taken?: ReadonlySet<string>
     slug: homeWorkspaceSlug(home, taken),
     name: HOME_WORKSPACE_NAME,
     lastOpenedAt: NEVER_OPENED,
-  }
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
   }
 }
 

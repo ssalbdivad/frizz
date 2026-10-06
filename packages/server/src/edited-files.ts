@@ -2,6 +2,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { shellWriteTargets, type EditedFile, type TranscriptMessage } from "@frizz/shared"
+import { expandHome } from "./path-probe.ts"
 
 // THE FILES A THREAD'S WORKER HAS WRITTEN, derived from its projected transcript — the fullscreen
 // page's rail lists them (maintainer 2026-08-28: "the edited files, if that's even possible"). Two
@@ -71,14 +72,6 @@ export function editedFilePath(tool: ToolLike): string | null {
   return FILE_WRITING_TOOL_NAMES.has(normalizedToolName(tool.name)) ? detail : null
 }
 
-// `path.resolve` treats a leading tilde as an ordinary segment, so `cd ~/.cache/nub/worktrees/x &&
-// cat > a.rs` resolved to `<project>/~/.cache/…` and then passed the containment check below as an
-// in-project file. Expanding first lands it in HOME, where the check drops it as it always should have.
-function expandHome(candidate: string, home: string): string {
-  if (candidate === "~") return home
-  return candidate.startsWith("~/") ? path.join(home, candidate.slice(2)) : candidate
-}
-
 // The files a shell command wrote, as absolute paths inside the project.
 //
 // SCOPED TO THE PROJECT, unlike the tool-call reading, which lists whatever path the tool named. A
@@ -95,7 +88,8 @@ function shellWrittenPaths(tool: ToolLike, projectDir: string): string[] {
   const out: string[] = []
   for (const target of targets) {
     if (truncated && target.atEnd) continue
-    // The command's own `cd`, else the call's recorded cwd (codex records one), else the project.
+    // The command's own `cd`, else the call's recorded cwd (codex records one), else the project. A leading
+    // `~` is HOME, not a path segment, so it lands outside the project and is dropped (path-probe.ts).
     const base = expandHome(target.base ?? tool.cwd ?? projectDir, home)
     const absoluteBase = path.isAbsolute(base) ? base : path.resolve(projectDir, base)
     const resolved = path.resolve(absoluteBase, expandHome(target.path, home))

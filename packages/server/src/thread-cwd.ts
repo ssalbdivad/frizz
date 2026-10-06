@@ -2,6 +2,7 @@ import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, r
 import { homedir } from "node:os"
 import { dirname, isAbsolute, join, relative, resolve, sep } from "node:path"
 import type { ThreadWorkingDir, TranscriptMessage, WorkCheckout } from "@frizz/shared"
+import { isDirectory } from "./path-probe.ts"
 
 // WHERE A THREAD IS WORKING NOW — the folder a terminal opened on it starts in (thread-terminals.ts).
 //
@@ -119,14 +120,6 @@ export function newestToolWorkdir(messages: readonly TranscriptMessage[], base: 
     }
   }
   return undefined
-}
-
-function isDirectory(path: string): boolean {
-  try {
-    return statSync(path).isDirectory()
-  } catch {
-    return false
-  }
 }
 
 function within(child: string, parent: string): boolean {
