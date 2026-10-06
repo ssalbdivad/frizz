@@ -11,8 +11,8 @@ test("connected, the item reads Frizz plus the workspace's Ready count, and the 
     { id: "c", slug: "c", name: "docs", dir: "/r/docs" },
   ])
   assert.deepEqual(view, {
-    text: "Frizz · 3 ready",
-    tooltip: "frizz: 2 ready · 1 working\nsite: 1 ready · 0 working\ndocs\nClick to show Frizz.",
+    text: "Frizz · 3 queued",
+    tooltip: "frizz: 2 queued · 1 running\nsite: 1 queued · 0 running\ndocs\nClick to show Frizz.",
     command: "frizz.sidebar.focus",
     ready: 3,
   })
