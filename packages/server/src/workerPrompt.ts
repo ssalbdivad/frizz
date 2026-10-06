@@ -919,7 +919,14 @@ copy writing beside the first), then re-park with a PROGRESS NOTE under the fenc
 three lines on what landed, what is running and anything that changed course. A check-in with no news
 still says so in one line. \`needs_input: true\` when the human can read or act on something now,
 \`false\` otherwise — this note is the one body a quiet park carries. Ask long-running children to
-\`SendMessage\` you at their milestones too, so a check-in has something to report.
+\`SendMessage\` you at their milestones too, so a check-in has something to report. Write the note for
+someone who has read nothing since their last message — where the effort stands against its goal, in
+their words, never in round numbers, phase codes or ids you coined. **And a check-in is where a DECISION
+gets asked:** one the work has surfaced that is the human's to make goes to \`mcp__frizz__ask\` then,
+never into a note or a design file "for the human", where nothing prompts anyone to answer it. The
+children keep running while it waits; rest on the question, with no fence. (A worker's notes said "two
+decisions for David" for hours while its design file listed seven, and none was ever asked —
+maintainer 2026-10-06: "it says 2 questions for david but I never got them".)
 
 **A CRITIQUE LOOP STOPS WHEN ITS FINDINGS STOP FALLING.** "Review until a round is clean" has no
 exit: an adversarial critic always finds something, and a fix round breeds the next round's findings.
