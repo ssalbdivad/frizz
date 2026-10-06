@@ -38,7 +38,7 @@ const WEEKLY = {
   effort: "low" as const,
 }
 
-function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootGraceMs" | "startCap" | "owner">> & { nowMs?: number } = {}) {
+function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootGraceMs" | "startCap" | "owner" | "nameFor" | "log">> & { nowMs?: number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-schedules-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "schedules", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -91,6 +91,8 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
     postBootGraceMs: opts.postBootGraceMs ?? 0,
     startCap: opts.startCap ?? createStartCap(2),
     ...(opts.owner ? { owner: opts.owner } : {}),
+    ...(opts.nameFor ? { nameFor: opts.nameFor } : {}),
+    ...(opts.log ? { log: opts.log } : {}),
   })
   refOf = (row) => service.threadRef(row)
   const tailer: Tailer = {
@@ -635,5 +637,112 @@ test("Mark as done then Undo before the next pass leaves the next run at its tim
     assert.equal(h.spawned.length, 1, "it runs at its occurrence")
   } finally {
     h.close()
+  }
+})
+
+// ---- the provisional title's rename (plans/schedule-live-reading.md §10.2, §15.1 "Title compare-and-set") --
+
+/** A namer whose answers the test releases by hand, recording what it was asked. */
+function heldNamer() {
+  const asked: { source: string; exceptSlug?: string }[] = []
+  const answers: { resolve: (name: string) => void; reject: (error: Error) => void }[] = []
+  const nameFor = (source: string, exceptSlug?: string) => {
+    asked.push({ source, ...(exceptSlug !== undefined ? { exceptSlug } : {}) })
+    return new Promise<string>((resolve, reject) => answers.push({ resolve, reject }))
+  }
+  return { nameFor, asked, answers }
+}
+/** Let the rename's continuation run (it is fire-and-forget off `create`). */
+const settle = () => new Promise((r) => setImmediate(r))
+
+test("titleAuto: the namer's name lands when nothing changed, and the pending run's title follows", async () => {
+  const namer = heldNamer()
+  const h = harness({ nameFor: namer.nameFor })
+  try {
+    const view = h.service.create({ ...WEEKLY, titleAuto: true })
+    assert.equal(view.title, "Triage issues", "create answers with the provisional title at once")
+    const slug = view.nextRun!.slug
+    assert.deepEqual(namer.asked, [{ source: WEEKLY.prompt, exceptSlug: slug }], "named from the prompt, not counting its own run")
+    namer.answers[0]!.resolve("Issue triage")
+    await settle()
+    const after = h.service.get(view.id).schedule
+    assert.equal(after.title, "Issue triage")
+    assert.equal(after.echo, "Issue triage · every Monday at 9am")
+    assert.equal(h.storage.getSession(slug)!.title, "Issue triage", "the pending run carries the new name")
+    assert.equal(after.nextRun!.slug, slug, "the same pending run, not a new one")
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto: a human rename before the namer answers wins", async () => {
+  const namer = heldNamer()
+  const h = harness({ nameFor: namer.nameFor })
+  try {
+    const view = h.service.create({ ...WEEKLY, titleAuto: true })
+    const renamed = h.service.update({ id: view.id, revision: view.revision, title: "Inbox sweep" })
+    namer.answers[0]!.resolve("Issue triage")
+    await settle()
+    assert.equal(h.service.get(view.id).schedule.title, "Inbox sweep")
+    assert.equal(h.service.get(view.id).schedule.revision, renamed.revision, "the namer wrote nothing")
+    assert.equal(h.storage.getSession(view.nextRun!.slug)!.title, "Inbox sweep", "the pending run follows the human")
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto: any other edit before the answer also keeps the title (compare-and-set on the revision)", async () => {
+  const namer = heldNamer()
+  const h = harness({ nameFor: namer.nameFor })
+  try {
+    const view = h.service.create({ ...WEEKLY, titleAuto: true })
+    // Same title, new rule: the title compare alone would pass; the revision does not.
+    h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am" })
+    namer.answers[0]!.resolve("Issue triage")
+    await settle()
+    assert.equal(h.service.get(view.id).schedule.title, "Triage issues")
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto: a deleted schedule, a failed namer and an unusable name all leave things as they are", async () => {
+  const namer = heldNamer()
+  const logged: string[] = []
+  const h = harness({ nameFor: namer.nameFor, log: (m) => logged.push(m) })
+  try {
+    const gone = h.service.create({ ...WEEKLY, titleAuto: true })
+    h.service.remove(gone.id)
+    namer.answers[0]!.resolve("Issue triage")
+    const failed = h.service.create({ ...WEEKLY, titleAuto: true })
+    namer.answers[1]!.reject(new Error("Claude did not answer within 60s"))
+    const long = h.service.create({ ...WEEKLY, titleAuto: true })
+    namer.answers[2]!.resolve("Triage of every new issue")
+    await settle()
+    assert.equal(h.storage.listSchedules().length, 2, "the deleted one stays deleted")
+    assert.equal(h.service.get(failed.id).schedule.title, "Triage issues")
+    assert.equal(h.service.get(long.id).schedule.title, "Triage issues")
+    assert.equal(h.service.get(long.id).schedule.revision, long.revision)
+    assert.ok(logged.some((m) => /naming schedule .* failed; it keeps "Triage issues": Claude did not answer/.test(m)), logged.join("\n"))
+  } finally {
+    h.close()
+  }
+})
+
+test("titleAuto with no namer (FRIZZ_THREAD_NAMER=0) keeps the provisional title; without titleAuto the namer is never asked", async () => {
+  const off = harness()
+  const namer = heldNamer()
+  const on = harness({ nameFor: namer.nameFor })
+  try {
+    const kept = off.service.create({ ...WEEKLY, titleAuto: true })
+    await settle()
+    assert.equal(off.service.get(kept.id).schedule.title, "Triage issues")
+    assert.equal(off.service.get(kept.id).schedule.revision, kept.revision)
+    on.service.create(WEEKLY)
+    await settle()
+    assert.equal(namer.asked.length, 0, "a human-typed title is never renamed")
+  } finally {
+    off.close()
+    on.close()
   }
 })

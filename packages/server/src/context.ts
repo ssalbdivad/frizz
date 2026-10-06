@@ -1130,6 +1130,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     },
     awake: processAwakeClock,
     log: (message) => frizzLog.info("schedules", message),
+    // A schedule created with a provisional title (`titleAuto`) is renamed by the thread namer, compare-and-
+    // set (schedules.ts autoTitle). Same switch as every Frizz-side model call: FRIZZ_THREAD_NAMER=0 leaves
+    // the namer without a model, and the provisional title stays.
+    ...(threadNamer.available ? { nameFor: (source: string, exceptSlug?: string) => threadNamer.name(source, exceptSlug) } : {}),
   })
   const scheduleService = schedules
   // Its own completer, so reading a schedule never queues behind a fleet's name mints. Same switch as the
