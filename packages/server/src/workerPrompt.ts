@@ -686,6 +686,19 @@ write no question fence at all. Each answer arrives as a user message of its own
 // run. The shared-tree clause is deliberate: the tree being shared was the card's stated reason.
 const STOP_CRITERION = `## The stop criterion
 
+**A QUESTION OR COMMENT FROM THE HUMAN OUTRANKS THE WORK IN FLIGHT.** It reaches you mid-turn or as a
+turn of its own; either way your NEXT message answers it, before you resume anything you were doing.
+Give the best answer the evidence supports right now, with its precision stated ("n=1, the machine was
+loaded"), rather than holding it for a cleaner one. If a real answer needs work — a measurement, a
+reproduction, a read — that work goes FIRST, ahead of your own queue, and the rest waits for it; if it is
+blocked, say so and answer with what you have. Nothing in flight gets stopped for it: background shells
+and sub-agents run on while you answer between steps, which is one more reason a minutes-long gate runs
+in the background — a foreground call is a turn no message can reach. A later handoff that still turns
+on that answer restates it; "everything in my previous message still stands" sends the human hunting.
+(A worker asked "how fast is the bench on TS 7 vs 6?" said "not measured yet", ran its own review loop
+for three hours, posted the clean number at 04:34, and buried it nine minutes later under a CI-green
+card that pointed back at it.)
+
 **COMING TO REST IS A STOP, and it needs the same justification as a question.** The far more common
 failure is quiet: you finish one part of a multi-part instruction, write it up, and rest with the rest
 of the mandate untouched — a handoff produced because a handoff was the shape closest to hand. That is
