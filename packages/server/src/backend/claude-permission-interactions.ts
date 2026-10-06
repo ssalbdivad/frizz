@@ -114,6 +114,70 @@ export const CLAUDE_PERMISSION_LAPSED_MESSAGE =
   "this exact call, finish everything else first, then say what is blocked and why in your final message " +
   "(or register it with `mcp__frizz__ask` where that tool exists)."
 
+// THE FIRST APPROVAL EACH AGENT NEEDS IS HELD BACK ONCE, SO THE AGENT CAN LOOK FOR ANOTHER WAY. The
+// journal's 38 Claude cards (2026-09-28..10-06, every one a Bash call) show what they are: in a frizz
+// worker (auto or bypass, with cc-worker's perm-policy allowing everything else) an escalation is almost
+// always one of Claude Code's bypass-immune checks — an `rm` on a variable-built or globbed path
+// (`rm -rf $W/$t`, `rm -f copy/*`), a nested `bash -c "…"`, a heredoc-fed script outside the project —
+// and the agent could have reached the same result without one. Real claude 2.1.287 names the check in
+// `decision_reason_type` and, for a safety check, says how to avoid it ("rewrite it as "${W:?}"/"${t:?}"
+// or use a literal path"); the agent only reads that if it is told before the operator pays for it.
+// So the first escalation from each agent is denied with this note instead of raising a card; the
+// identical call made again goes to the operator, as does every later one. Claude Code has no such
+// pass of its own: canUseTool is the only hook on an escalation, and it answers only allow or deny.
+//
+// NOT for an escalation someone asked for: a `permissions.ask` rule or a hook answering ask is the
+// operator's or the project's stated intent to be asked, and a restrictive mode the operator moved the
+// thread to (default, acceptEdits, plan) asks about nearly everything, so a note there would only send
+// the agent hunting for a way around a review it is meant to get.
+//
+// Claude only. Codex runs `approvalPolicy: "never"` (codex-app-server.ts), so it never asks; an ACP
+// permission reply is an option id with no text, so it has no channel to carry this note.
+const FIRST_APPROVAL_HINT_MODES: readonly string[] = ["auto", "bypassPermissions"]
+const DELIBERATE_ASK_REASON_TYPES: readonly string[] = ["rule", "hook"]
+
+// What the CLI's `decision_reason_type` means to the agent reading it. An unknown or missing type (a
+// daemon forked before the field was forwarded) falls back to a cause that is true of every escalation.
+const ESCALATION_CAUSES: Record<string, string> = {
+  safetyCheck: "one of Claude Code's own safety checks flagged it, and those apply even when every other permission is waived.",
+  subcommandResults: "Claude Code could not clear one part of this compound command.",
+  workingDir: "it reaches outside the directories this session may work in.",
+  sandboxOverride: "it asks to run outside the sandbox.",
+  classifier: "Claude Code's auto-mode classifier judged it risky.",
+}
+
+function minutesOrSeconds(ms: number): string {
+  if (ms < 60_000) return `${Math.max(1, Math.round(ms / 1000))} seconds`
+  const minutes = Math.round(ms / 60_000)
+  return minutes === 1 ? "1 minute" : `${minutes} minutes`
+}
+
+/** The note an agent's FIRST escalation is denied with, or null when this escalation goes straight to
+ *  the operator (see above). `permissionMode` is the mode the session's daemon launched under; undefined
+ *  (a daemon forked before the record carried it) is treated as frizz's own permissive dispatch. */
+export function claudeFirstApprovalHint(request: ClaudePermissionRequest, permissionMode: string | undefined, deadlineMs: number): string | null {
+  if (request.toolName === CLAUDE_ASK_USER_QUESTION_TOOL) return null
+  if (permissionMode !== undefined && !FIRST_APPROVAL_HINT_MODES.includes(permissionMode)) return null
+  if (request.ruleForced || DELIBERATE_ASK_REASON_TYPES.includes(request.decisionReasonType ?? "")) return null
+  const why = [
+    `Why it needs approval: ${ESCALATION_CAUSES[request.decisionReasonType ?? ""] ?? "Claude Code will not run it without a person's go-ahead."}`,
+    request.decisionReason ? `Claude Code's reason: ${clip(redactCredentialSyntax(request.decisionReason), 1_000)}` : "",
+    request.blockedPath ? `Blocked path: ${clip(request.blockedPath, 500)}` : "",
+  ].filter(Boolean).join("\n")
+  return [
+    "Not run yet. This call needs the operator's explicit approval, and the first one each agent makes is held " +
+      "back so it can look for another way: an approval interrupts the operator and stalls this thread until " +
+      `they answer, and one nobody answers within ${minutesOrSeconds(deadlineMs)} is denied.`,
+    why,
+    "If another route gets the same result without approval, take it. The usual ones: spell a deleted path out " +
+      "literally (no variables or globs) or guard each variable as \"${DIR:?}\"; run a nested `bash -c \"…\"` or a " +
+      "long compound command as separate simple Bash calls; make file changes with the Write/Edit tools instead " +
+      "of a heredoc; work inside the project instead of an outside directory. If no route avoids it, make the " +
+      "identical call again and it goes to the operator. This note is shown once; later calls that need approval " +
+      "go straight to them.",
+  ].join("\n\n")
+}
+
 /** Build the durable interaction request for a Claude tool-permission escalation, or return null when it
  *  can't be represented (never blocks the daemon — the caller falls back to a decision hook).
  *  `expiresAt` is the card's deadline (see CLAUDE_PERMISSION_DEADLINE_MS); null means none. */

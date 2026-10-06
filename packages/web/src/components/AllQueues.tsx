@@ -64,6 +64,7 @@ import { isPageKey, registerQueueCursor, releaseAutoOpened, runThreadCommand, us
 import { runExternalOpen } from "../lib/externalOpen.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard } from "./AllQueuesCard.tsx"
+import { QuotaAlerts } from "./QuotaAlert.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { isLimitPaused } from "../lib/limitPause.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
@@ -156,6 +157,7 @@ export function AllQueuesPage() {
   const pinOverrides = usePinOverrides()
   const projects = useMemo(() => pinOverlayQueues(overlayQueues(base, [live, departed], direction), pinOverrides), [base, live, departed, direction, pinOverrides])
   const focusProject = projects.find((project) => project.slug === focus)
+  const runningThreads = useMemo(() => projects.flatMap((project) => project.running), [projects])
   // THE VIEW (lib/pageView.ts): one project, or every project. Focused, the list and the queue are that
   // project's alone and the prompt box is its; showing All projects, they are every project's.
   const view = usePageView()
@@ -521,6 +523,9 @@ export function AllQueuesPage() {
               </h2>
               <ResumePaused entries={queue.filter((slot) => !slot.ghost && !leaving.isLeaving(slot.key)).map((slot) => slot.item)} leaving={leaving} />
             </div>
+            {/* Quota is account-global, so the alert counts every project's running threads even
+                when the page is focused on one. */}
+            <QuotaAlerts threads={runningThreads} />
             {queue.length > 0 ? (
               queue.map((slot, index) => (
                 <Fragment key={slot.key}>

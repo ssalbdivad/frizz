@@ -3559,6 +3559,50 @@ export const ThreadWorkingDir = z.object({
 }).strict()
 export type ThreadWorkingDir = z.infer<typeof ThreadWorkingDir>
 
+// THE THREAD INFO VIEW (⋯ menu → Thread info): what a thread has consumed, read off its own transcript
+// by server thread-stats.ts. Token buckets follow the API's accounting: `input` is fresh input only, and
+// `cacheRead` / `cacheWrite` are the prompt prefix read back from or newly written to the cache, so a
+// request's whole input is the three summed. Codex reports no cache writes; its `cacheWrite` stays 0.
+export const ThreadTokenUsage = z.object({
+  input: z.number(),
+  cacheWrite: z.number(),
+  cacheRead: z.number(),
+  output: z.number(),
+}).strict()
+export type ThreadTokenUsage = z.infer<typeof ThreadTokenUsage>
+
+export const ThreadModelUsage = z.object({
+  model: z.string(),
+  requests: z.number(),
+  tokens: ThreadTokenUsage,
+}).strict()
+export type ThreadModelUsage = z.infer<typeof ThreadModelUsage>
+
+export const ThreadStats = z.object({
+  backend: z.enum(["claude", "codex", "acp"]),
+  // False when there is no transcript to read (an ACP thread, a session that never started): every
+  // count below is then zero and means "unknown", not "none".
+  recorded: z.boolean(),
+  startedAt: z.string().optional(),
+  lastActivityAt: z.string().optional(),
+  // Times the agent was set going: a prompt, a follow-up, a wake. Tool results do not count.
+  turns: z.number(),
+  // Model requests, the unit the provider bills.
+  requests: z.number(),
+  toolCalls: z.number(),
+  compactions: z.number(),
+  subAgents: z.number(),
+  // The thread's own requests, then its sub-agents' — kept apart so the cost of fanning out is visible.
+  tokens: ThreadTokenUsage,
+  subAgentTokens: ThreadTokenUsage,
+  models: z.array(ThreadModelUsage),
+  // Claude only: what Claude Code prices the session at, at API rates (on a subscription this is what
+  // the work would have cost, not a charge). `partial`: the newest reading predates later requests,
+  // so the true figure is higher.
+  cost: z.object({ usd: z.number(), partial: z.boolean() }).strict().optional(),
+}).strict()
+export type ThreadStats = z.infer<typeof ThreadStats>
+
 /** One spinoff edge as a thread sees it — either end. `childSlug` is null while the parent has not yet
  *  dispatched it. */
 export const SpinoffView = z.object({
@@ -4523,7 +4567,11 @@ export const Settings = z.object({
   // and ultracode is a separate session-scoped setting meaning "xhigh + standing dynamic-workflow
   // orchestration". It travels the wire as an effort because that is how Claude Code's own `/effort`
   // presents it; resolveClaudeEffort (server/backend/claude-effort.ts) translates it at the spawn edge.
-  effort: z.enum(["low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
+  //
+  // "auto" is not a level either: it asks Frizz to pick one per dispatch from the prompt (a short Haiku
+  // call, server/effort-chooser.ts) before anything launches. It is a DISPATCH value only — a started
+  // thread's row records the concrete level that call chose, so no runtime ever sees "auto".
+  effort: z.enum(["auto", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
   notifications: z.boolean(),
   // There is no `projectRail` key any more. It toggled a permanent column of project icons down the
   // left edge until 2026-09-30, when the All projects view and per-tab notifications superseded it.
@@ -4559,6 +4607,14 @@ export const Settings = z.object({
    * would resurrect the period just cleared. Machine-level.
    */
   deleteDoneThreadsUntouchedDays: z.number().int().min(0).max(3650).optional(),
+  /**
+   * Spend Fable's own weekly budget when the base Claude usage runs low: while the 5-hour or weekly
+   * window is nearly out (90% used) and the Fable window still has room, a new Claude thread launches
+   * on Fable, and a thread a base limit paused restarts on Fable instead of waiting for the reset
+   * (server/backend/fable-fallback.ts). Off by default — it moves work onto a different, costlier
+   * model. Machine-level, because quota is the account's, not a project's.
+   */
+  fableFallback: z.boolean().optional(),
   // There is no `font` key any more. The interface rendered in one of two type families as a machine
   // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
   // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
@@ -4626,7 +4682,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback"] as const satisfies readonly (keyof Settings)[]
 
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a

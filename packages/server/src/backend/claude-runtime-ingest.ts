@@ -152,6 +152,12 @@ export interface ClaudeRuntimeIngest {
    */
   contextWindow(sessionId: string): number | undefined
   /**
+   * The session's cost so far, off its newest `result` (ClaudeResultEvent.totalCostUsd). Live while this
+   * process is attached; the transcript's own `cost-state` record is written only when Claude Code
+   * exits, so the thread info view prefers this and falls back to that (thread-stats.ts).
+   */
+  totalCost(sessionId: string): number | undefined
+  /**
    * The auto-compact ceiling this session's daemon was forked with (CLAUDE_CODE_AUTO_COMPACT_WINDOW,
    * from Settings.autoCompactWindow). Reported by the bridge at every attach, off the daemon's own
    * record, so a reattach after a frizz restart re-learns the value that daemon is really running under
@@ -234,6 +240,7 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
   // bridge at attach; see `noteCompactionWindow` for why it lowers the window rather than sitting
   // beside it. Per-SESSION and not per-model: it is a property of one daemon's environment.
   const compactionWindows = new Map<string, number>()
+  const costs = new Map<string, number>() // keyed by session id; the newest result's total_cost_usd
 
   // Which row of `modelUsage` describes the MAIN thread. The alias `init` named, when the result
   // carries it. Otherwise: a single-row table is unambiguous (no sub-agent billed anything), and a
@@ -363,6 +370,7 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       // Latched, never cleared by a later result that omits the row — the window of a running session
       // does not change, and losing it would blank a readout the operator is already reading.
       if (item.event.kind === "init") sessionModel.set(item.sessionId, item.event.model)
+      if (item.event.kind === "result" && item.event.totalCostUsd !== undefined) costs.set(item.sessionId, item.event.totalCostUsd)
       if (item.event.kind === "result" && item.event.modelContextWindows) {
         const window = pickWindow(item.sessionId, item.event.modelContextWindows)
         if (window !== undefined && window > 0) {
@@ -401,6 +409,7 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       const ceiling = compactionWindows.get(sessionId)
       return ceiling === undefined ? measured : Math.min(measured, ceiling)
     },
+    totalCost: (sessionId) => costs.get(sessionId),
     noteCompactionWindow(sessionId, window) {
       // Absent is a real answer, not "leave it": a daemon re-forked with the setting turned off runs on
       // the whole window again, and a stale ceiling would keep shrinking a reading that has grown.
@@ -413,10 +422,11 @@ export function createClaudeRuntimeIngest(deps: ClaudeRuntimeIngestDeps): Claude
       sessionModel.delete(sessionId)
       contextWindows.delete(sessionId)
       compactionWindows.delete(sessionId)
+      costs.delete(sessionId)
       deps.receipts?.publish({ type: "claude.runtime.session.released", sessionId })
     },
     drain: () => worker.drain(),
-    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear(); modelWindows.clear(); compactionWindows.clear() },
+    close() { worker.close(); live.clear(); tasks.clear(); sessionModel.clear(); contextWindows.clear(); modelWindows.clear(); compactionWindows.clear(); costs.clear() },
   }
 }
 

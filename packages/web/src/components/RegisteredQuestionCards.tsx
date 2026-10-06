@@ -62,6 +62,8 @@ export interface RegisteredAnswering {
   onText: (q: RegisteredQuestionView, path: string, isMulti: boolean, text: string) => void
   dismiss: (id: string) => void
   dismissing: boolean
+  /** Questions the × took off the card, ahead of the board read that drops them. */
+  dismissed: ReadonlySet<string>
   /** The countdown's ×: Frizz will not take the recommended option for `id`; it waits for the human. */
   cancelDefault: (id: string) => void
   /** Send ONE question's staged answer — what completing a question does. Nothing staged: nothing sent. */
@@ -185,9 +187,30 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       if (slug) void queryClient.invalidateQueries({ queryKey: settledQuestionsKey(slug) })
     },
   })
+  // THE × TAKES THE QUESTION OFF THE CARD ON CLICK, not on the board read that follows. That read is a
+  // poll on the All queues page, and a project still reopening after a server restart is drawn from
+  // its LAST poll for up to a minute (AllQueues useLastKnownQueues) — so the dismissal landed on the
+  // first click and the question stayed on the card, and every later × was a silent no-op on a row no
+  // longer open (2026-10-06, `@logo-design`: "have clicked x multiple times over ~30 seconds"). Back on
+  // screen only if the server still lists it open — a refusal — or the request fails.
+  const [dismissed, setDismissed] = useState<ReadonlySet<string>>(() => new Set())
+  const undismiss = (id: string) =>
+    setDismissed((prev) => {
+      if (!prev.has(id)) return prev
+      const next = new Set(prev)
+      next.delete(id)
+      return next
+    })
   const dismiss = useMutation({
     mutationFn: async (id: string) => api.dismissQuestions({ slug: slug!, ids: [id] }),
-    onError: (cause) => setError(errorText(cause)),
+    onMutate: (id) => setDismissed((prev) => new Set(prev).add(id)),
+    onSuccess: (result, id) => {
+      if (result.open.some((q) => q.id === id)) undismiss(id)
+    },
+    onError: (cause, id) => {
+      undismiss(id)
+      setError(errorText(cause))
+    },
   })
   // THE DEFAULT HOLDS WHILE THE HUMAN IS ON THE CARD. A question that would take its recommended option
   // (`defaultsAt`) is told about every pick, toggle and keystroke — at most once per ENGAGE_PING_MS, well
@@ -329,6 +352,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     },
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
+    dismissed,
     cancelDefault: (id) => hold.mutate({ id, action: "cancel" }),
     commit,
     submit,
@@ -623,12 +647,13 @@ export function RegisteredQuestionStack({
   className?: string
 }) {
   const slug = thread?.id
-  const listed = only ?? thread?.questions ?? []
   // A provider above this stack owns the state; without one, this stack does (a surface that draws only
   // one stack has no reason to mount the provider).
   const shared = useContext(RegisteredAnsweringContext)
   const own = useRegisteredAnswering(shared ? undefined : thread)
   const a = shared ?? own
+  const offered = only ?? thread?.questions ?? []
+  const listed = a.dismissed.size > 0 ? offered.filter((q) => !a.dismissed.has(q.id)) : offered
   // Every question this stack has drawn, in the order it drew them, so one answered and since dropped by
   // the board keeps its slot (`keepAnswered`) — and a question asked since joins at the bottom.
   const drawn = useRef<readonly RegisteredQuestionView[]>([])

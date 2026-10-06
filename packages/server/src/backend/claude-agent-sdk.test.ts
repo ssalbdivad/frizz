@@ -144,6 +144,7 @@ test("real SDK + fake executable: init owns the requested session, input streams
     assert.deepEqual(events.map((event) => event.kind), ["init", "user", "assistant", "result", "prompt-suggestion"])
     assert.equal(events.find((event) => event.kind === "result")?.kind, "result")
     assert.equal((events.find((event) => event.kind === "result") as Extract<ClaudeQueryEvent, { kind: "result" }>).result, "fake final result")
+    assert.equal((events.find((event) => event.kind === "result") as Extract<ClaudeQueryEvent, { kind: "result" }>).totalCostUsd, 0, "the session cost survives the mapping")
     assert.equal((events.at(-1) as Extract<ClaudeQueryEvent, { kind: "prompt-suggestion" }>).suggestion, "Run another fake turn")
 
     const records = await waitForCapture(harness.capturePath, (rows) => rows.some((row) => row.kind === "user-input"))
@@ -473,6 +474,8 @@ test("canUseTool request and structured allow response traverse the real SDK con
       input: { command: "printf safe" },
       blockedPath: "/tmp/outside",
       decisionReason: "outside the working directory",
+      decisionReasonType: "workingDir",
+      ruleForced: false,
       title: "Run a safe command",
       displayName: "Run command",
       description: "Print a test marker",

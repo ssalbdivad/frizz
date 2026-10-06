@@ -2,7 +2,7 @@ import { Profiler, memo, useCallback, useEffect, useMemo, useState, type Compone
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router"
-import type { BoardSnapshot, ThreadHandoff, ThreadView as ThreadViewModel } from "@frizz/shared"
+import { parkExpiredWakeMessage, type BoardSnapshot, type ThreadHandoff, type ThreadView as ThreadViewModel } from "@frizz/shared"
 import { useLeavingCards } from "./components/AllQueues.tsx"
 import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -64,6 +64,9 @@ const STALE_POLL = params.get("stalePoll") === "1"
 const STILL_QUEUED = params.get("stillQueued") === "1"
 const MID = params.get("mid") === "1"
 const HANDOFF_DELAY = Number(params.get("handoffDelay") ?? 0)
+// `?asked=update`: the human's last turn was the resting card's "Ask for update", which the server quotes
+// by the wake's head line (router.handoffOf) and the card draws as a marker, not a typed bubble.
+const ASKED = params.get("asked") === "update" ? parkExpiredWakeMessage([], true, true).split("\n")[0]! : "Rotate the signing key without downtime."
 
 const now = new Date().toISOString()
 function thread(id: string, title: string, extra: Partial<ThreadViewModel> = {}): ThreadViewModel {
@@ -214,7 +217,7 @@ window.fetch = async (input, init) => {
   const body = raw ? (JSON.parse(raw) as { slug?: string }) : {}
   if (rpc === "threadHandoff") {
     if (HANDOFF_DELAY) await new Promise((resolve) => setTimeout(resolve, HANDOFF_DELAY))
-    const handoff: ThreadHandoff = { asked: "Rotate the signing key without downtime.", askedAt: now, text: textOf(body.slug ?? ""), at: now }
+    const handoff: ThreadHandoff = { asked: ASKED, askedAt: now, text: textOf(body.slug ?? ""), at: now }
     return json(handoff)
   }
   // A reply steers the thread back to work, and the next poll drops it from the queue. After the fade, not

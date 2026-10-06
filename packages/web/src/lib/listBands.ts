@@ -43,7 +43,8 @@ export function listOverlay(
 /**
  * A project's work in flight, as its rail banded it: Pinned first (the pin diverts a thread out of every
  * other band, groups.ts sectionThreads), then Ready in queue order, then Working. A Ready card being
- * finished leaves its row with it (`hidden`); one open in a drawer keeps its row, marked open.
+ * finished (`hidden`) moves its row to Working until the poll catches up — never off the list; one open
+ * in a drawer keeps its row, marked open.
  *
  * `overlay` is what the operator has just done that the poll cannot know yet (lib/steering.ts,
  * lib/optimisticArchive.ts): a reply, an answer or a Retry sets the thread to work, so its row leaves
@@ -56,7 +57,13 @@ export function loudBands(project: QueuesProject, hidden: (key: string) => boole
   pinned.sort((a, b) => (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "") || a.id.localeCompare(b.id))
   const flight = [...project.queued, ...project.running].filter((t) => !isPinned(t)).map(overlay)
   const ready = flight.filter((t) => queued(t) && !hidden(threadKey(project.id, t.id)))
-  const working = orderByInteraction(flight.filter((t) => !queued(t) && sectionOf(t) === "active"))
+  // NO OPEN THREAD IS EVER ROWLESS (maintainer 2026-10-06: "it should never be the case that a thread
+  // should be totally invisible for any circumstances"). A Ready card the operator just acted on is hidden
+  // until the server agrees, and its row used to leave with it — so a card whose hide outlived the act
+  // (a permission approved on a resting thread's card left @3-0 queued server-side, cardless and rowless)
+  // took the thread off the list entirely. The row waits under Working instead: the human's act is in
+  // flight, which is what that band says, and the next poll puts it wherever the server does.
+  const working = orderByInteraction(flight.filter((t) => (queued(t) ? hidden(threadKey(project.id, t.id)) : sectionOf(t) === "active")))
   const carded = new Set([...pinned.filter(queued), ...ready].map((t) => t.id))
   return { pinned, ready, working, carded, rows: pinned.length + ready.length + working.length }
 }

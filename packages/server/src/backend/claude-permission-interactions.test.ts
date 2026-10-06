@@ -11,6 +11,7 @@ import assert from "node:assert/strict"
 import {
   CLAUDE_ASK_USER_QUESTION_TOOL,
   buildClaudeQuestionInteraction,
+  claudeFirstApprovalHint,
   claudeQuestionDecisionFor,
   parseClaudeAskUserQuestion,
   tildePath,
@@ -258,4 +259,53 @@ test("tildePath collapses the home prefix under either separator, and never a si
   assert.equal(tildePath("C:\\Users\\op", "C:\\Users\\op"), "~")
   assert.equal(tildePath("C:\\Users\\operator\\x", "C:\\Users\\op"), "C:\\Users\\operator\\x")
   assert.equal(tildePath("/elsewhere/op", "/Users/op"), "/elsewhere/op")
+})
+
+// ---- the first approval each agent needs is held back with a note ----------------------------------
+
+// What real claude 2.1.287 sends for `rm -rf $W/$t` under bypassPermissions (read off a live canUseTool).
+const SAFETY_CHECK: ClaudePermissionRequest = {
+  requestId: "perm-rm",
+  toolUseId: "toolu_rm",
+  toolName: "Bash",
+  input: { command: "W=/tmp/w; for t in A B; do rm -rf $W/$t; done" },
+  decisionReason: "Dangerous rm operation on possibly-empty variable path: $W/$t in `rm -rf $W/$t` (rewrite it as \"${W:?}\"/\"${t:?}\" or use a literal path)",
+  decisionReasonType: "safetyCheck",
+  ruleForced: false,
+  suggestions: [],
+}
+
+test("the note names the cause, quotes claude's own reason, and says how to reach the operator anyway", () => {
+  const hint = claudeFirstApprovalHint(SAFETY_CHECK, "bypassPermissions", 5 * 60_000)
+  assert.ok(hint)
+  assert.match(hint, /needs the operator's explicit approval/)
+  assert.match(hint, /within 5 minutes is denied/)
+  assert.match(hint, /Why it needs approval: one of Claude Code's own safety checks/)
+  assert.ok(hint.includes(`Claude Code's reason: ${SAFETY_CHECK.decisionReason}`), "claude's reason carries the fix; it must reach the agent verbatim")
+  assert.match(hint, /make the identical call again and it goes to the operator/)
+})
+
+test("each documented cause reads as its own sentence, and an unknown or missing one still reads true", () => {
+  const causeOf = (decisionReasonType: string | undefined) =>
+    /Why it needs approval: (.*)/.exec(claudeFirstApprovalHint({ ...SAFETY_CHECK, decisionReason: undefined, decisionReasonType }, "auto", 60_000) ?? "")?.[1]
+  assert.match(causeOf("subcommandResults") ?? "", /one part of this compound command/)
+  assert.match(causeOf("workingDir") ?? "", /outside the directories/)
+  assert.match(causeOf("sandboxOverride") ?? "", /outside the sandbox/)
+  assert.match(causeOf("classifier") ?? "", /classifier/)
+  assert.equal(causeOf("other"), causeOf(undefined))
+  assert.match(causeOf(undefined) ?? "", /will not run it without a person's go-ahead/)
+  const withPath = claudeFirstApprovalHint({ ...SAFETY_CHECK, blockedPath: "/etc/hosts" }, "auto", 60_000) ?? ""
+  assert.match(withPath, /Blocked path: \/etc\/hosts/)
+})
+
+test("an escalation someone asked for goes straight to the operator: ask rules, hooks, restrictive modes", () => {
+  assert.equal(claudeFirstApprovalHint({ ...SAFETY_CHECK, decisionReasonType: "rule" }, "bypassPermissions", 60_000), null)
+  assert.equal(claudeFirstApprovalHint({ ...SAFETY_CHECK, decisionReasonType: "hook" }, "bypassPermissions", 60_000), null)
+  assert.equal(claudeFirstApprovalHint({ ...SAFETY_CHECK, ruleForced: true }, "bypassPermissions", 60_000), null, "an ask rule riding beside a safety check is still an ask rule")
+  for (const mode of ["default", "acceptEdits", "plan", "dontAsk"]) {
+    assert.equal(claudeFirstApprovalHint(SAFETY_CHECK, mode, 60_000), null, `${mode} is a mode the operator chose to be asked in`)
+  }
+  assert.equal(claudeFirstApprovalHint(requestFor(CHANNEL_INPUT), "bypassPermissions", 60_000), null, "a question is not an authorization")
+  assert.ok(claudeFirstApprovalHint(SAFETY_CHECK, "auto", 60_000))
+  assert.ok(claudeFirstApprovalHint(SAFETY_CHECK, undefined, 60_000), "a daemon that predates recording its mode was dispatched permissive")
 })

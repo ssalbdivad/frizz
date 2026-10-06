@@ -32,6 +32,7 @@ import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
 import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot } from "./backend/claude-oneshot.ts"
+import { createEffortChooser } from "./effort-chooser.ts"
 import { readTranscriptYielding, sourceForThread } from "./transcript.ts"
 import { forkPointOf } from "./fork-point.ts"
 import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
@@ -171,6 +172,9 @@ export interface AppContext {
   // Session-broker bridge for Claude: the detached daemon that owns every claude thread's SDK session.
   // Undefined only under the FRIZZ_CLAUDE_BROKER_BRIDGE="0" kill switch, which leaves claude no transport.
   claudeBroker?: ClaudeAgentBrokerBridge
+  // The broker's event fold (backend/claude-runtime-ingest.ts), for readings only it has — the live
+  // session cost the thread info view shows. Undefined exactly when `claudeBroker` is.
+  claudeRuntimeIngest?: ClaudeRuntimeIngest
   board: BoardManager
   tailer: Tailer
   dispatcher: Dispatcher
@@ -1089,11 +1093,22 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // any project, any tab, a thread's own profile control — is what a model-less dispatch launches on.
     dispatchProfile: (kind) => getDispatchPreferences(storage, getSettings(storage, home), home, readCodexModels())[kind] ?? {},
     claudeBin: opts.claudeBin,
+    // The Fable fallback's quota reading — the same cached snapshot the status row polls.
+    readClaudeQuota: async () => (await readQuota({ claudeBin: opts.claudeBin })).claude,
     backendFor,
     codexAppServer,
     acpBridge,
     claudeBroker,
     threadNamer,
+    // "auto" effort → a level read off the prompt by Haiku, before launch (effort-chooser.ts). Its own
+    // completer with a short timeout: it blocks the dispatch, so it must never queue behind the namer's
+    // mints, and a slow answer falls back to a fixed level. FRIZZ_AUTO_EFFORT=0 skips the model.
+    chooseEffort: createEffortChooser({
+      complete: process.env.FRIZZ_AUTO_EFFORT === "0"
+        ? undefined
+        : createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project), timeoutMs: 20_000, concurrency: 4 }),
+      log: (message) => frizzLog.warn("dispatch", `auto effort: ${message}`),
+    }),
     // Auth preflight (claude-auth plan, Slice A): Claude reads its local credential and confirms only
     // a positive signed-out against its CLI (readClaudePreflightAuth — the comment there records why
     // the CLI must not sit on the signed-in path); Codex reads the local auth.json/env. Both block
@@ -1165,6 +1180,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
     // so consulting it per tick costs a live request only every few minutes.
     readQuota,
+    fableFallback: () => getSettings(storage, home).fableFallback === true,
     refreshBoard: () => board.refresh(),
     // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
     // lives and is unlinked when it dies (liveBrokerRecords checks the pid), so "did the process that
@@ -1309,6 +1325,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     codexAppServer,
     acpBridge,
     claudeBroker,
+    claudeRuntimeIngest,
     board,
     tailer,
     dispatcher,

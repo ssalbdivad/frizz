@@ -73,12 +73,12 @@ test("a same-slug thread in two projects is two rows with two keys", () => {
   assert.deepEqual(rows.map((r) => r.key), [threadKey("alpha", "fix-auth"), threadKey("beta", "fix-auth")])
 })
 
-test("a card being finished leaves with its row, and a steer moves its row to Working at once", () => {
+test("a card being finished keeps its row under Working, and a steer moves its row to Working at once", () => {
   const alpha = project("alpha", { queued: [ready("leaving", 60_000), ready("replied", 40_000), ready("waiting", 20_000)] })
   const hidden = (key: string) => key === threadKey("alpha", "leaving")
   const steered = { [threadKey("alpha", "replied")]: NOW - 100 }
   const rows = phoneQueue([alpha], hidden, (p) => listOverlay(p.id, false, steered, {}, NOW))
-  assert.deepEqual(names(rows), ["alpha:waiting", "alpha:replied"])
+  assert.deepEqual(names(rows), ["alpha:waiting", "alpha:replied", "alpha:leaving"])
   assert.equal(rows[1]!.thread.runtime, "running", "the steered row reads as running, so its mark and the header count agree")
 })
 

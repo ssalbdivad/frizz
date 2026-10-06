@@ -8,6 +8,7 @@ import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
 import { limitFaultResetKey, limitPauseIsStale, mayHaveLiveBackgroundWork, quotaWindowKeyFor, quotaWindowRecovered, scopedQuotaWindow, scopedQuotaWindowRecovered, textResetInstant } from "./backend/usage-limit.ts"
+import { fableHasHeadroom } from "./backend/fable-fallback.ts"
 import { claudeFallbackModel, claudeModelFromLimitName, claudeProfile, normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from "./wake-store.ts"
 import { isReplyWait } from "./thread-mentions.ts"
@@ -1302,6 +1303,9 @@ export interface SchedulerDeps {
   // limit message's own text can't say (every weekly limit, since its clock carries no date). Absent
   // in tests that exercise the text path; a read that throws is treated as indeterminate.
   readQuota?: () => Promise<QuotaSnapshot>
+  // The operator's `fableFallback` setting, read per tick so a toggle takes effect without a restart.
+  // Absent (tests) ⇒ off. See fableFallbackFor.
+  fableFallback?: () => boolean
   fetchPr?: (ref: PrRef) => Promise<PrStatus | undefined>
   // Tests may keep injecting the historical bare array/undefined result. Production uses the
   // structured result so the scheduler can distinguish auth, timeout, network, API, and shape faults.
@@ -1953,6 +1957,37 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- The BASE cap with Fable budget left: step UP to Fable instead of waiting ---------------------
+  //
+  // The `fableFallback` setting (backend/fable-fallback.ts). A session or all-models weekly limit stops
+  // every thread on the base budget, but on a plan where Fable carries its own weekly cap, Fable may
+  // still have room — so a thread paused by a base limit restarts on Fable now, through the same cold
+  // resume modelFallbackFor uses, rather than waiting out the window.
+  //
+  // It terminates for the same reason the step-down does: a thread already on Fable is never moved, so
+  // one that re-caps on Fable either writes a model-scoped fault (and steps down, with the Fable window
+  // now full and this path closed) or a base fault, and waits like any other limit.
+  function fableFallbackFor(c: LimitCandidate, quota: QuotaSnapshot | undefined): { model: string; effort: string; label: string; capped: string } | undefined {
+    if (c.backend !== "claude" || (c.fault.window !== "session" && c.fault.window !== "weekly")) return undefined
+    if (!deps.fableFallback?.() || !fableHasHeadroom(quota?.claude)) return undefined
+    const row = deps.storage.getSession(c.slug)
+    // Broker rows only, and only a thread Frizz may restart — the same gates modelFallbackFor states.
+    if (!row || row.claude_runtime !== "broker") return undefined
+    const tele = deps.tailer.get(c.slug)
+    if (mayHaveLiveBackgroundWork(tele)) return undefined
+    const current = row.model?.trim() || (tele?.model ? normalizeObservedThreadModel("claude", tele.model) : undefined)
+    if (current === "fable") return undefined
+    const option = claudeProfile("fable")
+    if (!option) return undefined
+    const effort = row.effort?.trim()
+    return {
+      model: "fable",
+      effort: effort && option.efforts.includes(effort) ? effort : option.defaultEffort,
+      label: option.label,
+      capped: c.fault.window,
+    }
+  }
+
   async function evalLimits(nowMs: number): Promise<void> {
     const candidates = limitCandidates(nowMs)
     if (candidates.length === 0) return
@@ -1974,7 +2009,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (outbox.get(deliveryId)) continue // this interruption already has its one wake
       // A model-scoped cap the thread can simply step down from needs no recovery at all — the account
       // is not out of capacity, this model is. Everything else waits for its window.
-      const fallback = modelFallbackFor(c)
+      // So does a base limit the thread can sidestep onto Fable's own budget (the opt-in fableFallback).
+      const fallback = modelFallbackFor(c) ?? fableFallbackFor(c, quota)
       if (!fallback && limitRecovered(c, quota, nowMs) !== true) continue
       // Persist the new pair BEFORE the wake is enqueued: the delivery forks `claude` from this row, so
       // a wake that raced ahead of the write would restart the thread on the model that just capped.

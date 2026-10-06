@@ -12,6 +12,7 @@ import { OPAQUE_PORTAL_SURFACE_ABOVE_POPOVER_Z } from "../lib/overlaySurface.ts"
 import { SETTINGS_HELP } from "../lib/settingsHelp.ts"
 import { ProjectInstructionsField } from "./ProjectInstructionsField.tsx"
 import { SettingsField } from "./SettingsField.tsx"
+import { OnOffToggle } from "./ui/OnOffToggle.tsx"
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Select } from "./ui/Select.tsx"
 
@@ -149,6 +150,9 @@ function AgentSettingsForm({ backend }: { backend: "claude" | "codex" }) {
             />
           </SettingsField>
           <CompactionWindowField draft={draft} update={update} />
+          <SettingsField label="Fall back to Fable" help={SETTINGS_HELP.fableFallback}>
+            <OnOffToggle value={draft.fableFallback ?? false} onChange={(fableFallback) => update({ ...draft, fableFallback })} />
+          </SettingsField>
         </>
       ) : (
         <SettingsField label="Context window" help={CONTEXT_WINDOW_HELP.codex}>

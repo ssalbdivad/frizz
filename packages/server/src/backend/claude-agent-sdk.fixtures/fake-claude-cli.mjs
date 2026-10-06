@@ -26,6 +26,7 @@ const permissionRequest = {
     permission_suggestions: [{ type: "addRules", rules: [{ toolName: "Bash", ruleContent: "printf *" }], behavior: "allow", destination: "session" }],
     blocked_path: "/tmp/outside",
     decision_reason: "outside the working directory",
+    decision_reason_type: "workingDir",
     title: "Run a safe command",
     display_name: "Run command",
     description: "Print a test marker",
@@ -38,6 +39,23 @@ let initializeCount = 0
 let systemInitSent = false
 let elicitationStep = 0
 let permissionResponses = 0
+// `permission-retry`: the bypass-immune safety check real claude raises for `rm -rf $W/$t` (2.1.287,
+// read off a live canUseTool), and the model's answer to a deny — the identical call again.
+const safetyCheckRequest = {
+  ...permissionRequest,
+  request: {
+    ...permissionRequest.request,
+    input: { command: "W=/tmp/w; for t in A B; do rm -rf $W/$t; done" },
+    blocked_path: undefined,
+    decision_reason: "Dangerous rm operation on possibly-empty variable path: $W/$t in `rm -rf $W/$t` (rewrite it as \"${W:?}\"/\"${t:?}\" or use a literal path)",
+    decision_reason_type: "safetyCheck",
+  },
+}
+const safetyCheckRetry = {
+  ...safetyCheckRequest,
+  request_id: "permission-request-2",
+  request: { ...safetyCheckRequest.request, tool_use_id: "tool-use-permission-2" },
+}
 let resultNumber = 0
 let userInputCount = 0
 // Input uuids sitting in the command queue, unanswered — the only ones a cancel can take back.
@@ -207,6 +225,15 @@ function handleHostResponse(message) {
   const response = message.response ?? {}
   const requestId = response.request_id
   record({ kind: "host-response", requestId, response })
+  if (requestId === "permission-request-1" && scenario === "permission-retry" && response.response?.behavior === "deny") {
+    send(safetyCheckRetry)
+    return
+  }
+  if (requestId === "permission-request-2") {
+    emitToolResult("tool-use-permission-2", "permission accepted")
+    emitResult("permission complete")
+    return
+  }
   if (requestId === "permission-request-1") {
     permissionResponses += 1
     if ((scenario === "redelivery" || scenario === "conflicting-redelivery") && permissionResponses === 1) return
@@ -265,6 +292,17 @@ function handleUserMessage(message) {
   }
   if (scenario === "conflicting-redelivery") {
     send(permissionRequest)
+    return
+  }
+  if (scenario === "permission-retry") {
+    send(safetyCheckRequest)
+    return
+  }
+  if (scenario === "permission-ask-rule") {
+    send({
+      ...safetyCheckRequest,
+      request: { ...safetyCheckRequest.request, matched_ask_rule: { source: "projectSettings", toolName: "Bash", ruleContent: "rm:*" } },
+    })
     return
   }
   if (scenario === "permission-flood") {

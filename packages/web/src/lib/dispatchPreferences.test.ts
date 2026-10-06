@@ -32,6 +32,7 @@ test("provider switching restores each runtime's exact model and effort profile"
     modelAvailable: true,
     effortAvailable: true,
     effortOptions: [
+      { value: "auto", label: "Auto" },
       { value: "low", label: "Low" },
       { value: "medium", label: "Medium" },
       { value: "high", label: "High" },
@@ -72,14 +73,14 @@ test("dispatch profile groups keep provider catalogues and per-model effort sets
   assert.deepEqual(groups.map((group) => group.id), ["claude", "codex"])
   assert.deepEqual(
     groups[0]?.options.find((option) => option.model === "opus")?.efforts,
-    ["low", "medium", "high", "xhigh", "max", "ultracode"],
+    ["auto", "low", "medium", "high", "xhigh", "max", "ultracode"],
     "the Claude ladder tops out at ultracode — and must never offer Codex-only ultra",
   )
   // Ultracode needs an xhigh-capable model; Claude ignores the setting on Haiku rather than failing,
   // so that row must not offer a rung that would quietly do nothing.
   assert.deepEqual(
     groups[0]?.options.find((option) => option.model === "haiku")?.efforts,
-    ["low", "medium", "high", "xhigh", "max"],
+    ["auto", "low", "medium", "high", "xhigh", "max"],
     "Haiku cannot honour ultracode, so its row stops at max",
   )
   for (const option of groups[0]?.options ?? []) {
@@ -88,10 +89,18 @@ test("dispatch profile groups keep provider catalogues and per-model effort sets
   assert.deepEqual(groups[1]?.options[0], {
     model: "gpt-5.6-sol",
     label: "GPT-5.6 Sol",
-    defaultEffort: "medium",
-    efforts: ["low", "medium", "high", "ultra"],
+    defaultEffort: "auto",
+    efforts: ["auto", "low", "medium", "high", "ultra"],
   })
   assert.equal(groups[1]?.options.some((option) => option.model === "opus"), false)
+})
+
+test("a profile with no saved effort defaults to auto on both runtimes", () => {
+  const bare: DispatchPreferences = { ...preferences, claude: { ...preferences.claude, effort: undefined } }
+  assert.equal(resolveDispatchPreferences(bare, models).effort, "auto")
+  assert.equal(resolveDispatchPreferences(bare, models).effortAvailable, true)
+  const codex: DispatchPreferences = { ...preferences, backend: "codex", codex: { ...preferences.codex, effort: undefined } }
+  assert.equal(resolveDispatchPreferences(codex, models).effort, "auto")
 })
 
 test("a renamed/unavailable saved model remains visible and invalid instead of becoming Opus or a catalogue default", () => {

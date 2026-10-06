@@ -46,6 +46,17 @@ async function fixture(name: string): Promise<QuotaSnapshot | undefined> {
           { key: "weekly", label: "Weekly", usedPercent: 88, resetsAt: now + 6 * 24 * hour },
         ] },
       }
+    case "fable-fallback":
+      // The base 5h window nearly out while Fable's own weekly has room — the state the `fableFallback`
+      // setting acts on (backend/fable-fallback.ts).
+      return {
+        claude: { ...claudeOk, windows: [
+          { key: "5h", label: "5h", usedPercent: 94, resetsAt: now + 50 * 60 },
+          { key: "weekly", label: "Weekly", usedPercent: 71, resetsAt: now + 2 * 24 * hour },
+          { key: "weekly-fable", label: "Fable wk", usedPercent: 22, resetsAt: now + 4 * 24 * hour },
+        ] },
+        codex: codexOk,
+      }
     case "claude-unavailable":
       return { claude: { status: "unavailable", windows: [], detail: "Not logged in to Claude" }, codex: codexOk }
     case "claude-endpoint-down":

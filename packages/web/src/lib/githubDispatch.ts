@@ -30,6 +30,8 @@ export function dispatchProfileError(
     if (!CLAUDE_MODELS.some((option) => option.value === profile.model)) {
       return `Claude model ${profile.model} is no longer available`
     }
+    // Auto picks from whatever ladder the model has, so it is valid on every model.
+    if (profile.effort === "auto") return undefined
     // Per-model, so picking ultracode and then switching to a model that cannot honour it stops here
     // rather than dispatching a level that would be silently ignored.
     if (!claudeEfforts(profile.model).includes(profile.effort)) {
@@ -40,7 +42,7 @@ export function dispatchProfileError(
 
   const model = codexModels.find((candidate) => candidate.slug === profile.model)
   if (!model) return `Codex model ${profile.model} is no longer available`
-  if (!model.efforts.includes(profile.effort)) {
+  if (profile.effort !== "auto" && !model.efforts.includes(profile.effort)) {
     return `Reasoning level ${profile.effort} is not available for ${profile.model}`
   }
   return undefined

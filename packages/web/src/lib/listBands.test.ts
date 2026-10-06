@@ -73,6 +73,23 @@ test("a drawer's Mark as done takes the page project's row out of its work in fl
   assert.equal(bands.rows, 1)
 })
 
+test("a Ready card hidden after the operator acted keeps its row, under Working", () => {
+  const p = project("alpha", [ready("fix-auth"), ready("docs")], [running("build")])
+  const hidden = (key: string) => key === threadKey("alpha", "fix-auth")
+  const bands = loudBands(p, hidden, listOverlay("alpha", false, {}, {}, NOW))
+  assert.deepEqual(ids(bands.ready), ["docs"])
+  assert.deepEqual(ids(bands.working).sort(), ["build", "fix-auth"])
+  assert.equal(bands.carded.has("fix-auth"), false)
+})
+
+test("every open thread lands in some band", () => {
+  const p = project("alpha", [ready("a"), ready("b"), ready("c")], [running("d")])
+  for (const hide of [[], ["a"], ["a", "b", "c"]]) {
+    const bands = loudBands(p, (key) => hide.some((id) => key === threadKey("alpha", id)), listOverlay("alpha", false, {}, {}, NOW))
+    assert.deepEqual([...ids(bands.pinned), ...ids(bands.ready), ...ids(bands.working)].sort(), ["a", "b", "c", "d"])
+  }
+})
+
 test("with nothing recorded, the bands are the poll's", () => {
   const p = project("alpha", [ready("fix-auth")], [running("build")])
   const bands = loudBands(p, shown, listOverlay("alpha", true, {}, {}, NOW))

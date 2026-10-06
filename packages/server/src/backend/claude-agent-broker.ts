@@ -105,6 +105,12 @@ export interface BrokerRecord {
    *  starts first. Linux only, where it costs one /proc read; absent elsewhere, and absent ⇒ the reader
    *  falls back to "the pid is alive", exactly the pre-marker behaviour. */
   processStart?: string
+  /** The permission mode this daemon's session was launched under — a launch flag, so fixed for the
+   *  daemon's life (a mode change retires it; see the bridge's retireDaemon). Echoed here for the same
+   *  reason as `compactionWindow`: after a frizz restart the record is all that remembers it, and the
+   *  bridge only holds an escalation back for the agent to reconsider when the mode was a permissive one.
+   *  Absent ⇒ a daemon forked before 2026-10-06. */
+  permissionMode?: ClaudeBrokerConfig["permissionMode"]
 }
 
 // What THIS daemon build understands, stamped into its record so the bridge can tell an old surviving
@@ -561,7 +567,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     socketPathIsOurs = socketPathOwnership(config.socketPath)
     if (config.recordPath) {
       const processStart = daemonBirthMarker() // see daemon-identity.ts
-      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv), ...(processStart ? { processStart } : {}) }
+      const record: BrokerRecord = { daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation, createdAt: new Date().toISOString(), capabilities: BROKER_CAPABILITIES, compactionWindow: claudeCompactionWindowOf(config.workerEnv), permissionMode: config.permissionMode ?? "default", ...(processStart ? { processStart } : {}) }
       try { writeFileSync(config.recordPath, JSON.stringify(record), { mode: 0o600 }) } catch {}
     }
     armIdle()
