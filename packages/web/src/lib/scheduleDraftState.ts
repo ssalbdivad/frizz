@@ -29,6 +29,9 @@ export type ScheduleDraftState = {
   dismissed?: string
   /** Dismissed by Undo of the schedule just created: the box says so, with a way to schedule it after all. */
   undone?: true
+  /** Said over a reading of EARLIER words (the strip was updating): it holds for the words on screen, and takes
+   *  their reading's phrase once it lands (lib/scheduleIntent.ts `dismissedPhrase`). */
+  pending?: true
 }
 
 export const SCHEDULE_DRAFT_NONE: ScheduleDraftState = Object.freeze({ v: 2 }) as ScheduleDraftState
@@ -39,9 +42,9 @@ export function parseScheduleDraftState(raw: string): ScheduleDraftState {
   try {
     const value: unknown = JSON.parse(raw)
     if (!value || typeof value !== "object" || (value as { v?: unknown }).v !== 2) return SCHEDULE_DRAFT_NONE
-    const { dismissed, undone } = value as { dismissed?: unknown; undone?: unknown }
+    const { dismissed, undone, pending } = value as { dismissed?: unknown; undone?: unknown; pending?: unknown }
     if (typeof dismissed !== "string" || !dismissed.trim()) return SCHEDULE_DRAFT_NONE
-    return { v: 2, dismissed, ...(undone === true ? { undone: true as const } : {}) }
+    return { v: 2, dismissed, ...(undone === true ? { undone: true as const } : {}), ...(pending === true ? { pending: true as const } : {}) }
   } catch {
     return SCHEDULE_DRAFT_NONE
   }
@@ -51,7 +54,7 @@ export function parseScheduleDraftState(raw: string): ScheduleDraftState {
  *  store's bounded snapshot carries nothing for it. */
 export function serializeScheduleDraftState(state: ScheduleDraftState): string {
   if (!state.dismissed?.trim()) return ""
-  return JSON.stringify({ v: 2, dismissed: state.dismissed, ...(state.undone ? { undone: true } : {}) })
+  return JSON.stringify({ v: 2, dismissed: state.dismissed, ...(state.undone ? { undone: true } : {}), ...(state.pending ? { pending: true } : {}) })
 }
 
 export function readScheduleDraftState(key: string, store: Pick<DraftStore, "get"> = draftStore): ScheduleDraftState {
@@ -180,4 +183,47 @@ export function useDraftCreating(key: string): boolean {
   }, [])
   const read = useCallback(() => inFlight.has(key), [key])
   return useSyncExternalStore(subscribe, read, read)
+}
+
+// ---- one held Enter per draft ----------------------------------------------------------------------------------
+//
+// An Enter on words not read yet HOLDS until their answer lands (lib/scheduleIntent.ts `submitStep`). The hold was
+// each box's own, and the page box and the `c` dialog over it are two boxes on one draft: the page box held, the
+// dialog's Enter held too, and the one answer landed in both in the same effect pass — two identical schedules,
+// or two threads, for one human submit (fix round 2026-10-06, A; 2 of 2 cases). The hold is the DRAFT's: the
+// newest Enter takes it, the box that held it before lets go, and acting on the draft (a dispatch, a create)
+// releases it for every box. Kept for the tab, like the creates above.
+
+const holds = new Map<string, symbol>()
+const holdListeners = new Set<() => void>()
+const holdsChanged = () => { for (const l of [...holdListeners]) l() }
+
+/** `owner`'s Enter is held on this draft now; whichever box held it before no longer does. */
+export function claimDraftHold(key: string, owner: symbol): void {
+  if (holds.get(key) === owner) return
+  holds.set(key, owner)
+  holdsChanged()
+}
+
+/** `owner` lets go of its hold on this draft — or, with no owner, the draft was acted on and no hold on it stands. */
+export function releaseDraftHold(key: string, owner?: symbol): void {
+  if (!holds.has(key) || (owner !== undefined && holds.get(key) !== owner)) return
+  holds.delete(key)
+  holdsChanged()
+}
+
+/** The box whose Enter is held on this draft, if any. */
+export function draftHolder(key: string): symbol | undefined {
+  return holds.get(key)
+}
+
+export function subscribeDraftHolds(listener: () => void): () => void {
+  holdListeners.add(listener)
+  return () => { holdListeners.delete(listener) }
+}
+
+/** `draftHolder`, re-rendering when it changes. */
+export function useDraftHolder(key: string): symbol | undefined {
+  const read = useCallback(() => holds.get(key), [key])
+  return useSyncExternalStore(subscribeDraftHolds, read, read)
 }

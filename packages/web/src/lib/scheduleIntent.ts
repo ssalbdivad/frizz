@@ -17,7 +17,10 @@ import { isFailedRead, type ModelReadOk, type ModelReadView } from "./scheduleMo
 //     times out at submit, or a schedule the box cannot make, stops with a line that says so, and the NEXT
 //     Enter starts the thread.
 //   - The human can say "not a schedule" (× or Esc): the draft keeps that phrase DISMISSED, and Enter starts the
-//     thread, until the model reads a different phrase out of the words.
+//     thread, until the model reads a different phrase out of the words. Said over a strip that is still the
+//     reading of EARLIER words, it is about the words on screen, and takes their reading's phrase when it lands.
+//   - A reading of other words never looks current: kept on screen while its words are read again, it is marked
+//     as updating, and the send wears ↻ only while that read is out or due.
 
 /** What the model's answer means for the box. */
 export type ScheduleAnswer =
@@ -102,6 +105,37 @@ export function liftsDismissal(a: { trigger: boolean; known: ScheduleKnown; dism
   return a.known.kind === "schedule" && !isDismissed(a.known.result, a.dismissed)
 }
 
+/** What "not a schedule" was said about, as the draft keeps it (lib/scheduleDraftState.ts). */
+export type DismissalRecord = { phrase: string; pending?: boolean }
+
+/**
+ * The phrase a dismissal holds for NOW. Said over a reading of the words on screen, it is that reading's phrase.
+ * Said over a strip that was still the reading of EARLIER words (updating), it is PENDING: the human said it
+ * about the words they were looking at, whose own reading had not landed — so it covers whatever reading is on
+ * screen meanwhile (`stale`) and, once the words' own reading lands (`known`), that one, whatever its phrase.
+ *
+ * Fix round 2026-10-06 (F): typed "triage new issues every Monday at 9am" with the phrase at the end, Esc 150ms
+ * after the last key dismissed the strip's "every Monday" — the reading of "… every Monday at" — and the words'
+ * own reading, "every Monday at 9am", was a different phrase: the dismissal lifted the moment it landed and the
+ * Enter pressed after the Esc created the schedule. 3 of 3 cases, Esc and × alike.
+ */
+export function dismissedPhrase(d: DismissalRecord | undefined, known: ScheduleKnown, stale: ScheduleAnswer | undefined): string | undefined {
+  if (!d) return undefined
+  if (!d.pending) return d.phrase
+  if (known.kind === "schedule") return known.result.phrase
+  if (stale?.kind === "schedule") return stale.result.phrase
+  return d.phrase
+}
+
+/** What becomes of the draft's dismissal now: kept, lifted (`liftsDismissal`), or — a pending one whose words'
+ *  reading landed — fixed to that reading's phrase, so later edits are judged against it as usual. */
+export function nextDismissal(a: { trigger: boolean; known: ScheduleKnown; dismissal: DismissalRecord | undefined }): "keep" | "lift" | { adopt: string } {
+  const d = a.dismissal
+  if (!d) return "keep"
+  if (d.pending && a.trigger && a.known.kind === "schedule") return { adopt: a.known.result.phrase }
+  return liftsDismissal({ trigger: a.trigger, known: a.known, dismissed: d.phrase }) ? "lift" : "keep"
+}
+
 // ---- submit ---------------------------------------------------------------------------------------------------
 
 export type SubmitAct =
@@ -162,8 +196,8 @@ export type SubmitPhase =
 
 export const SUBMIT_READY: SubmitPhase = Object.freeze({ kind: "ready" }) as SubmitPhase
 
-/** What the box knows when a submit event arrives. */
-export type SubmitFacts = { text: string; trigger: boolean; known: ScheduleKnown; dismissed: string | undefined }
+/** What the box knows when a submit event arrives. `uploading`: an attachment is on its way into the draft. */
+export type SubmitFacts = { text: string; trigger: boolean; known: ScheduleKnown; dismissed: string | undefined; uploading?: boolean }
 
 /** What to do, besides moving to `phase`: start the thread, create a schedule, or read the text now (explicitly,
  *  past the budget — a held Enter always asks). */
@@ -210,13 +244,16 @@ function stepFor(act: SubmitAct, text: string, now: number): SubmitStep {
 export function submitStep(phase: SubmitPhase, event: SubmitEvent, facts: SubmitFacts): SubmitStep {
   switch (event.type) {
     case "enter":
-      // One Enter at a time: another while one is held changes nothing.
-      if (phase.kind === "holding") return { phase }
+      // One Enter at a time: another while one is held changes nothing. Nor does one while a file is uploading:
+      // the box refuses that Enter itself (Composer's `!uploading`), and so does this.
+      if (phase.kind === "holding" || facts.uploading) return { phase }
       return enterStep(phase, facts, event.now, event.retry === true)
     case "update":
       if (phase.kind === "holding") {
-        // Typing during the hold cancels it; Enter again submits.
-        if (facts.text !== phase.text) return { phase: SUBMIT_READY }
+        // Typing during the hold cancels it; Enter again submits. So does a file dropped or pasted into the box:
+        // acting on the answer mid-upload sent the words without it (fix round, C), the send the Composer's
+        // `!uploading` gate exists to refuse.
+        if (facts.text !== phase.text || facts.uploading) return { phase: SUBMIT_READY }
         const act = submitAct({ trigger: facts.trigger, known: facts.known, dismissed: facts.dismissed, failShown: false, at: "landed" })
         return act ? stepFor(act, phase.text, 0) : { phase }
       }
@@ -283,4 +320,21 @@ export function stripView(a: {
     if (d!.undone) return { kind: "undone" }
   } else if (d?.undone) return { kind: "undone" }
   return a.reading ? { kind: "pending" } : { kind: "none" }
+}
+
+/**
+ * How a strip is drawn, and whether the send wears ↻. `readDue`: a read of exactly the words on screen is out, or
+ * due once the typing rests (or due again, its answer expired).
+ *
+ * - The words' own reading is CURRENT: drawn plainly, and Enter creates it.
+ * - A reading of other words while the words are read is UPDATING: it shimmers and keeps ↻, so a word typed into
+ *   a schedule does not flicker the send between glyphs (stale-while-revalidate, D4).
+ * - A reading of other words with no read coming — the budget spent, the read failed — is updating too, but
+ *   still, and the send is plain: Enter will check the words before it does anything. Until the fix round
+ *   (2026-10-06, B) it was drawn as current, ↻ and all, over an Enter that held, read, and started a thread.
+ */
+export function stripLook(strip: StripView, readDue: boolean): { updating: boolean; revalidating: boolean; scheduleGlyph: boolean } {
+  if (strip.kind !== "schedule") return { updating: false, revalidating: false, scheduleGlyph: false }
+  if (strip.fresh) return { updating: false, revalidating: false, scheduleGlyph: true }
+  return { updating: true, revalidating: readDue, scheduleGlyph: readDue }
 }

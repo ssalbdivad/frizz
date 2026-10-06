@@ -29,6 +29,7 @@ import { projectSlug } from "../lib/base-path.ts"
 import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
+import { phoneLayout } from "../lib/mobile.ts"
 import { useLiveSchedule } from "./ScheduleComposer.tsx"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 
@@ -125,6 +126,20 @@ function PromptForm({
   const pickState = useDraftDispatchPick(pickKey)
   const [pick, setPick] = pickState
   const submittedPickRef = useRef(pick)
+  // What was said about the draft's schedule ("not a schedule", an Undo) is part of the draft too
+  // (lib/scheduleDraftState.ts): a submit that fails puts it back with the words.
+  const scheduleKey = draftKey.dispatchSchedule(projectDir)
+  const submittedScheduleRef = useRef("")
+  /** A failed submit's words back into a still-empty box — and, in the same commit, what was said about their
+   *  schedule. Without it the strip and ↻ came back over words the human had said were not a schedule (or had
+   *  just undone), and the retry Enter created it (fix round 2026-10-06, H). */
+  const restoreSubmitted = (prompt: string) => {
+    if (draftStore.get(promptKey)) return
+    const schedule = submittedScheduleRef.current
+    draftStore.setMany({ [promptKey]: prompt, ...(schedule && !draftStore.get(scheduleKey) ? { [scheduleKey]: schedule } : {}) })
+  }
+  // A file on its way into the box: a held Enter waits for no answer while it uploads (ScheduleComposer.tsx).
+  const [uploading, setUploading] = useState(false)
   const { resolved, defaultResolved, picked, codexList, claudeList, acpList, loadError: profileLoadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
 
   // Per-provider LOCAL credential presence, polled so the submit gate has a fresh value without a
@@ -156,7 +171,7 @@ function PromptForm({
     onError: (e, input) => {
       // A submit clears before the RPC starts. Restore only into a still-empty field so retry is
       // effortless without overwriting text typed during the failed request.
-      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
+      restoreSubmitted(submittedDraftRef.current || input.prompt)
       // Its chips come back with it, or the restored token would be bare text with nothing behind it.
       restoreContextItems(promptKey, submittedContextRef.current)
       submittedContextRef.current = []
@@ -191,7 +206,7 @@ function PromptForm({
       showToast("Lazy thread added", { link: { label: "Open", slug: res.slug, project: res.project } })
     },
     onError: (e, input) => {
-      if (!draftStore.get(promptKey)) setPrompt(submittedDraftRef.current || input.prompt)
+      restoreSubmitted(submittedDraftRef.current || input.prompt)
       restoreContextItems(promptKey, submittedContextRef.current)
       submittedContextRef.current = []
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
@@ -220,6 +235,7 @@ function PromptForm({
     }
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
+    submittedScheduleRef.current = draftStore.get(scheduleKey)
     submittedContextRef.current = takeContextItems(promptKey)
     clearDispatchDraft(projectDir)
     saveLazy.mutate(input)
@@ -231,6 +247,7 @@ function PromptForm({
   function runDispatch(input: DispatchInput) {
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
+    submittedScheduleRef.current = draftStore.get(scheduleKey)
     // Taken here, not in submit: a submit the sign-in gate holds keeps its draft, and so its chips.
     submittedContextRef.current = takeContextItems(promptKey)
     // The prompt, its pick and what was said about its schedule in ONE commit (lib/scheduleDraftState.ts):
@@ -262,6 +279,7 @@ function PromptForm({
     profile: resolved
       ? { model: resolved.model, backend: resolved.backend, effort: (resolved.effort || undefined) as CreateScheduleInput["effort"] }
       : undefined,
+    uploading,
     startNow,
     onCreated: (submittedProse) => {
       // The draft became the schedule: the prompt, its chips and its pick leave the box in one commit. Words
@@ -285,7 +303,13 @@ function PromptForm({
       requestAnimationFrame(() => {
         const el = rootRef.current?.querySelector<HTMLTextAreaElement>("textarea")
           ?? document.querySelector<HTMLTextAreaElement>('textarea[data-surface="newComposer"]')
-        if (!el) return
+        if (!el) {
+          // A PHONE has no box on its page: it lives in the New thread sheet, which closed when the schedule was
+          // made. Undo opens it again, on the words it put back and their line — it changed nothing on screen
+          // until the human happened to tap New thread (fix round 2026-10-06, F3).
+          if (phoneLayout()) store.phoneNewThread = { focus: true }
+          return
+        }
         el.focus({ preventScroll: true })
         el.setSelectionRange(el.value.length, el.value.length)
       })
@@ -464,6 +488,7 @@ function PromptForm({
         minHeight={96}
         maxHeight={340}
         busy={dispatch.isPending || saveLazy.isPending || savingSettings}
+        onUploadingChange={setUploading}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}
       />

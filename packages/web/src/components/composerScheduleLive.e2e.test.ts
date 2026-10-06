@@ -35,6 +35,7 @@ type PuppeteerModule = typeof import("puppeteer")
 type Browser = Awaited<ReturnType<PuppeteerModule["launch"]>>
 type Page = Awaited<ReturnType<Browser["newPage"]>>
 type Counts = Record<"dispatch" | "createLazyThread" | "createSchedule" | "deleteSchedule" | "interpretSchedule", number>
+const ATTACHED = "/fixture/.frizz/attachments/1-abcdef12-shot.png"
 type Rule = { match: string; delayMs?: number } & Record<string, unknown>
 
 let browser: Browser | undefined
@@ -51,7 +52,7 @@ after(async () => { await browser?.close() })
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 /** A fresh tab (so a fresh sessionStorage: drafts start empty), the box mounted and its profile known. */
-async function open(opts: { width?: number; height?: number; phone?: boolean; dsf?: number } = {}) {
+async function open(opts: { width?: number; height?: number; phone?: boolean; dsf?: number; query?: string } = {}) {
   const page = await browser!.newPage()
   page.setDefaultTimeout(30_000)
   await page.emulateTimezone(NY)
@@ -66,8 +67,8 @@ async function open(opts: { width?: number; height?: number; phone?: boolean; ds
   page.on("console", (m) => { if (m.type() === "error" && !/404|502|favicon|Failed to load resource/i.test(m.text())) errors.push(m.text()) })
   page.on("pageerror", (e) => errors.push(String(e)))
   await page.evaluateOnNewDocument(INSTRUMENT)
-  await page.goto(`${baseUrl}/schedule-live-fixture.html`, { waitUntil: "networkidle0" })
-  await ready(page)
+  await page.goto(`${baseUrl}/schedule-live-fixture.html${opts.query ?? ""}`, { waitUntil: "networkidle0" })
+  if (!opts.query?.includes("sheet")) await ready(page)
   return { page, errors }
 }
 
@@ -650,6 +651,281 @@ test("15. the budget: 40 automatic reads per draft, then only a submit reads", {
     await page.keyboard.press("Enter")
     assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 4_000), "Enter read once more and dispatched")
     assert.equal((await counts(page)).interpretSchedule, 41)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+// ---- the fix round of 2026-10-06 (findings F1, A, B, F, C, H, G, F3) -------------------------------------------
+
+/** The words of every frame since the instrument was reset in which the slot was closed. */
+const closedFrames = async (page: Page) => (await frames(page)).filter((f) => !f.open)
+
+test("16. a read out while MANY texts are typed: the strip stays, updating, and the answer that lands is drawn (F1)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  // At 172ms a key with 4–6s reads, 24 and 29 texts went by between a read going out and its answer, and the
+  // strip closed (the reading it showed fell out of a 24-text history) or never drew the answer that landed.
+  const { page, errors } = await open()
+  try {
+    await arm(page, [MONDAY])
+    await scheduleShown(page, "every Monday at 9am triage")
+    await resetFrames(page)
+    await closeGate(page)
+    // 45 keys, every one a new text, while the read that went out at the first word's end is held.
+    await typeFast(page, " new issues and label each one by area today")
+    await sleep(400)
+    const mid = (await state(page))!
+    assert.equal(mid.slot, "schedule", `the strip is still up 45 texts on: ${JSON.stringify(mid)}`)
+    assert.equal(mid.updating, true)
+    assert.equal(mid.send, "schedule")
+    assert.deepEqual(await closedFrames(page), [], "the slot never closed, in any frame")
+    await release(page)
+    assert.ok(await waitFor(async () => { const s = await state(page); return s?.slot === "schedule" && !s.updating }, 6_000), "the words' own reading lands")
+    assert.deepEqual(await closedFrames(page), [], "and replaced the kept one in place")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("17. the `c` dialog and the page box hold ONE Enter on their draft: one answer acts once (A)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  for (const answer of ["schedule", "none"] as const) {
+    const { page, errors } = await open()
+    try {
+      const text = answer === "schedule" ? PHRASE_TASK : "every time CI fails, fix it"
+      await arm(page, answer === "schedule" ? [MONDAY] : [])
+      await closeGate(page)
+      await typeFast(page, text)
+      await page.keyboard.press("Enter")
+      await sleep(400)
+      assert.equal((await state(page))!.sendPending, true, `${answer}: the page box holds`)
+      // The human leaves the box and opens the `c` dialog — the same draft — and presses Enter there too.
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await page.evaluate(() => window.__sched.openDialog())
+      await ready(page, DIALOG_BOX)
+      assert.equal((await state(page, DIALOG_BOX))!.text, text)
+      await page.keyboard.press("Enter")
+      await sleep(400)
+      assert.equal((await state(page, DIALOG_BOX))!.sendPending, true, `${answer}: the dialog holds`)
+      assert.equal((await state(page, PAGE_BOX))!.sendPending, false, `${answer}: the page box let its hold go to the newer Enter`)
+      await release(page)
+      await waitFor(async () => { const c = await counts(page); return c.dispatch + c.createSchedule > 0 }, 4_000)
+      await sleep(1_000)
+      const c = await counts(page)
+      assert.equal(c.dispatch + c.createSchedule, 1, `${answer}: one Enter acted once: ${JSON.stringify(c)}`)
+      assert.equal(answer === "schedule" ? c.createSchedule : c.dispatch, 1)
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+})
+
+test("18. a reading of OTHER words never looks current: past the budget, or after a failed read, it is marked and the send is plain (B)", { skip: !baseUrl, timeout: 150_000 }, async () => {
+  const FRIDAY = { match: "every Friday at 9am", phrase: "every Friday at 9am", rrule: "FREQ=WEEKLY;BYDAY=FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-09T09:00", title: "Triage issues" }
+  {
+    // (a) The budget: 40 automatic reads spent on the draft, then one word changed. Nothing reads the new words
+    // until Enter, so the Monday reading on screen is not theirs.
+    const { page, errors } = await open()
+    try {
+      await arm(page, [{ ...MONDAY, delayMs: 5 }])
+      await typeFast(page, PHRASE_TASK)
+      for (let i = 0; i < 80 && (await counts(page)).interpretSchedule < 40; i++) {
+        await typeFast(page, ` w${i}`, 10)
+        await sleep(80)
+      }
+      await sleep(600)
+      assert.equal((await counts(page)).interpretSchedule, 40, "the budget is spent")
+      await arm(page, [{ ...FRIDAY, delayMs: 5 }])
+      await page.evaluate((sel) => {
+        const area = document.querySelector<HTMLTextAreaElement>(sel)!
+        const at = area.value.indexOf("Monday")
+        area.focus()
+        area.setSelectionRange(at, at + "Monday".length)
+      }, ta(PAGE_BOX))
+      await typeFast(page, "Friday", 40)
+      await sleep(1_200)
+      const s = (await state(page))!
+      assert.equal((await counts(page)).interpretSchedule, 40, "no read: the budget is spent")
+      assert.equal(s.slot, "schedule", "the last reading stays on screen…")
+      assert.equal(s.updating, true, "…marked as not these words'")
+      assert.equal(await page.evaluate((sel) => document.querySelector(`${sel} [data-schedule-reading]`)!.className.includes("shimmer-text"), PAGE_BOX), false, "no shimmer: nothing is being read")
+      assert.equal(s.send, "send", "and the send does not claim a schedule it has not read")
+      await shot(page, "intent-stale-budget")
+      await focusEnd(page)
+      await page.keyboard.press("Enter")
+      assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 4_000), "Enter read the words and created what they say")
+      assert.equal((await bodies(page, "createSchedule"))[0]!.whenText, "every Friday at 9am", "Friday — not the Monday that was on screen")
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+  {
+    // (b) A read that FAILS while typing leaves the earlier reading up — not as this text's.
+    const { page, errors } = await open()
+    try {
+      await arm(page, [MONDAY])
+      await scheduleShown(page)
+      await arm(page, [{ match: "label", fail: "http" }, MONDAY])
+      await typeFast(page, " and label them ")
+      await sleep(1_500)
+      const s = (await state(page))!
+      assert.equal(s.slot, "schedule")
+      assert.equal(s.updating, true, `a failed read is no answer for these words: ${JSON.stringify(s)}`)
+      assert.equal(s.send, "send")
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+})
+
+test("19. \"not a schedule\" said over an UPDATING strip holds for the words on screen: Enter starts the thread (F)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  const FULL = { match: "every Monday at 9am", phrase: "every Monday at 9am", rrule: MONDAY.rrule, dtstart: MONDAY.dtstart, title: "Triage issues", delayMs: 1_500 }
+  const SHORT = { match: "every Monday", phrase: "every Monday", rrule: MONDAY.rrule, dtstart: MONDAY.dtstart, title: "Triage issues", delayMs: 300 }
+  for (const how of ["Escape", "×"] as const) {
+    const { page, errors } = await open()
+    try {
+      // The phrase at the END, typed and dismissed at once: the strip still shows the reading of "… every Monday"
+      // while "… every Monday at 9am" — a longer phrase — is read.
+      await arm(page, [FULL, SHORT])
+      await typeFast(page, "triage new issues every Monday at", 60)
+      assert.ok(await waitFor(async () => (await state(page))?.slot === "schedule", 6_000), "the strip for the words so far")
+      await typeFast(page, " 9am", 60)
+      await sleep(150)
+      const mid = (await state(page))!
+      assert.equal(mid.updating, true, `${how}: the strip is the earlier words' reading`)
+      if (how === "Escape") await page.keyboard.press("Escape")
+      else await page.click(`${PAGE_BOX} [data-schedule-dismiss]`)
+      await sleep(150)
+      assert.equal((await state(page))!.send, "send", `${how}: Enter starts it now`)
+      await focusEnd(page)
+      await page.keyboard.press("Enter")
+      assert.ok(await waitFor(async () => { const c = await counts(page); return c.dispatch + c.createSchedule > 0 }, 6_000), `${how}: Enter acted`)
+      const c = await counts(page)
+      assert.deepEqual([c.createSchedule, c.dispatch], [0, 1], `${how}: the thread started, nothing scheduled: ${JSON.stringify(c)}`)
+      assert.equal((await bodies(page, "dispatch"))[0]!.prompt, "triage new issues every Monday at 9am")
+      assert.deepEqual(errors, [])
+    } finally { await page.close() }
+  }
+})
+
+/** Paste a PNG into the box, as a screenshot paste does. */
+async function pasteImage(page: Page, box = PAGE_BOX) {
+  await page.evaluate((sel) => {
+    const area = document.querySelector<HTMLTextAreaElement>(sel)!
+    const dt = new DataTransfer()
+    dt.items.add(new File([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], "shot.png", { type: "image/png" }))
+    area.dispatchEvent(new ClipboardEvent("paste", { clipboardData: dt, bubbles: true, cancelable: true }))
+  }, ta(box))
+}
+
+test("20. an image pasted during the hold cancels it, as typing does; once it is attached, Enter sends it with the words (C)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await page.evaluate(() => { window.__sched.attachDelayMs = 2_000 })
+    await arm(page, [MONDAY])
+    await closeGate(page)
+    await typeFast(page, PHRASE_TASK)
+    await page.keyboard.press("Enter")
+    await sleep(300)
+    assert.equal((await state(page))!.sendPending, true, "held")
+    await pasteImage(page)
+    await sleep(150)
+    assert.equal((await state(page))!.sendPending, false, "the upload cancelled the hold")
+    await release(page)
+    await sleep(800)
+    assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [0, 0], "nothing went without the image")
+    assert.ok(await waitFor(async () => !(await page.$eval(`${PAGE_BOX} [data-composer-send]`, (b) => (b as HTMLButtonElement).disabled)), 4_000), "the upload landed")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 4_000))
+    assert.ok(String((await bodies(page, "createSchedule"))[0]!.prompt).includes(ATTACHED), "the schedule's prompt carries the image")
+    assert.equal((await counts(page)).dispatch, 0)
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("21. a dispatch that fails puts the draft back WHOLE: a dismissal, or an Undo, still holds for the retry (H)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    // × then Enter, and the server fails the dispatch.
+    await arm(page, [MONDAY])
+    await scheduleShown(page)
+    await page.click(`${PAGE_BOX} [data-schedule-dismiss]`)
+    assert.ok(await waitFor(async () => (await state(page))!.send === "send", 2_000))
+    await page.evaluate(() => { window.__sched.failDispatch = 1 })
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1 && (await state(page))!.text === PHRASE_TASK, 3_000), "the words came back")
+    await sleep(800)
+    let s = (await state(page))!
+    assert.equal(s.open, false, `still dismissed: no strip — ${JSON.stringify(s)}`)
+    assert.equal(s.send, "send")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 2, 3_000), "the retry started the thread")
+    assert.equal((await counts(page)).createSchedule, 0)
+
+    // Undo, then Enter ("Enter starts it now"), and that dispatch fails too.
+    await sleep(400)
+    await focusEnd(page)
+    await scheduleShown(page, "every Monday at 9am post the digest")
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => !!(await state(page))?.toast?.actions.includes("Undo"), 3_000))
+    await page.click('[data-toast-action="Undo"]')
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "undone", 3_000))
+    await page.evaluate(() => { window.__sched.failDispatch = 1 })
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 3 && (await state(page))!.text === "every Monday at 9am post the digest", 3_000))
+    await sleep(800)
+    s = (await state(page))!
+    assert.equal(s.slot, "undone", `the Undo line is back with the words: ${JSON.stringify(s)}`)
+    assert.equal(s.send, "send")
+    await focusEnd(page)
+    await page.keyboard.press("Enter")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 4, 3_000), "the retry started the thread")
+    assert.equal((await counts(page)).createSchedule, 1, "and the undone schedule was not made again")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("22. a reading past the cache's 10m stays on screen as not current, and the box reads the words again (G)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await arm(page, [MONDAY])
+    await scheduleShown(page)
+    const reads = (await counts(page)).interpretSchedule
+    await resetFrames(page)
+    await closeGate(page)
+    await page.evaluate(() => (window as unknown as { __clock: { skew: (ms: number) => void } }).__clock.skew(11 * 60_000))
+    // The box notices on the live clock's next tick (30s).
+    assert.ok(await waitFor(async () => (await counts(page)).interpretSchedule > reads, 35_000, 250), "the words are read again")
+    const s = (await state(page))!
+    assert.equal(s.slot, "schedule", `the reading stays meanwhile: ${JSON.stringify(s)}`)
+    assert.equal(s.updating, true, "as not current")
+    assert.equal(s.send, "schedule", "its read is out")
+    assert.deepEqual(await closedFrames(page), [], "never a frame without it")
+    await release(page)
+    assert.ok(await waitFor(async () => { const n = await state(page); return n?.slot === "schedule" && !n.updating }, 4_000), "current again")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
+test("23. the phone: Undo after the sheet closed opens it again, with the words and the Undo line (F3)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open({ phone: true, query: "?sheet" })
+  try {
+    await arm(page, [MONDAY])
+    await page.tap("[data-fixture-new-thread]")
+    await ready(page)
+    await scheduleShown(page)
+    await page.tap(`${PAGE_BOX} [data-composer-send]`)
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1 && !(await page.$("[data-fixture-sheet]")), 3_000), "created, and the sheet closed")
+    assert.ok(await waitFor(async () => !!(await state(page, "body"))?.toast?.actions.includes("Undo"), 3_000))
+    // A tap lands where the button IS, and only once it takes the pointer: let the toast finish arriving (one tap
+    // at load ~40 went through a toast that was not taking it yet).
+    assert.ok(await waitFor(() => page.$eval('[data-toast-action="Undo"]', (b) => getComputedStyle(b).pointerEvents === "auto"), 3_000))
+    await page.evaluate(() => Promise.all(document.getAnimations()
+      .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity)
+      .map((a) => a.finished.catch(() => undefined))))
+    await page.tap('[data-toast-action="Undo"]')
+    assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1, 3_000), "deleted")
+    assert.ok(await waitFor(async () => (await state(page))?.slot === "undone", 3_000), "the sheet is open again on the Undo line")
+    const s = (await state(page))!
+    assert.equal(s.text, PHRASE_TASK, "with the words")
+    assert.equal(s.copy, "Schedule undone. Send starts it now.")
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })

@@ -11,11 +11,14 @@ import {
   NO_TASK_COPY,
   SUBMIT_READY,
   classifyResult,
+  dismissedPhrase,
   isDismissed,
   knownOf,
   liftsDismissal,
+  nextDismissal,
   phraseSpan,
   readTextOf,
+  stripLook,
   stripView,
   submitStep,
   type ScheduleKnown,
@@ -105,6 +108,34 @@ test("a dismissal is of a phrase, and lifts once that phrase is gone", () => {
   assert.equal(liftsDismissal({ trigger: false, known: NONE, dismissed: undefined }), false, "nothing to lift")
 })
 
+test("\"not a schedule\" said over an UPDATING strip is about the words on screen: it takes their reading's phrase when it lands (finding F)", () => {
+  // The strip was showing the reading of EARLIER words ("every Monday") while "… every Monday at 9am" was read.
+  // Esc dismissed "every Monday"; the current words' answer read "every Monday at 9am", a different phrase, so the
+  // dismissal lifted the moment it landed and the Enter pressed after the Esc created the schedule.
+  const earlier = { kind: "schedule" as const, result: ok("triage new issues every Monday", "every Monday") }
+  const pending = { phrase: "every Monday", pending: true }
+  // Before the current words' reading lands, it covers whatever reading is on screen…
+  assert.equal(dismissedPhrase(pending, PENDING, earlier), "every Monday")
+  // …and once it lands, that reading — whatever its phrase.
+  assert.equal(dismissedPhrase(pending, SCHEDULE, earlier), PHRASE)
+  assert.equal(isDismissed(READING, dismissedPhrase(pending, SCHEDULE, earlier)), true)
+  // A held Enter landing on that answer starts the thread.
+  const held = submitStep(SUBMIT_READY, enter, facts({ dismissed: dismissedPhrase(pending, PENDING, earlier) })).phase
+  assert.deepEqual(submitStep(held, update, facts({ known: SCHEDULE, dismissed: dismissedPhrase(pending, SCHEDULE, earlier) })).then, { run: "dispatch" })
+  // The draft then keeps the phrase it now holds for, so later edits are judged against it as usual.
+  assert.deepEqual(nextDismissal({ trigger: true, known: SCHEDULE, dismissal: pending }), { adopt: PHRASE })
+  assert.equal(nextDismissal({ trigger: true, known: PENDING, dismissal: pending }), "keep", "still being read")
+  assert.equal(nextDismissal({ trigger: true, known: NONE, dismissal: pending }), "lift", "no schedule in the words after all")
+  assert.equal(nextDismissal({ trigger: false, known: PENDING, dismissal: pending }), "lift")
+  // A dismissal said over a CURRENT reading is of its phrase, as before.
+  const settled = { phrase: PHRASE }
+  assert.equal(dismissedPhrase(settled, SCHEDULE, undefined), PHRASE)
+  assert.equal(nextDismissal({ trigger: true, known: SCHEDULE, dismissal: settled }), "keep")
+  assert.equal(nextDismissal({ trigger: true, known: { kind: "schedule", result: ok("every Tuesday at 9am triage", "every Tuesday at 9am") }, dismissal: settled }), "lift")
+  assert.equal(nextDismissal({ trigger: true, known: SCHEDULE, dismissal: undefined }), "keep")
+  assert.equal(dismissedPhrase(undefined, SCHEDULE, earlier), undefined)
+})
+
 // ---- D5: submit, branch by branch ------------------------------------------------------------------------------
 
 test("D5: no schedule word, or the reading dismissed → dispatch exactly as today", () => {
@@ -163,6 +194,16 @@ test("D5: the hold timing out (15s) is a failure too: the line, then the next En
   assert.deepEqual(timedOut, { phase: { kind: "failed", text: TEXT } })
   assert.deepEqual(drive(timedOut.phase, [[enter, facts()]]).runs, ["dispatch"])
   assert.deepEqual(submitStep(SUBMIT_READY, { type: "timeout" }, facts()), { phase: SUBMIT_READY }, "a stray timer does nothing")
+})
+
+test("an upload started during the hold cancels it, as typing does: nothing is sent without the file (finding C)", () => {
+  // The held Enter used to act on the answer with an image still uploading, and the image was dropped — the very
+  // send the Composer's \`!uploading\` gate refuses.
+  const held = submitStep(SUBMIT_READY, enter, facts()).phase
+  assert.deepEqual(submitStep(held, update, facts({ uploading: true })), { phase: SUBMIT_READY }, "cancelled")
+  assert.deepEqual(submitStep(held, update, facts({ known: SCHEDULE, uploading: true })), { phase: SUBMIT_READY }, "and nothing created mid-upload")
+  assert.deepEqual(submitStep(SUBMIT_READY, enter, facts({ known: SCHEDULE, uploading: true })), { phase: SUBMIT_READY }, "an Enter mid-upload does nothing")
+  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ known: SCHEDULE })]]).runs, ["create"], "once it lands, Enter acts")
 })
 
 test("a read that failed while TYPING is not the failure line: Enter holds and reads again", () => {
@@ -224,6 +265,21 @@ test("stale-while-revalidate: the last reading STAYS while newer words are read,
   assert.deepEqual(strip({ known: SCHEDULE, stale }), { kind: "schedule", result: READING, readText: TEXT, fresh: true }, "replaced in place")
   // A stale NON-schedule never shows: a refusal or a none read from earlier words is not said for these.
   assert.deepEqual(strip({ reading: true, stale: { text: earlier, answer: { kind: "refused", copy: NO_TASK_COPY } } }), { kind: "pending" })
+})
+
+test("a reading of OTHER words never looks current; ↻ only while it is current or being read again (finding B)", () => {
+  const earlier = "every Monday at 9am triage"
+  const kept = strip({ reading: true, stale: { text: earlier, answer: { kind: "schedule", result: ok(earlier, PHRASE) } } })
+  // The words' own reading: current, and Enter creates it.
+  assert.deepEqual(stripLook(strip({ known: SCHEDULE }), false), { updating: false, revalidating: false, scheduleGlyph: true })
+  // An earlier reading while these words are read (or due to be): updating, shimmering, ↻ kept — no flicker per word.
+  assert.deepEqual(stripLook(kept, true), { updating: true, revalidating: true, scheduleGlyph: true })
+  // An earlier reading with NO read coming — the budget spent, the read failed: it was shown as current, with ↻,
+  // over an Enter that holds and may well start the thread. Now it is plainly not current, and the send is plain.
+  assert.deepEqual(stripLook(kept, false), { updating: true, revalidating: false, scheduleGlyph: false })
+  for (const s of [strip(), strip({ reading: true }), strip({ known: { kind: "refused", copy: SCHEDULE_SPACING_COPY } })]) {
+    assert.deepEqual(stripLook(s, true), { updating: false, revalidating: false, scheduleGlyph: false }, s.kind)
+  }
 })
 
 test("the strip: a refusal is said for its own words; dismissed shows nothing, or the Undo line", () => {

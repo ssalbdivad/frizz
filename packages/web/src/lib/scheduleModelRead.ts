@@ -30,6 +30,10 @@ import {
 // - WHAT STAYS ON SCREEN while the words are read again (stale-while-revalidate) is the answer for the newest
 //   text the box itself showed before them, in the order they were typed (`useNewestAnswer`) — never simply
 //   the last answer to land, which can be an older text's, queued behind a newer one.
+// - AN ANSWER PAST ITS 10m (or read on another local day) is EXPIRED, not gone: it is no longer the answer for
+//   its words (`view` says `expired`, and a submit reads them again), but it is still the reading the box has
+//   for them (`known`), shown as not current while they are read again. Dropping it took the strip and ↻ away
+//   under unchanged words, with no read going out, while Enter would still create (fix round, G).
 //
 // The text is read as given. Callers send it TRIMMED: the server trims it anyway (`InterpretScheduleInput`),
 // and the answer's offsets index what it read, so a caller maps them onto its own text by adding the
@@ -114,6 +118,9 @@ export type ModelReadView =
   | { status: "failed"; message: string }
   /** The automatic reads are spent; only an explicit read goes out. */
   | { status: "budget" }
+  /** The model answered these words, but past the cache's 10m (or on another local day): no longer the answer,
+   *  still the reading the box has for them (`known`) until they are read again. */
+  | { status: "expired" }
 
 export interface ModelReader {
   /** Ask for a model reading of `text`. A cached answer costs nothing; a text already out is not sent
@@ -123,6 +130,10 @@ export interface ModelReader {
   /** Drop the queued follow-up: the text no longer needs the model. */
   cancelQueued(): void
   view(text: string): ModelReadView
+  /** The newest answer this reader has for `text` and whether it is still CURRENT (cached: inside the 10m, read
+   *  today) — an expired one is what stays on screen while the words are read again. Includes this session's
+   *  non-verdict answers (current); undefined when it has none. */
+  known(text: string): { result: InterpretScheduleResult; fresh: boolean } | undefined
   /** Automatic reads spent since the last reset. */
   spent(): number
   /** Start over (the draft was cleared): the budget refills, and this session's failures and non-verdict
@@ -163,9 +174,22 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
   /** This session's answers that are not cached (non-verdicts), by text; bounded. */
   const answers = new Map<string, InterpretScheduleResult>()
   const failures = new Map<string, string>()
+  /** Every verdict this reader has seen, by text, past the cache's TTL and its day: what an expired answer
+   *  still shows. Bounded like the cache. */
+  const verdicts = new Map<string, InterpretScheduleResult>()
+  const keep = (text: string, result: InterpretScheduleResult) => {
+    verdicts.delete(text)
+    verdicts.set(text, result)
+    while (verdicts.size > MODEL_CACHE_MAX) verdicts.delete(verdicts.keys().next().value!)
+  }
 
   const notify = () => { for (const l of [...listeners]) l() }
-  const cached = (text: string) => cachedModelRead(deps.keyOf(text, now()), now())
+  const cached = (text: string) => {
+    const hit = cachedModelRead(deps.keyOf(text, now()), now())
+    // Another reader's answer (the cache is the tab's) is this reader's to keep too, once seen.
+    if (hit && verdicts.get(text) !== hit) keep(text, hit)
+    return hit
+  }
 
   function launch(text: string, explicit: boolean): void {
     if (!explicit) spent++
@@ -198,7 +222,10 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
     call.then(
       (result) => {
         // A verdict is a verdict even after the wait was given up on: cached for the next ask.
-        if (isModelVerdict(result)) remember(key, result, now())
+        if (isModelVerdict(result)) {
+          remember(key, result, now())
+          keep(text, result)
+        }
         if (done) {
           if (isModelVerdict(result)) notify()
           return
@@ -258,7 +285,16 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
       const failure = failures.get(text)
       if (failure !== undefined) return { status: "failed", message: failure }
       if (refusedForBudget === text) return { status: "budget" }
+      if (verdicts.has(text)) return { status: "expired" }
       return { status: "none" }
+    },
+    known(text) {
+      const hit = cached(text)
+      if (hit) return { result: hit, fresh: true }
+      const answer = answers.get(text)
+      if (answer) return { result: answer, fresh: true }
+      const kept = verdicts.get(text)
+      return kept ? { result: kept, fresh: false } : undefined
     },
     spent: () => spent,
     reset() {
@@ -266,6 +302,7 @@ export function createModelReader(deps: ModelReaderDeps): ModelReader {
       refusedForBudget = undefined
       failures.clear()
       answers.clear()
+      verdicts.clear()
       notify()
     },
     subscribe(listener) {
@@ -312,14 +349,39 @@ export function clearSharedModelReaders(): void {
   sharedReaders.clear()
 }
 
-/** How many earlier texts a box remembers, in the order they were typed, to find what to keep on screen. */
+/** At most this many earlier texts are remembered — a backstop: the history holds only texts that can still answer
+ *  (`typedHistory`), which single flight keeps to a handful. */
 export const TYPED_HISTORY_MAX = 24
 
-/** `history` with `text` moved to its newest end (it is the text on screen now), bounded. Empty text starts over. */
-export function typedHistory(history: readonly string[], text: string): readonly string[] {
+/** What a box's history asks of its reader. */
+export type HistoryReader = Pick<ModelReader, "view" | "known">
+
+/** A usable answer: one the model gave, not a read that failed on its side. */
+const answerOf = (known: ReturnType<ModelReader["known"]>) => (known && !isFailedRead(known.result) ? known : undefined)
+
+/**
+ * `history` with `text` moved to its newest end (it is the text on screen now). Empty text starts over.
+ *
+ * With its `reader`, the history keeps only the texts that can still be SHOWN: every text a read is out or queued
+ * for, or that has an answer, from the newest one with an answer on. A text nothing was ever asked about (typed
+ * inside a word, gone before the idle) never will be, and an answer older than a newer one is never shown again,
+ * so both go. It held the last 24 texts typed instead until 2026-10-06 (fix round, F1): typed at 172ms a key
+ * with reads of 4–6s, 24 and 29 texts went by between a read going out and its answer landing, so the answer was
+ * never drawn, and the reading on screen fell out of the history too — the strip closed for 48ms until the next
+ * answer reopened it.
+ */
+export function typedHistory(history: readonly string[], text: string, reader?: HistoryReader): readonly string[] {
   if (!text) return []
   if (history[history.length - 1] === text) return history
-  return [...history.filter((t) => t !== text), text].slice(-TYPED_HISTORY_MAX)
+  const earlier = history.filter((t) => t !== text && (!reader || reader.view(t).status !== "none"))
+  let answered = -1
+  if (reader) {
+    for (let i = earlier.length - 1; i >= 0 && answered < 0; i--) if (answerOf(reader.known(earlier[i]!))) answered = i
+  }
+  const kept = earlier.slice(Math.max(answered, 0))
+  // The backstop never drops the newest answer, however many texts are waiting after it.
+  const cap = TYPED_HISTORY_MAX - 1
+  return [...(answered >= 0 && kept.length > cap ? [kept[0]!, ...kept.slice(-(cap - 1))] : kept.slice(-cap)), text]
 }
 
 /**
@@ -327,30 +389,31 @@ export function typedHistory(history: readonly string[], text: string): readonly
  * the answer for the newest text typed BEFORE it that has one. "Newest" is the typing order (`history`, oldest
  * first), not the order the answers landed: with one read out and the latest text queued behind it, an older
  * text's answer routinely lands after a newer one's was shown, and taking "the last to land" put the older
- * reading back on screen. A failed read is no answer, so what was shown before it stays.
+ * reading back on screen. A failed read is no answer, so what was shown before it stays. `current`: the answer is
+ * for exactly `text`, and still good (not expired).
  */
 export function newestAnswer(
   history: readonly string[],
   text: string,
-  view: (text: string) => ModelReadView,
-): { text: string; result: InterpretScheduleResult } | undefined {
+  known: ModelReader["known"],
+): { text: string; result: InterpretScheduleResult; current: boolean } | undefined {
   if (!text) return undefined
-  const own = view(text)
-  if (own.status === "answered" && !isFailedRead(own.result)) return { text, result: own.result }
+  const own = answerOf(known(text))
+  if (own) return { text, result: own.result, current: own.fresh }
   for (let i = history.length - 1; i >= 0; i--) {
     const before = history[i]!
     if (before === text) continue
-    const v = view(before)
-    if (v.status === "answered" && !isFailedRead(v.result)) return { text: before, result: v.result }
+    const answer = answerOf(known(before))
+    if (answer) return { text: before, result: answer.result, current: false }
   }
   return undefined
 }
 
 /** `newestAnswer` for a box: it keeps the box's own typing history. Cleared with the text. */
-export function useNewestAnswer(reader: ModelReader, text: string): { text: string; result: InterpretScheduleResult } | undefined {
+export function useNewestAnswer(reader: ModelReader, text: string): ReturnType<typeof newestAnswer> {
   const history = useRef<readonly string[]>([])
-  history.current = typedHistory(history.current, text)
-  return newestAnswer(history.current, text, (t) => reader.view(t))
+  history.current = typedHistory(history.current, text, reader)
+  return newestAnswer(history.current, text, (t) => reader.known(t))
 }
 
 /** A reader for the component's lifetime — or, with `share`, the one every box on that draft uses — and a

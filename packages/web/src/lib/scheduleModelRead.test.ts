@@ -22,7 +22,6 @@ import {
   sharedModelReader,
   typedHistory,
   type ModelReadOk,
-  type ModelReadView,
 } from "./scheduleModelRead.ts"
 
 const NY = "America/New_York"
@@ -127,9 +126,38 @@ test("the cache: a hit costs no call, for 10m, then reads again; across readers 
   r.request(text)
   assert.equal(held.asked.length, 1, "inside the TTL")
   at(NOW + MODEL_CACHE_TTL_MS + 1)
-  assert.equal(r.view(text).status, "none", "past the TTL the answer is gone")
+  assert.equal(r.view(text).status, "expired", "past the TTL the answer is no longer the answer")
   r.request(text)
   assert.equal(held.asked.length, 2, "and it reads again")
+})
+
+test("an EXPIRED answer is still the reading the box has for its words, until they are read again (finding G)", async () => {
+  // The 10m TTL ran out under a reading on screen, with the words unchanged: the strip and ↻ went, no read went
+  // out (the box only asks when the words change), and Enter then held and created — a plain send look over an
+  // Enter that creates. Now the answer is EXPIRED, not gone: the box keeps it on screen as not current and asks again.
+  const { r, held, at } = reader()
+  const text = "every Monday at 9am triage new issues"
+  const reading = ok(text, "every Monday at 9am")
+  r.request(text)
+  held.pending[0]!.resolve(reading)
+  await settle()
+  assert.deepEqual(r.known(text), { result: reading, fresh: true })
+  at(NOW + MODEL_CACHE_TTL_MS + 1)
+  assert.deepEqual(r.view(text), { status: "expired" })
+  assert.deepEqual(r.known(text), { result: reading, fresh: false }, "kept, as not current")
+  assert.deepEqual(newestAnswer([text], text, (t) => r.known(t)), { text, result: reading, current: false })
+  r.request(text)
+  assert.equal(held.asked.length, 2, "an automatic read asks again")
+  assert.equal(r.view(text).status, "reading")
+  assert.deepEqual(r.known(text), { result: reading, fresh: false }, "and the expired reading stays while it does")
+  held.pending[1]!.resolve(reading)
+  await settle()
+  assert.deepEqual(r.known(text), { result: reading, fresh: true })
+  // The next local day is another key: the same, through the date rather than the TTL.
+  at(Date.parse("2026-10-06T00:01:00-04:00"))
+  assert.equal(r.view(text).status, "expired")
+  r.reset()
+  assert.equal(r.known(text), undefined, "a new draft forgets it")
 })
 
 test("the cache key is the text with its zone and its local date, and the context", () => {
@@ -244,13 +272,10 @@ test("one reader per draft: two boxes on one draft send one read for one text", 
 
 // ---- what stays on screen while the words are read again ----------------------------------------------------
 
-/** A `view` over a fixed table of answers. */
-const views = (answers: Record<string, InterpretScheduleResult | "reading" | "failed">) => (text: string): ModelReadView => {
+/** A `known` over a fixed table of answers (all current). */
+const knowns = (answers: Record<string, InterpretScheduleResult | "reading" | "failed">) => (text: string) => {
   const a = answers[text]
-  if (a === undefined) return { status: "none" }
-  if (a === "reading") return { status: "reading" }
-  if (a === "failed") return { status: "failed", message: "network down" }
-  return { status: "answered", result: a }
+  return a === undefined || typeof a === "string" ? undefined : { result: a, fresh: true }
 }
 
 test("stale-while-revalidate: the text's own answer, else the answer for the newest text typed before it", () => {
@@ -264,12 +289,12 @@ test("stale-while-revalidate: the text's own answer, else the answer for the new
   history = typedHistory(history, t3)
   assert.deepEqual(history, [t1, t2, t3])
   // Nothing for t3 yet: t2's answer stays on screen.
-  assert.deepEqual(newestAnswer(history, t3, views({ [t1]: s1, [t2]: s2, [t3]: "reading" })), { text: t2, result: s2 })
+  assert.deepEqual(newestAnswer(history, t3, knowns({ [t1]: s1, [t2]: s2, [t3]: "reading" })), { text: t2, result: s2, current: false })
   // t3's own answer replaces it the moment it lands.
   const s3 = ok(t3, "every Monday at 9am")
-  assert.deepEqual(newestAnswer(history, t3, views({ [t1]: s1, [t2]: s2, [t3]: s3 })), { text: t3, result: s3 })
+  assert.deepEqual(newestAnswer(history, t3, knowns({ [t1]: s1, [t2]: s2, [t3]: s3 })), { text: t3, result: s3, current: true })
   // An answer of no schedule for t3 is an answer: it is what shows (and the strip leaves).
-  assert.deepEqual(newestAnswer(history, t3, views({ [t2]: s2, [t3]: NONE })), { text: t3, result: NONE })
+  assert.deepEqual(newestAnswer(history, t3, knowns({ [t2]: s2, [t3]: NONE })), { text: t3, result: NONE, current: true })
 })
 
 test("stale-while-revalidate goes by TYPING order: an older text's late answer never replaces a newer one's", () => {
@@ -280,9 +305,9 @@ test("stale-while-revalidate goes by TYPING order: an older text's late answer n
   const newer = ok(t2, "every weekday at 9am", { rrule: "FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0" })
   const history = [t1, t2, t3]
   // t1's answer landed LAST (it was queued), but t2 was typed after it: t2's reading is the one on screen.
-  assert.deepEqual(newestAnswer(history, t3, views({ [t1]: old, [t2]: newer, [t3]: "reading" })), { text: t2, result: newer })
+  assert.deepEqual(newestAnswer(history, t3, knowns({ [t1]: old, [t2]: newer, [t3]: "reading" })), { text: t2, result: newer, current: false })
   // With no answer for t2 at all, t1's is the newest there is.
-  assert.deepEqual(newestAnswer(history, t3, views({ [t1]: old, [t2]: "reading", [t3]: "reading" })), { text: t1, result: old })
+  assert.deepEqual(newestAnswer(history, t3, knowns({ [t1]: old, [t2]: "reading", [t3]: "reading" })), { text: t1, result: old, current: false })
 })
 
 test("stale-while-revalidate: a failed read is no answer, editing back moves a text to the newest end, and empty starts over", () => {
@@ -290,11 +315,44 @@ test("stale-while-revalidate: a failed read is no answer, editing back moves a t
   const t2 = "every Monday post x"
   const s1 = ok(t1, "every Monday")
   const failed: InterpretScheduleResult = { ok: false, error: "Couldn't read that just now: overloaded" }
-  assert.deepEqual(newestAnswer([t1, t2], t2, views({ [t1]: s1, [t2]: failed })), { text: t1, result: s1 }, "the failed read leaves the last answer up")
-  assert.deepEqual(newestAnswer([t1, t2], t2, views({ [t1]: s1, [t2]: "failed" })), { text: t1, result: s1 })
+  assert.deepEqual(newestAnswer([t1, t2], t2, knowns({ [t1]: s1, [t2]: failed })), { text: t1, result: s1, current: false }, "the failed read leaves the last answer up")
+  assert.deepEqual(newestAnswer([t1, t2], t2, knowns({ [t1]: s1, [t2]: "failed" })), { text: t1, result: s1, current: false })
   assert.deepEqual(typedHistory([t1, t2], t1), [t2, t1], "a typo fixed back: t1 is the newest again")
   assert.deepEqual(typedHistory([t1, t2], ""), [], "an emptied box remembers nothing")
-  assert.equal(newestAnswer([], "", views({})), undefined)
+  assert.equal(newestAnswer([], "", knowns({})), undefined)
   const long = Array.from({ length: TYPED_HISTORY_MAX + 5 }, (_, i) => `every day ${i}`)
   assert.equal(long.reduce((h: readonly string[], t) => typedHistory(h, t), []).length, TYPED_HISTORY_MAX, "bounded")
+})
+
+test("a reading out while MANY texts are typed is still found when it lands — the history keeps what can still answer (finding F1)", async () => {
+  // Typed at 172ms a key with reads taking 4–6s, 24 and 29 texts went by between a read going out and its answer
+  // landing, and the answer was never drawn: the history kept only the last 24 texts typed, so the reading being
+  // waited for had fallen out of it. And the reading on screen fell out with it — the strip closed for 48ms
+  // until the next answer. The history now keeps every text that can still answer (out, queued, answered,
+  // failed), and drops only the texts nothing was ever asked about, which never will.
+  const { r, held } = reader()
+  const base = "every Monday at 9am triage"
+  const fresh = ok(base, "every Monday at 9am")
+  let history = typedHistory([], base, r)
+  r.request(base)
+  held.pending[0]!.resolve(fresh)
+  await settle()
+  // A word ends: its read goes out and is held there.
+  const out = `${base} new `
+  history = typedHistory(history, out, r)
+  r.request(out)
+  assert.deepEqual(held.asked, [base, out])
+  // Forty more keys inside words: none of them asked about, every one of them a new text.
+  let text = out
+  for (let i = 0; i < 40; i++) {
+    text = `${text}x`
+    history = typedHistory(history, text, r)
+    assert.deepEqual(newestAnswer(history, text, (t) => r.known(t)), { text: base, result: fresh, current: false }, `the reading on screen stays, ${i + 1} texts on`)
+  }
+  assert.ok(history.length <= 4, `the history holds what can answer, not every text: ${JSON.stringify(history)}`)
+  const landed = ok(out.trim(), "every Monday at 9am")
+  held.pending[1]!.resolve(landed)
+  await settle()
+  history = typedHistory(history, `${text}y`, r)
+  assert.deepEqual(newestAnswer(history, `${text}y`, (t) => r.known(t)), { text: out, result: landed, current: false }, "the answer that landed is drawn")
 })

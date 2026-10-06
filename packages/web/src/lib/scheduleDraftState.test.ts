@@ -10,11 +10,15 @@ import {
   afterDraftCreates,
   beginDraftCreate,
   carryDispatchDraft,
+  claimDraftHold,
   clearDispatchDraft,
+  draftHolder,
   isDraftCreating,
   parseScheduleDraftState,
   readScheduleDraftState,
+  releaseDraftHold,
   serializeScheduleDraftState,
+  subscribeDraftHolds,
   writeScheduleDraftState,
 } from "./scheduleDraftState.ts"
 
@@ -48,6 +52,10 @@ test("nothing dismissed is the absent key; a corrupt record, or the retired mode
   const undone = { v: 2 as const, dismissed: PHRASE, undone: true as const }
   assert.deepEqual(parseScheduleDraftState(serializeScheduleDraftState(undone)), undone)
   assert.deepEqual(parseScheduleDraftState(serializeScheduleDraftState({ v: 2, dismissed: PHRASE })), { v: 2, dismissed: PHRASE })
+  // Said over a reading of earlier words, a dismissal is pending its words' own reading (scheduleIntent.ts
+  // `dismissedPhrase`), and a reload must not turn it into a dismissal of the older phrase alone.
+  const pending = { v: 2 as const, dismissed: "every Monday", pending: true as const }
+  assert.deepEqual(parseScheduleDraftState(serializeScheduleDraftState(pending)), pending)
 })
 
 test("a dismissal survives a same-tab reload: a fresh DraftStore over the same storage reads it", () => {
@@ -167,4 +175,26 @@ test("afterDraftCreates waits for every create on that draft, and only that draf
   second()
   assert.equal(await settled(waiting), true, "both landed; the other draft's create does not hold this one")
   busy()
+})
+
+// ONE HELD ENTER PER DRAFT (finding A). The page box held an Enter; the \`c\` dialog opened on the same draft and its
+// Enter held too; the one answer landed in both, in one effect pass, and each acted: two identical schedules, or
+// two threads. A hold is now the draft's: the newest Enter takes it, and the box that held it before lets go.
+test("a held Enter belongs to the draft: the newest box to hold takes it, and acting releases it for every box", () => {
+  const key = draftKey.dispatchSchedule("/work/hold-a")
+  const page = Symbol("page"), dialog = Symbol("dialog")
+  const seen: Array<symbol | undefined> = []
+  const unsubscribe = subscribeDraftHolds(() => seen.push(draftHolder(key)))
+  assert.equal(draftHolder(key), undefined)
+  claimDraftHold(key, page)
+  assert.equal(draftHolder(key), page)
+  claimDraftHold(key, dialog)
+  assert.equal(draftHolder(key), dialog, "the dialog's Enter takes the hold from the page box")
+  releaseDraftHold(key, page)
+  assert.equal(draftHolder(key), dialog, "the page box letting go of a hold it lost releases nothing")
+  assert.equal(draftHolder(draftKey.dispatchSchedule("/work/hold-b")), undefined, "another draft is untouched")
+  releaseDraftHold(key)
+  assert.equal(draftHolder(key), undefined, "acting on the draft releases whoever held it")
+  assert.deepEqual(seen, [page, dialog, undefined], "every box hears each change")
+  unsubscribe()
 })

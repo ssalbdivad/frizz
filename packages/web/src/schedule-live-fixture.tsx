@@ -38,7 +38,12 @@ import "./styles.css"
 // phone breakpoint does that in the real app), `openDialog()` opens the `c` dialog over the page box,
 // `reaim(dir)` moves the box to another project as the All-projects picker and ⌥↑/⌥↓ do, `reset()` zeroes the
 // counts. Counts live on the page, so a reload starts them at zero; the draft store (sessionStorage) is what
-// survives it, which is the point.
+// survives it, which is the point. `failDispatch` makes that many dispatches answer 500 (each still counted);
+// `/attach` answers an attachment path after `attachDelayMs`.
+//
+// `?sheet` is THE PHONE'S NEW THREAD SHEET (PhonePage.tsx PhoneNewThread): no box on the page, a New thread
+// button that opens the box in a sheet through the same store flag the phone uses (`store.phoneNewThread`), and
+// a dispatch or a created schedule closes it — so what happens AFTER the box is gone (Undo) can be driven.
 
 type Counted = "dispatch" | "createLazyThread" | "createSchedule" | "deleteSchedule" | "interpretSchedule"
 /** What the stub model says about a text that contains `match`. */
@@ -69,6 +74,10 @@ interface SchedFixture {
   createDelayMs: number
   /** RPC names the fixture does not answer — so a test can see what the box asked for. */
   unknown: string[]
+  /** How many of the next dispatches answer 500 (each still counted). */
+  failDispatch: number
+  /** How long `/attach` takes to answer (ms; 0 by default). */
+  attachDelayMs: number
   remount: () => void
   openDialog: () => void
   reaim: (projectDir: string) => void
@@ -108,6 +117,8 @@ const sched: SchedFixture = {
   maxInFlight: 0,
   createDelayMs: 0,
   unknown: [],
+  failDispatch: 0,
+  attachDelayMs: 0,
   remount: () => {},
   openDialog: () => {},
   reaim: () => {},
@@ -195,6 +206,10 @@ const nativeFetch = window.fetch.bind(window)
 window.fetch = async (input, init) => {
   const requestUrl = typeof input === "string" ? input : input instanceof URL ? input.href : input.url
   const url = new URL(requestUrl, window.location.origin)
+  if (/\/attach$/.test(url.pathname)) {
+    if (sched.attachDelayMs) await new Promise((r) => setTimeout(r, sched.attachDelayMs))
+    return new Response(JSON.stringify({ path: "/fixture/.frizz/attachments/1-abcdef12-shot.png" }), { headers: { "content-type": "application/json" } })
+  }
   // Both the page's client (`/_frizz/rpc/x`) and a project-pinned one (`/_frizz/<id>/rpc/x`, Undo's delete).
   const name = /\/rpc\/([A-Za-z]+)$/.exec(url.pathname)?.[1]
   if (!name) return nativeFetch(input, init)
@@ -213,6 +228,10 @@ window.fetch = async (input, init) => {
     case "userCommands": return json({ commands: [{ name: "review", description: "Review the diff", body: "Review the diff.", source: "project", path: "/fixture/.frizz/commands/review.md" }], frizzDir: "/fixture/.frizz/commands" })
     case "listSchedules": return json([])
     case "dispatch":
+      if (sched.failDispatch > 0) {
+        sched.failDispatch--
+        return new Response(JSON.stringify({ error: "fixture: the server could not start the thread" }), { status: 500, headers: { "content-type": "application/json" } })
+      }
       // Acknowledged, never acted on: there is no server behind this page.
       return json({ slug: "fixture-started-thread", sessionId: "fixture-session" })
     case "createLazyThread": return json({ slug: "fixture-lazy-thread" })
@@ -255,6 +274,26 @@ function FlashProbe() {
   return flash ? <span data-sched-flash={flash.projectId} className="sr-only">flash</span> : null
 }
 
+/** `?sheet`: the phone's New thread sheet, opened and closed through the store flag the phone page uses. */
+function SheetFixture() {
+  const composing = useSnapshot(store).phoneNewThread
+  return (
+    <main className="min-h-screen bg-bg p-3">
+      <button type="button" data-fixture-new-thread className="rounded-md border border-border px-3 py-1.5 text-sm" onClick={() => { store.phoneNewThread = { focus: true } }}>
+        New thread
+      </button>
+      {composing && (
+        <section data-fixture-sheet className="mt-3 rounded-xl border border-border bg-panel p-5">
+          <h1 className="mb-1 text-[14px] font-medium">New thread</h1>
+          <DispatchForm autoFocus={composing.focus} onDispatched={() => { store.phoneNewThread = null }} />
+        </section>
+      )}
+      <FlashProbe />
+      <Toaster />
+    </main>
+  )
+}
+
 function Fixture() {
   const [mount, setMount] = useState(0)
   const [hidden, setHidden] = useState(false)
@@ -290,7 +329,7 @@ const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false,
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
-      <Fixture />
+      {new URLSearchParams(location.search).has("sheet") ? <SheetFixture /> : <Fixture />}
     </TooltipProvider>
   </QueryClientProvider>,
 )

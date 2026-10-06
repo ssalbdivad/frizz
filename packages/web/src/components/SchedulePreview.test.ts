@@ -87,3 +87,16 @@ test("Change when, stale-while-revalidate: the last reading stays while new word
   const after = answer("every Tuesday at 9am", "FREQ=WEEKLY;BYDAY=TU;BYHOUR=9;BYMINUTE=0", "2026-10-06T09:00")
   assert.deepEqual(changeWhenView({ view: { status: "answered", result: after }, stale: before }), { kind: "model", result: after, fresh: true })
 })
+
+test("Change when never flashes its panel: once it is up for an edit, a word not yet read keeps it, reading (finding F2)", () => {
+  // Typed at 120ms a key, the panel ("Reading when it runs…", Cancel, Save) opened at every word's end — a read out —
+  // and vanished at the next letter — words not asked about yet — five times before the first answer, and the
+  // section under it jumped each time. A panel already up for the edit stays, as the reading line.
+  assert.deepEqual(changeWhenView({ view: { status: "reading" }, stale: undefined, shown: false }), { kind: "reading" })
+  assert.deepEqual(changeWhenView({ view: { status: "none" }, stale: undefined, shown: true }), { kind: "reading" }, "the next letter: still up")
+  assert.deepEqual(changeWhenView({ view: { status: "expired" }, stale: undefined, shown: true }), { kind: "reading" })
+  // A refusal of earlier words was up: the new words keep the panel too, as the reading line.
+  assert.deepEqual(changeWhenView({ view: { status: "none" }, stale: { ok: false, error: SCHEDULE_NOT_FOUND_COPY }, shown: true }), { kind: "reading" })
+  // Nothing up yet and nothing asked: still nothing — the panel does not open on a first letter mid-word.
+  assert.deepEqual(changeWhenView({ view: { status: "none" }, stale: undefined, shown: false }), { kind: "none" })
+})

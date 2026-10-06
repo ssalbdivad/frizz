@@ -17,7 +17,11 @@ import {
   SCHEDULE_DRAFT_NONE,
   afterDraftCreates,
   beginDraftCreate,
+  claimDraftHold,
+  draftHolder,
+  releaseDraftHold,
   useDraftCreating,
+  useDraftHolder,
   useScheduleDraftState,
   writeScheduleDraftState,
 } from "../lib/scheduleDraftState.ts"
@@ -27,13 +31,16 @@ import {
   NO_TASK_COPY,
   SUBMIT_READY,
   classifyResult,
+  dismissedPhrase,
   knownOf,
-  liftsDismissal,
+  nextDismissal,
   phraseSpan,
   readTextOf,
+  stripLook,
   stripView,
   submitStep,
   type ScheduleKnown,
+  type StripView,
   type SubmitEvent,
   type SubmitFacts,
   type SubmitPhase,
@@ -74,6 +81,8 @@ export interface LiveScheduleInput {
   promptOf: (cutProse: string) => string
   /** The model/effort the box would dispatch on. Undefined while the profile is loading. */
   profile: { model: string; backend: CreateScheduleInput["backend"]; effort: CreateScheduleInput["effort"] } | undefined
+  /** A file is uploading into the draft: Enter waits for it, and it cancels a held Enter (lib/scheduleIntent.ts). */
+  uploading?: boolean
   /** Start the thread now: the box's own dispatch, exactly as it is without schedules. */
   startNow: () => void
   /** The draft became a schedule: take it out of the box (`submittedProse` is what was read; anything typed
@@ -189,9 +198,10 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   )
 
   // THE NEWEST ANSWER KNOWN BEFORE THIS TEXT'S stays on screen while this text is read (stale-while-revalidate,
-  // lib/scheduleModelRead.ts `useNewestAnswer`), vetted against the words it was read from.
+  // lib/scheduleModelRead.ts `useNewestAnswer`), vetted against the words it was read from — or this text's own,
+  // once it has expired, while it is read again.
   const newest = useNewestAnswer(reader, text)
-  const stale = newest && newest.text !== text
+  const stale = newest && !newest.current
     ? { text: newest.text, answer: classifyResult(newest.result, vetter(newest.text, newest.text, promptOf)) }
     : undefined
 
@@ -224,17 +234,30 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     // An empty box is a new draft: its budget refills, and nothing read before it stays on screen.
     if (!prose.trim()) readerRef.current.reset()
   }, [prose])
+  // AN ANSWER THAT EXPIRED under unchanged words (the 10m cache, or a new local day) is read again: the box only
+  // asks when the words change, so nothing else would — and the reading stays on screen, updating, meanwhile.
+  useEffect(() => {
+    if (trigger && view.status === "expired") readerRef.current.request(text)
+  }, [trigger, view.status, text])
 
   // ---- the dismissal ----------------------------------------------------------------------------------------
 
-  const dismissed = draft.dismissed
+  const record = draft.dismissed ? { phrase: draft.dismissed, ...(draft.pending ? { pending: true } : {}) } : undefined
+  // The phrase "not a schedule" holds for now (scheduleIntent.ts `dismissedPhrase`): its own, or — said over the
+  // reading of earlier words — the reading of the words on screen.
+  const dismissed = dismissedPhrase(record, known, stale?.answer)
   // "Not a schedule" holds until the phrase it was said about is gone: no schedule word is left, or the model
   // reads a different phrase out of the words, or none. Written back, so editing back to the old phrase reads it
-  // afresh.
+  // afresh. A pending one is fixed to its words' reading the moment it lands.
   useEffect(() => {
-    if (liftsDismissal({ trigger, known, dismissed })) setDraft(SCHEDULE_DRAFT_NONE)
-  }, [trigger, known, dismissed])
-  const dismiss = (phrase: string) => setDraft({ v: 2, dismissed: phrase })
+    const next = nextDismissal({ trigger, known, dismissal: record })
+    if (next === "lift") setDraft(SCHEDULE_DRAFT_NONE)
+    else if (next !== "keep") setDraft((prev) => ({ v: 2, dismissed: next.adopt, ...(prev.undone ? { undone: true as const } : {}) }))
+  }, [trigger, known, draft.dismissed, draft.pending])
+  /** "Not a schedule", said over the strip on screen: of its phrase when it is these words' reading, else PENDING
+   *  these words' own reading (they are what the human was looking at). */
+  const dismiss = (on: Extract<StripView, { kind: "schedule" }>) =>
+    setDraft({ v: 2, dismissed: on.result.phrase, ...(on.fresh ? {} : { pending: true as const }) })
 
   // ---- create ---------------------------------------------------------------------------------------------------
 
@@ -336,19 +359,43 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   // about exactly these words — the send spins and, after a beat, a line says what it is waiting for; typing
   // cancels it; it gives up after HOLD_TIMEOUT_MS with "Couldn't check for a schedule", and the next Enter starts
   // the thread. This hook only runs the steps.
+  //
+  // ONE HELD ENTER PER DRAFT (lib/scheduleDraftState.ts `claimDraftHold`): the page box and the `c` dialog over it
+  // are two boxes on one draft, and with a hold each, one answer acted in both. A box's hold lasts while the draft
+  // says it is that box's: the newest Enter takes it, and acting on the draft ends every hold on it.
   const [phase, setPhase] = useState<SubmitPhase>(SUBMIT_READY)
   const phaseRef = useRef(phase)
-  const facts: SubmitFacts = { text, trigger, known, dismissed }
+  const facts: SubmitFacts = { text, trigger, known, dismissed, uploading: input.uploading === true }
   const factsRef = useRef(facts)
   factsRef.current = facts
+  const me = useRef<symbol | null>(null)
+  me.current ??= Symbol("schedule box")
+  /** The draft this box's hold is on (the box may be re-aimed while it holds). */
+  const heldOn = useRef<string | null>(null)
   const step = (event: SubmitEvent) => {
-    const next = submitStep(phaseRef.current, event, factsRef.current)
+    let from = phaseRef.current
+    // Another box on the draft took the hold, or the draft was acted on: this box's hold is over, and it acts on
+    // nothing — not even an answer landing in this same effect pass.
+    if (from.kind === "holding" && (heldOn.current === null || draftHolder(heldOn.current) !== me.current)) {
+      from = SUBMIT_READY
+      heldOn.current = null
+    }
+    const next = submitStep(from, event, factsRef.current)
+    if (next.phase.kind === "holding" && from.kind !== "holding") {
+      heldOn.current = latest.current.draftKey
+      claimDraftHold(heldOn.current, me.current!)
+    } else if (next.phase.kind !== "holding" && heldOn.current !== null) {
+      releaseDraftHold(heldOn.current, me.current!)
+      heldOn.current = null
+    }
     if (next.phase !== phaseRef.current) {
       phaseRef.current = next.phase
       setPhase(next.phase)
     }
     const then = next.then
     if (!then) return
+    // The draft is taken: any other box's Enter held on it is over.
+    if (then.run !== "read") releaseDraftHold(latest.current.draftKey)
     if (then.run === "dispatch") latest.current.startNow()
     else if (then.run === "create") commit(then.result)
     // A held Enter always asks, past the budget; a text already out is not sent twice.
@@ -356,8 +403,13 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   }
   const stepRef = useRef(step)
   stepRef.current = step
-  // The answer landing, an edit, a dismissal: a held Enter acts on what is now known, or is cancelled.
-  useEffect(() => stepRef.current({ type: "update" }), [text, trigger, known, dismissed])
+  const holder = useDraftHolder(draftKey)
+  useEffect(() => () => {
+    if (heldOn.current !== null) releaseDraftHold(heldOn.current, me.current!)
+  }, [])
+  // The answer landing, an edit, an upload, a dismissal, the hold moving to another box: a held Enter acts on what
+  // is now known, or is cancelled.
+  useEffect(() => stepRef.current({ type: "update" }), [text, trigger, known, dismissed, facts.uploading, holder])
   useEffect(() => {
     if (phase.kind !== "holding") return
     const t = setTimeout(() => stepRef.current({ type: "timeout" }), Math.max(0, HOLD_TIMEOUT_MS - (Date.now() - phase.since)))
@@ -381,8 +433,10 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     stale,
     dismissed: dismissed ? { phrase: dismissed, undone: draft.undone === true } : undefined,
   })
-  // A reading of earlier words is being replaced: the read for these is out, or due once the typing rests.
-  const revalidating = strip.kind === "schedule" && !strip.fresh && (view.status === "reading" || view.status === "none")
+  // How it is drawn (scheduleIntent.ts `stripLook`): a reading of other words is UPDATING — shimmering, with ↻,
+  // while the read for these words is out or due (once the typing rests, or again, expired); faint and still,
+  // with a plain send, when no read is coming (the budget spent, the read failed): Enter checks first.
+  const look = stripLook(strip, view.status === "reading" || view.status === "none" || view.status === "expired")
   const failed = phase.kind === "failed" && phase.text === text
   const onEscape = () => {
     if (phaseRef.current.kind === "holding") {
@@ -390,7 +444,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
       return true
     }
     if (strip.kind === "schedule" && !creating) {
-      dismiss(strip.result.phrase)
+      dismiss(strip)
       return true
     }
     return false
@@ -425,8 +479,8 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
         <ScheduleSlot
           kind="schedule"
           phone={phone}
-          updating={revalidating}
-          line={<StripLine result={strip.result} nowMs={nowMs} tz={tz} phone={phone} updating={revalidating} onClose={creating ? undefined : () => dismiss(strip.result.phrase)} />}
+          updating={look.updating}
+          line={<StripLine result={strip.result} nowMs={nowMs} tz={tz} phone={phone} updating={look.revalidating} stale={look.updating && !look.revalidating} onClose={creating ? undefined : () => dismiss(strip)} />}
           body={each ? <EachRunLine each={each} /> : undefined}
         />
       ),
@@ -453,7 +507,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   const current = line?.node ?? null
   const slot = useLinger(current, SLOT_LINGER_MS)
-  const schedules = strip.kind === "schedule" && !holding
+  const schedules = look.scheduleGlyph && !holding
   return {
     marks,
     slot,
@@ -613,21 +667,23 @@ function readingParts(result: ModelReadOk, nowMs: number, tz: string): { reading
  * longest that fits. A ResizeObserver re-fits it as the sheet turns.
  *
  * `updating`: a newer read of the words is out, and this is the last one's answer — it shimmers until the new one
- * lands, which replaces it in place, or takes the strip away.
+ * lands, which replaces it in place, or takes the strip away. `stale`: it is the answer for other words and no
+ * read is coming for these (the budget spent, the read failed) — drawn faint and still, never as these words'.
  */
-function StripLine({ result, nowMs, tz, phone, updating, onClose }: {
+function StripLine({ result, nowMs, tz, phone, updating, stale, onClose }: {
   result: ModelReadOk
   nowMs: number
   tz: string
   phone: boolean
   updating: boolean
+  stale: boolean
   onClose: (() => void) | undefined
 }) {
   const parts = readingParts(result, nowMs, tz)
   const shimmer = useDelayedTrue(updating, UPDATING_DELAY_MS)
-  const tone = shimmer ? "shimmer-text" : ""
+  const tone = shimmer ? "shimmer-text" : stale ? "text-muted-70" : ""
   // The tails, longest first: `· next Mon Oct 12, in 6d`, then `· in 6d` (the phone's choice of what to keep).
-  const spanTone = parts?.soon ? "text-attention" : ""
+  const spanTone = parts?.soon && !stale ? "text-attention" : ""
   const tails: ReactNode[] = []
   if (parts?.next) tails.push(<>{` · next ${parts.next}`}{parts.span && <span className={spanTone}>{`, in ${parts.span}`}</span>}</>)
   if (parts?.next && parts.span) tails.push(<span className={spanTone}>{` · in ${parts.span}`}</span>)

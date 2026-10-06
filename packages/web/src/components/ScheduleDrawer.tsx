@@ -287,7 +287,12 @@ function ChangeWhen({ schedule }: { schedule: ScheduleView }) {
 
   const view = live ? reader.view(words) : ({ status: "none" } as const)
   const newest = useNewestAnswer(reader, live ? words : "")
-  const preview = live ? changeWhenView({ view, stale: newest && newest.text !== words ? newest.result : undefined }) : ({ kind: "none" } as const)
+  // Once the panel is up for this edit it stays until the edit ends (changeWhenView `shown`): never a flash.
+  const shownRef = useRef(false)
+  const preview = live
+    ? changeWhenView({ view, stale: newest && !newest.current ? newest.result : undefined, shown: shownRef.current })
+    : ({ kind: "none" } as const)
+  shownRef.current = preview.kind !== "none"
   const shimmer = useDelayedTrue(preview.kind === "reading" || (preview.kind === "model" && !preview.fresh), SHIMMER_DELAY_MS)
   const savable = preview.kind === "model" && preview.fresh
 

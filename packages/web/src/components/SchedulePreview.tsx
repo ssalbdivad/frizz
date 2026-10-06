@@ -187,17 +187,23 @@ function changeWhenAnswer(result: InterpretScheduleResult): ChangeWhenView {
  * What the preview shows for the words on screen: their own answer, or — while they are read — the newest answer
  * before them (stale-while-revalidate), which the new one replaces in place. Save is only ever offered on a
  * `fresh` reading.
+ *
+ * `shown`: the panel is already up for this edit. It then never goes while the words are waited on — the reading
+ * line holds its place until there is something else to say. Without this it opened at every word's end (a read
+ * out) and closed at the next letter (words not asked about yet): five flashes of 132–215ms typing "every
+ * Tuesday at 10am" before the first answer, the section under it jumping each time (fix round 2026-10-06, F2).
  */
-export function changeWhenView({ view, stale }: {
+export function changeWhenView({ view, stale, shown = false }: {
   /** What the reader knows about exactly the words on screen. */
   view: ModelReadView
   /** The newest answer known for earlier words of this edit (`useNewestAnswer`). */
   stale: InterpretScheduleResult | undefined
+  shown?: boolean
 }): ChangeWhenView {
   if (view.status === "answered") return changeWhenAnswer(view.result)
   if (view.status === "failed") return { kind: "copy", copy: CHANGE_WHEN_FAILED_COPY }
   if (view.status === "budget") return { kind: "copy", copy: CHANGE_WHEN_BUDGET_COPY }
   const before = stale ? changeWhenAnswer(stale) : undefined
   if (before?.kind === "model") return { ...before, fresh: false }
-  return view.status === "reading" ? { kind: "reading" } : { kind: "none" }
+  return view.status === "reading" || shown ? { kind: "reading" } : { kind: "none" }
 }
