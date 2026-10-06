@@ -224,12 +224,16 @@ test("own background work does both — it cards AND it leaves the queue", () =>
 // blocking call that starved its own notification, a timer written in the past. Each one left a thread
 // looking parked forever, and frizz said nothing.
 
-function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number }; lastHumanAt?: string; spawnedAt?: string } = {}) {
+function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?: any[]; restedAt?: string; body?: string; retired?: any[]; prWatch?: { owner: string; repo: string; number: number }; lastHumanAt?: string; spawnedAt?: string; now?: () => number } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-park-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   storage.setSetting("signoffNudge", "off") // isolate SOURCE 12 from the nudge
   const slug = "parked"
   const restedAt = opts.restedAt ?? new Date(Date.now() - 60_000).toISOString()
+  // The worker's CURRENT rest, which a case may move to stand for a later turn (`rest`).
+  let current = restedAt
+  let currentHints = hints
+  let currentAgents = opts.agents ?? []
   // WHAT ACTUALLY REACHED THE WORKER. Every test in this file used to stop at the outbox row, which is
   // exactly how a correction that could never be delivered survived: enqueue is not delivery.
   const sent: string[] = []
@@ -253,6 +257,7 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
     // clock minutes. The window and the merge are pinned in scheduler.test.ts.
     wakeQuietWindowMs: 0,
     storage,
+    now: opts.now,
     // Stubbed so an armed watcher never reaches the real `gh`. Nothing here polls for a verdict — every
     // test in this file is about the fence — so a PR that never changes is exactly the right answer.
     fetchPr: async () => undefined,
@@ -260,14 +265,14 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
     tailer: {
       get: () => ({
         turn: "idle",
-        lastAssistantAt: restedAt,
-        lastActivityAt: restedAt,
-        subAgents: opts.agents ?? [],
+        lastAssistantAt: current,
+        lastActivityAt: current,
+        subAgents: currentAgents,
         bgShells: opts.shells ?? [],
         retiredShells: opts.retired ?? [],
         pendingQuestion: false,
         permPrompt: false,
-        lastFence: { kind: "awaiting", body: opts.body ?? "", hints },
+        lastFence: { kind: "awaiting", body: opts.body ?? "", hints: currentHints },
         lastHumanAt: opts.lastHumanAt,
       }),
     } as never,
@@ -276,7 +281,11 @@ function parkHarness(hints: FenceView["hints"], opts: { shells?: any[]; agents?:
   })
   const queued = () => storage.db.prepare("SELECT fence_id, message FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; message: string; state: string }[]
   const state = () => storage.db.prepare("SELECT fence_id, state FROM wake_delivery WHERE thread_slug = ?").all(slug) as { fence_id: string; state: string }[]
-  return { s, storage, queued, state, sent, restedAt, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  return { s, storage, queued, state, sent, restedAt, rest: (at: string, next?: { hints?: FenceView["hints"]; agents?: any[] }) => {
+    current = at
+    if (next?.hints) currentHints = next.hints
+    if (next?.agents) currentAgents = next.agents
+  }, close: () => { void s.stop(); storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 test("a park naming something that is NOT running bumps the worker, and says which", async () => {
@@ -600,6 +609,70 @@ test("requestCheckIn wakes a live agent park early with the check-in, once", asy
     assert.match(h.queued()[0].fence_id, /^park:requested:/)
     for (let i = 0; i < 3; i++) await h.s.tick()
     assert.equal(h.sent.length, 1, "one click, one wake")
+  } finally { h.close() }
+})
+
+// THE CHECK-IN IS ANCHORED ON THE LAST CHECK-IN, NOT THE LAST REST (scheduler.ts checkInAnchors). Any
+// other wake — here a PR event — makes the worker rest again, and keyed on the rest that restarted the 30
+// minutes, so a thread kept busy by its PR never reported on its children (@zod-json-validation,
+// 2026-10-06: a workflow 41 minutes in with no progress report, the next one due at 71).
+test("a wake in between does not push the sub-agent check-in back", async () => {
+  const t0 = Date.parse("2026-10-06T09:46:00.000Z")
+  let clock = t0 + 60_000
+  const live = { id: "toolu_A", taskId: "wuscd823t", label: "yes-types-lean", startedAt: "2026-10-06T09:35:00.000Z", state: "running" as const }
+  const h = parkHarness([{ kind: "agent", value: "wuscd823t" }, { kind: "for", value: "30m" }], {
+    agents: [live],
+    restedAt: new Date(t0).toISOString(),
+    now: () => clock,
+  })
+  try {
+    await h.s.tick()
+    assert.equal(h.sent.length, 0, "inside its 30 minutes")
+    // 29 minutes in, a PR wake: the worker answers it and re-parks on the same child.
+    clock = t0 + 29 * 60_000
+    h.rest(new Date(clock).toISOString())
+    await h.s.tick()
+    assert.equal(h.sent.length, 0, "the check-in is not due yet")
+    clock = t0 + 30 * 60_000 + 1000
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "due 30 minutes after the FIRST rest, not the second")
+    assert.match(h.sent[0], /SUB-AGENT CHECK-IN/)
+    // The check-in is the next anchor: a re-park right after it waits a full 30 minutes again.
+    h.rest(new Date(clock + 10_000).toISOString())
+    clock += 29 * 60_000
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "a fresh 30 minutes from the check-in")
+    clock += 2 * 60_000
+    await h.s.tick()
+    assert.equal(h.sent.length, 2)
+  } finally { h.close() }
+})
+
+// THE NEGATIVE CONTROL: a different set of children is a new run. The turn that launched them read the
+// old ones' result, so it was the report, and the clock starts over from that rest.
+test("a new set of sub-agents starts the check-in clock over", async () => {
+  const t0 = Date.parse("2026-10-06T09:46:00.000Z")
+  let clock = t0 + 60_000
+  const h = parkHarness([{ kind: "agent", value: "wFIRST" }, { kind: "for", value: "30m" }], {
+    agents: [{ id: "toolu_A", taskId: "wFIRST", label: "first", startedAt: "2026-10-06T09:35:00.000Z", state: "running" as const }],
+    restedAt: new Date(t0).toISOString(),
+    now: () => clock,
+  })
+  try {
+    await h.s.tick()
+    // 29 minutes in the first child returns, and the worker launches another and parks on it.
+    clock = t0 + 29 * 60_000
+    h.rest(new Date(clock).toISOString(), {
+      hints: [{ kind: "agent", value: "wSECOND" }, { kind: "for", value: "30m" }],
+      agents: [{ id: "toolu_B", taskId: "wSECOND", label: "second", startedAt: new Date(clock).toISOString(), state: "running" as const }],
+    })
+    await h.s.tick()
+    clock = t0 + 31 * 60_000
+    await h.s.tick()
+    assert.equal(h.sent.length, 0, "a fresh child's park runs its own 30 minutes")
+    clock = t0 + 59 * 60_000 + 1000
+    await h.s.tick()
+    assert.equal(h.sent.length, 1, "…and checks in when they run out")
   } finally { h.close() }
 })
 

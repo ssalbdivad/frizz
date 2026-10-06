@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, awaitingNeedsInput, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, strayShellsMessage, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
 import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
@@ -2403,12 +2403,32 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   /** Rests the human asked to hear from early (requestCheckIn): slug → the rest instant it was asked of. */
   const checkInRequests = new Map<string, string>()
 
+  /** THE SUB-AGENT CHECK-IN IS ANCHORED ON THE LAST CHECK-IN, NOT THE LAST REST: slug → when the current
+   *  run of agent parks last owed (or got) a report on its children, and which children those were.
+   *
+   *  Keyed on the rest alone, any other wake restarted the 30 minutes — a PR event, a finished shell, a
+   *  human's question — and the worker answers THAT wake, not its children, so a busy thread could go
+   *  hours without a check-in. Measured on @zod-json-validation (2026-10-06): a PR-conflict wake landed
+   *  12s before a check-in was due, the worker answered the conflict and re-parked, and the lean-cut
+   *  workflow it had launched 41 minutes earlier had still drawn no progress report; the next would have
+   *  come at 71 minutes (maintainer: "it really feels like the 30 minute updates aren't working").
+   *
+   *  The anchor starts at the first rest of an agent park and moves only when a check-in is sent. It
+   *  resets when the thread rests on anything that is not an agent park, or when the children it names
+   *  share none with the anchor's — a fresh set was launched by a turn that just read the old one's
+   *  result, so that turn was the report. In memory, like `checkInRequests`: a restart re-anchors on the
+   *  current rest, which is the old behaviour for one cycle and never an early wake. */
+  const checkInAnchors = new Map<string, { atMs: number; agents: ReadonlySet<string> }>()
+
   function evalParkIntegrity(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
       const tele = deps.tailer.get(row.slug)
       if (!tele || tele.turn !== "idle") continue
-      if (tele.lastFence?.kind !== "awaiting") continue
+      if (tele.lastFence?.kind !== "awaiting") {
+        checkInAnchors.delete(row.slug)
+        continue
+      }
       // The agent must have spoken last — same guard as the sign-off nudge, and for the same measured
       // reason: frizz's own delivery lands as a USER record, so keying on activity would let this reset
       // its own dedupe and bump in a loop.
@@ -2476,7 +2496,18 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         registeredIssueWatchesOf(deps.storage, row.slug),
       )
       const dead = unaccountedItems(park.items, live)
-      const expiresAt = parkExpiresAt(park, Date.parse(spokeAt))
+      const agentNames = new Set(park.items.filter((i) => i.kind === "agent").map((i) => i.value))
+      let expiresAt = parkExpiresAt(park, Date.parse(spokeAt))
+      if (agentNames.size === 0) checkInAnchors.delete(row.slug)
+      else {
+        let anchor = checkInAnchors.get(row.slug)
+        if (!anchor || ![...agentNames].some((a) => anchor!.agents.has(a))) {
+          anchor = { atMs: Date.parse(spokeAt), agents: agentNames }
+          checkInAnchors.set(row.slug, anchor)
+        }
+        const due = anchor.atMs + AGENT_PARK_FOR_MAX_MS
+        if (expiresAt !== null && due < expiresAt) expiresAt = due
+      }
       const requested = checkInRequests.get(row.slug) === spokeAt
       const expired = requested || (expiresAt !== null && nowMs >= expiresAt)
       // NAMES NOTHING — the loudest case, and it was the silent one. A fence carrying only `for:` and
@@ -2773,6 +2804,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // by the loop test: settling on delivery left the cap unreached and 12 unlearning rests drew 12
       // bumps, which is the runaway this exists to stop.
       if (cause !== "expired") deps.storage.countParkBump(row.slug, fenceId)
+      // A check-in sent is the next one's anchor (checkInAnchors).
+      if (cause === "expired" && agentNames.size > 0) checkInAnchors.set(row.slug, { atMs: nowMs, agents: agentNames })
       log(`waker: queued ${row.slug} — ${item.reason}`)
       checkpoint("after-enqueue", item)
     }
