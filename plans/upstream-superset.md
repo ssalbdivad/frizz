@@ -8,7 +8,7 @@ in it:
 - the core principles he stated at the 2026-10-06 standup.
 
 Where one of those principles collides with a fork behavior, the principle wins, and the fork's behavior survives in the
-least invasive form that still upholds it, usually as a choice the user makes. The fork can then be offered as the product,
+least invasive form that still upholds it. The fork can then be offered as the product,
 or cherry-picked from, with a ledger showing nothing of Colin's was lost. A plugin system holds what doesn't make the
 product.
 
@@ -31,7 +31,7 @@ The research behind every claim, with file:line, is in the planning thread's scr
 |---|---|---|
 | S1 | **Every thread belongs to one of five rails, and that status distinction is core information** that must never be lost from view | "a unified sidebar loses important conceptual information in Frizz, especially thread status distinctions, because each thread belongs to one of '5 rails.'" |
 | S2 | **Workspaces/projects stay separate** | "his strongest product intuition is still that workspaces/projects should stay separate, which aligns with other tools like Claude, ChatGPT, and T3." |
-| S3 | **The default must hold up at heavy load**, e.g. his 17 projects and ~70 open threads, against a sidebar that fits ~15–20 rows | "the unified-sidebar model does not scale for his usage because he currently has '17 projects' and around '70 active threads'"; "a single sidebar only fits around '20' threads at most, and closer to '15' once project-group spacing is included" |
+| S3 | **The default must hold up at heavy load,** e.g. his 17 projects and ~70 open threads, against a sidebar that fits ~15–20 rows. No view fits 70, upstream's included, so in practice this means **capacity parity: the default shows at least as much as his does** (§2) | "the unified-sidebar model does not scale for his usage because he currently has '17 projects' and around '70 active threads'"; "a single sidebar only fits around '20' threads at most, and closer to '15' once project-group spacing is included" |
 | S4 | **Mainline takes changes in pieces:** cherry-picks, soundness fixes first, no wholesale structural changes | "integrating the fork will likely be 'a cherry-pick situation'"; "substantive structural changes in the fork that he does not want to pull back into main wholesale"; "use agents to categorize changes from the fork and identify soundness fixes worth cherry-picking" |
 | S5 | No release before someone strong takes point | Not a design rule; it means the fork must stay reviewable by someone new |
 
@@ -46,13 +46,13 @@ argued rather than hidden.
 
 | # | Principle | Fork's position under this plan |
 |---|---|---|
-| P1 | One board is home; cross-project means awareness, not content (2498ad77) | **Upheld** by S2's default (§2). All projects stays as a choice, and the per-project view gains every project's counts (rail parity). |
-| P2 | Five named bands; Queue and Running never hidden (Sidebar.tsx:47-48, 259; 45ce008e) | **Upheld** in the per-project board, with S1 (§2). |
+| P1 | One board is home; cross-project means awareness, not content (2498ad77) | **Changed, argued.** All projects is home: a project-grouped awareness surface that carries every project's counts, the rail's job, and gives up no capacity (§2). Each project's own board is one click away at its own URL. |
+| P2 | Five named bands; Queue and Running never hidden (Sidebar.tsx:47-48, 259; 45ce008e) | **Upheld** in the project board, with S1 (§2); in All projects every row keeps its band mark. |
 | P3 | His vocabulary: Queue, Running, board | **Adopted** (§2): no feature cost, and the fork's own CLAUDE.md already teaches agents his band names. |
-| P4 | `/project/<slug>` URLs; `?project=` was rejected (singleton-frizz.md:131) | **Adopted** for the per-project board (§2). |
+| P4 | `/project/<slug>` URLs; `?project=` was rejected (singleton-frizz.md:131) | **Adopted** for the project board (§2). |
 | P5 | Frizz runs no model of its own (ARCHITECTURE.md:5) | **Kept, with an off switch.** See below. |
 | P6 | The worker contract is mechanics only; every token costs | **Kept, trimmed where inert.** Tools and sections tied to an absent capability are not listed (§5). |
-| P7 | Few settings | One new choice for the view (§2) and one for model calls (§4). The env-only switches become those settings rather than new ones. |
+| P7 | Few settings | No setting for the view (the URL names it, §2). One setting for model calls, replacing today's env-only switches. |
 | P8 | Keyboard is ⌘K, ⌘I and Esc | **Kept on.** The single-key layer is visible (the `?` sheet) and rebindable. |
 | P9 | No pty | **Already reconciled** in the fork: node-pty is imported lazily, only for a terminal the human opens, and no agent or sign-in path touches it (fork CLAUDE.md). Remaining: make it an optional dependency so a box without it installs cleanly. |
 | P10 | No git/worktree opinions | **Kept.** The fork's worktree folder rule is a mechanic its own threads rely on; the trade-off is offered to Colin as a decision (§8). |
@@ -79,29 +79,48 @@ on), so a user who wants Colin's "no model of its own" posture gets it from Sett
 
 ---
 
-## 2. Upholding S1–S3 in the sidebar while keeping All projects
+## 2. The sidebar: S1–S3 with All projects as the default
 
-This is where the fork collides with the standup principles. The answer is to keep both views and give each the job it is
-good at. **The per-project board becomes the default, and All projects is a choice David turns on for his own machine.**
-Colin's numbers (S3) make per-project the right default for a product. David's numbers (3–5 projects, ~10 threads, inbox
-zero) make All projects the right choice for him. The sidebar measurements back both:
+**No sidebar shows ~70 threads, upstream's included.** Upstream's default is one project's board, and it fits 22 rows at
+1440x900. Colin's other 16 projects sit behind a click, or behind the opt-in rail's badges. So S3 does not mean "handles
+70"; it means **the default shows at least as much as upstream's default does**. That is the bar here: capacity parity,
+measured, and pinned by a test.
 
-| View and load | Rows visible at 1440x900 |
-|---|---|
-| One project, upstream's board | 22 |
-| One project, fork focus mode | 22 |
-| All projects, Colin's load (17 projects, 70 open) | 11, plus 6 project headers |
-| All projects, David's load (4 projects, 10 threads) | all of them |
+All projects stays the default home at `/`. S2 holds because projects never interleave:
+- every row sits under its project's header;
+- each project's own board is one click away (the switcher, or the project header), at its own URL.
 
-### The setting
+No view setting is added. The URL names the view, so the per-tab `?project=` state goes away.
 
-- **View: Project board · All projects.**
-  - The product default is **Project board**.
-  - It replaces the per-tab `?project=` state, and it absorbs the project rail's row (`projectRail`, already gone from the
-    fork), so the settings count does not grow.
-  - David sets **All projects**, and his daily experience is unchanged.
+Measured today (sidebar-report.md, single-line titles, 27.5px rows):
 
-### The per-project board (default)
+| View and load | 1440x900 | 1920x1080 |
+|---|---|---|
+| Upstream's board, one project | 22 rows | 28 rows |
+| Fork focus mode, one project | 22 rows | 29 rows |
+| Fork All projects, Colin's load (17 projects, 70 open) | 11 rows + 6 project headers | 14 rows + 8 project headers |
+| Fork All projects, David's load (4 projects, 10 threads) | everything | everything |
+
+### Capacity parity (S3)
+
+- **Project board:** upstream's 22/28 already include its band headers and rules. Adding them to focus mode (below) keeps
+  parity by construction.
+- **All projects:** the shortfall is group overhead. Each project costs about 60px beyond its rows: a 23px header, a ~23px
+  "N more" row, and a 13px rule. **Compact each group to one line:**
+  - **The "N more" affordance moves into the header line** as the same explicit text. That keeps David's 2026-10-01 fix ("the
+    counts alone proved too hidden") visible without a row of its own.
+  - **The rule between groups goes;** the header's own top padding separates them.
+
+  With the group costing about one row, the view fits about upstream's number of lines (thread rows plus project headers).
+  Each header carries its project's counts, so at heavy load it shows more status per screen than upstream's board, not less.
+- **The gate:** port the measurement (`sidebar/seed-scale.ts` and `sidebar/measure.ts` in the planning scratch directory)
+  into one maintained `.ts` e2e test.
+  - It seeds Colin's load (17 projects, 70 open) and David's, renders both views, and counts what is visible without
+    scrolling at 1440x900 and 1920x1080.
+  - It fails if the project board shows fewer rows than upstream's 22/28 (baseline measured on 0a3b9139), or if All projects
+    shows fewer lines.
+
+### The project board (focus mode)
 
 URL `/project/<slug>`, Colin's scheme. `?project=<slug>` and `?focus=` redirect to it. In S1's terms it is **at least as
 detailed as upstream's sidebar** (U:Sidebar.tsx):
@@ -119,29 +138,35 @@ detailed as upstream's sidebar** (U:Sidebar.tsx):
   The fork's count stays as the collapsed form.
 - **The fork's additions fit in:** a collapsed Schedules header after External, ScheduleMark, rest-time and pin marks, the
   reading marker and row-click scroll (already present).
-- **Other projects' counts (rail parity, P1):** the fork's ProjectSwitcher replaces the opt-in rail. It shows each project's
-  Queue, Running and asks counts, not Ready alone. Upstream's home crumb and the owner/repo link go back in StatusRow
-  (U:StatusRow.tsx:133, 176), beside the switcher.
-- **The projects page** (`/` in this view, when more than one project exists) restores upstream's ProjectGrid content: cards
-  with path, "Opened 2h" and `/slug`. The fork's project actions (instructions, Home, add-by-path) go on the same page.
+- **Other projects' counts (rail parity):** the fork's ProjectSwitcher stands in for upstream's opt-in rail. It shows each
+  project's Queue, Running and asks counts, not Ready alone. Upstream's home crumb (back to `/`) and the owner/repo link go
+  back in StatusRow (U:StatusRow.tsx:133, 176), beside the switcher.
 
-### All projects (choice)
+### All projects (home)
 
-URL `/` when chosen, also reachable at `/all`. It stays David's design: project groups, unlabeled loud rows marked by icon,
-quiet bands as counts, project folds, cords, stable queue. It changes in four places:
+URL `/`, also `/all`. It stays David's design: project groups, unlabeled loud rows marked by icon, quiet bands as counts,
+project folds, cords, stable queue. Changes:
 
-1. **No hidden status (S1).** A folded project's row shows **Pinned, Queue and Running** counts, each with its band glyph.
-   Today it omits Pinned (ProjectList.tsx:922-923). The fold stays because it is the view's way of scaling.
-2. **Fix the pinned-Done hole.** A pinned thread that is Done in another project is invisible. `projectsQueues` drops
+1. **The compact group** described under capacity parity.
+2. **Every thread's rail stays readable (S1).**
+   - Each row keeps its band mark: a rest time means Queue, a spinner means Running, a pin mark means Pinned.
+   - A folded project's header shows **Pinned, Queue and Running** counts, each with its band glyph. Today it omits Pinned
+     (ProjectList.tsx:922-923).
+   - Named band headers live in the project board, one click away.
+   - If Colin finds per-row marks insufficient here, the fallback is a one-line band label inside a group. It costs lines,
+     and the capacity test says how many.
+3. **Fix the pinned-Done hole.** A pinned thread that is Done in another project is invisible. `projectsQueues` drops
    archived threads before the pin check (router.ts:5455-5458), and `loudBands` reads pins only from open lists
    (listBands.ts:56). Fix both, plus allQueues.ts:123-127.
-3. **The same names:** Queue and Running wherever a band is named (the header over the cards, the drawer stamp).
-4. **Cost only while open (P12):** the 3s `projectsQueues` poll and the idle board prefetch run only while this view is
-   mounted.
+4. **The same names:** Queue and Running wherever a band is named (the header over the cards, the drawer stamp).
+5. **Upstream's ProjectGrid details** that the fork's desktop lost (path, "Opened 2h", `/slug`) go on the project header's
+   hover and menu.
+6. **Load (P12):** the 3s `projectsQueues` poll and the idle board prefetch run only while this view is mounted. Moving the
+   poll onto the server's SSE stream is a follow-up for heavy loads.
 
-One view is the product default and honors all three standup principles. The other is a choice that honors S1, and its
-users accept S3's limits knowingly. Colin's board is never degraded by the existence of All projects, which was the
-objection.
+Colin's objection was that All projects degrades the board. Under this plan his board exists unchanged at
+`/project/<slug>`, with at least his detail and at least his capacity, and the default home shows at least as much as his
+default at any load.
 
 ---
 
@@ -327,8 +352,9 @@ steps 1–4.
 3. **The generic contract guidance** (§5).
 4. **The VS Code extension and editor bridge.** The extension package is already separate: 70 files, talking through two
    shared protocol files. This is the integration Colin praised at standup.
-5. **The per-project board improvements** that apply to his board as-is: sub-agent rows, schedules header, switcher counts.
-6. **All projects, as a design proposal:** an opt-in view that upholds S1 and leaves his default untouched.
+5. **The project board improvements** that apply to his board as-is: sub-agent rows, schedules header, switcher counts.
+6. **All projects, as a design proposal,** with the capacity test as evidence that it shows at least as much as his board
+   and keeps every thread's rail readable. Whether it is home or opt-in upstream is his call.
 7. **The rest of the fork's features, one at a time:** schedules, terminals, spinoff, model-backed names/status/effort,
    shortcuts, wake lock, Home, messaging. Each goes with its off switch or reason.
 
@@ -360,8 +386,8 @@ intended difference, listed in §4) or a parity bug.
 | Step | Touches | Risk | Needs Colin |
 |---|---|---|---|
 | 1 parity fixes (§3): steps card, question placement, contract text, phone long-press/counts/footer, lightbox | AllQueuesCard, fenceBlocks, phone page, ImageViewer, workerPrompt + goldens | low–medium: queue card is busy code | no |
-| 2 per-project board as default (§2): view setting, `/project/<slug>`, banded sidebar, sub-agent rows, StatusRow crumb/link, projects page, switcher counts | routes, pageView, ProjectList / Sidebar, StatusRow, settings, ~10 web files | medium: the default view changes for every fork user except via the setting | no |
-| 3 All projects fixes (§2): folded counts with Pinned, pinned-Done, names, poll only while open | ProjectList, router `projectsQueues`, allQueues, listBands | low | no |
+| 2 project board (§2): `/project/<slug>` replacing `?project=`, named never-collapsible bands, sub-agent rows, StatusRow crumb/link, switcher counts | routes, pageView, ProjectList / Sidebar, StatusRow, ~8 web files | medium: focus mode's look changes; All projects is untouched | no |
+| 3 All projects (§2): compact one-line groups, folded counts with Pinned, pinned-Done, names, grid details on hover, poll only while mounted; the capacity test | ProjectList, router `projectsQueues`, allQueues, listBands, one new e2e test | low; the test settles the parity claim | no |
 | 4 queue card parity (§3): transcript fold, Load earlier, collapse, resting card, deep-link landing, status route | AllQueuesCard, store, routes | medium | no |
 | 5 rules (§4): lift-back adopted; quiet-turn row marking | board.ts, groups | low | no |
 | 6 agent surface (§5) | frizz-mcp, workerPrompt | low | the guidance PRs |
@@ -370,5 +396,5 @@ intended difference, listed in §4) or a parity bug.
 | 9 plugin seams 1–4, lazy threads out (§7) | ~450 base lines, lazy code moves | medium | the loader, the held thread |
 | 10 offers to Colin (§8) | per PR | low each | yes |
 
-Steps 1–8 change only the fork, and David keeps every behavior by choosing All projects. Each step also lowers the cost of
+Steps 1–8 change only the fork, and David's default stays All projects. Each step also lowers the cost of
 the daily merge, because the fork's code stops diverging from upstream on the surfaces he keeps editing.
