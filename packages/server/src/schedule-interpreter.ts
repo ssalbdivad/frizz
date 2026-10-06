@@ -2,8 +2,10 @@ import {
   SCHEDULE_NOT_FOUND_COPY,
   SCHEDULE_PRESENCE_COPY,
   SCHEDULE_SPACING_COPY,
+  cutPhrase,
   isValidTimeZone,
   localWallString,
+  locatePhrase,
   scheduleEcho,
   zonedWall,
   type InterpretScheduleResult,
@@ -106,24 +108,8 @@ function parseAnswer(raw: string): Record<string, unknown> | undefined {
   }
 }
 
-/** Where `phrase` sits in `text`: exactly, else ignoring case. */
-export function locatePhrase(text: string, phrase: string): { start: number; end: number } | undefined {
-  const p = phrase.trim()
-  if (!p) return undefined
-  let at = text.indexOf(p)
-  if (at < 0) at = text.toLowerCase().indexOf(p.toLowerCase())
-  return at < 0 ? undefined : { start: at, end: at + p.length }
-}
-
-/** `text` with [start, end) cut out and the seam tidied — the dangling comma or dash the phrase leaves —
- *  and NOTHING else changed. */
-export function cutPhrase(text: string, start: number, end: number): string {
-  const before = text.slice(0, start).replace(/[\s,;:–—-]+$/u, "")
-  const after = text.slice(end).replace(/^[\s,;:–—-]+/u, "")
-  if (!before.trim()) return after.trim()
-  if (!after.trim()) return before.trim()
-  return `${before}${/^[.!?)]/.test(after) ? "" : " "}${after}`.trim()
-}
+// `locatePhrase` and `cutPhrase` live in @frizz/shared (schedule-phrase.ts) since the live reading: the
+// browser cuts the prompt it shows as "Each run:" with the same function the server saves it with.
 
 export interface ScheduleInterpreter {
   /** `tz` is the zone the rule is read in; `viewerTz` the zone the human reads the preview in (the
@@ -189,7 +175,7 @@ export function createScheduleInterpreter(deps: { complete?: ClaudeOneShot; now?
           continue
         }
         const { compiled: _c, ...preview } = checked.value
-        const saved = existing ? "" : cutPhrase(text, span.start, span.end)
+        const saved = existing ? "" : cutPhrase(text, span)
         if (!existing && !saved) {
           return { ok: false, error: "What should each run do? Add the task after the schedule, like “every Monday at 9am triage new issues”." }
         }

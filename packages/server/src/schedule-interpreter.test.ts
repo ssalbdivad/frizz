@@ -1,8 +1,8 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY } from "@frizz/shared"
+import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY, cutPhrase, locatePhrase } from "@frizz/shared"
 import type { ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
-import { createScheduleInterpreter, cutPhrase, interpreterSystemPrompt, locatePhrase } from "./schedule-interpreter.ts"
+import { createScheduleInterpreter, interpreterSystemPrompt } from "./schedule-interpreter.ts"
 import type { ThreadScheduleRow } from "./schedule-store.ts"
 
 // The interpreter's VALIDATION around the model (schedule-interpreter.ts): the model is scripted here, so
@@ -144,7 +144,7 @@ test("the preview names the schedule's zone when the viewer reads it from anothe
 test("locatePhrase and cutPhrase tidy only the seam", () => {
   assert.deepEqual(locatePhrase("Triage, every Monday at 9am.", "every monday at 9am"), { start: 8, end: 27 })
   assert.equal(locatePhrase("abc", "  "), undefined)
-  assert.equal(cutPhrase("Triage new issues, every Monday at 9am.", 19, 38), "Triage new issues.")
-  assert.equal(cutPhrase("every Monday at 9am — triage new  issues", 0, 19), "triage new  issues")
-  assert.equal(cutPhrase("Look at CI every Monday at 9am and post it", 11, 30), "Look at CI and post it")
+  assert.equal(cutPhrase("Triage new issues, every Monday at 9am.", { start: 19, end: 38 }), "Triage new issues.")
+  assert.equal(cutPhrase("every Monday at 9am — triage new  issues", { start: 0, end: 19 }), "triage new  issues")
+  assert.equal(cutPhrase("Look at CI every Monday at 9am and post it", { start: 11, end: 30 }), "Look at CI and post it")
 })
