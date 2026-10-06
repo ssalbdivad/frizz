@@ -441,6 +441,27 @@ test("question: a rested thread's unanswered question takes its recommended opti
   h.storage.close()
 })
 
+// An option that acts outside this machine is never taken by the default (maintainer 2026-10-06: an
+// upstream issue must not be filed under their account unless they answer). It falls back to the first
+// local option; with none, the question waits.
+test("question: the default never takes an external option", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  const t0 = h.clock.ms
+  const file = { label: "File the issue upstream", recommended: true, external: true }
+  h.storage.askThreadQuestion({ id: "qst_ext", slug: "t", spec: JSON.stringify({ question: "File the TS5088 repro?", kind: "question", options: [file, { label: "Keep the repro local" }] }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_all_ext", slug: "t", spec: JSON.stringify({ question: "Where to file it?", kind: "question", options: [file, { label: "Comment on the old issue", external: true }] }), askedAtMs: t0 })
+  h.tele.set("t", { ...tele(), lastAssistantAt: iso(t0) })
+  const s = h.make()
+  h.clock.ms = t0 + QUESTION_DEFAULT_AFTER_MS
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_ext")?.state, "answered")
+  assert.equal(h.storage.getThreadQuestion("qst_all_ext")?.state, "open", "nothing local to take")
+  assert.match(h.resumes[0].message, /“File the TS5088 repro\?” → Keep the repro local — No reply in 10m\. The recommended option acts outside this machine/)
+  assert.doesNotMatch(h.resumes[0].message, /→ File the issue upstream/)
+  h.storage.close()
+})
+
 test("question: the human working on the card holds the default, and the countdown's x turns it off", async () => {
   const h = harness()
   h.storage.upsertSession(row("t"))

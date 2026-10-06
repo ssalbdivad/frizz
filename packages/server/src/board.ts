@@ -32,6 +32,7 @@ import { spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
 import { reopenArchivedThreadForFollowUp, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
+import { log as frizzLog } from "./logging.ts"
 import { createQueueClock } from "./queue-clock.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { limitPauseIsStale, textResetInstant } from "./backend/usage-limit.ts"
@@ -316,7 +317,14 @@ function registeredLegacyFileIsTerminal(projectDir: string, slug: string): boole
 // no watch descriptor is ever spent on those 715 directories and on fs-events the event never reaches
 // JS at all. The predicate is the CORRECTNESS half: it is an allow-list of what the board reads, so a
 // tree nobody has thought of yet costs one string test rather than a rebuild.
-const FRIZZ_WATCH_IGNORED_DIRS = ["threads", ".session-state"]
+//
+// `worktrees` is the costly one. Agent worktrees moved INTO `.frizz/worktrees/` (settings.ts
+// `worktreeDir`), and each is a full checkout with its own `node_modules` and build output: on
+// 2026-10-06 arktype's held 4.4G in 286,510 directories, every one an inotify descriptor. Opening
+// that project took 711s, and a build deleting `out/structure` mid-walk failed the subscribe with
+// ENOENT and took the whole project down with it — no scheduler, so a question answered a second
+// later was never delivered.
+const FRIZZ_WATCH_IGNORED_DIRS = ["threads", ".session-state", "worktrees"]
 
 // True when a watcher event names a file the board would actually re-read. `roots` holds every spelling
 // the watched `.frizz` may be reported under — see watchFrizzDir for why there is more than one.
@@ -2139,7 +2147,10 @@ function sessionThreadView(
     const spec = safeQuestionSpec(q.spec)
     if (spec) {
       const repliedPast = questionRepliedPast(q, rawTele?.lastHumanAt)
-      const defaultsAtMs = !repliedPast && recommendedDefaultAnswer(q.id, spec) ? questionDefaultAtMs(q, restedMs) : undefined
+      const defaultAnswer = repliedPast ? undefined : recommendedDefaultAnswer(q.id, spec)
+      const defaultsAtMs = defaultAnswer ? questionDefaultAtMs(q, restedMs) : undefined
+      const recommendedLabel = spec.options?.find((o) => o.recommended)?.label
+      const defaultsTo = defaultAnswer?.chosen[0] !== recommendedLabel ? defaultAnswer?.chosen[0] : undefined
       questions.push({
         id: q.id,
         spec,
@@ -2147,6 +2158,7 @@ function sessionThreadView(
         ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
         ...(repliedPast ? { repliedPast: true as const } : {}),
         ...(defaultsAtMs !== undefined ? { defaultsAt: new Date(defaultsAtMs).toISOString() } : {}),
+        ...(defaultsAtMs !== undefined && defaultsTo ? { defaultsTo } : {}),
       })
     }
   }
@@ -3166,9 +3178,18 @@ export function createBoard(
       // LEVEL-TRIGGERED reconciliation: a periodic full rebuild guarantees convergence even if every
       // edge (watcher event, SSE push, mutation hook) is missed or fails — the UI can lag one period,
       // never forever. Edge-triggered paths above make it feel instant; this makes it CORRECT.
-      reconcileTimer = setInterval(() => void rebuild().catch(() => {}), RECONCILE_MS)
+      reconcileTimer = setInterval(() => {
+        void rebuild().catch(() => {})
+        if (!parcelSub && !bootstrapWatch && frizzDirExists(project.dir)) void watchFrizzDir().catch(() => {})
+      }, RECONCILE_MS)
       if (frizzDirExists(project.dir)) {
-        await watchFrizzDir()
+        // A watcher that cannot start is NOT a project that cannot open. Thrown from here, it failed
+        // the tenant's open, which nothing retries: the board, the scheduler and every wake for that
+        // project stayed dead until a restart. The reconcile above already keeps the board CORRECT
+        // without the watcher — it only loses promptness — and each tick tries the watcher again.
+        await watchFrizzDir().catch((error: unknown) => {
+          frizzLog.warn("board", `${project.name}: watching .frizz failed; falling back to the ${RECONCILE_MS / 1000}s reconcile until it succeeds — ${error instanceof Error ? error.message : String(error)}`)
+        })
       } else {
         // .frizz/ not created yet — watch the repo root (non-recursive) for its appearance,
         // then hand off to the .frizz watcher. Avoids recursively watching the whole repo.

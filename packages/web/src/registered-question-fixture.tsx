@@ -196,6 +196,7 @@ const questions = params.get("danger") === "1" ? [GATE]
   : params.get("many") === "1" ? [SETTINGS, TREE, GATES]
   : params.get("table") === "1" ? [TABLE]
   : params.get("default") === "1" ? [{ ...SETTINGS, defaultsAt: new Date(Date.now() + 7 * 60_000 + 20_000).toISOString() }]
+  : params.get("default") === "2" ? [{ ...SETTINGS, defaultsAt: new Date(Date.now() + 7 * 60_000 + 20_000).toISOString(), defaultsTo: "Keep the repro in the handoff" }]
   : [SETTINGS]
 
 const tail = "Both stores work. The choice is yours because it is the one thing here that is hard to reverse once there is data in it."
