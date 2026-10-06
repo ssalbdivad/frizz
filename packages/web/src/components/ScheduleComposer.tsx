@@ -533,13 +533,15 @@ function useDelayedTrue(on: boolean, ms: number): boolean {
  * GEOMETRY, not a fit: a lucide glyph's stroke (2 units) reaches 1 unit past its outermost path, so `Repeat`
  * (paths x 3–21) leaves 2 of 24 units a side and `X` (x 6–18) leaves 5.
  *
- * Measured on the real ledge (scratch/optics-live-box.ts, 466px — the All-projects column at 1440 — 12px sans,
- * dsf 6, 2026-10-06), ink gaps:
- *   border → ↻ 10.83 (the left inset)    ↻ → reading 9.67 → 7.67    × → border 12.33 → 10.83 (the left inset)
- * Before, the glyph floated halfway between the border and its words and the × hung 6.5px further out than the
- * gap it shared: 4px of button padding plus 2.5px of its viewBox.
+ * Measured with scripts/ink-gaps.mjs (pixels, dsf 6, 12px sans) on schedule-live-fixture's ledge, at 1440 (514px
+ * wide) and on the phone's tap row at 360 (290px), 2026-10-06 — the same at both widths:
+ *   border → ↻ 10.83 (the left inset)    ↻ → reading 8.00    × → border 10.83 (the left inset)
+ *   `Each run:` starts 0.00px off the reading's first letter; ↻ and × centre 0.13px under the cap band (geometry,
+ *   sub-pixel: left alone).
+ * Before the trims, the glyph floated halfway between the border and its words (9.67 to them) and the × hung
+ * 6.5px further out than the gap it shared: 4px of button padding plus 2.5px of its viewBox.
  */
-const GLYPH_TO_TEXT_TRIM = "-mr-0.5" // ↻: gap-2 (8) + 1px of viewBox − 2 = 7.67 to the reading's first letter
+const GLYPH_TO_TEXT_TRIM = "-mr-0.5" // ↻: gap-2 (8) + 1px of viewBox − 2, + the first letter's side bearing = 8.00
 const BODY_INSET = "pl-[28px]" // px-2.5 + the 12px glyph + gap-2 − 2: the body's rows start under the reading
 const CLOSE_TRIM = "-ml-[6.5px] -mr-[5.5px]" // ×: 4px padding + 2.5px of viewBox in, and out to the left inset
 // THE PHONE'S TAP ROW (StripLine on a phone), the same law: the × is a 32px hit square (10px a side around its

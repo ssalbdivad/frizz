@@ -1594,7 +1594,10 @@ export function Composer({
       >
         {busy || sendPending ? <Loader2 size={14} strokeWidth={2.5} className="animate-spin" /> : (
           // BOTH glyphs, stacked, so the swap is a 120ms cross-fade on the same pixels rather than one icon
-          // popping for another; same size and stroke, so neither moves the rail's measured rhythm.
+          // popping for another; same size and stroke, so neither moves the rail's measured rhythm. Measured
+          // 2026-10-06 (composer-icons-fixture ?send=schedule, geometry): one 1.46px pen, ↑ ink 9.62², ↻ ink
+          // 11.96×13.12, each centred to 0.00px in the 28px square — ↻ is the bigger mark by its drawing, not
+          // its placement.
           <span aria-hidden className="grid place-items-center">
             <ArrowUp size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-0" : "opacity-100"}`} />
             <Repeat size={14} strokeWidth={2.5} className={`col-start-1 row-start-1 transition-opacity duration-[120ms] motion-reduce:transition-none ${sendGlyph === "schedule" ? "opacity-100" : "opacity-0"}`} />

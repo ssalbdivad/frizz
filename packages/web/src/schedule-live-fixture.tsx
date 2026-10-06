@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import {
   InterpretScheduleInput,
+  SCHEDULE_NOT_FOUND_COPY,
   cutPhrase,
   scheduleEcho,
   type BoardSnapshot,
@@ -20,42 +21,56 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// THE LIVE SCHEDULE READING, on the real prompt box (plans/schedule-live-reading.md §15.2). It mounts the real
-// <DispatchForm> — Composer, useLiveSchedule, the ledge and the panel, the draft store — over a stubbed RPC
-// seam that COUNTS every call the box can make that matters (dispatch, createLazyThread, createSchedule,
-// deleteSchedule, interpretSchedule) and records their bodies, so composerScheduleLive.e2e.test.ts can say
-// "Enter dispatched once and created nothing" as a fact about the wire.
+// THE SCHEDULE IN THE WORDS, on the real prompt box (plans/schedule-live-reading.md). It mounts the real
+// <DispatchForm> — Composer, useLiveSchedule, the strip, the draft store — over a stubbed RPC seam that COUNTS
+// every call the box can make that matters (dispatch, createLazyThread, createSchedule, deleteSchedule,
+// interpretSchedule) and records their bodies, so composerScheduleLive.e2e.test.ts can say "Enter dispatched
+// once and created nothing" as a fact about the wire.
 //
-// Nothing here reaches a server: there is none. The model is a stub the test arms per case
-// (`__sched.answer`), the server's two refusals are a queue the test fills (`__sched.createFail`), and the
-// clock is the fixed one the HTML installs (Mon Oct 5 2026 2:32pm New York, the spec's clock).
+// Nothing here reaches a server: there is none. THE MODEL is a stub the test arms per case: `__sched.rules`, in
+// order, each matched by a substring of the text read — the first match answers (a schedule reading of its
+// phrase, a refusal, a failed read, or a call that never answers); text no rule matches has no schedule in it.
+// Every answer waits `delayMs` (300 by default), and while `__sched.gate` is closed every answer waits for
+// `__sched.release()` too, so a test can look at the box with a read in flight. The clock is the fixed one the
+// HTML installs (Mon Oct 5 2026 2:32pm New York).
 //
-// Fixture verbs, on `window.__sched`: `remount()` unmounts and remounts the box (the incident: a viewport
-// override across the phone breakpoint did that in the real app), `openDialog()` opens the `c` dialog over
-// the page box, `reaim(dir)` moves the box to another project as the All-projects picker and ⌥↑/⌥↓ do,
-// `reset()` zeroes the counts. Counts live on the page, so a reload starts them at zero; the
-// draft store (sessionStorage) is what survives it, which is the point.
+// Fixture verbs, on `window.__sched`: `remount()` unmounts and remounts the box (a viewport override across the
+// phone breakpoint does that in the real app), `openDialog()` opens the `c` dialog over the page box,
+// `reaim(dir)` moves the box to another project as the All-projects picker and ⌥↑/⌥↓ do, `reset()` zeroes the
+// counts. Counts live on the page, so a reload starts them at zero; the draft store (sessionStorage) is what
+// survives it, which is the point.
 
 type Counted = "dispatch" | "createLazyThread" | "createSchedule" | "deleteSchedule" | "interpretSchedule"
-type ModelAnswer = { phrase: string; rrule: string; dtstart: string; condition?: string; title: string; delayMs?: number }
+/** What the stub model says about a text that contains `match`. */
+type ModelRule = {
+  match: string
+  delayMs?: number
+} & (
+  /** A schedule reading of `phrase` (which must be in the text). */
+  | { phrase: string; rrule: string; dtstart: string; condition?: string; title: string }
+  /** A refusal, in the interpreter's own words (SCHEDULE_SPACING_COPY, …). */
+  | { refuse: string }
+  /** The interpreter's own failure ("Couldn't read that just now: …"), or `http` for a failed request. */
+  | { fail: "model" | "http" }
+  /** Never answers: the box's own give-up timers decide. */
+  | { hang: true }
+)
 
 interface SchedFixture {
   counts: Record<Counted, number>
   bodies: Record<Counted, Record<string, unknown>[]>
-  /** The model's next answers, by the text it is asked about; unmatched text reads as not-a-schedule. */
-  answer: ModelAnswer | null
-  /** Error messages the next createSchedule calls fail with, in order (`schedule-reading-moved: …`). */
-  createFail: string[]
-  /** How long createSchedule takes to answer (ms; 0 by default). A test that acts INSIDE a create's flight
-   *  (an Undo click, a re-aim, a remount) widens the window with it rather than racing a 0ms RPC plus the
-   *  220ms wash, which a loaded machine loses. */
+  rules: ModelRule[]
+  /** Closed: every model answer also waits for `release()`. */
+  gate: boolean
+  release: () => void
+  /** The most interpretSchedule calls ever out at once — the box's single flight, measured on the wire. */
+  maxInFlight: number
+  /** How long createSchedule takes to answer (ms; 0 by default). */
   createDelayMs: number
   /** RPC names the fixture does not answer — so a test can see what the box asked for. */
   unknown: string[]
   remount: () => void
   openDialog: () => void
-  /** Re-aim the box at another project the way the All-projects page does (AllQueues: carryDispatchDraft,
-   *  then the box keyed by the new project's dirs). */
   reaim: (projectDir: string) => void
   reset: () => void
 }
@@ -70,11 +85,27 @@ const PROJECT_DIR = "/fixture/schedule-live"
 const zero = (): Record<Counted, number> => ({ dispatch: 0, createLazyThread: 0, createSchedule: 0, deleteSchedule: 0, interpretSchedule: 0 })
 const empty = (): Record<Counted, Record<string, unknown>[]> => ({ dispatch: [], createLazyThread: [], createSchedule: [], deleteSchedule: [], interpretSchedule: [] })
 
+let gateWaiters: Array<() => void> = []
+let inFlight = 0
+/** The armed rules survive a reload (sessionStorage), so a test that reloads mid-case keeps its model. */
+const RULES_KEY = "__schedRules"
+let rules: ModelRule[] = JSON.parse(sessionStorage.getItem(RULES_KEY) ?? "[]") as ModelRule[]
 const sched: SchedFixture = {
   counts: zero(),
   bodies: empty(),
-  answer: null,
-  createFail: [],
+  get rules() { return rules },
+  set rules(next: ModelRule[]) {
+    rules = next
+    sessionStorage.setItem(RULES_KEY, JSON.stringify(next))
+  },
+  gate: false,
+  release: () => {
+    sched.gate = false
+    const waiters = gateWaiters
+    gateWaiters = []
+    for (const w of waiters) w()
+  },
+  maxInFlight: 0,
   createDelayMs: 0,
   unknown: [],
   remount: () => {},
@@ -83,6 +114,7 @@ const sched: SchedFixture = {
   reset: () => {
     sched.counts = zero()
     sched.bodies = empty()
+    sched.maxInFlight = 0
   },
 }
 window.__sched = sched
@@ -129,26 +161,32 @@ function viewOf(input: CreateScheduleInput): ScheduleView {
   } as ScheduleView
 }
 
-function interpret(text: string, tz: string): InterpretScheduleResult {
-  const a = sched.answer
-  const start = a ? text.indexOf(a.phrase) : -1
-  if (!a || start < 0) return { ok: false, error: "That doesn't say when it should run. Try “every weekday at 9am”." }
-  const span = { start, end: start + a.phrase.length }
-  const echo = scheduleEcho({ title: a.title, rrule: a.rrule, dtstart: a.dtstart, tz, condition: a.condition ?? null }, Date.now(), tz)
+/** What the stub model answers for `text`, as the real interpreter shapes it: offsets into the TRIMMED text. */
+function interpret(text: string, tz: string, rule: ModelRule | undefined): InterpretScheduleResult {
+  if (!rule) return { ok: false, error: SCHEDULE_NOT_FOUND_COPY }
+  if ("refuse" in rule) return { ok: false, error: rule.refuse }
+  if ("fail" in rule) return { ok: false, error: "Couldn't read that just now: the stub model is down" }
+  if (!("phrase" in rule)) return { ok: false, error: SCHEDULE_NOT_FOUND_COPY }
+  const start = text.indexOf(rule.phrase)
+  if (start < 0) return { ok: false, error: SCHEDULE_NOT_FOUND_COPY }
+  const span = { start, end: start + rule.phrase.length }
+  const echo = scheduleEcho({ title: rule.title, rrule: rule.rrule, dtstart: rule.dtstart, tz, condition: rule.condition ?? null }, Date.now(), tz)
   if (!echo.ok) return { ok: false, error: echo.error }
   const { compiled: _compiled, ...preview } = echo.value
+  const prompt = cutPhrase(text, span)
+  if (!prompt) return { ok: false, error: "What should each run do? Add the task after the schedule, like “every Monday at 9am triage new issues”." }
   return {
     ok: true,
-    phrase: a.phrase,
+    phrase: rule.phrase,
     phraseStart: span.start,
     phraseEnd: span.end,
-    prompt: cutPhrase(text, span),
-    whenText: a.phrase,
-    rrule: a.rrule,
-    dtstart: a.dtstart,
+    prompt,
+    whenText: rule.phrase,
+    rrule: rule.rrule,
+    dtstart: rule.dtstart,
     tz,
-    ...(a.condition ? { condition: a.condition } : {}),
-    title: a.title,
+    ...(rule.condition ? { condition: rule.condition } : {}),
+    title: rule.title,
     preview,
   }
 }
@@ -179,16 +217,23 @@ window.fetch = async (input, init) => {
       return json({ slug: "fixture-started-thread", sessionId: "fixture-session" })
     case "createLazyThread": return json({ slug: "fixture-lazy-thread" })
     case "interpretSchedule": {
-      const delay = sched.answer?.delayMs ?? 300
-      await new Promise((r) => setTimeout(r, delay))
       // Parsed as the server parses it: `text` is TRIMMED, and the answer's offsets index the trimmed text.
-      const input = InterpretScheduleInput.parse(body)
-      return json(interpret(input.text, input.tz ?? "America/New_York"))
+      const parsed = InterpretScheduleInput.parse(body)
+      const rule = sched.rules.find((r) => parsed.text.includes(r.match))
+      inFlight++
+      sched.maxInFlight = Math.max(sched.maxInFlight, inFlight)
+      try {
+        if (rule && "hang" in rule) return await new Promise<Response>(() => {})
+        await new Promise((r) => setTimeout(r, rule?.delayMs ?? 300))
+        if (sched.gate) await new Promise<void>((r) => gateWaiters.push(r))
+        if (rule && "fail" in rule && rule.fail === "http") return new Response(JSON.stringify({ error: "fixture: the server is down" }), { status: 502, headers: { "content-type": "application/json" } })
+        return json(interpret(parsed.text, parsed.tz ?? "America/New_York", rule))
+      } finally {
+        inFlight--
+      }
     }
     case "createSchedule": {
       if (sched.createDelayMs) await new Promise((r) => setTimeout(r, sched.createDelayMs))
-      const fail = sched.createFail.shift()
-      if (fail) return new Response(JSON.stringify({ error: fail }), { status: 400, headers: { "content-type": "application/json" } })
       return json(viewOf(body as unknown as CreateScheduleInput))
     }
     case "deleteSchedule": return json({ ok: true })
@@ -206,7 +251,8 @@ store.board = { projectDir: PROJECT_DIR, projectId: PROJECT_ID } as unknown as B
 /** Stands in for the project row's schedules count (ProjectList): marked while `store.scheduleFlash` names it. */
 function FlashProbe() {
   const flash = useSnapshot(store).scheduleFlash
-  return flash ? <span data-sched-flash={flash.projectId} className="text-[11px] text-muted">flash</span> : null
+  // Present for the test to find, and out of every screenshot: the real flash is on a project row this page lacks.
+  return flash ? <span data-sched-flash={flash.projectId} className="sr-only">flash</span> : null
 }
 
 function Fixture() {
@@ -227,8 +273,8 @@ function Fixture() {
     setDirs({ projectDir, homeDir: undefined })
   }
   return (
-    <main className="min-h-screen bg-bg p-6">
-      <section className="mx-auto max-w-xl rounded-xl border border-border bg-panel p-5">
+    <main className="min-h-screen bg-bg p-6 max-[699px]:p-3">
+      <section className="mx-auto max-w-xl rounded-xl border border-border bg-panel p-5 max-[699px]:p-3">
         <h1 className="mb-3 text-sm font-medium">New thread</h1>
         {!hidden && <DispatchForm key={mount} dirs={dirs} />}
         <FlashProbe />
