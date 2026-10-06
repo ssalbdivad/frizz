@@ -132,15 +132,31 @@ test("an archived thread whose worker is still running is under Working on the q
   assert.deepEqual(names(phoneDone([alpha!], () => ({ threads: [draining, finished] }))), ["alpha:a-finished"])
 })
 
-test("the projects list leads with the busy ones, keeps Home last, and counts Ready and Working", () => {
+test("the projects list leads with the busy ones, keeps Home last, and counts asks and Working", () => {
   const card = (id: string, home = false) => ({ id, slug: id, name: id, path: `/w/${id}`, lastOpenedAt: "", stale: false, iconStatus: "unknown", ...(home ? { home: true } : {}) }) as QueuesProject["card"]
   const quiet = project("quiet", { card: card("quiet"), snoozed: [snoozed("zz", 1_000)] })
-  const busy = project("busy", { card: card("busy"), queued: [ready("r1", 1_000), ready("r2", 2_000)], running: [running("w", 1_000), ready("excused", 0, { needsYou: false, queuedAt: undefined })] })
+  // Two asks and a handoff in Ready: the accent counts the asks alone (upstream ef6f7f23) — a handoff asks
+  // nothing. `r2` is a card being finished, which still counts: it is still marked "?" on this page.
+  const busy = project("busy", { card: card("busy"), queued: [ask("r1", 1_000), ask("r2", 2_000), ready("handoff", 3_000)], running: [running("w", 1_000), ready("excused", 0, { needsYou: false, queuedAt: undefined })] })
   const home = project("home", { card: card("home", true), queued: [ready("h", 1_000)] })
   const list = phoneProjects([quiet, home, busy], (key) => key === threadKey("busy", "r2"))
   // Working is the rail's Active band, which also takes a resting row the server excused from the queue
   // (`excused`): the badge's rule, so the list and the rail say the same number.
-  assert.deepEqual(list.projects.map((e) => [e.project.id, e.ready, e.working]), [["busy", 1, 2], ["quiet", 0, 0]])
+  assert.deepEqual(list.projects.map((e) => [e.project.id, e.asks, e.working]), [["busy", 2, 2], ["quiet", 0, 0]])
   assert.equal(list.home?.project.id, "home")
-  assert.equal(list.home?.ready, 1)
+  assert.equal(list.home?.asks, 0, "a project of handoffs alone has no asks to count")
+})
+
+test("a project's ask count is the one its own Queue header shows, overlay and all", () => {
+  // A permission request waiting on the human wears the "?", so it is counted here as the header counts it.
+  const approval = ready("approve-bash", 90_000, { actionableInteraction: { id: "i1" } } as Partial<ThreadView>)
+  const alpha = project("alpha", { queued: [ask("q1", 60_000), ask("q2", 30_000), approval, ready("handoff", 10_000)] })
+  assert.equal(phoneProjects([alpha]).projects[0]!.asks, 3, "two questions and an approval")
+  // The human approved the request a moment ago: it leaves the count on the list exactly as it leaves the
+  // header, before the poll says so.
+  const steered = { [threadKey("alpha", "approve-bash")]: NOW - 100 }
+  const overlay = (p: QueuesProject) => listOverlay(p.id, false, steered, {}, NOW)
+  const header = phoneCounts(phoneQueue([alpha], undefined, overlay)).asks
+  assert.equal(header, 2)
+  assert.equal(phoneProjects([alpha], undefined, overlay).projects[0]!.asks, header)
 })

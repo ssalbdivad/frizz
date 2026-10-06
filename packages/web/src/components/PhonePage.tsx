@@ -20,7 +20,7 @@ import { useArchivingAt } from "../lib/optimisticArchive.ts"
 import { useProjectBoards } from "../lib/projectBoards.ts"
 import { handleDialogEscape } from "../lib/selectOverlay.ts"
 import { agentSuffix, liveAgentCount, rowSecondLine, wakeAt } from "../lib/mobileBoardRow.ts"
-import { phoneCounts, phoneDone, phoneSubtitle, phoneProjects, phoneQueue, phoneSnoozed, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
+import { phoneCounts, phoneDone, phoneSubtitle, phoneProjects, phoneQueue, phoneSnoozed, type OverlayFor, type PhoneProjectEntry, type PhoneRow, type PhoneTab } from "../lib/phonePage.ts"
 import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { ScheduleMark } from "./ScheduleMark.tsx"
@@ -438,15 +438,8 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   }, [viewId])
 
   const direction = useSnapshot(prefs).queueOrder
-  // The rows move the moment the operator acts, as the desktop list's do (lib/listBands.ts listOverlay):
-  // a reply sent from a drawer takes its row from Ready to Working before the poll says so. The page
-  // project's drawer files those by bare slug; anything else, by the thread's key.
-  const steeredAt = useSteeredAt()
-  const archivingAt = useArchivingAt()
-  const focus = projectSlug(useLocation().pathname)
-  const live = useBoard()
-  const onPage = (project: QueuesProject) => project.slug === focus && live?.projectSlug === project.slug
-  const queue = phoneQueue(shown, hidden, (project) => listOverlay(project.id, onPage(project), steeredAt, archivingAt), direction)
+  const { live, onPage, overlayFor } = useJustActed()
+  const queue = phoneQueue(shown, hidden, overlayFor, direction)
   const counts = phoneCounts(queue)
   const subtitle = phoneSubtitle(counts)
   const snoozed = phoneSnoozed(shown)
@@ -591,6 +584,21 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   )
 }
 
+/**
+ * What the operator has just done that the poll cannot know yet, folded into every project's rows the way
+ * the desktop list folds it (lib/listBands.ts listOverlay): a reply sent from a drawer takes its row from
+ * Ready to Working before the poll says so. The page project's drawer files those by bare slug; anything
+ * else, by the thread's key — so `onPage` says which project is the page's own, whose board is `live`.
+ */
+function useJustActed(): { live: ReturnType<typeof useBoard>; onPage: (project: QueuesProject) => boolean; overlayFor: OverlayFor } {
+  const steeredAt = useSteeredAt()
+  const archivingAt = useArchivingAt()
+  const focus = projectSlug(useLocation().pathname)
+  const live = useBoard()
+  const onPage = (project: QueuesProject) => project.slug === focus && live?.projectSlug === project.slug
+  return { live, onPage, overlayFor: (project) => listOverlay(project.id, onPage(project), steeredAt, archivingAt) }
+}
+
 /** The page's tabs: the three bands, and the view's schedules. */
 type PageTab = PhoneTab | "schedules"
 
@@ -691,15 +699,18 @@ function PhoneNewThread({ onClose, children }: { onClose: () => void; children: 
 /**
  * THE PHONE'S PROJECTS — a plain list, the way to change the view (upstream's projects page on a phone,
  * 39db08a6, here the switcher's menu as a page). All projects first, as the one view that is not a
- * project; then each project with its square, its name, its path, and at the right its Ready count in the
- * accent and its Working band in muted; Home last. The view showing now wears a check.
+ * project; then each project with its square, its name, its path, and at the right its ASKS in the
+ * accent (lib/phonePage.ts phoneProjects: the "N need you" its own header shows) and its spinning band
+ * in muted; Home last. The view showing now wears a check.
  *
  * Choosing NAVIGATES, as the switcher does, replacing the list's history entry; choosing the view it was
  * opened from goes Back. No add, rename or remove here: they stay on the desktop.
  */
 function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProject, onChoose }: PhonePageProps & { onChoose: () => void }) {
-  const list = phoneProjects(projects, hidden)
-  const total = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.ready, 0)
+  // The threads view's own overlay, so a reply just sent takes its ask off this count as it takes it off
+  // that header — the two read the same rows.
+  const list = phoneProjects(projects, hidden, useJustActed().overlayFor)
+  const total = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.asks, 0)
   const allWorking = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.working, 0)
   const isAll = focusedSlug === undefined
   useEffect(() => {
@@ -727,7 +738,7 @@ function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProjec
               {project.stale ? "Directory is missing" : !project.open ? "Not open" : shortPath(card.path, project.homeDir ?? homeDir)}
             </span>
           </span>
-          <Counts ready={entry.ready} working={entry.working} />
+          <Counts asks={entry.asks} working={entry.working} />
           <Current on={project.slug === focusedSlug} />
         </button>
       </li>
@@ -759,7 +770,7 @@ function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProjec
                 {list.projects.length === 1 ? "1 project" : `${list.projects.length} projects`}
               </span>
             </span>
-            <Counts ready={total} working={allWorking} />
+            <Counts asks={total} working={allWorking} />
             <Current on={isAll} />
           </button>
         </li>
@@ -786,12 +797,12 @@ function AllProjectsSquare({ size }: { size: number }) {
   )
 }
 
-/** A project's Ready count in the accent and its Working band in muted — upstream's projects row. */
-function Counts({ ready, working }: { ready: number; working: number }) {
-  if (ready === 0 && working === 0) return null
+/** A project's asks in the accent and its spinning band in muted — upstream's projects row (ef6f7f23). */
+function Counts({ asks, working }: { asks: number; working: number }) {
+  if (asks === 0 && working === 0) return null
   return (
     <span data-mobile-project-counts className="flex shrink-0 items-baseline gap-2.5 whitespace-nowrap text-[13px] text-muted">
-      {ready > 0 ? <span className="font-bold tabular-nums text-accent">{ready}</span> : null}
+      {asks > 0 ? <span data-mobile-project-asks className="font-bold tabular-nums text-accent">{asks}</span> : null}
       {working > 0 ? <span className="tabular-nums">{working} working</span> : null}
     </span>
   )

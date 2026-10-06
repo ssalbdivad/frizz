@@ -149,8 +149,8 @@ export function phoneSubtitle(counts: { asks: number; ready: number; working: nu
 /** One project as the phone's projects list draws it. */
 export interface PhoneProjectEntry {
   project: QueuesProject
-  /** Its Ready rows — the accent count, as the switcher and the list wear it. */
-  ready: number
+  /** Its asks — the rows marked "?" — the accent count. */
+  asks: number
   /** Its Active band — the threads spinning. */
   working: number
 }
@@ -158,11 +158,28 @@ export interface PhoneProjectEntry {
 /**
  * THE PROJECTS LIST'S ORDER — the desktop switcher's: projects with work in flight first, then the quiet
  * ones, each group in the machine-wide order, and Home last, on its own.
+ *
+ * THE ACCENT NUMBER IS ASKS, not the queue (upstream ef6f7f23, "the projects list's accent number is asks,
+ * not the queue"): the accent means "awaiting your answer", and a rested handoff asks nothing. Until
+ * 2026-10-06 this counted the project's whole Ready band, so a project of four handoffs wore an accent 4 —
+ * the colour this page spends on asks alone — and opened onto a header with no accent in it at all.
+ *
+ * Counted off THIS page's own Queue tab for that project (`phoneQueue` → `phoneCounts`), not with a
+ * second predicate, so the number on a project's row is the "N need you" its header shows once tapped —
+ * the same rule upstream gets by sharing `boardAskThread` between its server count and its header. The
+ * fork's header counts the "?" mark (`isAsk`, above), which also takes a permission request waiting on
+ * the human that upstream's `needsAction` misses, so the list counts that too. `overlayFor` is the same
+ * just-acted overlay the threads view folds in, so a reply sent a moment ago leaves the count at once
+ * there and here alike.
  */
-export function phoneProjects(projects: readonly QueuesProject[], hidden: (key: string) => boolean = () => false): { projects: PhoneProjectEntry[]; home: PhoneProjectEntry | undefined } {
+export function phoneProjects(
+  projects: readonly QueuesProject[],
+  hidden: (key: string) => boolean = () => false,
+  overlayFor: OverlayFor = noOverlay,
+): { projects: PhoneProjectEntry[]; home: PhoneProjectEntry | undefined } {
   const entry = (project: QueuesProject): PhoneProjectEntry => ({
     project,
-    ready: project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length,
+    asks: phoneCounts(phoneQueue([project], hidden, overlayFor)).asks,
     working: project.running.filter(activeBandThread).length,
   })
   const listed = projects.filter((project) => !project.card?.home)
