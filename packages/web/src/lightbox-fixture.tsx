@@ -8,6 +8,7 @@ import { mdToHtml } from "./lib/markdown.ts"
 import type { BlockAnswer, ParsedQuestion } from "./lib/questionBlocks.ts"
 import type { RegisteredQuestionView } from "@frizz/shared"
 import { BlockImage, FenceCard } from "./components/ChatView.tsx"
+import { ImageViewer } from "./components/ImageViewer.tsx"
 import { LightboxGallery, LightboxHost } from "./components/Lightbox.tsx"
 import { QuestionBlockCard } from "./components/QuestionBlockCard.tsx"
 import { RegisteredAnswerSheet } from "./components/RegisteredAnswerSheet.tsx"
@@ -172,6 +173,8 @@ createRoot(document.getElementById("root")!).render(
         <AnswerSheet />
       </section>
       <LightboxHost />
+      {/* A single picture opens the picture viewer, which the app mounts with its drawers (DrawerStack). */}
+      <ImageViewer />
     </main>
   </QueryClientProvider>,
 )

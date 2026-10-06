@@ -5,7 +5,7 @@ import { crc32, deflateSync } from "node:zlib"
 
 // Runtime coverage for the ```lightbox fence (components/Lightbox.tsx): the gallery's justified rows,
 // the viewer's paging and dismissal, its zoom under a mouse and under fingers, the gallery on the cards
-// that render prose as one string of HTML, a loose picture opening the same viewer — and the three things
+// that render prose as one string of HTML, a loose picture opening the picture viewer — and the three things
 // only a browser settles: that an Escape the viewer handled never reaches the page (where it would unwind
 // a drawer or leave the fullscreen page), that focus comes back to the picture that opened it, and that
 // a phone's Back closes the viewer rather than leaving the page. Skipped unless a Vite URL serving the
@@ -105,14 +105,28 @@ const viewer = (page: Page) => page.evaluate(() => {
   }
 })
 
+// A SINGLE picture — a Markdown image, a bare path line, a link to one — opens the fork's picture viewer
+// (ImageViewer.tsx), not this one: upstream's 0e81902b opened every picture here, and the fork kept its own
+// viewer for them, which zooms with the same gestures (lib/viewerGestures.ts). It names a picture by its
+// file and pages through the message's pictures, as this one pages through a gallery.
+const pictureViewer = (page: Page) => page.evaluate(() => {
+  const v = document.querySelector("[data-image-viewer]")
+  if (!v) return null
+  return {
+    counter: v.querySelector("[data-image-viewer-counter]")?.textContent ?? null,
+    title: v.querySelector("h2")?.textContent ?? null,
+    picture: decodeURIComponent(v.querySelector("img")?.getAttribute("src")?.split("path=")[1] ?? ""),
+  }
+})
+
 const pageKeys = (page: Page) => page.evaluate(() => window.__pageKeys!.splice(0))
 
 // The viewer's picture once its zoom has SETTLED. The inline transform is the target a change sets and
 // the computed one trails it through the 180ms ease, so this waits for the two to agree before reading.
 // `rect` is where the picture is drawn; `fitted` is its layout box, which a transform does not move.
-async function zoomOf(page: Page) {
-  const read = () => {
-    const img = document.querySelector<HTMLImageElement>("[data-lightbox] img")
+async function zoomOf(page: Page, root = "[data-lightbox]") {
+  const read = (root: string) => {
+    const img = document.querySelector<HTMLImageElement>(`${root} img`)
     const m = img && /translate\(([^p]+)px, ([^p]+)px\) scale\(([^)]+)\)/.exec(img.style.transform)
     if (!img || !m) return null
     const [x, y, scale] = m.slice(1).map(Number)
@@ -121,8 +135,8 @@ async function zoomOf(page: Page) {
     const r = img.getBoundingClientRect()
     return { settled, scale, x, y, rect: { left: r.left, top: r.top, width: r.width, height: r.height } }
   }
-  await page.waitForFunction(`(${read})()?.settled`, { timeout: 5000 })
-  return (await page.evaluate(read))!
+  await page.waitForFunction(`(${read})(${JSON.stringify(root)})?.settled`, { timeout: 5000 })
+  return (await page.evaluate(read, root))!
 }
 
 const close = (a: number, b: number, tolerance = 0.5) => Math.abs(a - b) <= tolerance
@@ -452,10 +466,11 @@ test("on a phone's answer sheet, a picture in an option opens the viewer without
     await (await page.$("[data-lightbox] button[aria-label='Close']"))!.tap()
     await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
     await (await page.$("[data-answer-sheet] [data-answer-option] img[data-local-path]"))!.tap()
-    await page.waitForSelector("[data-lightbox]")
-    assert.deepEqual(await viewer(page), { counter: null, title: "One column", picture: "/fixture/lightbox/sheet-one-col-1440x900.png" })
-    await (await page.$("[data-lightbox] button[aria-label='Close']"))!.tap()
-    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    await page.waitForSelector("[data-image-viewer]")
+    // Among the sheet's pictures, as a picture in a transcript message pages through that message's.
+    assert.deepEqual(await pictureViewer(page), { counter: "4 / 4", title: "sheet-one-col-1440x900.png", picture: "/fixture/lightbox/sheet-one-col-1440x900.png" })
+    await (await page.$("[data-image-viewer] button[aria-label='Close']"))!.tap()
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
     assert.deepEqual(await page.evaluate(() => window.__sheetPicks), [], "looking at a picture picked an option")
     assert.ok(await page.$("[data-answer-sheet]"), "closing the viewer left the sheet open")
     // The control: the row's label picks it.
@@ -488,7 +503,7 @@ test("on a phone, Back closes the viewer and leaves the page where it was", { sk
   }
 })
 
-test("a fence is a gallery on a done card and in a question option, and any picture opens the viewer with its message's pictures", { skip: !baseUrl, timeout: 120_000 }, async () => {
+test("a fence is a gallery on a done card and in a question option, and any single picture opens the picture viewer with its message's pictures", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
     // No fence is left standing as a code block anywhere: each became its gallery.
@@ -512,34 +527,196 @@ test("a fence is a gallery on a done card and in a question option, and any pict
     await page.keyboard.press("Escape")
     await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
     await (await option[1].$("img[data-local-path]"))!.click()
-    await page.waitForSelector("[data-lightbox]")
-    assert.deepEqual(await viewer(page), { counter: null, title: "One column", picture: "/fixture/lightbox/one-col-1440x900.png" })
+    await page.waitForSelector("[data-image-viewer]")
+    assert.deepEqual(await pictureViewer(page), { counter: "3 / 3", title: "one-col-1440x900.png", picture: "/fixture/lightbox/one-col-1440x900.png" })
     await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
     assert.deepEqual(await page.evaluate(() => window.__chips), [], "looking at a picture picked an option")
     // The control: the option's own label still picks it.
     const label = (await (await option[1].$("[id]"))!.boundingBox())!
     await page.mouse.click(label.x + 4, label.y + label.height / 2)
     assert.deepEqual(await page.evaluate(() => window.__chips), [1])
 
-    // A message's loose pictures — a Markdown image and a bare path line — page together, in order, each
-    // named by its alt text when it has one and by its file otherwise.
+    // A message's loose pictures — a Markdown image, a bare path line and a linked one — page together in
+    // the picture viewer, in order, each named by its file.
     await page.click("[data-fixture-loose] .md-body img[data-local-path]")
-    await page.waitForSelector("[data-lightbox]")
-    assert.deepEqual(await viewer(page), { counter: "1 / 2", title: "The settings page", picture: "/fixture/lightbox/settings-1200x800.png" })
+    await page.waitForSelector("[data-image-viewer]")
+    assert.deepEqual(await pictureViewer(page), { counter: "1 / 3", title: "settings-1200x800.png", picture: "/fixture/lightbox/settings-1200x800.png" })
     await page.keyboard.press("ArrowRight")
-    assert.deepEqual(await viewer(page), { counter: "2 / 2", title: "terminal-1000x700.png", picture: "/fixture/lightbox/terminal-1000x700.png" })
+    await page.waitForFunction(() => document.querySelector("[data-image-viewer-counter]")?.textContent === "2 / 3")
+    assert.deepEqual(await pictureViewer(page), { counter: "2 / 3", title: "terminal-1000x700.png", picture: "/fixture/lightbox/terminal-1000x700.png" })
     await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
     await page.click("[data-fixture-loose] figure img[data-local-path]")
-    await page.waitForSelector("[data-lightbox]")
-    assert.equal((await viewer(page))?.counter, "2 / 2")
+    await page.waitForSelector("[data-image-viewer]")
+    assert.equal((await pictureViewer(page))?.counter, "2 / 3")
     await page.keyboard.press("Escape")
-    await page.waitForFunction(() => !document.querySelector("[data-lightbox]"))
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
     // A LINK to a picture names that one picture.
     await page.click("[data-fixture-loose] a[data-local-image]")
-    await page.waitForSelector("[data-lightbox]")
-    assert.deepEqual(await viewer(page), { counter: null, title: "the log view", picture: "/fixture/lightbox/log-800x600.png" })
+    await page.waitForSelector("[data-image-viewer]")
+    assert.deepEqual(await pictureViewer(page), { counter: null, title: "log-800x600.png", picture: "/fixture/lightbox/log-800x600.png" })
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+// THE PICTURE VIEWER ZOOMS THE SAME WAY. A single picture opens the fork's own viewer (ImageViewer.tsx),
+// which until 2026-10-06 had fit / actual size and ←/→ only; it now runs the gallery viewer's gestures
+// (lib/viewerGestures.ts). These pin that it really does — on its own DOM, with its own fit (never
+// enlarged, its step-button gutters) — rather than re-proving the arithmetic the gallery tests above own.
+const PICTURE = "[data-image-viewer]"
+
+test("the picture viewer zooms like the gallery's: a click and ctrl-wheel about the pointer, a drag pans, + − 0, and paging starts at fit", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors } = await launch()
+  try {
+    await page.click("[data-fixture-loose] .md-body img[data-local-path]")
+    await page.waitForSelector(`${PICTURE} img`)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector("[data-image-viewer] img")!).opacity === "1")
+    const fit = await zoomOf(page, PICTURE)
+    assert.deepEqual([fit.scale, fit.x, fit.y], [1, 0, 0])
+    assert.equal(await page.$eval(`${PICTURE} img`, (img) => getComputedStyle(img).cursor), "zoom-in")
+    // 1200×800 fitted into the stage less its step-button gutters: the readout says what a pixel is drawn at.
+    const fitPercent = Math.round((fit.rect.width / 1200) * 100)
+    assert.match(await page.$eval(`${PICTURE} header`, (el) => el.textContent ?? ""), new RegExp(`1200 × 800 · ${fitPercent}%`))
+
+    // A click zooms into the point under the cursor: the picture's own pixels, held to at least 2×.
+    const px = Math.round(fit.rect.left + fit.rect.width * 0.3)
+    const py = Math.round(fit.rect.top + fit.rect.height * 0.4)
+    const fx = (px - fit.rect.left) / fit.rect.width
+    const fy = (py - fit.rect.top) / fit.rect.height
+    await page.mouse.click(px, py)
+    const zoomed = await zoomOf(page, PICTURE)
+    assert.equal(zoomed.scale, Math.min(Math.max(1200 / fit.rect.width, 2), 4))
+    assert.ok(close(zoomed.rect.left + zoomed.rect.width * fx, px, 0.05) && close(zoomed.rect.top + zoomed.rect.height * fy, py, 0.05),
+      `the pixel under the cursor moved: ${JSON.stringify({ px, py, zoomed })}`)
+    assert.match(await page.$eval(`${PICTURE} header`, (el) => el.textContent ?? ""), new RegExp(`· ${Math.round((zoomed.rect.width / 1200) * 100)}%`), "the readout follows the zoom")
+    assert.equal(await page.$eval(`${PICTURE} [data-viewer-backdrop]`, (el) => getComputedStyle(el).cursor), "grab")
+
+    // A drag moves it with the pointer, and the click that ends the drag neither zooms nor closes.
+    await page.mouse.move(px, py)
+    await page.mouse.down()
+    await page.mouse.move(px - 30, py - 20, { steps: 3 })
+    assert.equal(await page.$eval(`${PICTURE} [data-viewer-backdrop]`, (el) => getComputedStyle(el).cursor), "grabbing")
+    await page.mouse.move(px - 60, py - 40, { steps: 3 })
+    await page.mouse.up()
+    const dragged = await zoomOf(page, PICTURE)
+    assert.deepEqual([dragged.scale, px2(dragged.x - zoomed.x), px2(dragged.y - zoomed.y)], [zoomed.scale, -60, -40])
+    await page.mouse.click(px, py)
+    assert.equal((await zoomOf(page, PICTURE)).scale, 1, "a plain click zooms back out")
+
+    // + − 0, and they are the viewer's, not the page's.
+    const scales: number[] = []
+    for (const key of ["=", "=", "-", "0"]) {
+      await page.keyboard.press(key)
+      scales.push((await zoomOf(page, PICTURE)).scale)
+    }
+    assert.deepEqual(scales, [1.5, 2.25, 1.5, 1])
+    assert.deepEqual(await pageKeys(page), [], "the zoom keys are the viewer's")
+
+    // ctrl + wheel — a trackpad pinch — zooms about the cursor, and the page's own zoom is prevented.
+    const wx = Math.round(fit.rect.left + fit.rect.width * 0.3)
+    const wy = Math.round(fit.rect.top + fit.rect.height * 0.45)
+    const wfx = (wx - fit.rect.left) / fit.rect.width
+    const wfy = (wy - fit.rect.top) / fit.rect.height
+    await page.mouse.move(wx, wy)
+    await page.evaluate(() => {
+      const w = window as Window & { __wheels?: boolean[] }
+      w.__wheels = []
+      window.addEventListener("wheel", (e) => w.__wheels!.push(e.defaultPrevented), { passive: true })
+    })
+    await page.keyboard.down("Control")
+    await page.mouse.wheel({ deltaY: -100 })
+    await page.keyboard.up("Control")
+    const pinched = await zoomOf(page, PICTURE)
+    assert.ok(sameScale(pinched.scale, Math.exp(0.5)), `scale ${pinched.scale}`)
+    assert.ok(close(pinched.rect.left + pinched.rect.width * wfx, wx, 0.05) && close(pinched.rect.top + pinched.rect.height * wfy, wy, 0.05),
+      `the pixel under the cursor moved: ${JSON.stringify({ wx, wy, pinched })}`)
+    assert.deepEqual(await page.evaluate(() => (window as Window & { __wheels?: boolean[] }).__wheels), [true], "the page zoom was not prevented")
+    // A plain wheel scrolls the magnified picture.
+    await page.mouse.wheel({ deltaX: 50 })
+    const panned = await zoomOf(page, PICTURE)
+    assert.deepEqual([panned.scale, px2(panned.x - pinched.x), panned.y], [pinched.scale, -50, pinched.y])
+
+    // Paging lands on the next picture at fit; a click on the backdrop at fit closes.
+    await page.keyboard.press("ArrowRight")
+    await page.waitForFunction(() => document.querySelector("[data-image-viewer-counter]")?.textContent === "2 / 3")
+    await page.waitForFunction(() => getComputedStyle(document.querySelector("[data-image-viewer] img")!).opacity === "1")
+    const next = await zoomOf(page, PICTURE)
+    assert.deepEqual([next.scale, next.x, next.y], [1, 0, 0])
+    const stage = (await (await page.$(`${PICTURE} [data-viewer-backdrop]`))!.boundingBox())!
+    await page.mouse.click(stage.x + 8, stage.y + stage.height / 2)
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("on a phone, the picture viewer pinches, pans, double-taps and swipes like the gallery's, and Back closes it", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors } = await launch(PHONE)
+  try {
+    const depth = await page.evaluate(() => history.length)
+    await (await page.$("[data-fixture-loose] .md-body img[data-local-path]"))!.tap()
+    await page.waitForSelector(`${PICTURE} img`)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector("[data-image-viewer] img")!).opacity === "1")
+    assert.deepEqual(await pictureViewer(page), { counter: "1 / 3", title: "settings-1200x800.png", picture: "/fixture/lightbox/settings-1200x800.png" })
+    assert.equal(await page.$eval(`${PICTURE} [data-viewer-backdrop]`, (el) => getComputedStyle(el).touchAction), "none", "the page claims no touch over the stage")
+    const fit = await zoomOf(page, PICTURE)
+    const cx = fit.rect.left + fit.rect.width / 2
+    const cy = fit.rect.top + fit.rect.height / 2
+
+    const cdp = await page.createCDPSession()
+    const touch = (type: string, points: [number, number][]) =>
+      cdp.send("Input.dispatchTouchEvent", { type: type as "touchStart", touchPoints: points.map(([x, y], id) => ({ x, y, id })) })
+    // Two fingers spreading from 80px to 200px apart about a point off the centre: 2.5×, the pixel under
+    // the midpoint held under it across, and the picture — still shorter than the stage — centred down.
+    const mx = cx + 30
+    const my = cy - 20
+    await touch("touchStart", [[mx - 40, my], [mx + 40, my]])
+    for (let i = 1; i <= 6; i++) await touch("touchMove", [[mx - 40 - 10 * i, my], [mx + 40 + 10 * i, my]])
+    await touch("touchEnd", [])
+    const pinched = await zoomOf(page, PICTURE)
+    assert.ok(sameScale(pinched.scale, 2.5), `scale ${pinched.scale}`)
+    assert.ok(close(pinched.x, 30 - 30 * 2.5, 0.05), `x ${pinched.x}`)
+    assert.equal(pinched.y, 0)
+    assert.ok(await page.$(PICTURE), "the pinch's release did not close the viewer")
+
+    // One finger moves the magnified picture.
+    await touch("touchStart", [[cx, cy]])
+    for (let i = 1; i <= 5; i++) await touch("touchMove", [[cx + 8 * i, cy + 6 * i]])
+    await touch("touchEnd", [])
+    const panned = await zoomOf(page, PICTURE)
+    assert.deepEqual([panned.scale, px2(panned.x - pinched.x), panned.y], [pinched.scale, 40, 0])
+
+    // A double tap returns to fit.
+    await page.touchscreen.tap(cx, cy)
+    await page.touchscreen.tap(cx, cy)
+    const unzoomed = await zoomOf(page, PICTURE)
+    assert.deepEqual([unzoomed.scale, unzoomed.x, unzoomed.y], [1, 0, 0])
+    await new Promise((r) => setTimeout(r, 400))
+
+    // At fit a sideways swipe pages to the message's next picture; the viewer holds a history entry, so
+    // Back closes it and leaves the page where it was.
+    await touch("touchStart", [[cx, cy]])
+    for (let i = 1; i <= 8; i++) await touch("touchMove", [[cx - 20 * i, cy + 1]])
+    await touch("touchEnd", [])
+    await page.waitForFunction(() => document.querySelector("[data-image-viewer-counter]")?.textContent === "2 / 3")
+    assert.equal(await page.evaluate(() => history.length), depth + 1)
+    const url = page.url()
+    await page.evaluate(() => history.back())
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
+    assert.equal(page.url(), url, "Back closed the viewer, not the page")
+
+    // And a swipe down closes it, as a phone's photo viewer does.
+    await (await page.$("[data-fixture-loose] .md-body img[data-local-path]"))!.tap()
+    await page.waitForSelector(`${PICTURE} img`)
+    await page.waitForFunction(() => getComputedStyle(document.querySelector("[data-image-viewer] img")!).opacity === "1")
+    await touch("touchStart", [[cx, cy]])
+    for (let i = 1; i <= 8; i++) await touch("touchMove", [[cx + 1, cy + 25 * i]])
+    await touch("touchEnd", [])
+    await page.waitForFunction(() => !document.querySelector("[data-image-viewer]"))
     assert.deepEqual(errors, [])
   } finally {
     await browser.close()

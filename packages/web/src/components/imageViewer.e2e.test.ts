@@ -22,11 +22,13 @@ const drawers = (page: Page) => page.evaluate(() => (window as unknown as { __im
 const opened = (page: Page) => page.evaluate(() => (window as unknown as { __imageViewerFixture: { opened: unknown[] } }).__imageViewerFixture.opened)
 const headerText = (page: Page) => page.$eval("[data-image-viewer] header", (el) => el.textContent ?? "")
 
-// The picture on show, once it has loaded and been sized.
+// The picture on show, once it has loaded and been sized — and once a zoom has finished easing in: the
+// zoom is a transform with a 180ms transition (lib/viewerGestures.ts), and a rect read mid-ease is neither
+// the fit nor the zoom.
 async function shown(page: Page) {
   await page.waitForFunction(() => {
     const img = document.querySelector<HTMLImageElement>("[data-image-viewer] img")
-    return !!img && img.complete && img.naturalWidth > 0 && getComputedStyle(img).opacity === "1"
+    return !!img && img.complete && img.naturalWidth > 0 && getComputedStyle(img).opacity === "1" && img.getAnimations().length === 0
   })
   return page.$eval("[data-image-viewer] img", (img) => {
     const r = img.getBoundingClientRect()
@@ -98,9 +100,10 @@ test("a picture opens in Frizz's viewer: fit, actual size, its card's gallery, a
     assert.match(await headerText(page), /shot-small\.png/)
     assert.match(await headerText(page), /480 × 300 · 100%/)
     assert.match(await headerText(page), /2 \/ 4/)
-    // Fitting did not shrink it, so there is no actual size to offer and the cursor says so.
+    // Fitting did not shrink it, so it shows at its own size — and it still zooms, to at least 2×, as a
+    // gallery's picture does (lib/viewerGestures.ts): a small crop is often the one worth magnifying.
     assert.deepEqual([Math.round(smallShown.width), Math.round(smallShown.height)], [480, 300])
-    assert.notEqual(smallShown.cursor, "zoom-in")
+    assert.equal(smallShown.cursor, "zoom-in")
     assert.deepEqual(await opened(page), [], "a picture click never reaches the desktop opener")
     // OVER the page, not instead of it: everything but the header lets the page through a scrim, which
     // is what says a click off the picture goes back to it. Dimmed, not hidden, and not left bare.
@@ -147,7 +150,8 @@ test("a picture opens in Frizz's viewer: fit, actual size, its card's gallery, a
     await page.waitForFunction(() => document.querySelector<HTMLImageElement>("[data-image-viewer] img")!.getBoundingClientRect().width > 2000)
     const actual = await shown(page)
     assert.equal(Math.round(actual.width), 2880)
-    assert.equal(actual.cursor, "zoom-out")
+    // Magnified, the picture offers the stage's drag; a click without one still zooms back out.
+    assert.equal(actual.cursor, "grab")
     assert.match(await headerText(page), /2880 × 1800 · 100%/)
     // The clicked point of the picture is still under the pointer.
     assert.ok(Math.abs((at.x - actual.left) / actual.width - 0.3) < 0.002, "x anchor")

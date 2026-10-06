@@ -1,10 +1,13 @@
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useQuery } from "@tanstack/react-query"
 import { ChevronLeft, ChevronRight } from "lucide-react"
-import { useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react"
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useSnapshot } from "valtio"
 import { closeImageViewer, stepImageViewer, store } from "../store.ts"
+import { useBackClosesLayer } from "../lib/backDismiss.ts"
 import { localFileQuery } from "../lib/localFileQuery.ts"
+import { useIsMobile } from "../lib/mobile.ts"
+import { pictureTransform, useViewerGestures } from "../lib/viewerGestures.ts"
 import { isRasterImagePath } from "../lib/localViewer.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
 import { basename } from "../lib/paths.ts"
@@ -19,9 +22,15 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 // the picture puts it away and leaves everything beneath exactly as it was.
 //
 //   · FIT FIRST. The picture opens as large as the stage allows without being enlarged past its own
-//     size; a click then shows it at ACTUAL SIZE (one image pixel per CSS pixel, the way the browser's
-//     own image tab does), keeping the clicked point under the pointer, and a second click fits it
-//     again. Only offered when fitting actually shrank it.
+//     size — a 40px crop blown up to the viewport is noise.
+//   · THEN IT ZOOMS, exactly as a ```lightbox gallery's viewer does, because it is the same code
+//     (lib/viewerGestures.ts, upstream's 0e81902b): a click toggles fit and the picture's actual pixels
+//     (one image pixel per CSS pixel, the browser's own image tab, held between 2× and 4× so even a
+//     picture that fits at full size visibly zooms) about the cursor; ctrl/⌘ + wheel or a trackpad pinch
+//     zooms about the pointer; a plain wheel or a drag moves a magnified picture; + − 0 step it. On a
+//     phone a pinch zooms and pans at once, a double tap toggles, one finger pans, and at fit a sideways
+//     swipe pages and a vertical one closes. Until 2026-10-06 this viewer had fit / actual size and ←/→
+//     only, so the same screenshot zoomed under a finger in a gallery and not when opened on its own.
 //   · ←/→ step through the pictures rendered beside it — the same card, drawer or page (the store's
 //     `imageViewer.paths`), so a worker's before/after shots compare in place.
 //   · "Open" is the way out to the OS's own viewer, as a click on a picture used to be — in an editor's
@@ -43,12 +52,22 @@ export function ImageViewer() {
   const snap = useSnapshot(store)
   const viewer = snap.imageViewer
   if (!viewer) return null
-  const path = viewer.paths[viewer.index]!
+  return <OpenViewer paths={viewer.paths} index={viewer.index} project={viewer.project} />
+}
+
+function OpenViewer({ paths, index, project }: { paths: readonly string[]; index: number; project?: string }) {
+  // On a phone the viewer takes a history entry of its own, so Back closes it and not the thread under it
+  // (lib/backDismiss) — what the gallery's viewer does (Lightbox.tsx), and every sheet over a phone thread.
+  useBackClosesLayer(useIsMobile(), false, closeImageViewer)
+  // How far a vertical swipe toward closing has dimmed the scrim (lib/viewerGestures.ts `fade`). Held
+  // here because the scrim outlives each picture's content, which is keyed by its path.
+  const [fade, setFade] = useState(1)
+  const path = paths[index]!
   return (
     <RadixDialog.Root open onOpenChange={(open) => { if (!open) closeImageViewer() }}>
       <RadixDialog.Portal>
-        <RadixDialog.Overlay data-image-viewer-scrim className="overlay-in fixed inset-0 z-[200] bg-scrim backdrop-blur-[1px]" />
-        <ViewerContent key={path} path={path} index={viewer.index} count={viewer.paths.length} project={viewer.project} />
+        <RadixDialog.Overlay data-image-viewer-scrim className="overlay-in fixed inset-0 z-[200] bg-scrim backdrop-blur-[1px]" style={{ opacity: fade }} />
+        <ViewerContent key={path} path={path} index={index} count={paths.length} project={project} onFade={setFade} />
       </RadixDialog.Portal>
     </RadixDialog.Root>
   )
@@ -98,7 +117,7 @@ function svgDataUrl(text: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(text)}`
 }
 
-function ViewerContent({ path, index, count, project }: { path: string; index: number; count: number; project?: string }) {
+function ViewerContent({ path, index, count, project, onFade }: { path: string; index: number; count: number; project?: string; onFade: (fade: number) => void }) {
   const raster = isRasterImagePath(path)
   // A vector reads through the reader's text gate (the /local-image route refuses SVG) and becomes a
   // `data:` image. A read cut at the reader's 1 MiB ceiling is a broken drawing, so it counts as failed.
@@ -113,21 +132,27 @@ function ViewerContent({ path, index, count, project }: { path: string; index: n
         : null
 
   const contentRef = useRef<HTMLDivElement>(null)
-  const stageRef = useRef<HTMLDivElement>(null)
-  const imgRef = useRef<HTMLImageElement>(null)
   const [natural, setNatural] = useState<Size | null>(null)
   const [stage, setStage] = useState<Size | null>(null)
   const [broken, setBroken] = useState(false)
-  const [actual, setActual] = useState(false)
-  // Where a zoom-in click landed: the picture's fraction under the pointer, and the pointer itself.
-  const anchor = useRef<{ fx: number; fy: number; x: number; y: number } | null>(null)
-  // The pointer-down target, so a drag that merely ENDS on the stage (a text selection in the header,
-  // a scrollbar drag) is not read as a click on it.
-  const downOn = useRef<EventTarget | null>(null)
+  // The zoom, the pan and the swipe — the gallery viewer's own (lib/viewerGestures.ts). Its limits are
+  // measured against the picture's real pixels: for a drawing that declares none, Chrome's 300×150
+  // stand-in would set them, so the declared size is passed in.
+  const gestures = useViewerGestures({ path, index, count, step: stepImageViewer, close: closeImageViewer, naturalWidth: natural?.width })
+  const { view, zoomed, fade } = gestures
+  useLayoutEffect(() => onFade(fade), [fade, onFade])
+  // The stage, as a ref callback the gestures share: they wire the wheel to it; this measures it. Stable,
+  // so React does not detach and re-attach it on every render.
+  const stageEl = useRef<HTMLDivElement | null>(null)
+  const attachGestures = gestures.attachStage
+  const attachStage = useCallback((el: HTMLDivElement | null) => {
+    stageEl.current = el
+    attachGestures(el)
+  }, [attachGestures])
 
   // The stage, tracked live: the fitted size follows a window resize or a rotated phone.
   useLayoutEffect(() => {
-    const el = stageRef.current
+    const el = stageEl.current
     if (!el) return
     const measure = () => setStage({ width: el.clientWidth, height: el.clientHeight })
     measure()
@@ -139,46 +164,12 @@ function ViewerContent({ path, index, count, project }: { path: string; index: n
   const padX = count > 1 && stage && stage.width >= GUTTER_MIN_STAGE ? STEP_GUTTER : STAGE_PAD
   const box = stage ? { width: Math.max(0, stage.width - padX * 2), height: Math.max(0, stage.height - STAGE_PAD * 2) } : null
   const fitted = natural && box ? fitSize(natural, box) : null
-  const zoomable = !!fitted && fitted.scale < 1
-
-  // Actual size just took effect: scroll so the point that was clicked sits under the pointer again.
-  useLayoutEffect(() => {
-    const a = anchor.current
-    const el = stageRef.current
-    const img = imgRef.current
-    anchor.current = null
-    if (!actual || !a || !el || !img) return
-    const r = img.getBoundingClientRect()
-    el.scrollLeft += r.left + a.fx * r.width - a.x
-    el.scrollTop += r.top + a.fy * r.height - a.y
-  }, [actual])
-
-  const onPicture = (event: ReactMouseEvent<HTMLImageElement>) => {
-    if (actual) {
-      setActual(false)
-      return
-    }
-    if (!zoomable) return
-    const r = event.currentTarget.getBoundingClientRect()
-    anchor.current = { fx: (event.clientX - r.left) / r.width, fy: (event.clientY - r.top) / r.height, x: event.clientX, y: event.clientY }
-    setActual(true)
-  }
-
-  // The empty stage is the backdrop. Its own scrollbar (actual size) is not, and a drag is not a click.
-  const onStage = (event: ReactMouseEvent<HTMLDivElement>) => {
-    const target = event.target as Element
-    if (target !== downOn.current || !target.hasAttribute("data-viewer-backdrop")) return
-    const el = event.currentTarget
-    const rect = el.getBoundingClientRect()
-    if (event.clientX - rect.left >= el.clientWidth || event.clientY - rect.top >= el.clientHeight) return
-    closeImageViewer()
-  }
 
   const name = basename(path)
   // Pixels and the scale they are drawn at — the two numbers a screenshot is judged by. A drawing that
   // declares no size of its own has neither: its "natural" size is the browser's 300×150 stand-in.
   const measured = raster || declared !== null
-  const readout = measured && natural && fitted ? `${natural.width} × ${natural.height} · ${Math.round((actual ? 1 : fitted.scale) * 100)}%` : null
+  const readout = measured && natural && fitted ? `${natural.width} × ${natural.height} · ${Math.round(fitted.scale * view.zoom.scale * 100)}%` : null
   const failure = readFailure ?? (broken ? "the file may have moved or been cleaned up" : null)
 
   return (
@@ -195,70 +186,83 @@ function ViewerContent({ path, index, count, project }: { path: string; index: n
         contentRef.current?.focus({ preventScroll: true })
       }}
       onKeyDown={(event) => {
-        if (event.metaKey || event.ctrlKey || event.altKey) return
-        if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
-          event.preventDefault()
-          stepImageViewer(event.key === "ArrowLeft" ? -1 : 1)
-        }
+        // + − 0 zoom (lib/viewerGestures.ts zoomKey); ←/→ step. Either is the viewer's alone: stopped
+        // here, so a key that zoomed the picture never also reaches the page under it.
+        const plain = !event.metaKey && !event.ctrlKey && !event.altKey
+        const step = plain && (event.key === "ArrowLeft" || event.key === "ArrowRight")
+        if (step) stepImageViewer(event.key === "ArrowLeft" ? -1 : 1)
+        else if (!gestures.zoomKey(event)) return
+        event.preventDefault()
+        event.stopPropagation()
       }}
       className="overlay-in fixed inset-0 z-[200] flex flex-col outline-none"
     >
       <RadixDialog.Title className="sr-only">{name}</RadixDialog.Title>
-      <SheetHeader
-        title={name}
-        subtitle={path}
-        // The file's name is what a phone's header has room for; its pixels are a desktop's detail. It sits
-        // on the name's baseline (SheetHeader aligns its runs by baseline; it centred them until 2026-09-30,
-        // when this run needed a measured 0.045em nudge to get there).
-        meta={readout ? <span className="shrink-0 text-[11px] tabular-nums text-muted-60 max-sm:hidden">{readout}</span> : undefined}
-        actions={
-          <>
-            {count > 1 && <span className="shrink-0 text-[12px] tabular-nums text-muted">{index + 1} / {count}</span>}
-            {/* -mr-2: the close glyph's hover square carries 9px of dead space, so on the header's even
-                gap "Open" sat 19.06px of ink from the ✕ but 11.21px from the counter. Pulled in, the
-                three read as one evenly spaced cluster (ink gaps 11.21 / 11.06px). */}
-            <OpenAction path={path} image={raster} project={project} onOpen={closeImageViewer} className="-mr-2" />
-          </>
-        }
-        onClose={closeImageViewer}
-      />
+      {/* A vertical swipe dims the chrome with the scrim, and leaves the picture it is carrying alone. */}
+      <div style={{ opacity: fade }}>
+        <SheetHeader
+          title={name}
+          subtitle={path}
+          // The file's name is what a phone's header has room for; its pixels are a desktop's detail. It sits
+          // on the name's baseline (SheetHeader aligns its runs by baseline; it centred them until 2026-09-30,
+          // when this run needed a measured 0.045em nudge to get there).
+          meta={readout ? <span className="shrink-0 text-[11px] tabular-nums text-muted-60 max-sm:hidden">{readout}</span> : undefined}
+          actions={
+            <>
+              {count > 1 && <span data-image-viewer-counter className="shrink-0 text-[12px] tabular-nums text-muted">{index + 1} / {count}</span>}
+              {/* -mr-2: the close glyph's hover square carries 9px of dead space, so on the header's even
+                  gap "Open" sat 19.06px of ink from the ✕ but 11.21px from the counter. Pulled in, the
+                  three read as one evenly spaced cluster (ink gaps 11.21 / 11.06px). */}
+              <OpenAction path={path} image={raster} project={project} onOpen={closeImageViewer} className="-mr-2" />
+            </>
+          }
+          onClose={closeImageViewer}
+        />
+      </div>
       <div className="relative min-h-0 flex-1">
+        {/* The backdrop: a click on it closes the viewer at fit (and first returns a magnified picture to
+            fit). `touch-action: none` hands every touch to the gestures, so a pinch zooms the PICTURE
+            rather than the page; `overflow-hidden` clips a magnified picture to the stage. Magnified, the
+            whole stage offers the drag — on the STAGE rather than the picture because a drag captures the
+            pointer to the stage, and a captured pointer wears its captor's cursor. */}
         <div
-          ref={stageRef}
+          ref={attachStage}
           data-viewer-backdrop
-          onPointerDown={(event) => { downOn.current = event.target }}
-          onClick={onStage}
-          className={`absolute inset-0 ${actual ? "overflow-auto" : "flex items-center justify-center overflow-hidden"}`}
+          {...gestures.stage}
+          className={`absolute inset-0 flex items-center justify-center overflow-hidden ${zoomed ? (view.panning ? "cursor-grabbing" : "cursor-grab") : ""}`}
+          style={{ touchAction: "none" }}
         >
           {failure ? (
             <div className="px-6 text-center text-[13px] text-muted">Couldn’t show this picture: {failure}.</div>
           ) : src ? (
-            <div data-viewer-backdrop className={actual ? "grid min-h-full min-w-full w-max place-items-center" : "contents"} style={actual ? { padding: STAGE_PAD } : undefined}>
-              <img
-                ref={imgRef}
-                src={src}
-                alt={name}
-                onLoad={(event) => {
-                  const img = event.currentTarget
-                  setNatural(declared && declared !== "absolute" ? declared : { width: img.naturalWidth, height: img.naturalHeight })
-                }}
-                onError={() => setBroken(true)}
-                onClick={onPicture}
-                // The picture's own size at actual size; the fitted box otherwise. Until it has loaded
-                // there is no size to fit, so it waits invisibly rather than flashing at its raw size.
-                style={
-                  actual && natural ? { width: natural.width, height: natural.height, maxWidth: "none" }
-                    : fitted ? { width: fitted.width, height: fitted.height }
-                      : { maxWidth: "100%", maxHeight: "100%" }
-                }
-                // The transparency grid is behind EVERY picture, not only SVG: it shows nowhere a picture
-                // paints, so a screenshot is untouched, while an icon's black strokes on nothing stay
-                // visible over the dimmed page.
-                className={`frizz-transparency-grid block select-none rounded-sm shadow-2xl shadow-shadow-ink/40 ring-1 ring-border ${
-                  natural ? "" : "opacity-0"
-                } ${actual ? "cursor-zoom-out" : zoomable ? "cursor-zoom-in" : ""}`}
-              />
-            </div>
+            <img
+              ref={gestures.pictureRef}
+              src={src}
+              alt={name}
+              draggable={false}
+              onLoad={(event) => {
+                const img = event.currentTarget
+                setNatural(declared && declared !== "absolute" ? declared : { width: img.naturalWidth, height: img.naturalHeight })
+              }}
+              onError={() => setBroken(true)}
+              // The fitted box, magnified by one transform. Until it has loaded there is no size to fit, so
+              // it waits invisibly rather than flashing at its raw size.
+              style={{
+                ...(fitted ? { width: fitted.width, height: fitted.height } : { maxWidth: "100%", maxHeight: "100%" }),
+                ...pictureTransform(view),
+                // Magnified, the ring and the corner are drawn at 1/scale, so the transform paints them at the
+                // same 1px and 2px at every magnification instead of a 4px rule at 4× (the gallery viewer's
+                // ViewerPicture does the same with its hairline).
+                ...(zoomed ? { borderRadius: 2 / view.zoom.scale, boxShadow: `0 0 0 ${1 / view.zoom.scale}px var(--color-border)` } : {}),
+              }}
+              // The transparency grid is behind EVERY picture, not only SVG: it shows nowhere a picture
+              // paints, so a screenshot is untouched, while an icon's black strokes on nothing stay
+              // visible over the dimmed page. At fit the cursor offers the zoom; magnified, it inherits the
+              // stage's drag.
+              className={`frizz-transparency-grid block select-none rounded-sm shadow-2xl shadow-shadow-ink/40 ring-1 ring-border ${
+                natural ? "" : "opacity-0"
+              } ${zoomed ? "" : natural ? "cursor-zoom-in" : ""}`}
+            />
           ) : null}
         </div>
         {count > 1 && (
