@@ -68,9 +68,14 @@ export const CHILD_STALE_TITLE = "stale — no recent output"
 export const CHILD_RESTED_DOT_CLASS = "block h-1.5 w-1.5 rounded-full border border-muted/45"
 export const CHILD_RESTED_TITLE = "rested — it stopped, but the work it launched is still running"
 
-// A tracked background shell/Monitor is a LIVE process even when quiet (its entry only clears on a
-// terminal notification), so it breathes rather than showing the flat stale dot — and says so.
-export const CHILD_QUIET_SHELL_TITLE = "running — no recent output"
+// A background SHELL reads "stale" for exactly one reason: the OS confirmed nobody holds its output file
+// open, so its process is gone, and no terminal notification ever arrived (tailer `shellIsGone`, since
+// 2026-08-19; a Monitor has no output file, is never probed, and never goes stale). So it takes the same
+// flat dot as every other child that is not live, with words that say why. It BREATHED until 2026-10-05,
+// titled "running — no recent output" — the July meaning, when a shell went stale after 15 quiet minutes
+// and was usually still alive — which drew a dead process as a live one on the card, the drawer and the
+// transcript.
+export const CHILD_STALE_SHELL_TITLE = "stale — its process has exited, but no completion was reported"
 
 // There is deliberately NO "finished" glyph in this vocabulary. Every mark here means the child is in
 // some state of being ALIVE — running, quiet, or stopped-with-live-descendants — so a completed one is

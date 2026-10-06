@@ -24,13 +24,16 @@
 // cleanup is exactly the corpse-deletes-successor bug this guards against.
 import net from "node:net"
 import { readFileSync, realpathSync, unlinkSync, writeFileSync } from "node:fs"
+import { join } from "node:path"
 import { randomUUID } from "node:crypto"
 import { fileURLToPath } from "node:url"
-import { createClaudeQueryFactory } from "./claude-agent-sdk.ts"
+import { createClaudeQueryFactory, sanitizeProviderChildEnvironment } from "./claude-agent-sdk.ts"
 import { inheritWorkerEnvironment } from "./worker-env.ts"
 import { leaseRuntime } from "../runtime-lease.ts"
 import { daemonBirthMarker } from "./daemon-identity.ts"
-import { projectMcpServers, workerMcpServers, type WorkerMcpServers } from "./project-mcp-servers.ts"
+import { projectMcpServers, workerMcpServers, type StdioMcpServer, type WorkerMcpServers } from "./project-mcp-servers.ts"
+import { lazyMcpEnabled, startLazyMcpHost, type LazyMcpHost } from "./lazy-mcp-host.ts"
+import { frizzRoots } from "../frizz-paths.ts"
 import { WORKER_DISALLOWED_TOOLS, claudeCompactionWindowOf } from "./types.ts"
 import { socketPathOwnership } from "./socket-ownership.ts"
 import { createClaudeBrokerDiagnosticWriter, createClaudeBrokerExitWriter, type ClaudeBrokerExitReason } from "./claude-broker-diagnostics.ts"
@@ -131,7 +134,24 @@ const EVENT_ERROR_TOLERANCE = 5
 
 export interface RunningBroker { close: () => Promise<void>; sessionId: string; generation: string }
 
-export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
+export interface RunClaudeBrokerOptions {
+  /** Serves the project's stdio MCP servers lazily (lazy-mcp-host.ts). Absent ⇒ the CLI starts them at
+   *  boot, as it does for any session — the embedded (test) form, and FRIZZ_LAZY_MCP_OFF=1. */
+  lazyMcpHost?: LazyMcpHost
+}
+
+/** The project's stdio servers, handed to the lazy host and replaced by its remote mounts. A name the
+ *  frizz mount takes is left alone: workerMcpServers drops it anyway, and a slot nobody can reach is noise. */
+function mountLazily(project: WorkerMcpServers, frizz: WorkerMcpServers | undefined, host: LazyMcpHost | undefined, context: Parameters<LazyMcpHost["mount"]>[1]): WorkerMcpServers {
+  if (!host) return project
+  const stdio: Record<string, StdioMcpServer> = {}
+  for (const [name, server] of Object.entries(project)) {
+    if ((server.type === undefined || server.type === "stdio") && !(frizz && name in frizz)) stdio[name] = server as StdioMcpServer
+  }
+  return { ...project, ...host.mount(stdio, context) }
+}
+
+export function runClaudeBroker(config: ClaudeBrokerConfig, options: RunClaudeBrokerOptions = {}): RunningBroker {
   const generation = config.generation ?? randomUUID()
   let client: net.Socket | null = null
   // 20,000 frames was the only bound; see emitEvent for why bytes matter more than count.
@@ -211,7 +231,18 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     // approved `.mcp.json` (and the operator's remote user-scope servers) under the frizz mount, which
     // wins a name collision. Read at every fork, not once per project, so a `.mcp.json` edit reaches the
     // next dispatch the way it reaches the next plain `claude`. project-mcp-servers.ts has the reasons.
-    mcpServers: workerMcpServers(projectMcpServers(config.cwd, { env }), config.mcpServers),
+    // Stdio servers are not started here: the lazy host stands in for each one and starts the real
+    // command on the first tool call (lazy-mcp-host.ts has the measurement that motivated it).
+    mcpServers: workerMcpServers(
+      mountLazily(projectMcpServers(config.cwd, { env }), config.mcpServers, options.lazyMcpHost, {
+        cwd: config.cwd,
+        // What the CLI itself would have spawned the server with: the env the factory hands it, after
+        // the same sanitizing (no inherited NODE_OPTIONS, no nub shim on PATH).
+        env: sanitizeProviderChildEnvironment(env) as Record<string, string>,
+        log: (message) => writeDiagnostic?.({ kind: "stderr", message: `[lazy-mcp] ${message}`, truncated: false }),
+      }),
+      config.mcpServers,
+    ),
     strictMcpConfig: true,
     allowedTools: config.allowedTools,
     // The same prohibition as the argv path (WORKER_DISALLOWED_TOOLS). This path kept AskUserQuestion
@@ -526,6 +557,7 @@ export function runClaudeBroker(config: ClaudeBrokerConfig): RunningBroker {
     if (pathIsSomeoneElses) { try { server.unref() } catch {} }
     else { try { server.close() } catch {} }
     await handle.close().catch(() => {})
+    await options.lazyMcpHost?.close().catch(() => {})
     if (config.recordPath) process.exit(code) // standalone daemon
   }
 
@@ -634,7 +666,11 @@ if (process.env.FRIZZ_CLAUDE_BROKER) {
     recordExit("unhandled-rejection", reason instanceof Error ? `${reason.message}\n${reason.stack ?? ""}`.slice(0, 2000) : String(reason))
     process.exit(1)
   })
-  running = runClaudeBroker(config)
+  // The lazy MCP host has to be LISTENING before the CLI starts, because its port is in the CLI's
+  // config — and a listen only reports its port on a later tick. A host that fails to start costs the
+  // laziness, never the session: the broker runs without one and the CLI starts the servers itself.
+  const lazyMcpHost = lazyMcpEnabled() ? startLazyMcpHost({ cacheDir: join(frizzRoots().data, "mcp-cache") }) : Promise.resolve(undefined)
+  void lazyMcpHost.catch(() => undefined).then((host) => { running = runClaudeBroker(config, { lazyMcpHost: host }) })
 } else if (startedAsProcessEntry()) {
   // Node was pointed AT THIS FILE and there is no configuration to broker. Exiting 0 here reports
   // success for a session that never started — the silent-death shape the detached-daemon closure

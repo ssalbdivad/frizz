@@ -6,7 +6,10 @@ import test from "node:test"
 // the strip did, and the strip has to come back the moment the window is too narrow to show the rail.
 // Real server, real tailer, real broker-row thread; only the absent launcher status probe is stubbed.
 // Boot scripts/adhoc-stack.mjs, then scripts/seed-full-rail-ops.mjs --port=<its port> --home=<its HOME>.
-// FRIZZ_FULL_RAIL_OPS_E2E_URL=http://127.0.0.1:<port> nub --test <this file>
+// FRIZZ_FULL_RAIL_OPS_E2E_URL=http://127.0.0.1:<port> nub run test <this file>
+// Through the suite's runner, not a bare `nub --test`: nub 0.9.5 runs a file handed to `nub --test` twice
+// at once (in the runner process AND in its test child), and two copies of this test race one stack.
+// Step 4 clears a row, so every run needs a fresh seed.
 const baseUrl = process.env.FRIZZ_FULL_RAIL_OPS_E2E_URL
 
 test("/full lists the thread's ops in its rail, and under the prompt box only once the rail is gone", { skip: !baseUrl, timeout: 120_000 }, async () => {
@@ -29,9 +32,22 @@ test("/full lists the thread's ops in its rail, and under the prompt box only on
     // 1. Wide enough for the rail: every row is there, and none of them is under the prompt box.
     await page.setViewport({ width: 1440, height: 900 })
     await page.goto(`${baseUrl}/thread/full-rail-ops/full`, { waitUntil: "networkidle2" })
-    await page.waitForFunction(() => document.querySelectorAll("[data-focus-rail] [data-wait-row]").length === 4)
-    assert.deepEqual(await railKinds(), ["agent", "link", "link", "shell"])
+    await page.waitForFunction(() => document.querySelectorAll("[data-focus-rail] [data-wait-row]").length === 6)
+    assert.deepEqual(await railKinds(), ["agent", "agent", "link", "link", "shell", "shell"])
     assert.equal(await stripIn("main[data-standalone-thread]"), null, "the strip must not repeat the rail's rows")
+
+    // THE TWO ROWS THE RAIL USED TO DROP (until 2026-10-05), so on /full they were shown nowhere: a
+    // sub-agent quiet past its window, and a shell the OS reports gone. Each says what it is. The shell's
+    // verdict lands a probe tick after the first board read, so it is waited for rather than read once.
+    const railRow = (id: string) => `[data-focus-rail] [data-wait-row="${id}"]`
+    const statusOf = (id: string) => page.$eval(`${railRow(id)} [data-wait-status]`, (el) => (el as HTMLElement).innerText)
+    assert.match(await statusOf("toolu_fro_agent2"), /^stale · sonnet-low · /)
+    assert.equal(await page.$(`${railRow("toolu_fro_agent2")} [class*="animate-spin"]`), null, "a stale sub-agent does not spin")
+    assert.ok(await page.$(`${railRow("toolu_fro_agent2")} .rounded-full.bg-muted\\/30`), "…it wears the stale dot")
+    assert.equal(await page.$(`${railRow("toolu_fro_agent")} [class*="animate-spin"]`) !== null, true, "the live one still spins")
+    await page.waitForFunction((sel) => /^stale · /.test((document.querySelector(sel) as HTMLElement | null)?.innerText ?? ""), {}, `${railRow("toolu_fro_sh2")} [data-wait-status]`)
+    assert.equal(await page.$(`${railRow("toolu_fro_sh2")} svg.text-shell`), null, "a dead shell does not wear the live shell blue")
+    assert.match(await statusOf("toolu_fro_sh1"), /^running · /)
     // A saved URL is a real link out; a saved file opens in the page's own viewer.
     assert.equal(await page.$eval('[data-focus-rail] [data-wait-kind="link"] a', (a) => a.getAttribute("href")), "http://127.0.0.1:5173/project/demo")
     await page.click('[data-focus-rail] [data-wait-kind="link"] button')
@@ -44,13 +60,22 @@ test("/full lists the thread's ops in its rail, and under the prompt box only on
     await page.setViewport({ width: 1000, height: 900 })
     await page.waitForSelector("main[data-standalone-thread] [data-background-ops]")
     const strip = await page.$eval("main[data-standalone-thread] [data-background-ops]", (el) => (el as HTMLElement).innerText)
-    for (const row of ["Verify the rail carries every row", "Run the dev server", "Open dev server", "Working plan"]) {
+    for (const row of ["Verify the rail carries every row", "Audit the old projection", "Run the dev server", "Tail the old log", "Open dev server", "Working plan"]) {
       assert.ok(strip.includes(row), `the narrow strip lists "${row}"`)
     }
 
     // 3. Back to wide: the strip yields to the rail again.
     await page.setViewport({ width: 1440, height: 900 })
     await page.waitForFunction(() => !document.querySelector("main[data-standalone-thread] [data-background-ops]"))
+
+    // 4. …and with it the strip's ×, which the rail carries under the strip's own gate (it had none until
+    // 2026-10-05, so /full wide offered no way to stop or clear a row). A stale row's × CLEARS — nothing
+    // runs to stop — so pressing the gone shell's retires it through the real server, without opening
+    // the drawer the rest of its row opens.
+    assert.ok(await page.$(`${railRow("toolu_fro_agent2")} button[aria-label="Clear sub-agent: Audit the old projection"]`), "the stale child offers Clear")
+    await page.click(`${railRow("toolu_fro_sh2")} button[aria-label="Clear background shell: Tail the old log"]`)
+    await page.waitForFunction((sel) => !document.querySelector(sel), {}, railRow("toolu_fro_sh2"))
+    assert.equal(await page.$(".frizz-sheet-panel"), null, "the × did not open the shell's drawer")
 
     assert.deepEqual(errors, [])
   } finally {

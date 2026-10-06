@@ -3,7 +3,7 @@ import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { ChildOpRow, type ChildOpDensity, type ChildOpKind } from "./ChildOpRow.tsx"
-import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_STALE_DOT_CLASS, CHILD_STALE_TITLE } from "../lib/childOps.ts"
+import { CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 
 // The whole point of this component is that four surfaces stopped drawing their own version of one row.
 // So the tests that matter are the CROSS-DENSITY ones: the arrow markup, the stale dot and the id-less
@@ -174,11 +174,17 @@ test("the counter stands alone when the row has no duration, and leaves no gap w
   }
 })
 
-test("a quiet SHELL breathes instead of going flat, on the ops row", () => {
-  const html = render({ density: "sheet", kind: "SHELL", state: "stale" })
-  assert.match(html, /data-running-indicator="operation-quiet"/)
-  assert.match(html, /title="running — no recent output"/)
-  assert.doesNotMatch(html, new RegExp(CHILD_STALE_TITLE))
+// A stale SHELL is a process the OS has confirmed GONE (tailer `shellIsGone`), never a quiet live one. It
+// breathed on the card and the sheet until 2026-10-05, titled "running — no recent output", while the
+// rail drew the same row flat: one dead process, two answers about whether it was alive.
+test("a stale SHELL goes flat on every density, and its words say the process exited", () => {
+  for (const density of DENSITIES) {
+    const html = render({ density, kind: "SHELL", state: "stale" })
+    assert.ok(html.includes(`class="${CHILD_STALE_DOT_CLASS}"`), `${density}: the flat stale dot`)
+    assert.ok(html.includes(`title="${CHILD_STALE_SHELL_TITLE}"`), `${density}: the shell's own words`)
+    assert.doesNotMatch(html, /frizz-live-dot|data-running-indicator/, `${density}: nothing that reads as live`)
+    assert.doesNotMatch(html, new RegExp(CHILD_STALE_TITLE), `${density}: not the agent's "no recent output"`)
+  }
   assert.match(render({ density: "sheet", kind: "SHELL", state: "running" }), /frizz-live-dot--shell/)
 })
 

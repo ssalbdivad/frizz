@@ -4,7 +4,7 @@
 // declared-park.test.ts for the scheduler's correction of a fence that gives no answer.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { AWAITING_STEP_VALUE_MAX, AWAITING_STEPS_MAX, awaitingNeedsInput, awaitingSteps, NEEDS_INPUT_REQUIRED_AT, needsInputRequired, RETIRED_AWAITING_REPLACEMENT, splitAwaitingFrontmatter, type AwaitingHint } from "@frizz/shared"
+import { AWAITING_QUESTIONS_MAX, AWAITING_STEP_VALUE_MAX, AWAITING_STEPS_MAX, awaitingNeedsInput, awaitingQuestions, awaitingSteps, NEEDS_INPUT_REQUIRED_AT, needsInputRequired, RETIRED_AWAITING_REPLACEMENT, splitAwaitingFrontmatter, type AwaitingHint } from "@frizz/shared"
 import { deriveAwaitingBackground, deriveNeedsYou, hasDeclaredWait, type RegisteredWatch } from "./board.ts"
 import type { GithubStatusBook } from "./awaiting.ts"
 import type { SessionRow } from "./storage.ts"
@@ -203,6 +203,30 @@ test("steps ARE the needs_input answer: the line may be left out, and a false be
   // The retired `human:` gate now points at steps for an act, and at a question for a decision.
   assert.match(RETIRED_AWAITING_REPLACEMENT.human, /`steps:`/)
   assert.match(RETIRED_AWAITING_REPLACEMENT.human, /mcp__frizz__ask/)
+})
+
+// `questions:` (2026-10-05): a fence beside open questions names every one the worker still needs. The
+// ids are lookups, read like any other list, and they name the human the same way steps do.
+
+test("questions are read as ids — flow or block list, case-blind, a gloss after the id ignored", () => {
+  assert.deepEqual(awaitingQuestions(splitAwaitingFrontmatter("questions: [QST_ab12cd34, qst_0011]\nneeds_input: true").hints), ["qst_ab12cd34", "qst_0011"])
+  assert.deepEqual(awaitingQuestions(splitAwaitingFrontmatter("questions:\n  - qst_ab12cd34 — the cache call\n  - qst_0011").hints), ["qst_ab12cd34", "qst_0011"])
+  assert.deepEqual(awaitingQuestions(splitAwaitingFrontmatter("questions: qst_ab12cd34").hints), ["qst_ab12cd34"], "one bare item")
+  assert.deepEqual(awaitingQuestions(splitAwaitingFrontmatter("agents: [a01b2d20]\nfor: 1h").hints), [], "no questions is the ordinary fence")
+})
+
+test("questions have a cap of their own, after the hints' cap, so they never crowd out a lookup", () => {
+  const ids = Array.from({ length: AWAITING_QUESTIONS_MAX + 6 }, (_, i) => `qst_${i}`).join(", ")
+  const shells = Array.from({ length: 6 }, (_, i) => `id${i}`).join(", ")
+  const { hints } = splitAwaitingFrontmatter([`questions: [${ids}]`, `shells: [${shells}]`, "for: 1h"].join("\n"))
+  assert.equal(hints.filter((h) => h.kind === "shell").length, 6)
+  assert.ok(hints.some((h) => h.kind === "for"))
+  assert.equal(awaitingQuestions(hints).length, AWAITING_QUESTIONS_MAX)
+})
+
+test("questions ARE the needs_input answer: the line may be left out, and a false beside them reads true", () => {
+  assert.equal(awaitingNeedsInput(splitAwaitingFrontmatter("questions: [qst_ab12]").hints), true)
+  assert.equal(awaitingNeedsInput(splitAwaitingFrontmatter("needs_input: false\nshells: [x]\nquestions: [qst_ab12]\nfor: 1h").hints), true)
 })
 
 const stepsFence = (...extra: AwaitingHint[]) => awaiting({ kind: "step", value: "Run `npm login`" }, { kind: "step", value: "Approve the prompt" }, ...extra)

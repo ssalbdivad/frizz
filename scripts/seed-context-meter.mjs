@@ -1,5 +1,5 @@
 // Seed a disposable adhoc stack with SIMULATED workers that carry a real CONTEXT reading, so the
-// footer's fullness donut (components/ContextMeter.tsx) can be judged on all three surfaces in the
+// header's context reading (components/ContextMeter.tsx) can be judged on all three surfaces in the
 // REAL app — queue card, side drawer, and the standalone `/thread/<slug>/full` page — through the real
 // tailer, the real board projection and the real push. A fixture proves the component in isolation;
 // only this proves the SERVER emits ThreadView.context and that every surface reads it.
@@ -94,8 +94,8 @@ codex({
 
 // ── the ABSENT case: a claude row with a numerator and no denominator ───────────────────────────────
 // Its assistant record's `usage` gives contextTokens, and nothing anywhere gives contextWindow (that
-// half only ever comes from the broker stream). The footer must therefore show NO meter — no 0% dial,
-// no empty ring, no placeholder — and stay exactly the height it was before the donut existed.
+// half only ever comes from the broker stream). The header must therefore show NO meter — no 0% dial,
+// no empty ring, no placeholder — and its line of facts must end at "Last active".
 const jsonlDir = join(home, ".claude", "projects", cwd.replace(/[/.]/g, "-"))
 mkdirSync(jsonlDir, { recursive: true })
 const noneSession = "8e577e57-0000-4000-9000-0000000000c3"

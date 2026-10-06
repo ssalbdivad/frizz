@@ -54,7 +54,15 @@ export function backgroundOpStoppable(deps: ShellStopDeps, slug: string, id: str
   // has printed nothing for a day is still `running`, not `stale`. Read the shell's own state, which
   // says exactly that; `info.state` runs it through the sub-agent staleness rule and would report
   // "stale" for precisely the wedged shell this control exists to kill.
-  if (!(shell ? shell.state === "running" : info.state === "running")) return blocked(null)
+  //
+  // What a shell DOES have is the OS's verdict (tailer shellIsGone, since 2026-08-19): one nobody holds
+  // open is gone, and the board's row for it reads `stale`. The lookup above does not carry that
+  // verdict, so a dead shell passed as running and the × attempted a real stop — which threw when no
+  // daemon held the session (leaving the row the × exists to clear), and otherwise told the worker a
+  // kill that never happened. Nothing is running to stop, so the × CLEARS it, as the client promises
+  // for a stale row (lib/dismissChildOp.ts). (Upstream ad80eb20, carried into this fork's shell-stop.ts.)
+  const shellGone = shell !== undefined && deps.tailer.get(slug)?.bgShells?.find((s) => s.id === id)?.state === "stale"
+  if (!(shell ? shell.state === "running" && !shellGone : info.state === "running")) return blocked(null)
   const row = deps.storage.getSession(slug)
   if (!row) return blocked(null)
   if (row.backend === "codex") {

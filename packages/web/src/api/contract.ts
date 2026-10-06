@@ -275,7 +275,7 @@ export interface Api {
   setThreadSnooze(input: SetThreadSnoozeInput): Promise<void>
   // Pin/unpin the thread out of the rail's band system (the pinned band at the top of the rail).
   setThreadPinned(input: SetThreadPinnedInput): Promise<void>
-  // THE RECURRING PROMPT, armed entirely from the footer panel: one text, and up to two triggers
+  // THE RECURRING PROMPT, armed entirely from the Goal panel: one text, and up to two triggers
   // (every rest, and/or every N minutes). Text, triggers and cadence travel together — they are one row.
   setThreadRecurringPrompt(input: SetThreadRecurringPromptInput): Promise<void>
   // The WORKER-facing counterpart, called by `mcp__frizz__goal` rather than by this client.
@@ -283,7 +283,7 @@ export interface Api {
   // client cannot name is one nothing checks the shape of. No browser call site uses it.
   setOwnThreadRecurringPrompt(input: SetOwnThreadRecurringPromptInput): Promise<SetOwnThreadRecurringPromptResult>
   // The READ half of the same tool (`action: "get"`), so a worker can see the row before it overwrites
-  // it — after a compaction, or after the human edited the text in the footer panel.
+  // it — after a compaction, or after the human edited the text in the Goal panel.
   getOwnThreadRecurringPrompt(input: GetOwnThreadRecurringPromptInput): Promise<OwnThreadRecurringPromptResult>
   // THE WORKER NAMING ITS OWN THREAD, called by `mcp__frizz__title`. Declared here for the drift gate
   // alone — the browser's rename verbs are `renameThread` / `aiRenameThread`, which lock the name.

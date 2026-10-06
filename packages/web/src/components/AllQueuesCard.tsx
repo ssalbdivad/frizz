@@ -19,7 +19,7 @@
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
 import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
+import { Check, CheckCheck, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { parseParkWake, parseScheduledRunPrompt, questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
@@ -69,13 +69,14 @@ import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { QueueChildOps } from "./QueueChildOps.tsx"
-import { SnoozeButton } from "./SnoozeButton.tsx"
-import { StateButton } from "./ThreadLifecycleFooter.tsx"
+import { ThreadLifecycleActions } from "./ThreadLifecycle.tsx"
+import { RecurringPromptControl } from "./RecurringPromptControl.tsx"
+import { ContextFact, GoalLoopFact } from "./ThreadHeaderFacts.tsx"
 import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
 import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
 import { Tooltip } from "./Tooltip.tsx"
-import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 
 /**
  * WHOSE CARD THIS IS, on its meta line — in All projects the page's one queue holds every project's
@@ -412,6 +413,12 @@ function CardArticle({
                 className="min-w-0 truncate"
               />
             )}
+            {/* The thread-header facts the lifecycle footer used to carry (ThreadHeaderFacts): the context
+                reading — its Compact sent into the CARD's project — and the Goal's loop. */}
+            <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+              <ContextFact thread={thread} lead={<span aria-hidden>·</span>} />
+              <GoalLoopFact thread={thread} lead={<span aria-hidden>·</span>} />
+            </ThreadProjectScope>
             {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
             <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
             {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
@@ -454,9 +461,27 @@ function CardArticle({
           />
           {offersRetry(thread) && <RetryButton project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
           {/* The ⋯ menu, as the drawer's (ThreadMenu.tsx) minus Restart worker, which only sends to the
-              page's project. */}
+              page's project. Then THE LIFECYCLE VERBS, after a rule, as every thread header closes
+              (ThreadLifecycle.tsx; upstream moved them out of the footer on 2026-10-05): Mark as read when
+              the card is only a reply to read, the snooze clock, the check. The cluster now ends the strip,
+              so it takes the `-mr-2` trim the ⋯ carried: a glyph's ink sits well inside a 14px box centred
+              in a 28px square, and untrimmed the last mark drew ~29px in from the card's right border
+              against the project mark's 20.75px on the left. In the card's OWN project scope, so the
+              snooze and completion address the card's project, not the focused one. */}
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-            <ThreadMenu thread={thread} restart={false} className={`${HEADER_ICON_CLASS} -mr-2`} />
+            <ThreadMenu thread={thread} restart={false} className={HEADER_ICON_CLASS} />
+            <ThreadLifecycleActions
+              thread={thread}
+              className="-mr-2"
+              projectName={project.name}
+              onSnoozed={onLeave}
+              onUnsnoozed={onUnsnoozed}
+              snoozeEventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />}
+              onArchived={onSent}
+              onDismissCancel={onReturn}
+              onCompleted={onLanded}
+              leading={thread.queuedForReply ? <MarkReadButton project={project} thread={thread} onRead={onLeave} onFailed={onReturn} /> : undefined}
+            />
           </ThreadProjectScope>
         </div>
       </header>
@@ -595,13 +620,6 @@ function CardArticle({
       </RegisteredAnsweringProvider>
       </QueueDismissContext.Provider>
 
-      <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-        <footer className={`${BLOCK_RADIUS_INNER_BOTTOM} flex min-h-10 flex-wrap items-center justify-end gap-3 border-t border-border/70 bg-panel/95 px-3 py-2 text-[12px]`}>
-          {thread.queuedForReply && <MarkReadButton project={project} thread={thread} onRead={onLeave} onFailed={onReturn} />}
-          <SnoozeButton thread={thread} projectName={project.name} onSnoozed={onLeave} onUndone={onUnsnoozed} eventItems={showsSubAgentWait(thread) && <SubAgentWaitSnoozeItems thread={thread} onSnoozed={onLeave} onUndone={onUnsnoozed} />} />
-          <StateButton thread={thread} onArchived={onSent} onDismissCancel={onReturn} onCompleted={onLanded} command />
-        </footer>
-      </ThreadProjectScope>
     </article>
   )
 }
@@ -644,10 +662,16 @@ function sameCard(a: AllQueuesCardProps, b: AllQueuesCardProps): boolean {
  */
 function MarkReadButton({ project, thread, onRead, onFailed }: { project: QueuesProject; thread: ThreadView; onRead: () => void; onFailed: () => void }) {
   const [pending, setPending] = useState(false)
+  // A BARE ICON in the header's lifecycle cluster since 2026-10-06, beside the clock and the check it is a
+  // peer of — all three take the card off the queue. It was a worded pill in the card's footer, which went
+  // with the lifecycle footer. The double check is the read receipt's own mark; its name is one hover away.
   return (
+    <Tooltip label="Mark as read">
     <button
       type="button"
       data-mark-read
+      aria-label="Mark as read"
+      onMouseDown={(event) => event.preventDefault()}
       disabled={pending}
       onClick={() => {
         setPending(true)
@@ -658,10 +682,11 @@ function MarkReadButton({ project, thread, onRead, onFailed }: { project: Queues
           showToast(`Couldn’t mark as read: ${(error as Error).message.slice(0, 80)}`)
         })
       }}
-      className="rounded-md border border-border-strong bg-panel-2/60 px-2.5 py-1 text-[12px] text-fg/80 hover:bg-panel-2 hover:text-fg disabled:opacity-60"
+      className={HEADER_ICON_CLASS}
     >
-      Mark as read
+      <CheckCheck size={15} strokeWidth={2} />
     </button>
+    </Tooltip>
   )
 }
 
@@ -1030,6 +1055,9 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
         ownMention={ownMention}
         busy={controls.busy}
         footer={controls.footer}
+        // THE GOAL at the rail's left end, as on every thread prompt box (ThreadComposerBox) — for a
+        // Frizz-owned session. It reaches the card's project through the scope this box renders in.
+        railLead={thread.kind === "session" && thread.foreign !== true ? <RecurringPromptControl thread={thread} /> : undefined}
       />
       {controls.status}
       {error && <div role="alert" className="mt-1.5 break-words text-[11px] leading-snug text-danger-soft">{error}</div>}

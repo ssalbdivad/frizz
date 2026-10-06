@@ -1942,7 +1942,7 @@ test("a handler's refusal reaches the worker as its own sentence, not an HTTP 50
 // THE QUESTIONS ARE READ OUT TOO, in their own section (maintainer 2026-08-28: "Is there a way for the
 // agent to read out the current set of watchers and questions?"). They must NOT reach the fence block:
 // a question waits on a person, and there is no `questions:` key in the awaiting grammar to hold one.
-test("`activity` reads the open questions back, with the ids `unask` takes", async () => {
+test("`activity` reads the open questions back, with the ids `unask` takes and a fence names them by", async () => {
   const http = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json" })
     res.end(JSON.stringify({ result: {
@@ -1970,10 +1970,14 @@ test("`activity` reads the open questions back, with the ids `unask` takes", asy
     assert.match(text, /1 question set aside — the human wrote to you since, without answering:\n\n {2}question: qst_99887766aabb\n/)
     assert.match(text, /frizz withdraws each one when you next come to rest\. `keep` only one directly relevant/)
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
-    // The fence block names the SHELL and nothing else — no question id may appear inside it.
+    // The ready fence names the shell AND every OWED question under `questions:` (2026-10-05): a fence
+    // beside open questions must name each one the worker still needs, or frizz refuses the park. A
+    // set-aside one is left out — it holds nothing, and the next rest withdraws it.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
     assert.match(fence, /shells: \[bzvtnt3ig\]/)
-    assert.doesNotMatch(fence, /qst_/, "a question is never named in an awaiting fence")
+    assert.match(fence, /questions: \[qst_ab12cd34ef56, qst_0011223344ff\]/)
+    assert.doesNotMatch(fence, /qst_99887766aabb/, "the set-aside question is not named")
+    assert.match(fence, /status: needs_input/, "a fence on questions always needs the human")
   } finally {
     rpc.kill()
     http.close()

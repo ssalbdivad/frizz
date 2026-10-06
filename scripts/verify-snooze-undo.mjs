@@ -10,7 +10,7 @@
 //     than wait for the next tick (checked after the poll has already dropped the thread);
 //   • the PAGE project's card (All projects' pick, set to the launcher here) — its queue is the live
 //     board, and the fade guard must lift at once;
-//   • the thread DRAWER's footer — no card at all, and the thread there may already be snoozed.
+//   • the thread DRAWER's header — no card at all, and the thread there may already be snoozed.
 //
 // Usage: node scripts/verify-snooze-undo.mjs --stack=/abs/stack.log [--shots=/abs/dir]
 //   against a stack booted by adhoc-stack.mjs with --also-project for marketing-site and billing-worker,
@@ -94,11 +94,21 @@ try {
     const undo = await page.waitForSelector("[data-toast] button", { timeout: 3000 })
     await undo.click()
   }
-  // The quick snooze on a card: the first button of its footer (SnoozeButton's one-click half).
-  const snoozeCard = async (scope) => {
-    const button = await page.$(`${scope} footer button`)
-    if (!button) throw new Error(`no snooze button in ${scope}`)
-    await button.click()
+  // A snooze from a header's alarm clock (SnoozeMenu): the clock opens every preset, and `preset` picks one.
+  // The lifecycle verbs moved from a footer split button to the header on 2026-10-05.
+  const snoozeFrom = async (scope, preset = "tomorrow") => {
+    const clock = await page.waitForSelector(`${scope} [data-snooze-menu]`, { timeout: 8000 })
+    await clock.click()
+    await page.waitForSelector(`[role="menu"] [data-value="${preset}"]`, { timeout: 3000 })
+    await page.click(`[role="menu"] [data-value="${preset}"]`)
+  }
+  const snoozeCard = (scope) => snoozeFrom(scope)
+  const wakeFrom = async (scope) => {
+    await page.click(`${scope} [data-snooze-menu]`)
+    const items = await page.waitForSelector('[role="menu"]', { timeout: 3000 })
+    const wake = await items.$$('[role="menuitem"]')
+    for (const item of wake) if ((await item.evaluate((el) => el.textContent?.trim())) === "Wake now") return item.click()
+    throw new Error("no Wake now in the snooze menu")
   }
   const shotToast = async (name) => {
     await sleep(300) // past the 200ms rise, so the shot is the toast at rest
@@ -163,18 +173,16 @@ try {
     const scope = card("acme-api", "upgrade-postgres-driver")
     await sleep(1800)
     await page.click(`${scope} h3 a`)
-    const footer = "[data-thread-lifecycle-footer]"
-    await page.waitForSelector(`${footer} button[aria-label^="Snooze "]:not([aria-label="Snooze options"])`, { timeout: 8000 })
+    const footer = "[data-thread-header]"
+    await page.waitForSelector(`${footer} [data-snooze-menu]`, { timeout: 8000 })
     await sleep(500)
-    await page.click(`${footer} button[aria-label^="Snooze "]:not([aria-label="Snooze options"])`)
+    await snoozeFrom(footer)
     const first = await toastSays(SNOOZED)
     check("the drawer's snooze toast names the drawer's project", first.detail === under("acme-api"), `"${first.text}" / "${first.detail}"`)
     const firstUntil = (await waitFor("the thread to snooze", async () => { const t = await threadOf("acme-api", "upgrade-postgres-driver"); return t?.snoozedUntil ? t : null })).snoozedUntil
     await sleep(600)
-    // Re-snooze to a week from the chevron menu, then Undo: the FIRST snooze must come back, not "awake".
-    await page.click(`${footer} button[aria-label="Snooze options"]`)
-    await page.waitForSelector(`[role="menu"] [data-value="1w"]`, { timeout: 3000 })
-    await page.click(`[role="menu"] [data-value="1w"]`)
+    // Re-snooze to a week from the clock's menu, then Undo: the FIRST snooze must come back, not "awake".
+    await snoozeFrom(footer, "1w")
     await waitFor("the week-long snooze", async () => { const t = await threadOf("acme-api", "upgrade-postgres-driver"); return t?.snoozedUntil && t.snoozedUntil !== firstUntil ? t : null })
     await toastSays(SNOOZED)
     await clickUndo()
@@ -188,14 +196,14 @@ try {
   })
 
   await step("a faded toast's button takes no click and no Tab", async () => {
-    // The drawer is still open, so the toast rides above its footer — the spot where an invisible Undo
+    // The drawer is still open, so the toast rides above its prompt box — the spot where an invisible Undo
     // would have caught a click. Snooze once more, let the toast fade, then probe the button's place.
-    const footer = "[data-thread-lifecycle-footer]"
+    const footer = "[data-thread-header]"
     await sleep(1800)
-    await page.click(`${footer} button[aria-label="Wake thread now"]`)
+    await wakeFrom(footer)
     await toastSays(/^Snooze cleared$/)
     await sleep(1800)
-    await page.click(`${footer} button[aria-label^="Snooze "]:not([aria-label="Snooze options"])`)
+    await snoozeFrom(footer)
     await toastSays(SNOOZED)
     const probe = () => page.evaluate(() => {
       const button = document.querySelector("[data-toast] button")

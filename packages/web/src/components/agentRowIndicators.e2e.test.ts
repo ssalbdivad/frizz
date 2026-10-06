@@ -298,25 +298,28 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
       )
     const shells = await read("[data-shell-rows] .frizz-bash")
     const agents = await read("[data-agent-rows] .frizz-bash")
-    assert.equal(shells.length, 8, "the fixture must cover live / quiet / untracked-detached / long-foreground / fresh-foreground / done / failed foreground rows, plus a RESOLVED background task")
+    assert.equal(shells.length, 8, "the fixture must cover live / gone / untracked-detached / long-foreground / fresh-foreground / done / failed foreground rows, plus a RESOLVED background task")
 
-    // THE SHAPE, row by row. Rows 0-3 are running — three detached, plus the FOREGROUND command that has
-    // been going long enough to earn the mark. Rows 4-7 have nothing LIVE to show (a call issued a moment
-    // ago, two resolved foreground ones, and a resolved BACKGROUND task) and render NO slot: this column
-    // means "something is alive behind this row", so a finished op belongs out of it entirely (maintainer
-    // 2026-08-01: "remove the status indicator entirely for a sub-agent or background shell that has
-    // completed"). Detachment does not earn a mark; being ALIVE does. An empty reservation is the defect
-    // the dispatch card already had to unlearn, and it stays unlearned here.
-    const RUNNING = 4
+    // THE SHAPE, row by row. Rows 0-3 carry the mark: row 1 is a tracked shell whose process the OS has
+    // confirmed gone (the flat stale dot, which is not a RUNNING indicator), and the other three are
+    // running — two detached, plus the FOREGROUND command that has been going long enough to earn the
+    // mark. Rows 4-7 have nothing LIVE to show (a call issued a moment ago, two resolved foreground ones,
+    // and a resolved BACKGROUND task) and render NO slot: this column means "something is alive behind
+    // this row", so a finished op belongs out of it entirely (maintainer 2026-08-01: "remove the status
+    // indicator entirely for a sub-agent or background shell that has completed"). Detachment does not
+    // earn a mark; being ALIVE does. An empty reservation is the defect the dispatch card already had to
+    // unlearn, and it stays unlearned here.
+    const MARKED = 4
+    const GONE = 1
     const RESOLVED_BACKGROUND = 7
     for (const [index, row] of shells.entries()) {
-      const running = index < RUNNING
-      assert.equal(row.markSlotIndex, running ? 0 : -1, `shell row ${index}: ${running ? "the mark must lead the header" : "a row with nothing live behind it renders no mark slot"}`)
-      assert.equal(row.labelIndex, running ? 1 : 0, `shell row ${index}: the tool label must ${running ? "follow the mark" : "lead the header"}`)
-      assert.equal(running ? row.labelOffset > 0 : row.labelOffset === 0, true, `shell row ${index}: the label sits ${row.labelOffset}px from the left edge`)
+      const marked = index < MARKED
+      assert.equal(row.markSlotIndex, marked ? 0 : -1, `shell row ${index}: ${marked ? "the mark must lead the header" : "a row with nothing live behind it renders no mark slot"}`)
+      assert.equal(row.labelIndex, marked ? 1 : 0, `shell row ${index}: the tool label must ${marked ? "follow the mark" : "lead the header"}`)
+      assert.equal(marked ? row.labelOffset > 0 : row.labelOffset === 0, true, `shell row ${index}: the label sits ${row.labelOffset}px from the left edge`)
       // Exactly one glyph per row, and it is ALWAYS the leading mark: this family draws nothing in the
       // right-hand reading any more. A `tool-pending` spinner reappearing here is the regression.
-      assert.equal(row.indicators, running ? 1 : 0, `shell row ${index}: one running indicator at most, and only in the mark slot`)
+      assert.equal(row.indicators, marked && index !== GONE ? 1 : 0, `shell row ${index}: one running indicator at most, and only in the mark slot`)
       assert.equal(row.doneMarks, 0, `shell row ${index}: no finished glyph may exist`)
     }
 
@@ -354,11 +357,15 @@ test("a background shell card marks its liveness in the same slot as a dispatch 
     assert.ok(b > r && b > g, `a live shell marks itself blue, got rgb(${shells[0].markRgb})`)
     assert.notDeepEqual(shells[0].markRgb, agents[0].markRgb, "the two runtimes keep their two hues")
 
-    // A tracked-but-QUIET shell (a dev server waiting, a Monitor with no output file) breathes rather
-    // than pulses — and its mark must agree with its own reading. It shipped drawing the full-brightness
-    // live dot beside the word "stale", which is the row contradicting itself.
-    assert.match(String(shells[1].markClass), /frizz-live-dot-quiet--shell/)
-    assert.equal(shells[1].rightText, "stale")
+    // A tracked shell whose process is GONE draws the flat stale dot beside its own word "stale" — the
+    // same mark, in the same place, as the stale child on the dispatch card. It shipped drawing the
+    // full-brightness live dot there, and then, until 2026-10-05, a breathing one titled "running — no
+    // recent output": a dead process drawn as a live one either way.
+    assert.equal(shells[GONE].markClass, agents[1].markClass, "the gone shell's mark is the stale child's mark")
+    assert.doesNotMatch(String(shells[GONE].markClass), /frizz-live-dot/)
+    assert.equal(shells[GONE].markLeft, agents[1].markLeft, "…in the same slot")
+    assert.equal(shells[GONE].markMidY, agents[1].markMidY, "…on the same optical line")
+    assert.equal(shells[GONE].rightText, "stale")
     // The two detached-and-live readings: correlated to a live op, and merely flagged background.
     assert.equal(shells[0].rightText, "running")
     assert.equal(shells[2].rightText, "running")

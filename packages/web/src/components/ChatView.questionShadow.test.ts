@@ -6,9 +6,8 @@ const chat = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
 
 // A ```question fence restating or naming a question REGISTERED at that rest or an earlier one is folded
 // into the registered card (lib/questionShadow) — the 2026-08-28 "same question showing up twice in a row". The fold is a
-// prop on Message, so it works only where the transcript hands it over: these pin that every transcript
-// path that renders an answerable message does. (The board's queue card pinned the same wiring here until
-// it was deleted with the single-project board, 2026-09-28.)
+// prop on Message, so it works only where the transcript hands it over: these pin that every surface
+// that renders an answerable message does, and that a folded fence leaves no Send behind it.
 
 test("every answerable Message site hands the registered questions at its rest to the fold", () => {
   // Thread page: the plain path (keyed by `messageIndex`) and the virtualized path (`row.messageIndex`).
@@ -24,28 +23,22 @@ test("the map is built off the same messages and questions the anchors use, on b
 })
 
 test("a folded fence leaves no Send button behind it", () => {
-  // Message's own bottom button needs a block that actually rendered.
+  // Message's own bottom button needs a block that actually rendered…
   assert.match(chat, /else if \(showSendButton && answering && askBlocks\.length > 0\)/)
 })
 
-// ---- NO CARD INSIDE A MESSAGE (2026-09-28) ----
-// Placement is retired: a registered card renders at the bottom of the rest it belongs to, never in a
-// marker's slot (maintainer: "questions should always appear at the bottom of the thread not in the
-// middle any explanation should occur beforehand"). These pin that no surface can hand a message a card
-// to draw inside itself any more, and that every stack is positioned by the one reader.
+// ---- PER-QUESTION PLACEMENT (2026-09-11) ----
 
-test("no Message site hands a message registered cards to draw inside itself", () => {
-  assert.doesNotMatch(chat, /\bplaced=\{/, "no placed prop")
-  assert.doesNotMatch(chat, /\bsettledPlaced=\{/, "no settledPlaced prop")
-  assert.doesNotMatch(chat, /placeQuestions\(/, "the in-slot placement reader is gone")
-  // …and Message itself draws nothing for an empty marker, whatever it names.
-  assert.match(chat, /if \(seg\.registeredId && seg\.text\.trim\(\) === ""\) continue/)
-  assert.doesNotMatch(chat, /<RegisteredQuestionCard key=/, "Message never mounts a registered card")
-  assert.doesNotMatch(chat, /<SettledQuestionCard key=/, "Message never mounts a settled card")
+// The fork draws no batch "Send answers" (each answer is sent on its own — RegisteredQuestionCards), so the
+// Send-per-placed-rest half of upstream's pin is gone; the placement half stays.
+test("every Message site hands the message its placed questions, and the thread page groups placed rests", () => {
+  assert.equal((chat.match(/placed=\{placement\.placed\.get\(messageIndex\)\}/g) ?? []).length, 1, "plain transcript path")
+  assert.equal((chat.match(/placed=\{placement\.placed\.get\(row\.messageIndex\)\}/g) ?? []).length, 1, "virtualized transcript path")
+  assert.equal((chat.match(/placedRestEnds\(messages, placement\)/g) ?? []).length, 1, "the thread page groups its Sends by rest")
 })
 
-test("the thread page positions every stack through questionStacks, and mounts ONE answering provider", () => {
-  assert.match(chat, /questionStacks\(messages, openQuestions\)/)
+test("a placed question leaves its anchor group, and the thread page mounts ONE answering provider", () => {
+  assert.match(chat, /filter\(\(q\) => !placement\.placedIds\.has\(q\.id\)\)/)
   assert.equal((chat.match(/<RegisteredAnsweringProvider thread=\{thread\}>/g) ?? []).length, 1)
 })
 

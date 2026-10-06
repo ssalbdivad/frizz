@@ -86,7 +86,7 @@ export type MarkDoneOutcome =
  * Mark `thread` done through the session-first completion (`rpc.completeThread` — never the legacy
  * `markComplete`, see MobileBoard's swipe), then advance.
  *
- * OPTIMISTIC exactly when the lifecycle footer is: when `completionArchivesImmediately` predicts no
+ * OPTIMISTIC exactly when the desktop header's check is: when `completionArchivesImmediately` predicts no
  * dialog, or the operator has already answered it (`terminateLive`). Then the row drops into Done, the
  * next thread opens and the Undo toast shows at once, ahead of the round trip; a server that declines
  * after all puts the row back and says so. Otherwise it waits, and a `needs-confirmation` reply goes

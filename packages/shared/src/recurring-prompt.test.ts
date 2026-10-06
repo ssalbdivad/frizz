@@ -5,7 +5,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import { ALLDONE_SENTINEL, DEFAULT_RECURRING_PROMPT, SetOwnThreadRecurringPromptInput, SetThreadRecurringPromptInput, saysAllDone, restPromptMessage, schedulePromptMessage, formatIntervalLabel, parseRecurringPrompt , humanGapNote, stripHumanGapNote, wakeTimeHeader, stripWakeTimeHeader, formatElapsed } from "./index.ts"
 
-// THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: the footer panel prefills an unarmed thread's
+// THE DEFAULT TEXT IS THE ONE GOAL MOST THREADS EVER RUN: the Goal panel prefills an unarmed thread's
 // with it, so almost nobody types their own. Its BIAS is therefore a product decision rather than a
 // wording choice, and it is deliberately lopsided (maintainer 2026-08-14: bias "strongly towards
 // continuing with its work if there is incomplete work, unless there is a pressing or imminent decision

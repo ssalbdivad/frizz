@@ -14,10 +14,10 @@ import {
   CHILD_KIND_TAG_CLASS,
   CHILD_MARK_SLOT_CLASS,
   CHILD_OPEN_TITLE,
-  CHILD_QUIET_SHELL_TITLE,
   CHILD_RESTED_DOT_CLASS,
   CHILD_RESTED_TITLE,
   CHILD_STALE_DOT_CLASS,
+  CHILD_STALE_SHELL_TITLE,
   CHILD_STALE_TITLE,
 } from "../lib/childOps.ts"
 
@@ -181,10 +181,12 @@ export function ChildOpRow({
   const rowTitle = title ?? (clickable ? openTitle : undefined)
 
   // The liveness mark. The rail speaks the rail's checkbox language; the card and the drawer share the
-  // pulsing-dot language, in a fixed-width column so their labels line up across both surfaces.
+  // pulsing-dot language, in a fixed-width column so their labels line up across both surfaces. A row
+  // that is not running is FLAT on every density and every kind — a stale SHELL is a process the OS has
+  // confirmed gone, so only its words differ (see CHILD_STALE_SHELL_TITLE).
   const quiet = state === "rested"
     ? <span className={CHILD_RESTED_DOT_CLASS} title={CHILD_RESTED_TITLE} />
-    : <span className={CHILD_STALE_DOT_CLASS} title={CHILD_STALE_TITLE} />
+    : <span className={CHILD_STALE_DOT_CLASS} title={kind === "SHELL" ? CHILD_STALE_SHELL_TITLE : CHILD_STALE_TITLE} />
   const indicator = rail ? (
     <span className="flex w-3.5 shrink-0 items-center justify-center">
       {running ? <BoxSpinner size={12} /> : quiet}
@@ -205,8 +207,6 @@ export function ChildOpRow({
         <span aria-hidden className={RETURNED_MARK[outcome ?? "completed"]} data-returned-mark={outcome ?? "completed"} title={outcomeWord}>
           {outcome === "failed" ? <X size={10} strokeWidth={2.5} /> : outcome === "killed" ? <CircleSlash size={9} strokeWidth={2.25} /> : <Check size={10} strokeWidth={2.5} />}
         </span>
-      ) : kind === "SHELL" ? (
-        <span aria-hidden className="frizz-live-dot-quiet frizz-live-dot-quiet--shell" data-running-indicator="operation-quiet" title={CHILD_QUIET_SHELL_TITLE} />
       ) : (
         quiet
       )}

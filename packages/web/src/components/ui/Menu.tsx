@@ -69,8 +69,7 @@ export function MenuItem({
   danger?: boolean
   /** The item's key, formatted (useShortcutLabel), drawn muted at the row's end. */
   shortcut?: string | null
-  /** Rendered as `data-value`, so a caller can find and focus one item (SnoozeButton opens its menu
-   *  on the remembered preset rather than the first row). */
+  /** Rendered as `data-value`, so a caller (or a test) can find one item by its key. */
   value?: string
 }) {
   return (

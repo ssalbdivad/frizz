@@ -92,7 +92,7 @@ try {
       await (await page.$(scope)).screenshot({ path: join(out, `${theme}-composer-crop.png`) })
       await page.setViewport(viewport)
     }
-    await page.click('[aria-label="Snooze options"]')
+    await page.click('button[data-snooze-menu]')
     await page.waitForSelector('[role="menu"]')
     await shot('snooze-menu')
     await page.evaluate(() => [...document.querySelectorAll('[role="menuitem"]')].find(el => /Custom/.test(el.textContent)).click())

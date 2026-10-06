@@ -61,12 +61,12 @@ test("the contract teaches that a registered question draws itself at the bottom
     assert.match(prompt, /draws NOTHING: one question, one card/)
     // The card is last, so the explanation is first — said where the worker asks AND where it stops.
     assert.match(c, /THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
-    assert.match(c, /frizz draws every open question at the BOTTOM of your newest handoff, below its last line/)
-    // An open question rides to the newest handoff through a wake or another card's answer — not a typed
-    // message, which sets it aside until the worker keeps it (2026-09-30) and withdraws it at the next
-    // rest (2026-10-02). A question dismissed, or withdrawn by the worker after the human's message, is
-    // never asked again.
-    assert.match(c, /AN OPEN QUESTION RIDES TO YOUR NEWEST HANDOFF/)
+    assert.match(c, /frizz draws the question at the BOTTOM of the handoff of the rest that asked it, below its last line/)
+    // A question stays at the rest that asked it (upstream 2026-10-05) — a later rest names it under
+    // `questions:` or withdraws it. A typed message sets it aside until the worker keeps it (2026-09-30)
+    // and withdraws it at the next rest (2026-10-02). A question dismissed, or withdrawn by the worker
+    // after the human's message, is never asked again.
+    assert.match(c, /A QUESTION STAYS AT THE REST THAT ASKED IT/)
     assert.match(c, /A MESSAGE PAST A QUESTION SETS IT ASIDE — AND YOUR NEXT REST WITHDRAWS IT/)
     assert.match(c, /keep it WITH `question`, the whole reworded question/)
     assert.match(c, /NEVER ASK\s+AGAIN a question the human dismissed, or one you yourself withdrew after their newest message/)
@@ -165,7 +165,7 @@ test("the contract teaches steps: as the wait on a human's act, and routes to it
     assert.match(c, /card shows the steps over one \*\*Done\*\* button, and its click comes back to you as their reply, `Done`/)
     assert.match(c, /anything else they need to tell you — a step that failed, the account they used — comes as a message of their own/)
     assert.doesNotMatch(c, /Couldn't do it/)
-    assert.match(c, /\(`steps:` count: they name the human\.\)/)
+    assert.match(c, /\(`steps:` and `questions:` count: they name the human\.\)/)
     // A decision is still a question; an act is steps — at every place the two used to blur.
     assert.match(c, /A DECISION you need from them is a question, never a fence/)
     assert.match(c, /WAITING ON ONE TO ACT IS `steps:`/)

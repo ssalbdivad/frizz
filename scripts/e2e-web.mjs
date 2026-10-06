@@ -140,16 +140,22 @@ async function waitForServer(url, child) {
 }
 
 let vite;
-// The whole process group, never `vite` alone: see `detached` below. Tried unconditionally, because the
-// group outlives its leader — `vite.exitCode` says nothing about whether anything in it still serves.
+let url = urlFlag;
+// THE WHOLE GROUP, NOT THE PID WE HOLD. `nubx vite` is a launcher: it forks the real `node vite.js` as
+// its own child and waits on it, so the pid `spawn` returns is nubx's. A SIGKILL to that pid killed
+// nubx alone and left vite serving with launchd as its parent — one orphaned vite per run, measured
+// 2026-10-05 (pid 77213, ppid 1, still listening on the run's port after the suite had exited). So vite
+// starts in its own process group (`detached`) and teardown signals the group. Windows has no groups to
+// signal and does not run this suite; it keeps the plain kill.
 const killVite = () => {
+  if (!vite) return;
   try {
-    process.kill(-vite.pid, "SIGKILL");
+    if (process.platform === "win32") vite.kill("SIGKILL");
+    else process.kill(-vite.pid, "SIGKILL");
   } catch {
-    // already gone
+    // the group is already gone
   }
 };
-let url = urlFlag;
 if (!url) {
   const port = await freePort();
   url = `http://127.0.0.1:${port}`;
@@ -159,7 +165,7 @@ if (!url) {
     // Its own process group, so one signal reaches all of it. `nubx` is not vite: it starts `node vite.js`,
     // which re-execs node with its flags, and a SIGKILL cannot be forwarded — killing `nubx` alone left
     // those two orphaned and still listening after every run.
-    detached: true,
+    detached: process.platform !== "win32",
     // No watcher, no HMR (see vite.config.ts): a concurrent agent editing the tree mid-run must not
     // reload a fixture page in the middle of a test.
     // A scratch dep cache too, so this Vite never rewrites the one a running dev server serves from.
@@ -193,7 +199,8 @@ const runner = spawn(
   { cwd: root, stdio: "inherit", env },
 );
 
-const shutdown = () => { if (vite) killVite(); };
+// Not gated on nubx's own exit code: the launcher can be gone while the vite it forked still serves.
+const shutdown = killVite;
 process.on("SIGINT", () => { shutdown(); process.exit(130); });
 process.on("SIGTERM", () => { shutdown(); process.exit(143); });
 

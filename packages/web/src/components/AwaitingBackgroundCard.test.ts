@@ -2,7 +2,8 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AwaitingBackgroundCard, AwaitingWaitTable, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, AwaitingBackgroundCard, AwaitingWaitTable, BgShellRow, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
+import { CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import type { ThreadView } from "@frizz/shared"
 
 // One card, three surfaces, and since 2026-08-15 one TABLE: every kind of live work the thread declared
@@ -86,7 +87,7 @@ test("a thread nobody can park draws no snooze — foreign or archived", () => {
   // would be an affordance that cannot work.
   const foreign = { ...thread(rows, []), foreign: true } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.doesNotMatch(render(foreign), /Snooze/)
-  // An ARCHIVED thread has no lifecycle verbs at all — the same rule the footer's strip applies.
+  // An ARCHIVED thread has no lifecycle verbs at all — the same rule the header's lifecycle strip applies.
   const archived = { ...thread(rows, []), state: "archived" } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
   assert.doesNotMatch(render(archived), /Snooze/)
 })
@@ -257,6 +258,48 @@ test("a shell watch resolves its label off ANY of the three legal handles", () =
   assert.match(text(orphan), /bzz-nothing/)
 })
 
+// A declared watch outlives the shell it names: the OS confirms the process gone (tailer `shellIsGone`),
+// no completion ever arrives, and this row is the reason the thread is back in the queue. It read
+// "running · …" in the shell blue until 2026-10-05.
+test("a declared shell whose process is gone reads stale, never running", () => {
+  const dead = { ...thread([], [{ ...shell("running"), state: "stale" }]), watches: [shellWatch("bzvtnt3ig")] } as Parameters<typeof AwaitingBackgroundCard>[0]["thread"]
+  const html = render(dead)
+  const row = html.slice(html.indexOf('data-wait-kind="shell"'))
+  assert.match(row, /data-wait-status[^>]*>stale · /)
+  assert.doesNotMatch(row, /running/)
+  assert.doesNotMatch(row, /text-shell/, "a dead process does not wear the live shell blue")
+  assert.ok(row.includes(CHILD_STALE_SHELL_TITLE), "the tooltip says the process exited")
+})
+
+// STALE reaches only the fullscreen rail (this card's set is `liveAgents`), which rows every direct child
+// since 2026-10-05. It must not spin beside a child that has gone quiet past its window.
+test("the rail's row for a stale sub-agent wears the stale dot, never the spinner", () => {
+  const now = Date.parse("2026-07-28T09:30:00.000Z")
+  const stale = renderToStaticMarkup(createElement(AgentRow, { agent: agent("stale"), slug: "demo-thread", now }))
+  assert.ok(stale.includes(`class="${CHILD_STALE_DOT_CLASS}"`))
+  assert.doesNotMatch(stale, /animate-spin/)
+  assert.match(stale, /data-wait-status[^>]*>stale · opus-high · 30m</)
+  assert.ok(stale.includes(CHILD_STALE_TITLE))
+  const live = renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now }))
+  assert.match(live, /animate-spin/)
+  assert.doesNotMatch(live, /stale/)
+})
+
+// On /full the rail REPLACES the ops strip, so its agent and shell rows carry the strip's × — STOP while
+// running, CLEAR once not, with ChildOpRow's own words. The card passes none (the strip sits beneath it).
+test("a rail row given onDismiss carries the strip's stop/clear ×, directly after its name", () => {
+  const now = Date.parse("2026-07-28T09:30:00.000Z")
+  const noop = () => {}
+  const stopX = renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now, onDismiss: noop }))
+  assert.match(stopX, /aria-label="Stop sub-agent: Audit the parser"/)
+  assert.ok(stopX.indexOf("Audit the parser</button>") < stopX.indexOf('aria-label="Stop sub-agent'), "the × follows the name")
+  assert.ok(stopX.indexOf('aria-label="Stop sub-agent') < stopX.indexOf("data-wait-status"), "…and precedes the status")
+  const clearX = renderToStaticMarkup(createElement(BgShellRow, { shell: { ...shell("running"), state: "stale" }, slug: "demo-thread", now, onDismiss: noop }))
+  assert.match(clearX, /aria-label="Clear agent terminal: vite dev"/)
+  assert.match(clearX, /title="Clear — stop tracking this finished operation"/)
+  assert.doesNotMatch(renderToStaticMarkup(createElement(AgentRow, { agent: agent("running"), slug: "demo-thread", now })), /aria-label="Stop/, "no onDismiss, no ×")
+})
+
 test("sub-agent rows are DIRECT and RUNNING only", () => {
   const t = thread([agent("running"), agent("stale"), nested(2)], [])
   const html = render(t)
@@ -338,6 +381,13 @@ test("the snooze renders in the shared footer band, flush with the card's bottom
     createElement(AwaitingBackgroundCard, { thread: { ...t, state: "archived" } as typeof t }),
   )
   assert.doesNotMatch(past, /data-card-actions/)
+  // A `watching` rest is already parked in Snoozed by its worker (2026-10-05): the button would make the
+  // park it is in, so the card draws without it — and still states the wait. A `working` rest keeps it:
+  // that row is in the Running band, and the click is what moves it to Snoozed.
+  const watching = render({ ...t, waitStatus: "watching" } as typeof t)
+  assert.doesNotMatch(watching, /data-awaiting-snooze/)
+  assert.match(watching, /data-awaiting-background/, "the card itself still renders")
+  assert.match(render({ ...t, waitStatus: "working" } as typeof t), /data-awaiting-snooze="true"/)
 })
 
 // THE TABLE AS A PIECE (2026-08-28). The awaiting FENCE card draws it whenever the thread is NOT at rest
@@ -474,17 +524,11 @@ test("Stop draws the footer on its own where there is no rest to park", () => {
 
 // ---- STEPS FOR THE HUMAN (2026-10-03) --------------------------------------------------------------
 // A fence carrying `steps:` waits on the READER. The steps themselves render through the markdown
-// sanitizer, which needs a real DOM this runner does not have — the drawn card and its one verb are
-// pinned in a real browser by AwaitingSteps.e2e.test.ts. What is DOM-free is pinned here: the
-// heading, and the one test that decides whether the verbs may be offered at all.
+// sanitizer, which needs a real DOM this runner does not have — the drawn card, its "To do" chip head
+// and its one verb are pinned in a real browser by AwaitingSteps.e2e.test.ts (the chip head's structure
+// is TranscriptCard's, in TranscriptCard.test.ts). What is DOM-free is pinned here: the one test that
+// decides whether the verbs may be offered at all.
 const stepHints = [{ kind: "step" as const, value: "Run `npm login`" }, { kind: "step" as const, value: "Approve the prompt" }]
-
-test("a steps card is headed for the reader unless the worker titled it", () => {
-  assert.equal(awaitingBackgroundLabel(thread([], []), stepHints), "For you to do")
-  // It outranks the shape headings: the reader is the wait even while a shell runs beside it.
-  assert.equal(awaitingBackgroundLabel(thread([], [shell("running")]), stepHints), "For you to do")
-  assert.equal(awaitingBackgroundLabel(thread([], []), [{ kind: "title", value: "Sign in to npm" }, ...stepHints]), "Sign in to npm")
-})
 
 test("the steps' Done is offered only while the thread rests on exactly those steps", () => {
   const steps = stepHints.map((h) => h.value)

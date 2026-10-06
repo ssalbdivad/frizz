@@ -8,7 +8,7 @@ import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
 import { shouldInterruptSubmitComposerEnter, shouldSaveLazyComposerEnter, shouldScheduleComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
-import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
+import { RAIL_ACTION_OFFSET, RAIL_LAZY_ACTION_OFFSET, RAIL_LAZY_OFFSET, RAIL_LAZY_PAPERCLIP_OFFSET, RAIL_LAZY_PAPERCLIP_PLAIN_OFFSET, RAIL_LAZY_RESERVE_PLAIN, RAIL_LAZY_RESERVE_WITH_ACTION, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SCHEDULE_ACTION_OFFSET, RAIL_SCHEDULE_OFFSET, RAIL_SCHEDULE_PAPERCLIP_OFFSET, RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET, RAIL_SCHEDULE_RESERVE_PLAIN, RAIL_SCHEDULE_RESERVE_WITH_ACTION, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
 import { localImageUrl } from "../lib/markdownTargets.ts"
@@ -193,6 +193,7 @@ export function Composer({
   header,
   aside,
   leftAction,
+  railLead,
   contextTokens,
   contextSources,
   slashSuggest,
@@ -249,6 +250,9 @@ export function Composer({
   // A small action rendered just LEFT of the send button (the dispatch composer's GitHub-picker icon).
   // Only surfaces that pass it get it; reply/queue composers omit it.
   leftAction?: React.ReactNode
+  // A control at the rail's LEFT end, beyond the paperclip — the thread composer's Goal
+  // (ThreadComposerBox). It owns its own popover; this component only places it.
+  railLead?: React.ReactNode
   // SKILLS TYPEAHEAD. When set, a draft that is exactly one `/`-led token opens a suggestion menu of
   // the thread's invocable skills and slash commands (`/context`, `/usage`, …) above the box (fetched lazily, once, on first trigger). The list is
   // whatever the thread's own harness reports — the caller owns sourcing entirely; this component only
@@ -822,12 +826,14 @@ export function Composer({
   // ⌘/Ctrl-Enter — see the `onInterruptSubmit` prop doc.
   const railAction = leftAction ?? null
   // The lazy-save glyph (new-thread box only) takes the slot beside Send and pushes the rest of the rail
-  // one slot left, so the reserve and the left-hand offsets all follow it.
+  // one slot left, so the reserve and the left-hand offsets all follow it. The Goal (`railLead`, the
+  // thread composer only) sits beyond the paperclip on the plain rail; the two never share a box — no
+  // surface passes both — so the lead's offsets are the plain rail's.
   const railReserve = scheduleSlot
     ? railAction ? RAIL_SCHEDULE_RESERVE_WITH_ACTION : RAIL_SCHEDULE_RESERVE_PLAIN
     : onSaveLazy
       ? railAction ? RAIL_LAZY_RESERVE_WITH_ACTION : RAIL_LAZY_RESERVE_PLAIN
-      : railAction ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
+      : railAction && railLead ? RAIL_RESERVE_WITH_BOTH : railAction || railLead ? RAIL_RESERVE_WITH_ACTION : RAIL_RESERVE_PLAIN
   const railActionOffset = scheduleSlot ? RAIL_SCHEDULE_ACTION_OFFSET : onSaveLazy ? RAIL_LAZY_ACTION_OFFSET : RAIL_ACTION_OFFSET
   const paperclipOffset = scheduleSlot
     ? railAction ? RAIL_SCHEDULE_PAPERCLIP_OFFSET : RAIL_SCHEDULE_PAPERCLIP_PLAIN_OFFSET
@@ -1254,7 +1260,9 @@ export function Composer({
   return (
     // Focused = the accent border: the visual handoff from the nav chevron to the box.
     // While a file drags over, the border dashes and a hint overlay appears (screenshot intake).
+    // `data-composer-box` is the bordered box itself: the Goal panel spans exactly its two edges.
     <div
+      data-composer-box
       className={`group relative rounded-xl border bg-bg transition-colors focus-within:border-accent ${
         dragging ? "border-dashed border-accent" : "border-border"
       }`}
@@ -1470,6 +1478,7 @@ export function Composer({
       )}
       {/* Outlined controls keep 8px between edges; prose reserves the same clearance. */}
       {railAction && <div className={`absolute bottom-2 ${railActionOffset} flex items-center`}>{railAction}</div>}
+      {railLead && <div className={`absolute bottom-2 ${railAction ? RAIL_LEAD_WITH_ACTION_OFFSET : RAIL_LEAD_OFFSET} flex items-center`}>{railLead}</div>}
       {/* Attach: a hidden file input driven by the paperclip. Sits in the right rail LEFT of the send
           button (and left of any railAction), so it never overlaps the mode/model footer or the send
           affordance. Accept is the shared extension allowlist; the /attach route re-validates. */}

@@ -32,15 +32,15 @@ function thread(over: Partial<ThreadView> = {}): ThreadView {
   }
 }
 
-test("thread lifecycle controls have one footer home independent of queue/done presentation", () => {
+test("thread lifecycle controls have one home independent of queue/done presentation", () => {
   assert.deepEqual(threadLifecycleAvailability(thread()), {
-    footer: true,
+    lifecycle: true,
     done: false,
     snooze: true,
     archive: true,
   })
   assert.deepEqual(threadLifecycleAvailability(thread({ lastFence: { kind: "done", body: "Shipped", hints: [] } })), {
-    footer: true,
+    lifecycle: true,
     done: false,
     snooze: true,
     archive: true,
@@ -49,20 +49,20 @@ test("thread lifecycle controls have one footer home independent of queue/done p
   // Reopen button — but it KEEPS the strip, which reads "Done" where the buttons were. Dropping the strip
   // left the completed state with nowhere to appear on a thread's own full view.
   assert.deepEqual(threadLifecycleAvailability(thread({ state: "archived", archived: true })), {
-    footer: true,
+    lifecycle: true,
     done: true,
     snooze: false,
     archive: false,
   })
   const rolling = threadLifecycleAvailability(thread({ state: undefined, archived: true }))
-  assert.deepEqual({ footer: rolling.footer, done: rolling.done, archive: rolling.archive }, { footer: true, done: true, archive: false }, "rolling snapshots still read the legacy flag as done")
+  assert.deepEqual({ lifecycle: rolling.lifecycle, done: rolling.done, archive: rolling.archive }, { lifecycle: true, done: true, archive: false }, "rolling snapshots still read the legacy flag as done")
   // A thread frizz does not own has no lifecycle standing at all: no verbs AND no readout, because
   // "Done" would assert a completion state frizz never wrote.
   for (const unowned of [thread({ foreign: true }), thread({ kind: "legacy" })]) {
-    assert.deepEqual(threadLifecycleAvailability(unowned), { footer: false, done: false, snooze: false, archive: false })
+    assert.deepEqual(threadLifecycleAvailability(unowned), { lifecycle: false, done: false, snooze: false, archive: false })
   }
   assert.deepEqual(threadLifecycleAvailability(thread({ foreign: true, state: "archived", archived: true })), {
-    footer: false,
+    lifecycle: false,
     done: false,
     snooze: false,
     archive: false,
@@ -162,7 +162,7 @@ test("completionHoldSummary reports withheld labels as '+N more' and never claim
   assert.equal(completionHoldSummary(hold()).lead, "This thread is still running.", "an evidence-free hold asserts nothing new")
 })
 
-test("every owned open queue reason retains enabled lifecycle actions in the footer", () => {
+test("every owned open queue reason retains enabled lifecycle actions", () => {
   for (const state of [
     thread({ pendingQuestion: true }),
     thread({ pendingAsk: { questions: [] } }),
@@ -171,7 +171,7 @@ test("every owned open queue reason retains enabled lifecycle actions in the foo
     thread({ crashed: true, runtime: "exited" }),
   ]) {
     assert.deepEqual(threadLifecycleAvailability(state), {
-      footer: true,
+      lifecycle: true,
       done: false,
       snooze: true,
       archive: true,

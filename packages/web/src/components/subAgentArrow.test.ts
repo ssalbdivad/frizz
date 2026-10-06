@@ -7,7 +7,7 @@ import { ANSWER_FOLLOW_UP_MARKER } from "@frizz/shared"
 
 // The "child of / branches from" affordance is ONE glyph: ⤷ (U+2937), established by the sidebar's
 // sub-agent rows and reused by the drawer's operation lines, the queue card's child lines and the
-// lifecycle footer. The queue card drifted to ↳ (U+21B3) when it was added, so a single queue card
+// completion dialog. The queue card drifted to ↳ (U+21B3) when it was added, so a single queue card
 // rendered two different down-right arrows a few pixels apart.
 //
 // The original guard banned the WRONG glyph. This one is strictly stronger: the arrow is now a token
@@ -99,7 +99,7 @@ test("every child-operation surface renders through the one shared row component
   assert.doesNotMatch(readFileSync(join(SRC, "components/Sidebar.tsx"), "utf8"), /<ChildOpRow\b/, "the rail shows a count, not child rows")
   // The completion-hold dialog lists children as PROSE inside a dialog, not as operation rows (no
   // liveness mark, no drill-in, no dismiss), so it consumes the tokens directly rather than the row.
-  assert.match(readFileSync(join(SRC, "components/ThreadLifecycleFooter.tsx"), "utf8"), /CHILD_ARROW\b/)
+  assert.match(readFileSync(join(SRC, "components/ThreadLifecycle.tsx"), "utf8"), /CHILD_ARROW\b/)
 })
 
 test("every child-operation surface offers the dismiss ×, through the one shared dismisser", () => {

@@ -137,7 +137,7 @@ export interface SessionRow {
   // context is emptiest exactly when nobody is there to re-orient it: the operator (or the worker)
   // links whatever doc it wrote in its scratch directory, and this hands that link back the moment the
   // window is summarized away. It replaced a hook that spliced a canonical scratchpad's head into the
-  // context — the durable row is visible and editable in the thread footer, where a hook was neither.
+  // context — the durable row is visible and editable in the thread's Goal panel, where a hook was neither.
   recurring_on_compact?: number
   // The built-in sign-off nudge's consecutive counter, and the last delivery id it counted (diagnosis
   // only). See the ALTER list for what clears the count.

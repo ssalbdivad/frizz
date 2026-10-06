@@ -12,6 +12,10 @@ export function Popover({ modal = false, ...props }: ComponentProps<typeof Radix
   return <RadixPopover.Root modal={modal} {...props} />
 }
 
+// The margin every panel keeps from the edge of whatever it collides with (the viewport, unless a caller
+// names a boundary). Exported for a caller that sets its own per-side padding and keeps this on the rest.
+export const POPOVER_COLLISION_PADDING = 12
+
 export const PopoverTrigger = RadixPopover.Trigger
 export const PopoverAnchor = RadixPopover.Anchor
 
@@ -38,7 +42,7 @@ export function PopoverContent({
         // Flip/shift to stay on-screen; keep a margin from the viewport edge so a panel opened off a
         // trigger low in the sidebar never clips under the composer or off the bottom.
         avoidCollisions
-        collisionPadding={12}
+        collisionPadding={POPOVER_COLLISION_PADDING}
         // Escape closes ONLY this popover — stop it bubbling to App's window-level Esc handler, which
         // would otherwise ALSO unwind the overlay under it (e.g. close the whole Settings drawer when
         // dismissing the token-help popover). Radix still closes the layer (we don't preventDefault).

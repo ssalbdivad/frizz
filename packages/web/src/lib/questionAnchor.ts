@@ -1,179 +1,115 @@
-// WHERE A REGISTERED QUESTION SITS IN THE TRANSCRIPT: at the BOTTOM of the newest handoff the worker has
-// rested on since asking it — after every word the worker wrote there, never inside a message — however
-// many times the thread moved in between (see the 2026-09-29 note below for how it got here).
+// WHERE A REGISTERED QUESTION SITS IN THE TRANSCRIPT: at the newest rest that CLAIMS it — the rest it
+// was asked at, or a later rest whose ```awaiting fence names it under `questions:`. Never at a rest that
+// says nothing about it.
 //
 // A ```question fence needs none of this — it IS a message, so it renders where it was written. A
 // REGISTERED question is a row in `thread_question` with no message to live in, so its position is a
-// decision, and it was the wrong one until 2026-08-27: the card was pinned above the composer with the
-// pending-interaction stack, on the reasoning that neither may scroll out of reach. That holds only
-// while the question is the newest thing on the thread. The moment the human replies past it without
-// answering — which they may, the composer is right there — the card sits UNDER their own newest
-// message and under everything the worker has done since, claiming to be the current ask (maintainer
-// 2026-08-27: "Questions are still showing up for me between my most recent message and the agent
-// outputs that have happened since that message. That doesn't make any sense. The questions should show
-// up in the chat wherever the session came to rest").
+// decision, and it has been the wrong one three times:
 //
-// The 2026-08-27 fix froze the card at the rest that ended the turn it was asked in — and that reading
-// broke on the OTHER half of the same scenario. The human replies past the card, the worker answers the
-// follow-up and rests AGAIN with the question still open: the new rest is now the handoff the human
-// reads, and it shows no ask at all. The card sits stranded above their own reply, the tail reads as a
-// bare stop, and the sign-off nudge rightly stands down because the open row IS the thread's sign-off
-// (maintainer 2026-08-31, on exactly that transcript: "Why was this able to come to rest without a
-// proper handoff?"). "Wherever the session came to rest" means the CURRENT rest, not the historical one.
+// - Until 2026-08-27 the card was pinned above the composer. The moment the human replied past it, it
+//   sat UNDER their own newest message and under everything the worker had done since, claiming to be
+//   the current ask (maintainer 2026-08-27: "The questions should show up in the chat wherever the
+//   session came to rest").
+// - 2026-08-27 froze it at the rest that asked it — and then a worker that rested AGAIN with the
+//   question open left the newest rest reading as a bare stop (maintainer 2026-08-31: "Why was this able
+//   to come to rest without a proper handoff?").
+// - 2026-08-31 therefore pulled every open question to the CURRENT rest. That took each card out of the
+//   prose it was placed in and stacked them all under whatever the worker said last — a CI wake, an
+//   unrelated reply — where they superseded the worker's own sign-off (maintainer 2026-10-01: "the
+//   questions are taken out of the place where they were sort of embedded in the transcript and all
+//   just show up in a bunch at the bottom of the chat"; 2026-10-05: "the pending questions that may or
+//   may not be relevant kind of supersede how the agent actually signed off"). Measured over the 867
+//   questions asked here since 2026-09-11, 38% outlived a later rest, and 72% of those resumes were
+//   wakes, not the human.
 //
-// And that reading was reversed in turn on 2026-09-24. Dragging every open question to the newest rest
-// assumes the ask is still CURRENT, and the case that actually produces a later rest with a question
-// still open is the one where it is not: the human sent more messages that obviated it, or the worker
-// did something that made it moot, and the newest handoff is about something else. The card then sat
-// under that handoff claiming to be its ask — a placeholder-package question from the first round of
-// names, drawn beneath the write-up of the second round (maintainer 2026-09-24: "it should move up in
-// the chat appropriately").
-//
-// 2026-09-28 closed the two ways a card still landed mid-thread with the worker's explanation BELOW it
-// (maintainer: "questions should always appear at the bottom of the thread not in the middle any
-// explanation should occur beforehand"). One was the placement marker, which drew the card inside a
-// handoff with paragraphs under it — retired, see lib/questionShadow. The other was frizz's OWN
-// deliveries ending the exchange: a PR watcher expired, frizz woke the worker, it re-armed and wrote "the
-// merge question from my last message is still the open decision" — under a card the wake had frozen
-// above it.
-//
-// AND ON 2026-09-29 THE HUMAN'S TURN STOPPED ENDING IT TOO — the 2026-08-31 reading, back, for a reason
-// the 2026-09-24 reversal did not have. Two things changed that day. Answers arrive one question at a
-// time, so an answer delivery is now the ordinary thing that follows a batch of cards: counted as the
-// human's turn, it froze the unanswered rest above the answer, and once the worker acted on it and
-// rested, its newest handoff showed no ask at all while the cards it still owed sat higher up. And a
-// typed message stopped releasing the questions it passed (shared questionRepliedPast): a timestamp
-// released seven the human still meant to answer when they typed a side question, so the WORKER decides
-// now, `unask`ing the ones the message made moot. What is still open after that is still current by the
-// worker's own judgment — which is the premise the 2026-09-24 reversal found missing.
-//
-// AND ON 2026-09-30 THE HUMAN'S TYPED MESSAGE ENDS IT AGAIN, as an opt-in rather than a release. The
-// 2026-09-29 premise — "what is still open is still current by the worker's own judgment" — held only if
-// the worker `unask`ed; it rarely did, so a merge question rode under a handoff that had since raised a
-// second fix it did not mention (maintainer 2026-09-30: "the questions feel out of date"). Now a typed
-// message sets the question aside (shared questionRepliedPast, surfaced here as `repliedPast`): its card
-// stays at the bottom of the last rest BEFORE that message, still answerable, and rides forward again
-// only if the worker `keep`s it — which stamps `keptAt`, and a kept question reads from there. One it does
-// not keep is withdrawn at its next rest (server scheduler evalSetAsideQuestions, 2026-10-02), and leaves.
-//
-// So a CURRENT open question renders at the bottom of the NEWEST REST — the last "Agent rested" boundary the
-// server emits (transcript.ts restMessage) — at or after it was asked. While a turn is running past that
-// rest (the human typed, an answer or a wake was delivered), the card stays where it was, at the bottom
-// of the handoff the human was reading, instead of riding under the worker's streaming output; the
-// moment the worker rests again it moves to the bottom of that new handoff. A question asked in the turn
-// still running, or on a thread at rest, is the tail.
+// The fix for the 2026-08-31 report now lives in the CONTRACT, not here: a question is a sign-off only at
+// the rest that asked it, and at every later rest the worker names each one it still needs under
+// `questions:` or withdraws it (server scheduler.evalSignoffNudges / evalParkIntegrity). So the newest
+// rest never reads as a bare stop with an ask hidden above it, and this file only has to honour what the
+// worker said: a card stays where it was asked until a later rest claims it, and a claim moves it to the
+// end of that rest — under the fence that named it.
 
-import type { TranscriptMessage } from "@frizz/shared"
+import { awaitingQuestions } from "@frizz/shared"
+import { splitFenceBlocks } from "./fenceBlocks.ts"
 
 export interface AnchorMessage {
   role: string
   kind?: string
-  /** Which divider an `event` row is — `rest` is the agent coming to rest (transcript.ts). */
-  boundary?: TranscriptMessage["boundary"]
   at?: string
-  /** Frizz wrote this user record (a scheduler wake), not the human. */
-  wake?: boolean
-  /** A sub-agent's upward report, recorded as a user turn it did not type either. */
-  peerFrom?: string
+  /** The message's markdown, read only for an ```awaiting fence's `questions:` claim. */
   text?: string
 }
 
-/** Did the HUMAN TYPE this turn? Frizz's wakes are not the human (a watcher, a timer, a sign-off nudge, a
- *  Goal), and neither is a sub-agent's report — and since 2026-09-29 neither is the delivery of their
- *  answers: an answer is one card of a batch, not the human moving the conversation on, and counting it
- *  froze the rest of the batch above it. The same reading as the tailer's `lastHumanAt`. (The router's
- *  `handoffOf` still counts an answer, on purpose: it asks what the newest handoff is a reply TO.)
- *  Punctuation with a nominal role (an event line, a reasoning summary) is not a turn at all. */
-export function isHumanTurn(m: AnchorMessage): boolean {
-  if (m.role !== "user" || m.kind === "event" || m.kind === "reasoning" || m.peerFrom) return false
-  return !m.wake
+/** A real human turn — a typed reply or one of frizz's own deliveries, which land as user records and
+ *  count deliberately (the thread moved on, whoever moved it). Punctuation with a nominal role (an event
+ *  line, a reasoning summary) is not a turn. */
+function isTurn(m: AnchorMessage): boolean {
+  return m.role === "user" && m.kind !== "event" && m.kind !== "reasoning"
 }
 
-/** The agent came to rest here — the server's own divider, off the provider's end-of-turn signal. */
-export function isRestBoundary(m: AnchorMessage): boolean {
-  return m.kind === "event" && m.boundary === "rest"
-}
-
-/** Anything that is a TURN happening, as opposed to the transcript's punctuation. */
-function isActivity(m: AnchorMessage): boolean {
-  return m.kind !== "event" && m.kind !== "reasoning"
-}
-
-/** A question as placement reads it: when it became current (asked, or last kept), and whether the human
- *  has typed past it since. */
-export interface AnchoredQuestion {
-  askedAt: string
-  keptAt?: string
-  repliedPast?: true
-}
-
-/** Where a SET-ASIDE question stays: the bottom of the last rest before the human's first typed message
- *  after it became current — or, when the human typed before the worker rested at all, just above that
- *  message. Undefined when that message is not in the window (a pending send, or one not yet recorded),
- *  so the caller falls back to the current-question reading rather than guessing. */
-function setAsideAnchorIndex(messages: readonly AnchorMessage[], current: number): number | undefined {
-  let human = -1
-  for (let i = 0; i < messages.length; i++) {
-    const m = messages[i]
-    const at = m.at ? Date.parse(m.at) : Number.NaN
-    if (isHumanTurn(m) && Number.isFinite(at) && at > current) {
-      human = i
-      break
-    }
+/** The last message of the rest message `i` belongs to: the one before the next human turn, or the tail
+ *  when no turn follows. */
+export function restEnd(messages: readonly AnchorMessage[], i: number): number {
+  for (let j = i + 1; j < messages.length; j++) {
+    if (isTurn(messages[j])) return j - 1
   }
-  if (human < 0) return undefined
-  for (let i = human - 1; i >= 0; i--) {
-    const m = messages[i]
-    if (!isRestBoundary(m)) continue
-    const at = m.at ? Date.parse(m.at) : Number.NaN
-    if (Number.isFinite(at) && at >= current) return i
-    break
-  }
-  return human - 1
+  return messages.length - 1
 }
 
-/** The index of the message this question renders AFTER. Set aside (the human typed past it): see
- *  setAsideAnchorIndex. Otherwise: the newest rest at or after it became current — its
- *  "Agent rested" row, which the caller lifts the card above (questionShadow aboveTrailingEvents) — or
- *  `messages.length - 1`, the tail, when that rest IS the tail (the thread is at rest) or the question was
- *  asked after it (the worker asked in the turn still running). `-1` when the rest it belongs to is older
- *  than the loaded window, which puts it at the top of what is loaded rather than at the bottom where it
- *  would lie about being current. */
-export function questionAnchorIndex(messages: readonly AnchorMessage[], question: string | AnchoredQuestion): number {
-  const q = typeof question === "string" ? { askedAt: question } : question
-  const asked = Math.max(Date.parse(q.askedAt), q.keptAt ? Date.parse(q.keptAt) : -Infinity)
-  if (q.repliedPast && Number.isFinite(asked)) {
-    const aside = setAsideAnchorIndex(messages, asked)
-    if (aside !== undefined) return aside
-  }
+/** The index of the message closing the rest this question was ASKED at — the card renders after it.
+ *  `messages.length - 1` when nothing has happened since (the common case — the worker asked and rested,
+ *  and the card is still the tail), and `-1` when the rest it belongs to is older than the loaded window,
+ *  which puts it at the top of what is loaded rather than back at the bottom where it would lie about
+ *  being current. */
+export function questionAnchorIndex(messages: readonly AnchorMessage[], askedAt: string): number {
+  const asked = Date.parse(askedAt)
   const tail = messages.length - 1
   if (!Number.isFinite(asked)) return tail
-  for (let i = tail; i >= 0; i--) {
+  for (let i = 0; i < messages.length; i++) {
     const m = messages[i]
-    if (!isRestBoundary(m)) continue
+    if (!isTurn(m)) continue
     const at = m.at ? Date.parse(m.at) : Number.NaN
-    // The newest rest came before the ask, or cannot be dated: the worker asked in the turn still going.
-    if (!Number.isFinite(at) || at < asked) return tail
-    for (let j = i + 1; j <= tail; j++) if (isActivity(messages[j])) return i
-    return tail
+    if (!Number.isFinite(at) || at <= asked) continue
+    return i - 1
   }
-  // No rest in the window at all: a question asked inside it is from the turn still running; one asked
-  // before its first dated message belongs to a rest above it.
-  const first = messages.find((m) => m.at && Number.isFinite(Date.parse(m.at)))
-  return first && Date.parse(first.at!) > asked ? -1 : tail
+  return tail
+}
+
+/** The newest worker message whose ```awaiting fence names each question under `questions:`, keyed by
+ *  lowercased id. A message with no awaiting fence costs one substring test. */
+export function questionClaims(messages: readonly AnchorMessage[]): Map<string, number> {
+  const claims = new Map<string, number>()
+  messages.forEach((m, i) => {
+    if (m.role !== "assistant" || !m.text || !m.text.includes("```awaiting")) return
+    for (const seg of splitFenceBlocks(m.text)) {
+      if (seg.kind !== "fence" || seg.fenceKind !== "awaiting") continue
+      for (const id of awaitingQuestions(seg.hints)) claims.set(id, i)
+    }
+  })
+  return claims
 }
 
 /** Every question grouped by the message index it renders after, so a call site walks the transcript once
- *  and drops each group in place. Every CURRENT question shares the newest rest, so questions asked at
- *  different rests — and a batch — render as one stack at the bottom of the newest handoff; a set-aside
- *  one stays in the history where the human typed past it. */
-export function questionsByAnchor<Q extends AnchoredQuestion>(
+ *  and drops each group in place. Questions asked in ONE `ask` call share an instant and therefore a
+ *  group, which is what keeps a batch rendering as one stack — and a fence naming several questions
+ *  gathers them into one group at its own rest the same way.
+ *
+ *  `claims: false` reads the ASKING rest alone, ignoring any later fence — the reading lib/questionShadow's
+ *  fold needs, because a fence restating a question must fold from the rest that asked it onward.
+ *
+ *  A KEPT question (`keptAt`, the worker's `keep` tool in this fork) counts as asked at the rest that kept
+ *  it — the same move a `questions:` claim makes, made by a tool call instead of a fence line. */
+export function questionsByAnchor<Q extends { askedAt: string; keptAt?: string; id?: string }>(
   messages: readonly AnchorMessage[],
   questions: readonly Q[],
+  opts: { claims?: boolean } = {},
 ): Map<number, Q[]> {
   const byAnchor = new Map<number, Q[]>()
+  const claims = opts.claims === false || questions.length === 0 ? undefined : questionClaims(messages)
   for (const q of questions) {
-    const anchor = questionAnchorIndex(messages, q)
+    let anchor = questionAnchorIndex(messages, q.keptAt && Date.parse(q.keptAt) > Date.parse(q.askedAt) ? q.keptAt : q.askedAt)
+    const claimedAt = q.id ? claims?.get(q.id.toLowerCase()) : undefined
+    if (claimedAt !== undefined && claimedAt > anchor) anchor = restEnd(messages, claimedAt)
     const group = byAnchor.get(anchor)
     if (group) group.push(q)
     else byAnchor.set(anchor, [q])

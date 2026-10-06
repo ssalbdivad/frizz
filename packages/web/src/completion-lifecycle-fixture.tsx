@@ -1,7 +1,8 @@
 import { createRoot } from "react-dom/client"
 import { useEffect, useState } from "react"
 import type { ThreadView } from "@frizz/shared"
-import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
+import { ThreadLifecycleActions } from "./components/ThreadLifecycle.tsx"
+import { TooltipProvider } from "./components/Tooltip.tsx"
 import "./styles.css"
 
 const mode = new URLSearchParams(window.location.search).get("mode") === "executing" ? "executing" : "resting"
@@ -66,10 +67,13 @@ function Fixture() {
           <p data-fixture-complete-calls className="mt-3 text-[11px] text-muted">RPC calls: {calls.join(", ") || "none"}</p>
           {done && <p data-fixture-done className="mt-1 text-[11px] text-accent">Done applied</p>}
         </div>
-        <ThreadLifecycleFooter thread={thread} onArchived={() => setDone(true)} />
+        {/* The header's lifecycle cluster — the check is what this fixture drives. */}
+        <div className="flex justify-end px-4 py-2">
+          <ThreadLifecycleActions thread={thread} onArchived={() => setDone(true)} />
+        </div>
       </section>
     </main>
   )
 }
 
-createRoot(document.getElementById("root")!).render(<Fixture />)
+createRoot(document.getElementById("root")!).render(<TooltipProvider><Fixture /></TooltipProvider>)

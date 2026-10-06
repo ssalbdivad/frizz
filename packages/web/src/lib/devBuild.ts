@@ -14,8 +14,8 @@ import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 // The answer rides the ONE shared supervisor poll (api/supervisorStatus.ts). It used to be a
 // module-level promise of its own, which is how a single navigation came to request
 // /_frizz/control/status three times (t+58ms / t+61ms / t+63ms, 2026-09-04) — and the caller is a
-// thread-footer verb, so the queue renders one footer per card. Sharing the query keeps that at one
-// request however many footers mount, and drops the old cache's one weakness with it: a `null` answer
+// thread-header verb, so the queue renders one per card. Sharing the query keeps that at one
+// request however many headers mount, and drops the old cache's one weakness with it: a `null` answer
 // (a supervisor mid-restart, unreachable, or serving the SPA HTML fallback) is not evidence of a
 // production build, and the poll now simply asks again instead of the verb staying hidden for the life
 // of the page.

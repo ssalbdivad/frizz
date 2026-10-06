@@ -457,7 +457,7 @@ test("arming over open questions runs the delivery sweep NOW — the cancellatio
     })
     assert.equal(h.kicks(), 1, "arming over an open question sweeps immediately")
 
-    // The footer panel's writer makes the same call through its own guard.
+    // The Goal panel's writer makes the same call through its own guard.
     h.storage.upsertSession(row("v"))
     await h.router.ask.handler({ input: { slug: "v", questions: [simple()] } })
     await h.router.setThreadRecurringPrompt.handler({
@@ -490,7 +490,7 @@ test("an EDIT to an already-autonomous thread cancels nothing — it is a transi
   try {
     h.storage.upsertSession(row("t"))
     goal(h, "t")
-    // The footer panel writes the whole row on every edit — text, all three triggers and the cadence are
+    // The Goal panel writes the whole row on every edit — text, all three triggers and the cadence are
     // one save — so re-firing on a cadence tweak would quietly bin a question registered a moment ago.
     // (Which is reachable: `ask` refuses on an autonomous thread, but the row can be written directly,
     // and a question registered BEFORE the Goal was armed outlives a danger-tagged flip.)

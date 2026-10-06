@@ -24,10 +24,15 @@ async function launch() {
 
 // A real mouse click at the centre of the i-th element `selector` matches. A chip's hit area is a
 // stretched button whose mousedown is prevented, so only a pointer click exercises the focus dance the
-// bug lives in — `el.click()` would skip it.
+// bug lives in — `el.click()` would skip it. And a pointer only reaches what is ON SCREEN: `?many=1`
+// stacks three cards, so the lower card's rows and box can sit below the 1200px viewport, where a
+// click at their centre lands on nothing — the multi checks failed that way once the cards above grew.
+// The target scrolls into view before its centre is read.
 async function mouseClick(page: Page, selector: string, i = 0) {
   const box = await page.$$eval(selector, (ns, i) => {
-    const r = ns[i as number]!.getBoundingClientRect()
+    const el = ns[i as number]!
+    el.scrollIntoView({ block: "center" })
+    const r = el.getBoundingClientRect()
     return { x: r.left + r.width / 2, y: r.top + r.height / 2 }
   }, i)
   await page.mouse.click(box.x, box.y)

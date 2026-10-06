@@ -5,7 +5,8 @@
 // a `claude` CLI at 289 MB, a chrome-devtools MCP pair at 159 MB, the broker daemon at 39 MB and the
 // frizz MCP server at 17 MB. That browser was frizz's own always-on mount, removed 2026-08-26: a
 // thread now carries only the MCP servers the PROJECT configured, so the same measurement in a repo
-// with no `.mcp.json` would read ~345 MB — still the largest reclaimable block on the machine. Seventeen of those threads had been idle for an hour or
+// with no `.mcp.json` would read ~345 MB, and since 2026-10-05 so does one whose `.mcp.json` brings a browser
+// until a tool call starts it (lazy-mcp-host.ts) — still the largest reclaimable block on the machine. Seventeen of those threads had been idle for an hour or
 // more; the oldest for 19.5 hours, still holding its full 504 MB. Nothing in frizz ever collected them:
 // the broker daemon's own IDLE_EXIT_MS is six hours AND only fires when no client is attached, which
 // for a frizz-managed thread is never.

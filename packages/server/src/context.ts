@@ -290,6 +290,9 @@ export interface AppContext {
   // scheduler alike (lazy-start.ts). A schedule's pending next run gets its run header and its history
   // line on this path. Absent (a hand-built test context) ⇒ the router starts lazy rows itself.
   startLazyThread?: (row: SessionRow, prompt: string, profile?: LazyStartProfile) => Promise<{ slug: string; sessionId: string }>
+  // Exact only for Frizz's provisioned runtime. An explicit/PATH override is unknown and leaves the
+  // shared Codex cache ungated; see backend/codex-models.ts.
+  codexVersion?: string
 }
 
 // Read on every board build (once per scheduled row), so it is cached per Frizz home — one process
@@ -302,6 +305,7 @@ export const CLIENT_ZONE_CONFIG_KEY = "clientTimeZone"
 export interface ContextOptions {
   claudeBin?: string // injectable dispatch executable (tests use a stand-in)
   codexBin?: string // injectable app-server executable; unused unless the bridge flag is enabled
+  codexVersion?: string // exact provisioned runtime version; undefined for an override/PATH fallback
   // startServer pins the owner-verified project before any SQLite/tailer/scheduler initialization.
   project?: Project
   /**
@@ -840,7 +844,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const claudeBroker = claudeBrokerBridgeEnabled()
     ? createClaudeAgentBrokerBridge({
         onEvent: (slug, sessionId, event) => claudeRuntimeIngest?.onEvent(slug, sessionId, event),
-        // The ceiling this thread's daemon actually runs under, which is what the footer's context dial
+        // The ceiling this thread's daemon actually runs under, which is what the header's context reading
         // has to divide by: a `[1m]` worker forked at the shipped 500K compacts at 500K, and reading its
         // fullness against 1M reported a comfortable 25% for a session that was half full.
         onCompactionWindow: (sessionId, window) => claudeRuntimeIngest?.noteCompactionWindow(sessionId, window),
@@ -991,6 +995,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     storage,
     bus,
     backendFor,
+    codexModels: () => readCodexModels(undefined, opts.codexVersion),
     onChange: () => board.refresh(),
     // A turn that wore a working status gets a rest status even when no reply moved the conversation.
     onTurnDone: (row) => periodicStatus.onTurnDone(row, { force: liveStatus.onTurnDone(row) }),
@@ -1008,7 +1013,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // reconstruct child lifecycle from English prose. See applyRuntimeTasks for the authority split.
     runtimeTasks: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.tasks(sessionId) : undefined,
     // The model's context SIZE for a broker Claude session. Claude names it nowhere on disk, so this
-    // is the only path to the footer readout's denominator for a Claude row (codex names its own on
+    // is the only path to the context reading's denominator for a Claude row (codex names its own on
     // every token_count and needs nothing here).
     runtimeContextWindow: claudeRuntimeIngest ? (sessionId) => claudeRuntimeIngest.contextWindow(sessionId) : undefined,
     // Codex's live background execs, off the app-server item stream. The counterpart of runtimeTasks
@@ -1091,7 +1096,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     getSettings: () => getSettings(storage, home),
     // The prompt box's machine-wide profile, read fresh per dispatch so the most recent pick anywhere —
     // any project, any tab, a thread's own profile control — is what a model-less dispatch launches on.
-    dispatchProfile: (kind) => getDispatchPreferences(storage, getSettings(storage, home), home, readCodexModels())[kind] ?? {},
+    dispatchProfile: (kind) => getDispatchPreferences(storage, getSettings(storage, home), home, readCodexModels(undefined, opts.codexVersion))[kind] ?? {},
+    codexModels: () => readCodexModels(undefined, opts.codexVersion),
     claudeBin: opts.claudeBin,
     // The Fable fallback's quota reading — the same cached snapshot the status row polls.
     readClaudeQuota: async () => (await readQuota({ claudeBin: opts.claudeBin })).claude,
@@ -1171,8 +1177,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // Second wake source: every thread a subscription window cut off mid-turn gets its own "continue"
     // once that window rolls, over this same delivery path. The quota reader supplies the fallback
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
-    // so consulting it per tick costs a live request only every few minutes.
-    readQuota,
+    // so consulting it per tick costs a live request only every few minutes. Read through the resolved
+    // runtimes, as the quota RPC does: a bare call would start whatever `codex` is first on PATH.
+    readQuota: () => readQuota({ claudeBin: opts.claudeBin, codexBin: opts.codexBin }),
     fableFallback: () => getSettings(storage, home).fableFallback === true,
     refreshBoard: () => board.refresh(),
     // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
@@ -1277,7 +1284,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // that has rested past the prompt-cache TTL and has nothing outstanding. The 504 MB figure that
   // motivated this was measured 2026-08-19, when frizz auto-mounted chrome-devtools into every worker
   // (159 MB of that total); frizz mounts no browser since 2026-08-26, so a thread in a project that
-  // brings none rests nearer ~345 MB and one that brings a browser is back at the old number. It is not an end: the transcript
+  // brings none rests nearer ~345 MB, and one that brings a browser is back at the old number only once it has
+  // used it — a project's stdio MCP servers start on first use since 2026-10-05 (lazy-mcp-host.ts). It is not an end: the transcript
   // is on disk and the next input (an operator message, a fired timer, a recurring prompt, a PR event —
   // all of which route through the bridge's followUp) cold-resumes it with `resume: true`. Above the TTL
   // that resume costs no extra tokens, because the cache is already gone.
@@ -1346,6 +1354,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     schedules: scheduleService,
     scheduleInterpreter,
     startLazyThread: (row, prompt, profile) => scheduleService.startLazyRow(row, prompt, profile),
+    codexVersion: opts.codexVersion,
   }
   startThreadRetention(appContext, contextUnsubscribers)
   return appContext

@@ -12,9 +12,10 @@ export const AWAITING_FALLBACK_TITLE = "Awaiting"
  *  less than a sentence does. */
 export const AWAITING_NO_PROSE = "Waiting for an external update."
 
-/** The heading of a card handing the human `steps:` when the worker named no `title:` — the one fence
- *  shape whose wait is on the READER, so the fallback says so instead of the generic "Awaiting". */
-export const STEPS_FALLBACK_TITLE = "For you to do"
+/** The KIND CHIP over a card handing the human `steps:` — the one fence shape whose wait is on the
+ *  READER (TranscriptCard's KindChip). The worker's `title:` goes under it; with none, the chip alone
+ *  heads the card. */
+export const STEPS_CHIP = "To do"
 
 /** The steps card's one verb, and EXACTLY the message it sends — an ordinary reply from the human, the
  *  same thing typing the word would send. Nothing marks it as frizz's, because nothing about it is: the
@@ -130,12 +131,14 @@ export function awaitingProseBlock(body: string | undefined): string | null {
  *  It strips ONLY a line whose key is a key: a retired kind, or one of the live YAML keys. That
  *  narrowness is the point — a handoff that opens "Note: the macOS leg is flaky" is prose, and a filter
  *  keyed on "has a colon" would eat it. */
-const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "issues", "for", "title"])
+// The answer lines are machinery too: `status:` (2026-10-05) and the `needs_input:` it replaced, in both
+// spellings the parser reads.
+const FENCE_SYNTAX_KEYS = new Set<string>([...RETIRED_AWAITING_KINDS, "shells", "agents", "timers", "prs", "issues", "for", "title", "status", "needs_input", "needs-input"])
 function stripFenceSyntax(body: string): string {
   return body
     .split("\n")
     .filter((line) => {
-      const key = /^\s*([a-z][a-z-]*):/i.exec(line)?.[1]?.toLowerCase()
+      const key = /^\s*([a-z][a-z_-]*):/i.exec(line)?.[1]?.toLowerCase()
       return !(key && FENCE_SYNTAX_KEYS.has(key))
     })
     .join("\n")
@@ -165,6 +168,7 @@ export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | nul
   const parts = [
     // Steps first: the reader is the one being waited on, which outranks anything frizz is watching.
     plural(count("step"), "step from you", "steps from you"),
+    plural(count("question"), "answer from you", "answers from you"),
     ...prWatchRefs(hints).map((pr) => pr.ref),
     plural(count("shell"), "agent terminal", "agent terminals"), // the strip's own noun for the same row
     plural(count("agent"), "sub-agent", "sub-agents"),

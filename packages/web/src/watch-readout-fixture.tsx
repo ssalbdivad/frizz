@@ -2,7 +2,6 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import type { BoardSnapshot, ThreadView as ThreadViewModel } from "@frizz/shared"
 import { BackgroundOpsStrip } from "./components/ChatView.tsx"
-import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
@@ -13,8 +12,10 @@ import "./styles.css"
 // either of them as background shells underneath the prompt box", then "we do not need to redundantly
 // list out background shells inside of the watcher icon menu", maintainer 2026-08-14).
 //
-// It is now ONE: the shell's own row, blue dot and all. So this surface renders the strip AND the footer
-// together, because the property under test is what the two say about the same shell at the same time.
+// It is now ONE: the shell's own row, blue dot and all. This surface rendered the strip AND the lifecycle
+// footer together, because the property under test was what the two said about the same shell at the
+// same time; the footer itself went on 2026-10-05 (its verbs moved to the header), so the strip is the
+// one place left and this surface renders it alone.
 //
 // `?case=` picks the state. `?font=sans|mono` sets `data-font`, because this app renders in two type
 // stacks and a line that fits on one can wrap on the other.
@@ -82,13 +83,12 @@ window.fetch = async (input, init) => {
 function Fixture() {
   return (
     <div className="mx-auto w-[min(680px,calc(100%-32px))] py-8">
-      {/* The footer is normally the bottom edge of a card, so give it one: the tooltip opens upward and
-          needs somewhere to land, and the strip's own corner radius only reads against a border. */}
+      {/* The strip is normally the bottom edge of a drawer's prompt box, so give it one: a row's tooltip
+          opens upward and needs somewhere to land. */}
       <div className="overflow-hidden rounded-lg border border-border bg-panel">
         <div className="h-32 p-4 text-[12px] text-muted">…transcript…</div>
         <div className="mx-3 rounded-md border border-border/70 px-3 py-2 text-[12px] text-muted-50">…prompt box…</div>
         <BackgroundOpsStrip slug={SLUG} />
-        <ThreadLifecycleFooter thread={thread} />
       </div>
     </div>
   )

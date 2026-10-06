@@ -5,7 +5,6 @@ import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { BackgroundOpsStrip } from "./components/ChatView.tsx"
 import { Composer } from "./components/Composer.tsx"
 import { ProfileGridSelector } from "./components/ProfileGridSelector.tsx"
-import { ThreadLifecycleFooter } from "./components/ThreadLifecycleFooter.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
@@ -79,7 +78,9 @@ function Fixture() {
             </article>
           ))}
         </div>
-        <footer data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel">
+        {/* The device's bottom inset rides the chat footer, as it does in ChatView: the lifecycle footer
+            that used to sit under this and carry it went on 2026-10-05. 0px on a desktop screen. */}
+        <footer data-thread-chat-footer className="z-10 shrink-0 border-t border-border/60 bg-panel pb-[env(safe-area-inset-bottom)]">
           <div data-thread-action-bar className="px-3 py-3">
             <Composer
               surface="drawerFooterFixture"
@@ -112,7 +113,6 @@ function Fixture() {
             </div>
           </div>
         </footer>
-        <ThreadLifecycleFooter thread={thread} safeArea />
       </section>
     </main>
   )

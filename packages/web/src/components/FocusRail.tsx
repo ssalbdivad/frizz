@@ -8,22 +8,24 @@ import { embedded } from "../lib/embed.ts"
 import { reviewChanges, reviewLabel } from "../lib/reviewChanges.ts"
 import { store } from "../store.ts"
 import { isDirectSubAgent, type EditedFile, type ThreadLinkView, type ThreadView } from "@frizz/shared"
-import { useBoard, useProjectDir, useTranscript } from "../hooks.ts"
+import { useHomeDir, useProjectDir, useTranscript } from "../hooks.ts"
 import { transcriptBackgroundShells } from "../lib/childOps.ts"
+import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { editedFileTree, flattenEditedFileTree } from "../lib/editedFileTree.ts"
 import { newestFileChangeKey } from "../lib/editedFilesRefresh.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
 import { prewarmLocalFile } from "../lib/localFileQuery.ts"
 import { useNowMs } from "../lib/liveClock.ts"
+import { basename, tildePath } from "../lib/paths.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { threadProcesses } from "../lib/threadProcesses.ts"
+import { processIsLive, threadProcesses } from "../lib/threadProcesses.ts"
 import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
 import { FolderHintToken, folderHintTitle, processFolderHint } from "./ThreadTerminals.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
-// (maintainer 2026-08-28): its live sub-agents, its running terminals (the agent's and yours), the pull requests and
-// timers it is watching, and the files its worker has edited.
+// (maintainer 2026-08-28): its sub-agents (live, or stale and saying so), its terminals (the agent's and
+// yours), the pull requests and timers it is watching, and the files its worker has edited.
 //
 // IT IS THE AWAITING CARD'S TABLE, one surface over. Every row here is the card's own row component —
 // AgentRow, BgShellRow, GithubWatchRow, TimerRow, the same WaitRow for a file — in the card's own
@@ -85,7 +87,8 @@ function DirRow({ name, depth }: { name: string; depth: number }) {
 
 function EditedFileTree({ files }: { files: readonly EditedFile[] }) {
   const projectDir = useProjectDir()
-  const rows = flattenEditedFileTree(editedFileTree(files, projectDir))
+  const homeDir = useHomeDir()
+  const rows = flattenEditedFileTree(editedFileTree(files, projectDir, homeDir))
   return (
     // ONE cell of the shared grid, holding its own column of rows: the tree's rows must not share the
     // grid's tracks (the indent is the whole point), and a `gap-y-px` between them keeps the rhythm
@@ -94,13 +97,13 @@ function EditedFileTree({ files }: { files: readonly EditedFile[] }) {
       {rows.map((node) =>
         node.kind === "dir"
           ? <DirRow key={`d:${node.path}`} name={node.name} depth={node.depth} />
-          : <FileRow key={node.file.path} file={node.file} name={node.name} depth={node.depth} />,
+          : <FileRow key={node.file.path} file={node.file} name={node.name} depth={node.depth} homeDir={homeDir} />,
       )}
     </div>
   )
 }
 
-function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth: number }) {
+function FileRow({ file, name, depth, homeDir }: { file: EditedFile; name: string; depth: number; homeDir: string | undefined }) {
   // EAGER READ ON HOVER (maintainer 2026-09-01): the pointer resting on a row is the earliest honest
   // signal that this file is the next one to open, and it buys the whole server round trip plus the
   // highlight pass before the click. The viewer then mounts against a warm cache and paints on the
@@ -123,13 +126,13 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
       // lands it at 6.33, the same reading as the directory row above it.
       mark={<FileDiff size={12} className={`${ON_CAP} -mr-[2px] text-muted-60`} />}
       // The basename is the name and the directory row above it says where; the full path is the
-      // tooltip. A 340px rail truncates from the end, and a repo path truncated from the end lost
-      // exactly the part that names the file.
+      // tooltip, its home written as `~` the way the tree writes it. A 340px rail truncates from the
+      // end, and a repo path truncated from the end lost exactly the part that names the file.
       name={name}
       indent={depth * TREE_INDENT}
       onOpen={() => openLocalPath(file.path)}
       onPrewarm={() => prewarmLocalFile(client, file.path)}
-      title={file.path}
+      title={tildePath(file.path, homeDir)}
       status={
         <>
           {(file.added ?? 0) > 0 && <span style={{ color: PRIMER.fgSuccess }}>+{file.added}</span>}
@@ -143,11 +146,13 @@ function FileRow({ file, name, depth }: { file: EditedFile; name: string; depth:
 
 // A file or link the worker SAVED for the human (`mcp__frizz__link`). The card's row shape again: the
 // label it was saved under is the name, and the status is the short reading of where it goes — a URL's
-// host, a file's basename — with the full target in the tooltip. Never the whole URL or path: the status
-// track is shared by every row in the grid, so one long target there would truncate every name above it
-// (see WaitGrid's `fit-content(50%)`). A file opens in the page's viewer, a link in a new tab.
+// host, a file's basename — with the full target in the tooltip (a file's home written as `~`, as the
+// edited-files tree writes it). Never the whole URL or path: the status track is shared by every row in
+// the grid, so one long target there would truncate every name above it (see WaitGrid's
+// `fit-content(50%)`). A file opens in the page's viewer, a link in a new tab.
 function SavedLinkRow({ link }: { link: ThreadLinkView }) {
   const client = useQueryClient()
+  const homeDir = useHomeDir()
   if (link.kind === "link") {
     return (
       <WaitRow
@@ -172,8 +177,9 @@ function SavedLinkRow({ link }: { link: ThreadLinkView }) {
       name={link.label}
       onOpen={() => openLocalPath(link.target)}
       onPrewarm={() => prewarmLocalFile(client, link.target)}
-      title={link.target}
-      status={link.target.split("/").filter(Boolean).pop() ?? link.target}
+      title={tildePath(link.target, homeDir)}
+      // Either separator: a `/`-only split left a Windows target's whole `C:\Users\…` path as the status.
+      status={basename(link.target)}
     />
   )
 }
@@ -216,27 +222,30 @@ function useEditedFilesRefresh(slug: string, loaded: boolean, changeKey: string 
 
 export function FocusRail({ thread }: { thread: ThreadView }) {
   const now = useNowMs()
-  const board = useBoard()
+  const homeDir = useHomeDir()
   const projectDir = useProjectDir()
   // Shared with ChatView's own subscription (same key), so this adds no request and no poll.
   const transcript = useTranscript(thread.id, { poll: false })
   const files = transcript.data?.editedFiles ?? []
   const changeKey = useMemo(() => newestFileChangeKey(transcript.data?.messages ?? []), [transcript.data?.messages])
   useEditedFilesRefresh(thread.id, transcript.data !== undefined, changeKey, thread.runtime === "running" || thread.runtime === "spawning")
-  // The card's live children PLUS the rested ones: a direct child whose own run ended while sub-agents
-  // it dispatched are still working. The server emits a rested row only while that fan-out runs (tailer
-  // anchorRoots), so the branch is genuinely in motion — yet the card's `liveAgents` drops the rested
-  // root by state and the running grandchildren by depth, and the rail's Sub-agents group went empty
-  // with work in flight. The card keeps its own set: it counts the results the thread still AWAITS, and
-  // a rested child has already delivered its result.
-  const agents = (thread.subAgents ?? []).filter((a) => isDirectSubAgent(a) && (a.state === "running" || a.state === "rested"))
-  // EVERY TERMINAL ON THE THREAD that is running or waiting on you — the agent's and yours, in the one order
-  // every surface lists them (lib/threadProcesses.ts): a prompt first, then the live ones oldest first.
+  // EVERY DIRECT CHILD THE BOARD LISTS, in each of its three states — what the ops strip under the
+  // prompt box lists, because on /full this rail is that strip's replacement (ff185621) and a row it
+  // drops is shown nowhere. A RESTED child is one whose own run ended while sub-agents it dispatched are
+  // still working (the server emits it only while that fan-out runs, tailer anchorRoots), so it stands
+  // for the branch; a STALE one is quiet past its window and draws as such (AgentRow). This rail kept
+  // only running and rested until 2026-10-05, so a stale child vanished from /full altogether. The card
+  // keeps its own set: it counts the results the thread still AWAITS (`liveAgents`). For the same reason
+  // each agent and agent-terminal row carries the strip's stop/clear ×, under the strip's own gate.
+  const agents = (thread.subAgents ?? []).filter(isDirectSubAgent)
+  // EVERY TERMINAL ON THE THREAD that is live or waiting on you — the agent's and yours, in the one order
+  // every surface lists them (lib/threadProcesses.ts): a prompt first, then the live ones oldest first. A
+  // QUIET agent terminal stays listed, as on the strip, and BgShellRow says it is stale.
   // The board's shells PLUS the transcript's: a Codex background exec is transcript-native and the board
   // reports none for it (childOps.transcriptBackgroundShells). A Claude shell arrives through both, and
   // threadProcesses merges the two on its launch id, so it still draws once.
   const transcriptShells = useMemo(() => transcriptBackgroundShells(transcript.data?.messages ?? []), [transcript.data?.messages])
-  const terminals = threadProcesses(thread, transcriptShells, { now }).filter((p) => p.state === "prompt" || p.state === "running")
+  const terminals = threadProcesses(thread, transcriptShells, { now }).filter(processIsLive)
   // AN ARCHIVED THREAD WATCHES NOTHING, though its registrations stay armed for the day it is reopened:
   // the scheduler neither fires its timers nor polls its PRs and issues (scheduler.ts evalTimers, and the
   // per-watcher liveness skip). Rowed here, a past-due timer read "firing…" forever and a PR row froze on
@@ -257,17 +266,17 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   // rail with them, and the wait rows above are what the reader came for. The fold is a saved view
   // preference (lib/prefs.ts), so it holds across threads and reloads.
   const groups: WaitGroup[] = [
-    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} />) },
+    { head: "Sub-agents", rows: agents.map((a) => <AgentRow key={a.id ?? a.label} agent={a} slug={thread.id} now={now} onDismiss={childOpDismisser(thread.id, a)} />) },
     {
       head: "Terminals",
       rows: terminals.map((p) => {
         // The strip's folder hint, on the strip's rule: only where a row runs somewhere other than where
         // the thread's header says the agent is working (processFolderHint).
         const where = processFolderHint(p, thread.checkout)
-        const hint = where ? <FolderHintToken hint={where} title={folderHintTitle(where, projectDir, board?.homeDir)} /> : undefined
+        const hint = where ? <FolderHintToken hint={where} title={folderHintTitle(where, projectDir, homeDir)} /> : undefined
         return p.terminal
           ? <TermWaitRow key={p.key} terminal={p.terminal} slug={thread.id} now={now} hint={hint} />
-          : <BgShellRow key={p.key} shell={p.shell!} slug={thread.id} now={now} hint={hint} />
+          : <BgShellRow key={p.key} shell={p.shell!} slug={thread.id} now={now} hint={hint} onDismiss={childOpDismisser(thread.id, p.shell!, "SHELL")} />
       }),
     },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },

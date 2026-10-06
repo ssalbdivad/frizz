@@ -248,10 +248,10 @@ test(`the pinned Claude Code ${CLAUDE_CODE_VERSION} still writes a transcript th
     state.ownedToolUseIds.size > 0,
     "no tool_use id was folded from a real session — completion-report ownership is keyed on this set, and an empty one re-attributes other threads' reports",
   )
-  // Both vendors report their own context accounting, and the footer's fullness readout is a reading
+  // Both vendors report their own context accounting, and the header's fullness readout is a reading
   // rather than an estimate precisely because of that. A moved `usage` bag would blank it silently.
   assert.ok(
     typeof state.contextTokens === "number" && state.contextTokens > 0,
-    "no context reading was folded — message.usage moved, and the footer's fullness readout would go blank",
+    "no context reading was folded — message.usage moved, and the header's fullness readout would go blank",
   )
 })
