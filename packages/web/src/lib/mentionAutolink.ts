@@ -3,6 +3,8 @@ import type { ProjectQueue, ThreadView } from "@frizz/shared"
 import { crossProjectHref } from "./base-path.ts"
 import { childArrays } from "./githubAutolink.ts"
 import { crossProjectMentionCandidates, mentionCandidates, scanMentions, type MentionCandidate } from "./threadMentions.ts"
+import { projectMentionIndex, scanProjectMentions, subscribeProjectMentions } from "./projectMentions.ts"
+import { projectViewHref } from "./pageView.ts"
 
 // `@handle` AND `@thread.child` IN AGENT PROSE ARE LINKS (maintainer 2026-09-30: "ensure that in cases
 // where agents refer to each other, it doesn't refer to 'another agent' but refers to the fully
@@ -80,6 +82,14 @@ export function setCrossProjectMentions(next: readonly ProjectQueue[] | null | u
   rebuild()
 }
 
+// `#slug` names a PROJECT (lib/projectMentions.ts), and links to the page focused on it in every project's
+// prose alike — the machine's projects are no one project's. Their list arriving or changing is one more
+// reason to rebuild what renders.
+subscribeProjectMentions(() => {
+  version++
+  for (const listener of listeners) listener()
+})
+
 /** A scalar that moves whenever the index does — the `getSnapshot` half of the subscription. */
 export function mentionIndexVersion(): number {
   return version
@@ -139,13 +149,20 @@ function linkToken(text: string, href: string, title: string): Tokens.Link {
 }
 
 function splitMentions(source: string): Token[] | null {
-  const matches = scanMentions(source, index)
+  // Threads and projects in one pass, by position: the two grammars never overlap (a project mention
+  // never follows a word character, and `@` is one neither starts with `#`).
+  const matches = [
+    ...scanMentions(source, index).map(({ start, text, slug, address, project: projectSlug }) => ({
+      start, text, href: mentionHref(slug, address, projectSlug), title: address ? "Open sub-agent" : "Open thread",
+    })),
+    ...scanProjectMentions(source, projectMentionIndex()).map(({ start, text, slug, name }) => ({ start, text, href: projectViewHref(slug), title: name })),
+  ].sort((a, b) => a.start - b.start)
   if (matches.length === 0) return null
   const pieces: Token[] = []
   let consumed = 0
-  for (const { start, text, slug, address, project: projectSlug } of matches) {
+  for (const { start, text, href, title } of matches) {
     if (start > consumed) pieces.push(textToken(source.slice(consumed, start)))
-    pieces.push(linkToken(text, mentionHref(slug, address, projectSlug), address ? "Open sub-agent" : "Open thread"))
+    pieces.push(linkToken(text, href, title))
     consumed = start + text.length
   }
   if (consumed < source.length) pieces.push(textToken(source.slice(consumed)))
@@ -162,7 +179,7 @@ const HTML_ANCHOR_CLOSE = /^<\/a\s*>/i
 /** Rewrite every plain-text token in the tree whose mentions resolve into text + link tokens. Mutates
  *  in place; walks forwards and skips what it splices in. A no-op while the index is empty. */
 export function linkifyThreadMentions(tokens: Token[]): void {
-  if (index.length === 0) return
+  if (index.length === 0 && projectMentionIndex().length === 0) return
   let inAnchor = false
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]!

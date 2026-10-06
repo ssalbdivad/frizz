@@ -1,5 +1,5 @@
 import { createRoot } from "react-dom/client"
-import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
+import { QueryClient, QueryClientProvider, QueryObserver } from "@tanstack/react-query"
 import "@xterm/xterm/css/xterm.css"
 import "./styles.css"
 import { RootErrorBoundary } from "./components/ErrorBoundary.tsx"
@@ -16,6 +16,8 @@ import { installExternalLinkInterceptor } from "./lib/external-links.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { installCodeCopyInterceptor } from "./lib/copy-code.ts"
 import { installThreadLinkInterceptor } from "./lib/thread-links.ts"
+import { setProjectMentions } from "./lib/projectMentions.ts"
+import { rpc } from "./api/rpc.ts"
 import { primeRoute } from "./lib/router.ts"
 import { installViewTransitionRejectionFilter } from "./lib/viewTransitionRejections.ts"
 import { PENDING_SEND_REPLAY_DELAY_MS, replayPendingSends } from "./lib/eagerComposerSubmission.ts"
@@ -81,6 +83,9 @@ if (!settingsFixture) {
   installLocalFileLinkInterceptor()
   installCodeCopyInterceptor()
   installThreadLinkInterceptor(queryClient)
+  // The projects a `#slug` names (lib/projectMentions.ts): the machine's project list, the same cached
+  // read the switcher draws from, kept current as it is invalidated by an add, rename or removal.
+  new QueryObserver(queryClient, { queryKey: ["projectsList"], queryFn: () => rpc.projectsList() }).subscribe((result) => setProjectMentions(result.data))
   installViewTransitionRejectionFilter()
   // A reply still on the wire when the last page in this tab went away — see lib/pendingSends.ts.
   setTimeout(() => void replayPendingSends(), PENDING_SEND_REPLAY_DELAY_MS)

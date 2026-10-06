@@ -2,7 +2,7 @@ import { useEffect, useMemo } from "react"
 import { plainLinkSegments } from "../lib/plainLinks.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
 import { useGithubRepoForLinks } from "../lib/useMarkdown.ts"
-import { MentionLink, useMentionSegments } from "./MentionLinks.tsx"
+import { MentionLink, ProjectMentionLink, useMentionSegments } from "./MentionLinks.tsx"
 import { scanInputFences } from "../lib/inputCodeFences.ts"
 import { FenceCodeSpan } from "./TextareaCodeFences.tsx"
 
@@ -77,8 +77,8 @@ function LinkedRun({ text }: { text: string }) {
 }
 
 // A plain run with its `@handle` mentions linked to the threads they name — only under a transcript that
-// provides the board's handles (MentionLinks.tsx); anywhere else the run renders exactly as typed.
+// provides the board's handles (MentionLinks.tsx) — and its `#slug` mentions to the projects they name.
 function MentionText({ text }: { text: string }) {
   const segments = useMentionSegments(text)
-  return <>{segments.map((s, i) => (s.kind === "text" ? s.text : <MentionLink key={i} segment={s} />))}</>
+  return <>{segments.map((s, i) => (s.kind === "text" ? s.text : s.kind === "project" ? <ProjectMentionLink key={i} segment={s} /> : <MentionLink key={i} segment={s} />))}</>
 }

@@ -7,6 +7,8 @@ import { basePath } from "../lib/base-path.ts"
 import { mentionHref } from "../lib/mentionAutolink.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { mentionSegments, type MentionCandidate, type MentionSegment } from "../lib/threadMentions.ts"
+import { scanProjectMentions, useProjectMentions } from "../lib/projectMentions.ts"
+import { projectViewHref } from "../lib/pageView.ts"
 import type { ThreadView } from "@frizz/shared"
 import { displayName, displayTitle, threadHandleOf } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
@@ -29,10 +31,54 @@ export function MentionIndexProvider({ children }: { children: ReactNode }) {
   return <MentionIndexContext.Provider value={index}>{children}</MentionIndexContext.Provider>
 }
 
-/** Split a text run by the mentions the surrounding transcript can resolve. */
-export function useMentionSegments(text: string): MentionSegment[] {
+/** A run of a human's text split by what it names: `@handle` threads the surrounding transcript can
+ *  resolve, and `#slug` projects, which are the machine's and resolve on any surface. */
+export type MentionTextSegment = MentionSegment | { kind: "project"; text: string; slug: string; name: string }
+
+/** Split a text run by the mentions the surrounding transcript can resolve, and the projects it names. */
+export function useMentionSegments(text: string): MentionTextSegment[] {
   const index = useContext(MentionIndexContext)
-  return useMemo(() => mentionSegments(text, index), [text, index])
+  const projects = useProjectMentions()
+  return useMemo(() => {
+    const segments = mentionSegments(text, index)
+    if (projects.length === 0 || !text.includes("#")) return segments
+    return segments.flatMap((segment): MentionTextSegment[] => {
+      if (segment.kind !== "text") return [segment]
+      const out: MentionTextSegment[] = []
+      let consumed = 0
+      for (const { start, ...match } of scanProjectMentions(segment.text, projects)) {
+        if (start > consumed) out.push({ kind: "text", text: segment.text.slice(consumed, start) })
+        out.push({ kind: "project", ...match })
+        consumed = start + match.text.length
+      }
+      if (consumed < segment.text.length) out.push({ kind: "text", text: segment.text.slice(consumed) })
+      return out
+    })
+  }, [text, index, projects])
+}
+
+// `#slug` OPENS THE PROJECT — the page focused on it, as choosing it in the switcher does. The thread
+// mention's look and click contract: underlined in the host's colour, a plain click moves the page in
+// place, a modified click is the browser's (a new tab focused on the project).
+export function ProjectMentionLink({ segment }: { segment: Extract<MentionTextSegment, { kind: "project" }> }) {
+  const href = projectViewHref(segment.slug)
+  return (
+    <a
+      href={href}
+      title={segment.name}
+      data-project-mention={segment.slug}
+      className="underline underline-offset-2"
+      onClick={(e) => {
+        e.stopPropagation()
+        if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        e.preventDefault()
+        spaNavigate(href)
+      }}
+      onKeyDown={(e) => e.stopPropagation()}
+    >
+      {segment.text}
+    </a>
+  )
 }
 
 export function MentionLink({ segment }: { segment: Extract<MentionSegment, { kind: "mention" }> }) {

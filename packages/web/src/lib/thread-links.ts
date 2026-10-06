@@ -35,10 +35,23 @@ export function threadLinkTarget(inner: string): { slug: string; address?: strin
   return match[2] ? { slug: match[1]!, address: match[2] } : { slug: match[1]! }
 }
 
+// A PROJECT MENTION in agent prose (`#arktype`, lib/mentionAutolink.ts) links to the page focused on that
+// project, `/?project=<slug>`. A plain click moves the page there in place through the router, as the
+// switcher does, where the browser would reload the whole app; a modified click is left to it.
+const PROJECT_VIEW_HREF = /^\/\?project=[^&#\s]+$/u
+
 export function installThreadLinkInterceptor(queryClient: QueryClient): () => void {
   const handler = (event: MouseEvent) => {
     if (event.button !== 0 || event.defaultPrevented) return
     if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return
+    const projectLink = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href^="/?project="]') : null
+    const projectHref = projectLink?.getAttribute("href")
+    if (projectHref && PROJECT_VIEW_HREF.test(projectHref)) {
+      event.preventDefault()
+      event.stopPropagation()
+      spaNavigate(projectHref)
+      return
+    }
     const anchor = event.target instanceof Element ? event.target.closest<HTMLAnchorElement>('a[href*="/thread/"]') : null
     const href = anchor?.getAttribute("href")
     if (!anchor || !href || !href.startsWith("/")) return
