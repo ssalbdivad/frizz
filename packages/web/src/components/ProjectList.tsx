@@ -20,9 +20,12 @@
 //           with no name or caret of its own (maintainer 2026-10-01, of a caret row closing every project:
 //           "find some way to have it expand just from the title bar so we don't need anything at the
 //           bottom of the list"). The same day the counts alone proved too hidden ("the click done on the
-//           top being the only way to view is too confusing"), so an unfolded project's list also ENDS in a
-//           small "N more" under its last row, which lists the rest in place (MoreRow) — one unnamed row,
-//           not a caret per band.
+//           top being the only way to view is too confusing"), so an unfolded project also says "N more" in
+//           words, which lists the rest in place (MoreToggle) — one unnamed affordance, not a caret per
+//           band. It ENDED the project's list, on a row of its own, until 2026-10-06; it now sits on the
+//           project's own line beside its name, because that row cost every project a line, and at
+//           Colin's load (17 projects, 70 open threads) the project frames ate a third of the screen —
+//           see ProjectGroup.
 //
 // ONE PRESENTATION, BOTH VIEWS. Focus mode is this list with one project in it; All projects is the same
 // groups, one per project. So the density is what a busy project costs beyond its own rows, and it is
@@ -45,7 +48,7 @@
 // only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Plus, Repeat } from "lucide-react"
+import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Pin, Plus, Repeat } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ScheduleView, ThreadView } from "@frizz/shared"
@@ -70,7 +73,7 @@ import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { BANDS, type BandKey } from "./BandLabel.tsx"
-import { ProjectMenu, useAddProject, warmProjectPicker } from "./ProjectActions.tsx"
+import { ProjectMenu, projectFacts, shortPath, useAddProject, warmProjectPicker } from "./ProjectActions.tsx"
 import { QueueBadge } from "./ProjectSwitcher.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { ROW_ACTION_CLASS, RailRow, type RowScope } from "./Sidebar.tsx"
@@ -84,20 +87,24 @@ const ROW_BUTTON_CLASS = "flex min-w-0 flex-1 items-start gap-2 pb-1 pl-5 pr-1.5
 const INDICATOR_SLOT = "flex h-[19px] w-4 shrink-0 items-center justify-center"
 /** A project's own row: the thread row's 19px line, 2px of padding a side rather than 4 — see ProjectGroup. */
 const HEAD_BUTTON_CLASS = "flex min-w-0 flex-1 items-start gap-2 py-0.5 pl-5 pr-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 rounded-md"
-/** The space above every project's group but the first — see ProjectGroup. */
-const GROUP_GAP = "mt-1.5"
 /**
- * THE RULE BETWEEN PROJECTS (maintainer 2026-10-01: "needs slightly more visual separation between projects
- * now maybe thin divider? pick something elegant"). A hairline in a 13px gap, starting at the project
- * squares' left edge so it heads the column the groups hang from, and fading out before the counts: it
- * parts the projects without boxing them, so the list still reads as one list. Placed on the INK, not the
- * gap: a thread row keeps ~4.5px of padding and leading under its title, so the gap's middle left 17.5px of
- * ink above the rule and 9.5px below; 11px up from the next group it stands ~13.5px off each (sans). Between the busy
- * projects, and once above the quiet ones, which are single rows and need nothing between them. It is a
- * pseudo-element, so it rides a dragged group's transform; a lifted group drops it.
+ * THE SPACE ABOVE EVERY PROJECT BUT THE FIRST — the only thing between two projects. Between the busy
+ * projects, once above the quiet ones (single rows, which need nothing between them), and above the add
+ * row.
+ *
+ * It was a hairline in a 13px gap from 2026-10-01 (David: "needs slightly more visual separation between
+ * projects now maybe thin divider? pick something elegant") until 2026-10-06, when capacity parity with
+ * upstream's board took it (plans/upstream-superset.md §2: the default view must show at least the 22 / 28
+ * lines Colin's own board shows at 1440x900 / 1920x1080). What parts the projects now is the project's
+ * row itself — a 16px square and a semibold name over a column of 13px regular titles — standing on this
+ * gap. Measured as ink (sans, dsf 2, descenders included): 19px of air from a group's last title to the
+ * next project's name, against 14px between two threads' titles and 12px from a name to its first
+ * thread, so each name reads as heading what is under it, not as closing what is over it. At Colin's
+ * load 6px fits 23 / 29 lines at 1440x900 / 1920x1080, 7px and 8px 22 / 29 (21px of air at 8): the
+ * smaller gap is the one that clears the 1440 bar by a line rather than meeting it exactly. It is a
+ * margin on the group, so it rides a dragged group's transform with it.
  */
-const GROUP_RULE =
-  "relative mt-[13px] before:pointer-events-none before:absolute before:-top-[11px] before:left-5 before:right-1.5 before:h-px before:bg-linear-to-r before:from-border-strong before:from-15% before:to-transparent before:to-90% before:content-['']"
+const GROUP_GAP = "mt-1.5"
 /** A row whose "…" menu is open wears the rail's hover wash, held. */
 const SELECTED_ROW = "after:!opacity-100"
 /** Done rows listed per page: the band grows without bound, and a project opens on its most recent. */
@@ -217,7 +224,7 @@ export function ProjectList({
           which cost a click to reach a project whose row is already about as quiet as a row can be
           (maintainer: "if I want to navigate to them I shouldn't have to expand"). */}
       {quiet.length > 0 && (
-        <section aria-label="Quiet projects" className={busy.length > 0 ? GROUP_RULE : ""}>
+        <section aria-label="Quiet projects" className={busy.length > 0 ? GROUP_GAP : ""}>
           {quiet.map((entry) => group(entry, false))}
         </section>
       )}
@@ -478,18 +485,24 @@ function useReadAhead(projects: QueuesProject[]) {
  *
  * ITS COST BEYOND ITS OWN ROWS is what Colin's sidebar was tuned for and what this group is held to — the
  * whole group has to read as its threads, with a name over them, and not as a frame the threads sit in.
- * Measured on a seeded stack (sans, a busy project with pinned, ready and working rows and all three quiet
- * bands; scripts/seed-focus-mode.mjs):
+ * Measured on a seeded stack (sans, Colin's load: 17 projects, 70 open threads; the planning thread's
+ * sidebar/seed-scale.ts, gated by capacityParity.e2e.test.ts):
  *
  *   the project's row          23px  (27 until 2026-09-29: 2px of padding a side, not 4 — the 16px square
  *                                     still has 3.5px around it, and nothing wraps in it)
  *   a band's name, per band     0px  (none since 2026-10-01: the count on the project's row is its only
  *                                     handle; 15px before, and Colin's was a 23.7px header under a 25px rule)
- *   the space before the next  13px  (GROUP_RULE's hairline in its middle; 6 until 2026-10-01, 12 before)
+ *   "N more"                    0px  (on the project's row since 2026-10-06, MoreToggle; a 23px row of its
+ *                                     own under the threads from 2026-10-01)
+ *   the space before the next   6px  (GROUP_GAP; a 13px gap with a hairline in it 2026-10-01 to 10-06)
  *
- * so a busy project costs 23 + 13 = 36px beyond its rows (29 with the 6px gap) now that no loud band is named (59 while both were, 80 while the quiet counts sat on a 21px line of their own under the
- * threads, 2026-09-29 only), against 66px before its bands had names — and the same project in Colin's sidebar, one project per page, cost
- * 267px for its six headers and five rules.
+ * so a busy project costs 23 + 6 = 29px beyond its rows — about one thread row (27.5px) — measured 28.3px
+ * a project across Colin's load, against 55px with the "N more" row and the rule (59 by the table). That
+ * is the difference between 17 lines and 23 on a 1440x900 screen, and 22 and 29 on a 1920x1080 one,
+ * where upstream's board, one project, shows 22 / 28. Earlier: 59px while both loud bands
+ * were named, 80 while the quiet counts sat on a 21px line of their own (2026-09-29 only), 66 before the
+ * bands had names — and the same project in Colin's sidebar, one project per page, cost 267px for its six
+ * headers and five rules.
  *
  * Its FOCUS project (the page project, whose board is live in the store) reads the rest from that board;
  * every other reads its board through the cache, which the list read ahead.
@@ -640,7 +653,7 @@ function ProjectGroupRows({
       data-xq-project-held={grip?.held || undefined}
       // Lifted while held: the page's own colour under it, so the rows it slides over do not show through,
       // and a shadow that says it is off the list. `relative` so the lift stacks above its neighbours.
-      className={`${spaced && !grip?.held ? GROUP_RULE : spaced ? "mt-[13px]" : ""} ${grip?.held ? "relative z-10 cursor-grabbing rounded-md bg-bg shadow-lg shadow-shadow-ink/50" : ""}`}
+      className={`${spaced ? GROUP_GAP : ""} ${grip?.held ? "relative z-10 cursor-grabbing rounded-md bg-bg shadow-lg shadow-shadow-ink/50" : ""}`}
       style={{
         transform: grip?.offset ? `translateY(${grip.offset}px)` : undefined,
         // The held group tracks the pointer exactly; the ones it passes are what animate.
@@ -655,6 +668,7 @@ function ProjectGroupRows({
         project={project}
         grip={grip}
         busy={loud.rows > 0}
+        pinned={loud.pinned.length}
         working={loud.working.length}
         count={loud.ready.length}
         quiet={quiet}
@@ -662,6 +676,19 @@ function ProjectGroupRows({
         collapsed={collapsed}
         home={home}
         switcher={switcher}
+        more={
+          // The rest of the project, in words, on its own line — while its list is showing at all.
+          !collapsed && (loud.rows > 0 || opened.length > 0) ? (
+            <MoreToggle
+              project={project}
+              quiet={quiet}
+              opened={opened}
+              doneDrawn={Math.min(donePage, slots("done").length)}
+              onMore={() => setDonePage((page) => page + DONE_PAGE * 2)}
+              onLess={() => setDonePage(DONE_PAGE)}
+            />
+          ) : undefined
+        }
       />
       {!collapsed && (
         <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
@@ -673,16 +700,6 @@ function ProjectGroupRows({
           {slots("ready").map(row)}
           {slots("working").map(row)}
           {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} donePage={donePage} />}
-          {(loud.rows > 0 || opened.length > 0) && (
-            <MoreRow
-              project={project}
-              quiet={quiet}
-              opened={opened}
-              doneDrawn={Math.min(donePage, slots("done").length)}
-              onMore={() => setDonePage((page) => page + DONE_PAGE * 2)}
-              onLess={() => setDonePage(DONE_PAGE)}
-            />
-          )}
         </ThreadProjectScope>
       )}
     </section>
@@ -759,6 +776,15 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
  * click opens every quiet band it has, and folds them away again.
  * Nothing navigates. The whole row is the fold's target; only its own controls sit above it.
  *
+ * BESIDE ITS NAME, "N more" (MoreToggle) while its list is showing — the rest of the project, said in words
+ * on the line the project already spends, rather than on a row of its own under its threads.
+ *
+ * ON HOVER, WHAT UPSTREAM'S PROJECT CARD SAID (U:ProjectGrid.tsx, the grid the fork's home replaced): its
+ * folder, its `/slug` when that is not just its name, and when it was last opened — or that its directory
+ * is missing. A tooltip over the whole row, with the fold it performs on the last line, and the same facts
+ * head its "…" menu (ProjectActions.tsx ProjectMenu). A row is one line of 13px type and has no room for
+ * three more; the card's facts are reference, read when wanted, never chrome on a busy list.
+ *
  * Its right edge carries, in order: the quiet bands' counts — each ITS OWN toggle, always here, folded or
  * not, so opening one never moves the rest (maintainer 2026-09-29, reversing a morning's move of them under
  * the threads: "don't move the done/snooze/external buttons when expanding just always leave them at the
@@ -777,9 +803,11 @@ function ProjectRow({
   quiet,
   opened,
   collapsed,
+  pinned,
   working,
   home,
   switcher,
+  more,
 }: {
   project: QueuesProject
   grip: Grip | undefined
@@ -788,10 +816,13 @@ function ProjectRow({
   quiet: QuietBands
   opened: readonly QuietBandKey[]
   collapsed: boolean
-  /** Its Working rows — counted on the row while it is folded, the one state that hides them. */
+  /** Its Pinned and Running rows — counted on the row while it is folded, the one state that hides them. */
+  pinned: number
   working: number
   home: string | undefined
   switcher?: ReactNode
+  /** "N more" / "Show less" (MoreToggle), beside the name — while the project's list is showing. */
+  more?: ReactNode
 }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const navigate = useNavigate()
@@ -819,6 +850,11 @@ function ProjectRow({
   const foldTitle = folds
     ? `${collapsed ? "Show" : "Collapse"} ${project.name}'s threads`
     : `${opened.length > 0 ? "Hide" : "Show"} everything in ${project.name}`
+  // The card's facts over the fold it performs: native, so it waits for a pause of the pointer rather than
+  // flashing open as the pointer crosses the list (the app's Tooltip opens at once, by design).
+  const facts = project.card ? projectFacts(project.card) : undefined
+  const path = project.card?.path || project.projectDir
+  const hoverTitle = [path && shortPath(path, home), facts, foldTitle].filter(Boolean).join("\n")
   return (
     <div
       data-xq-project-row={project.id}
@@ -832,7 +868,16 @@ function ProjectRow({
       {focused ? (
         // …unless there is no such title (an editor's sidebar): the switcher takes the slot, in the head
         // button's own geometry, so its square stands in the rows' indicator column.
-        switcher ? <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div> : <span className="flex-1" />
+        switcher ? (
+          <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div>
+        ) : more ? (
+          // With no name to sit beside, "N more" takes the thread titles' column, where its row was — in
+          // the 19px this row already had from its counts, not the 23 a named row takes: grown to 23, it
+          // cost the project board its 29th row at 1920x1080 (capacityParity.e2e.test.ts, 29 → 28).
+          <span className="flex h-[19px] min-w-0 flex-1 items-baseline pl-[42px] pr-2">{more}</span>
+        ) : (
+          <span className="flex-1" />
+        )
       ) : (
         <button
           type="button"
@@ -850,10 +895,11 @@ function ProjectRow({
           onKeyDown={grip?.onKeyDown}
           aria-expanded={unfolded}
           aria-label={foldTitle}
-          title={foldTitle}
-          // The whole row is the target (the `before:` layer), not just the name: the badge and the space
-          // around it fold too. The counts and the "…" sit above it. `pr-2` is the gap to the counts.
-          className={`${HEAD_BUTTON_CLASS} !pr-2 items-center before:absolute before:inset-0 before:rounded-md before:content-['']`}
+          title={hoverTitle}
+          // The whole row is the target (the `before:` layer), not just the square: the name, the badge and
+          // the space around them fold too. "N more", the counts and the "…" sit above it. The ring is the
+          // layer's, so a keyboard focus outlines the row it folds rather than the square alone.
+          className={`${HEAD_BUTTON_CLASS} !flex-initial shrink-0 !pr-0 items-center before:absolute before:inset-0 before:rounded-md before:content-[''] focus-visible:!ring-0 focus-visible:before:ring-1 focus-visible:before:ring-focus-ink-60`}
         >
           {/* THE DISCLOSURE, in the gutter the rail's scroll marker uses — where the rail's own collapsible
               band headers kept theirs, so the list folds the way the rail did. Only while it means
@@ -874,11 +920,25 @@ function ProjectRow({
           <span data-xq-indicator className={`${INDICATOR_SLOT} ${project.stale ? "grayscale" : ""}`}>
             <ProjectSquare project={project.card ?? squareCard(project)} size={16} />
           </span>
-          <span className={`flex min-w-0 flex-1 items-baseline text-[13px] leading-[19px] font-semibold ${busy ? "text-fg" : "text-fg/70"}`}>
-            <span className="min-w-0 truncate">{project.name}</span>
-          </span>
         </button>
       )}
+      {/* THE NAME AND "N MORE", OUTSIDE THE FOLD BUTTON, so the two sit on one BASELINE the browser
+          computes (`items-baseline`) — a 13px name and its 11px aside, each centred in its own box, read
+          ~0.7px apart — and so "N more" can be a button of its own; a button cannot nest in the fold.
+          Clicks on the name still fold: the fold's `before:` layer is positioned, so it paints, and hits,
+          above this unpositioned line; only `relative` controls (MoreToggle) rise above it. `pl-2` is the
+          head button's own 8px gap after the square, `pr-2` the gap to the counts. `gap-[5px]` puts the
+          chevron's ink 8px off the name's, the square's own 8.25 on the other side: at `gap-2` it measured
+          10.98 (the chevron paints 5.5 of its 11px box; scripts/ink-gaps.mjs, sans, dsf 4, 2026-10-06) and
+          the aside floated off the name it qualifies. Held at the row's 23px: baseline-aligned, the 11px
+          aside drops ~0.7px below the name's line box, and the line grew to 24. */}
+      {!focused && (
+        <span className="flex h-[23px] min-w-0 flex-1 items-baseline gap-[5px] py-0.5 pl-2 pr-2">
+          <span className={`min-w-0 truncate text-[13px] leading-[19px] font-semibold ${busy ? "text-fg" : "text-fg/70"}`}>{project.name}</span>
+          {more}
+        </span>
+      )}
+      {focused && switcher && more && <span className="flex h-[23px] shrink-0 items-baseline py-0.5 pr-2">{more}</span>}
       {/* THE RIGHT EDGE, flush with every thread row's readings under it, and filled from the right: the
           Ready badge when there is one, then the counts, then — on hover — the "…". Each mark that
           appears takes its place on the LEFT of the ones already there, so nothing already drawn moves
@@ -914,7 +974,7 @@ function ProjectRow({
           <span className="text-[10.5px] leading-[19px] text-muted-55">{note}</span>
         ) : (
           <>
-            <QuietToggles project={project} quiet={quiet} opened={opened} working={collapsed && folds ? working : 0} />
+            <QuietToggles project={project} quiet={quiet} opened={opened} pinned={collapsed && folds ? pinned : 0} working={collapsed && folds ? working : 0} />
             {count > 0 && <span className="flex shrink-0"><QueueBadge count={count} /></span>}
           </>
         )}
@@ -927,19 +987,24 @@ function ProjectRow({
  * The rest of a project, before it is shown: one muted count per quiet band, in that band's glyph — the
  * rail's legend (BandLabel.tsx), so "zz 2 · ☑ 43" reads as the Snoozed and Done names they open onto.
  * Quieter than the name and never the accent, which in this product means only "this many want you".
- * A folded project counts its Working rows the same way, first (maintainer 2026-09-29: "when collapsed
- * ... it should also show the number of running/ready threads"); its Ready rows are the accent badge
- * beside these, which already stays through a fold, so they are not counted twice.
+ *
+ * A FOLDED project counts its work in flight the same way, first: its Pinned rows by the pin, then its
+ * Running rows by the bot (David 2026-09-29: "when collapsed ... it should also show the number of
+ * running/ready threads"); its Queue rows are the accent badge beside these, which already stays through
+ * a fold, so they are not counted twice. Pinned joined them on 2026-10-06 — every thread belongs to one of
+ * five rails and that status must never leave view (Colin's S1, plans/upstream-superset.md §1), and a fold
+ * that hid a project's pins said nothing at all of them.
  *
  * EACH COUNT IS ITS OWN TOGGLE — Snoozed, Done and External open and close one at a time, all collapsed to
  * start. An open one is a step brighter, and its band lists under the project's threads, named. On a folded
- * project a click unfolds it too, so it always shows what it says; the Working count only unfolds. Each
+ * project a click unfolds it too, so it always shows what it says; the Pinned and Running counts only unfold. Each
  * wash hangs 4px past its count's ink (`-mx-1 px-1`), so the ink stays exactly where it sat before the
  * counts were buttons; `relative`, to sit above the fold's whole-row target.
  */
-function QuietToggles({ project, quiet, opened, working = 0 }: { project: QueuesProject; quiet: QuietBands; opened: readonly QuietBandKey[]; working?: number }) {
+function QuietToggles({ project, quiet, opened, pinned = 0, working = 0 }: { project: QueuesProject; quiet: QuietBands; opened: readonly QuietBandKey[]; pinned?: number; working?: number }) {
   const entries: { band: BandKey | "schedules"; count: number; noun: string }[] = [
-    { band: "working", count: working, noun: "working" },
+    { band: "pinned", count: pinned, noun: "pinned" },
+    { band: "working", count: working, noun: "running" },
     ...QUIET_BANDS.map((band) => ({ band, count: quietCount(quiet, band), noun: band === "schedules" && quietCount(quiet, band) === 1 ? "schedule" : band })),
   ]
   const shown = entries.filter((entry) => entry.count > 0)
@@ -952,13 +1017,15 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
       {shown.map(({ band, count, noun }) => {
         // Schedules are no band of the rail's, so their glyph is their own: the repeat mark every surface
         // draws for a schedule (the prompt box's button, a run's title, the drawer).
-        const Icon = band === "schedules" ? ScheduleCountGlyph : BANDS[band].Icon
-        const isOpen = band !== "working" && opened.includes(band as QuietBandKey)
+        const Icon = band === "schedules" ? ScheduleCountGlyph : band === "pinned" ? PinCountGlyph : BANDS[band].Icon
+        // The work in flight's counts only unfold: their rows are the project's own list, not a band to open.
+        const inFlight = band === "pinned" || band === "working"
+        const isOpen = !inFlight && opened.includes(band as QuietBandKey)
         // THE WARNING TONE, on the schedules count alone: one was paused by Frizz, or a worker's proposal is
         // waiting for Turn on — the "it stopped two weeks ago and I never noticed" failure, said on the row.
         const attention = band === "schedules" && quiet.schedulesAttention
-        const label = band === "working"
-          ? `Show ${count} working`
+        const label = inFlight
+          ? `Show ${count} ${noun}`
           : `${isOpen ? "Hide" : "Show"} ${count} ${noun}${attention ? " — one is waiting on you" : ""}`
         return (
           <button
@@ -966,14 +1033,14 @@ function QuietToggles({ project, quiet, opened, working = 0 }: { project: Queues
             type="button"
             data-xq-quiet-count={band}
             data-xq-reshape
-            aria-expanded={band === "working" ? undefined : isOpen}
+            aria-expanded={inFlight ? undefined : isOpen}
             aria-label={label}
             title={label}
             onClick={() => {
               setProjectCollapsed(project.id, false)
               // To the state the click SAW, not a toggle of whatever the store holds by now: two clicks
               // landing before a render (the row's fold and a count, from a script) must agree.
-              if (band !== "working") setBandOpen(project.id, band as QuietBandKey, !isOpen)
+              if (!inFlight) setBandOpen(project.id, band as QuietBandKey, !isOpen)
             }}
             // The glyph sits on its DIGIT's cap band, not beside its box: box-centred, all three glyphs read
             // 1.5px low (sans, 10.5px). The pair shares one font size, set on the pair, so `cap` resolves
@@ -1057,6 +1124,14 @@ function ScheduleCountGlyph({ size = 10 }: { size?: number }) {
   return <Repeat size={size} viewBox="-1.333 -1.333 26.667 26.667" />
 }
 
+// The folded Pinned count's glyph, by the same correction: lucide's Pin inks y 2–22 of its 24 units, so at
+// the shared 10px its paths stood 8.33px tall against Done's and Snoozed's 7.5 — the loudest mark in the
+// folded strip, on the band that is the human's own shelf and needs no extra weight. At 90% it is 7.5,
+// centred on its digit's cap band with a 0.00px residual like the rest (geometry, sans, dsf 8, 2026-10-06).
+function PinCountGlyph({ size = 10 }: { size?: number }) {
+  return <Pin size={size} viewBox="-1.333 -1.333 26.667 26.667" />
+}
+
 /**
  * A project's SCHEDULES, listed in place under its row when its fourth count is open (plans/scheduled-
  * threads.md §8) — not a dialog: every count on the row opens its rows here, and this one does too. Read
@@ -1117,15 +1192,22 @@ function ScheduleRow({ schedule }: { schedule: ScheduleView }) {
 }
 
 /**
- * THE END OF AN UNFOLDED PROJECT'S LIST: "⌄ N more" while any of its rest is not listed — a quiet band
- * still closed, or Done rows past the page — and "⌃ Show less" beside it once any of the rest is. It names
- * no band (maintainer 2026-10-01: "a little expand button … at the bottom of each list … without the word
- * done"): the rest is one continuation of the list, and the counts on the project's row stay the way to
- * open a single band. "More" opens every closed band first, then pages Done; "less" closes them all.
- * At the thread titles' column, in the muted tone the quiet counts use, so it reads as the list's tail and
- * not as a row of its own.
+ * "⌄ N more" while any of a project's rest is not listed — a quiet band still closed, or Done rows past the
+ * page — and "⌃ Show less" beside it once any of the rest is. It names no band (David 2026-10-01: "a little
+ * expand button … at the bottom of each list … without the word done"): the rest is one continuation of
+ * the list, and the counts on the project's row stay the way to open a single band. "More" opens every
+ * closed band first, then pages Done; "less" closes them all. The rows it opens list under the project's
+ * threads, in place.
+ *
+ * ON THE PROJECT'S OWN LINE, beside its name (ProjectRow), in the muted tone the quiet counts use — an aside
+ * to the name, never a heading of its own. It was the last row of every unfolded project, at the titles'
+ * column, until 2026-10-06: kept for David's "the counts alone proved too hidden", it cost each project a
+ * 23px line, and at Colin's load (17 projects, 70 open threads) the "N more" rows, rules and headers took
+ * ~55px a project and left 17 lines on a 1440x900 screen, where his own board shows 22. The words stayed
+ * and the row went (plans/upstream-superset.md §2). `relative`, so it stands above the fold's whole-row
+ * target: a click here opens the rest, never folds the project.
  */
-function MoreRow({
+function MoreToggle({
   project,
   quiet,
   opened,
@@ -1146,13 +1228,12 @@ function MoreRow({
   const more = closed.reduce((sum, band) => sum + quietCount(quiet, band), 0) + unpaged
   const less = opened.length > 0
   if (more === 0 && !less) return null
-  // The chevron paints 5.5 of its 11 box px, so its box starts 2px left of the titles' column (pl-42, not
-  // 44) to put its INK on the titles' ink, and sits 1px from its words for a ~4px ink gap; gap-1 drew 7px.
-  // Vertically it sits on its words' cap band the way the row's counts do (QuietToggles): box-centred, it
-  // read 1px low (sans, 11px). Both chevrons' ink is symmetric in the box, so the box centre is the ink's.
+  // The chevron paints 5.5 of its 11 box px and sits 1px from its words, for a ~4px ink gap; gap-1 drew
+  // 7px. Vertically it sits on its words' cap band the way the row's counts do (QuietToggles): box-centred,
+  // it read 1px low (sans, 11px). Both chevrons' ink is symmetric in the box, so the box centre is the ink's.
   const action = "flex h-[19px] items-baseline gap-px rounded px-1 -mx-1 outline-none transition-colors hover:bg-hover-strong hover:text-fg/80 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
   return (
-    <div data-xq-more={project.id} className="flex items-center gap-3 py-0.5 pl-[42px] pr-1.5 text-[11px] leading-[19px] text-muted-55">
+    <span data-xq-more={project.id} className="relative flex shrink-0 items-baseline gap-3 text-[11px] leading-[19px] text-muted-55">
       {more > 0 && (
         <button
           type="button"
@@ -1188,7 +1269,7 @@ function MoreRow({
           Show less
         </button>
       )}
-    </div>
+    </span>
   )
 }
 

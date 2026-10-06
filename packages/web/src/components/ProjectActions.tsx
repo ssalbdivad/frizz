@@ -20,6 +20,7 @@ import { showToast, store } from "../store.ts"
 import { rememberCrossProjectFocus } from "../lib/crossProject.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, tabView, usePageView, viewHref } from "../lib/pageView.ts"
 import { projectBoardKey } from "../lib/projectBoards.ts"
+import { relativeAge } from "../lib/activityTime.ts"
 import { useShortcut } from "../lib/keyboardRuntime.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
@@ -29,6 +30,19 @@ import { ROW_ACTION_CLASS } from "./Sidebar.tsx"
 export function shortPath(path: string, home: string | undefined): string {
   if (home && path === home) return "~"
   return home && path.startsWith(`${home}/`) ? `~${path.slice(home.length)}` : path
+}
+
+/**
+ * UPSTREAM'S PROJECT CARD, in one line (U:ProjectGrid.tsx Card, the grid the fork's home replaced): its
+ * `/slug` when that is not simply its name — a directory called "app" under "pullfrog" lives at
+ * `/pullfrog-app`, worth saying, while "nub" would just repeat itself — and when it was last opened, in the
+ * house age grammar (`Opened 2h ago`), or that its directory is missing. Its path is the line above it,
+ * wherever it is drawn: the project row's hover (ProjectList.tsx ProjectRow) and the head of its menu.
+ */
+export function projectFacts(project: Pick<ProjectCard, "slug" | "name" | "lastOpenedAt" | "stale">, nowMs = Date.now()): string {
+  const opened = relativeAge(project.lastOpenedAt || undefined, nowMs)
+  const when = project.stale ? "Directory is missing" : opened ? `Opened ${opened}` : "Never opened"
+  return project.slug !== project.name ? `/${project.slug} · ${when}` : when
 }
 
 const MENU_ITEM = "block cursor-default rounded px-2 py-1.5 text-[12.5px] text-fg outline-none data-[highlighted]:bg-panel-2"
@@ -138,8 +152,11 @@ export function ProjectMenu({
             sideOffset={6}
             className="z-[220] min-w-[190px] max-w-[280px] rounded-lg border border-border bg-panel p-1 shadow-xl shadow-shadow-ink/40"
           >
-            <RadixDropdown.Label title={project.path} className="truncate px-2 pb-1.5 pt-1 font-mono text-[11px] text-muted-70">
+            <RadixDropdown.Label title={project.path} className="truncate px-2 pt-1 font-mono text-[11px] text-muted-70">
               {shortPath(project.path, home)}
+            </RadixDropdown.Label>
+            <RadixDropdown.Label data-project-facts className="truncate px-2 pb-1.5 text-[11px] text-muted-55">
+              {projectFacts(project)}
             </RadixDropdown.Label>
             {onFocus && (
               <>
