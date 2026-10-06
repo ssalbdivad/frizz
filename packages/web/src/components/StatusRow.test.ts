@@ -10,7 +10,8 @@ import { store, type ConnectionState } from "../store.ts"
 import { SUPERVISOR_STATUS_KEY } from "../api/supervisorStatus.ts"
 
 // The row's SHAPE is a spec, not an accident: settings → shortcuts → reload → quota, left to right and all
-// of it left-justified — and nothing else: no door and no name (2026-09-28). It has been three separate pieces
+// of it left-justified — and on All projects nothing else: no door and no name (2026-09-28). A project's
+// board adds the door home and its identity (below). It has been three separate pieces
 // of chrome in three places (identity top-left, settings/reload top-right, quota floating over the
 // sidebar composer), then one fixed corner chip, then the same row running the other way — so a
 // regression here is a silent return to one of those rather than a visible break.
@@ -65,6 +66,31 @@ test("the row has no door and names nothing — not the page, not a project", ()
   assert.doesNotMatch(html, /Everything/, "no page name")
   assert.doesNotMatch(html, /href=/, "no link at all")
   assert.doesNotMatch(html, /colinhacks|github\.com|data-project-identity-state/, "and not the board the store happens to hold")
+})
+
+// ON A PROJECT'S BOARD (2026-10-06) the row is upstream's again at its left end: the door home, a divider
+// (home LEAVES the board; the rest act on what you are in), then the page's title and the board's identity
+// beside it — its repo and menu (ProjectBoard.tsx BoardIdentity). All projects passes neither, above.
+test("on a board the row leads with the door home, then a divider, then the title and the board's identity", () => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const html = renderToStaticMarkup(
+    createElement(
+      QueryClientProvider,
+      { client },
+      createElement(
+        MemoryRouter,
+        null,
+        createElement(StatusRow, { title: createElement("span", { "data-title": "" }, "acme"), identity: createElement("span", { "data-identity": "" }, "acme/api"), crumb: true }),
+      ),
+    ),
+  )
+  const home = html.indexOf('data-status-home')
+  const divider = html.indexOf('class="h-3 w-px shrink-0 bg-border"')
+  const title = html.indexOf("data-title")
+  const identity = html.indexOf("data-identity")
+  const settings = html.indexOf('aria-label="Settings"')
+  assert.ok(home >= 0 && home < divider && divider < title && title < identity && identity < settings, JSON.stringify({ home, divider, title, identity, settings }))
+  assert.match(html, /<a data-status-home="true" title="All projects" aria-label="All projects" class="-mx-1\.5 inline-flex[^"]*-ml-px" href="\/"/)
 })
 
 test("ONE divider, between the buttons and the readouts", () => {

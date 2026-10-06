@@ -81,6 +81,8 @@ import { DispatchForm, type DispatchDirs } from "./NewThreadModal.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { ProjectSwitcher, type SwitcherProject } from "./ProjectSwitcher.tsx"
 import { AddProjectRow, ProjectList } from "./ProjectList.tsx"
+import { BoardIdentity } from "./ProjectBoard.tsx"
+import { isAsk } from "../lib/phonePage.ts"
 import { setCrossProjectMentions } from "../lib/mentionAutolink.ts"
 import { readingLine } from "../lib/readingLine.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -491,7 +493,12 @@ export function AllQueuesPage() {
               Focused, it starts in the view's project; showing All projects, in the project chosen in the
               box's own bottom strip, beside the model. */}
           <div className="mb-5 shrink-0 px-0.5" onKeyDown={onColumnKeyDown}>
-            <StatusRow title={<Switcher projects={projects} hidden={hidden} current={viewed} />} />
+            {/* On a project's board: the door home before the switcher, the project's repo and menu after it. */}
+            <StatusRow
+              title={<Switcher projects={projects} hidden={hidden} current={viewed} />}
+              crumb={focused}
+              identity={focused && viewed ? <BoardIdentity project={viewed} home={home} /> : undefined}
+            />
             <FocusedComposer
               focus={focus}
               project={focusProject}
@@ -595,6 +602,8 @@ function Switcher({ projects, hidden, current, row = false }: { projects: Queues
     name: project.name,
     card: project.card ?? fallbackCard(project),
     ready: project.queued.filter((t) => !hidden(threadKey(project.id, t.id))).length,
+    running: project.running.length,
+    asks: [...project.queued, ...project.running].filter(isAsk).length,
     note: project.stale ? "Missing" : undefined,
   })
   const homeProject = projects.find((project) => project.card?.home)

@@ -31,31 +31,37 @@
 // (lib/listHold.ts, lib/heldLayout.ts), the operator's own acts moving rows before the server answers
 // (lib/listBands.ts listOverlay), and the cord that strings the project's rows through their glyphs
 // (ThreadConnector.tsx — a band's header glyph stands in the same column, so the names cost it nothing).
-// No project row heads the board: the switcher over the prompt box names the project (StatusRow.tsx), so
-// a row repeating it would only cost the board a line — and the capacity gate has none to spare
-// (capacityParity.e2e.test.ts).
+// No project row heads the board: the switcher over the prompt box names the project (StatusRow.tsx),
+// with its repo and its menu beside it (BoardIdentity below), so a row repeating it would only cost the
+// board a line — and the capacity gate has none to spare (capacityParity.e2e.test.ts).
 //
 // A THREAD'S SUB-AGENTS ARE ROWS under it here (Sidebar.tsx SubAgentRows), as upstream drew them; All
 // projects keeps the count on the row.
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
+import { Ellipsis } from "lucide-react"
+import { useNavigate } from "react-router"
 import { useVirtualizer, useWindowVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ThreadView } from "@frizz/shared"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { displayTitle, queued } from "../groups.ts"
 import { threadKey, type QueuesProject } from "../lib/allQueues.ts"
-import { bandKey, setBoardBandOpen, useBoardOpenBands, type QuietBandKey } from "../lib/crossProject.ts"
+import { bandKey, rememberCrossProjectFocus, setBoardBandOpen, useBoardOpenBands, type QuietBandKey } from "../lib/crossProject.ts"
 import { holdLayout, type HeldSection, type HeldSlot } from "../lib/heldLayout.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useListHold } from "../lib/listHold.ts"
 import { boardBands } from "../lib/boardBands.ts"
 import { listOverlay } from "../lib/listBands.ts"
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
+import { ALL_PROJECTS, viewHref } from "../lib/pageView.ts"
 import { useProjectBoard } from "../lib/projectBoards.ts"
 import { useSteeredAt } from "../lib/steering.ts"
+import { glideTo } from "../lib/viewportLock.ts"
+import { STATUS_ROW_ACTION } from "../lib/statusRow.ts"
 import { drawerThreadSlug, store } from "../store.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import type { BandKey } from "./BandLabel.tsx"
+import { ProjectMenu } from "./ProjectActions.tsx"
 import { ScheduleRows } from "./ProjectList.tsx"
 import { RailRow, SectionHeader, SubAgentRows, type RowScope } from "./Sidebar.tsx"
 
@@ -395,5 +401,76 @@ function VirtualRows({
         )
       })}
     </div>
+  )
+}
+
+/**
+ * THE BOARD'S IDENTITY, beside the switcher in the status row (StatusRow.tsx `identity`): the project's
+ * `owner/repo`, a link to it on GitHub when its origin is there (upstream's StatusRow, maintainer
+ * 2026-08-28: "Perhaps it should actually be showing owner/repo if a repo is detected"), and the project's
+ * "…" menu — its icon, rename, delete and the way back to All projects — which in All projects rides the
+ * project's row (ProjectList.tsx ProjectRow), a row the board does not draw. The menu shows on hover and
+ * focus, as it does on that row.
+ */
+export function BoardIdentity({ project, home }: { project: QueuesProject; home: string | undefined }) {
+  const navigate = useNavigate()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const repo = project.githubRepo
+  return (
+    // `-ml-[5px]`: the status row's rhythm is 12px of INK (StatusRow.tsx), and the title's 8px gap after the
+    // switcher's own 6px of padding and its chevron's dead space stood the repo 17px off the chevron's ink
+    // (scripts/ink-gaps.mjs, sans 12px, 2026-10-06).
+    <span data-xq-board-identity className="group/identity -ml-[5px] flex min-w-0 items-center gap-3">
+      {repo && (
+        <a
+          href={`https://github.com/${repo}`}
+          target="_blank"
+          rel="noopener"
+          data-xq-board-repo
+          title={`Open ${repo} on GitHub`}
+          aria-label={`Open ${repo} on GitHub`}
+          // Muted beside the switcher's name: the name is the page's title, the repo its address.
+          className="block min-w-0 rounded-sm text-[12px] text-muted-70 underline-offset-2 outline-none transition-colors hover:text-fg hover:underline focus-visible:ring-1 focus-visible:ring-border-strong"
+        >
+          <StartTruncated text={repo} />
+        </a>
+      )}
+      {project.card && (
+        <span className={`shrink-0 items-center group-hover/identity:flex group-has-[:focus-visible]/identity:flex [@media(hover:none)]:flex ${menuOpen ? "flex" : "hidden"}`}>
+          <ProjectMenu
+            project={project.card}
+            home={home}
+            githubRepo={repo}
+            focused
+            onFocus={() => {
+              // Leaving a project for All projects carries it over as the prompt box's pick, as the
+              // switcher does (AllQueues.tsx Switcher).
+              rememberCrossProjectFocus(project.id)
+              navigate(viewHref(ALL_PROJECTS))
+              glideTo(() => 0)
+            }}
+            onOpenChange={setMenuOpen}
+          >
+            <button type="button" aria-label={`More actions for ${project.name}`} className={`${STATUS_ROW_ACTION} data-[state=open]:text-fg`}>
+              <Ellipsis size={13} />
+            </button>
+          </ProjectMenu>
+        </span>
+      )}
+    </span>
+  )
+}
+
+/**
+ * `owner/repo` clipped from the START, so it is the owner that gives way — "…hacks/frizz", never
+ * "colinhacks/f…" (upstream StatusRow.tsx StartTruncated): `direction: rtl` moves the overflow and its
+ * ellipsis to the left, and the text is re-isolated LTR so its letters and slash keep their order. A repo
+ * name ends in a strong LTR character, which this needs.
+ */
+function StartTruncated({ text }: { text: string }) {
+  return (
+    <span dir="rtl" className="block min-w-0 overflow-hidden text-ellipsis whitespace-nowrap">
+      <span dir="ltr" className="[unicode-bidi:isolate]">{text}</span>
+    </span>
   )
 }

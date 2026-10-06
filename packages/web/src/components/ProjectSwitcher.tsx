@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from "react"
-import { Check, ChevronDown, Layers, Plus } from "lucide-react"
+import { Bot, Check, ChevronDown, Layers, Plus } from "lucide-react"
 import type { ProjectCard } from "@frizz/shared"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
@@ -18,7 +18,8 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 //
 // The menu lists every project in the list's order, then the Home workspace under a rule with the folder
 // its agents run in (as the prompt box's picker lists it), with All projects above them all as the one
-// view that is not a project. Each wears its Ready count, the accent badge. Choosing one is a
+// view that is not a project. Each wears its counts — its asks, its Running, and its Queue, the accent
+// badge (SwitcherCounts) — as upstream's rail wore each project's on its square. Choosing one is a
 // NAVIGATION (`/project/<slug>`, `/`), so Back returns to the view before.
 //
 // It must not read like the prompt box's project picker (AllQueues.tsx ProjectPicker), which All projects
@@ -30,8 +31,12 @@ export interface SwitcherProject {
   slug: string
   name: string
   card: ProjectCard
-  /** Ready threads — the accent badge. */
+  /** Its Queue — the threads at rest, one card each: the accent badge. */
   ready: number
+  /** Its Running threads — spinning, the agents' move. */
+  running: number
+  /** The rows marked "?" (lib/phonePage.ts isAsk) — a question or a permission waiting on the human. */
+  asks: number
   /** Why it cannot be chosen as a place to work — its directory is gone, or this server has not opened it. */
   note?: string
 }
@@ -79,7 +84,8 @@ export function ProjectSwitcher({
    */
   row?: boolean
 }) {
-  const total = [...projects, ...(home ? [home] : [])].reduce((sum, project) => sum + project.ready, 0)
+  const every = [...projects, ...(home ? [home] : [])]
+  const total = (key: "ready" | "running" | "asks") => every.reduce((sum, project) => sum + project[key], 0)
   const name = current ? current.name : "All projects"
   const item = (project: SwitcherProject, hint?: ReactNode) => {
     const selected = current?.id === project.id
@@ -88,7 +94,7 @@ export function ProjectSwitcher({
         <span className={`min-w-0 flex-1 truncate ${selected ? "text-fg" : ""}`}>{project.name}</span>
         {hint && <span className="min-w-0 shrink truncate font-mono text-[10.5px] text-muted-55">{hint}</span>}
         {project.note && <span className="shrink-0 text-[10.5px] text-muted-55">{project.note}</span>}
-        {project.ready > 0 && <QueueBadge count={project.ready} />}
+        <SwitcherCounts asks={project.asks} running={project.running} ready={project.ready} />
         <span className="flex w-3 shrink-0 justify-center">{selected && <Check size={12} aria-label="Current" className="text-fg" />}</span>
       </MenuItem>
     )
@@ -138,7 +144,7 @@ export function ProjectSwitcher({
         <div className="pr-[var(--sbw)]">
           <MenuItem onSelect={onAll} icon={<Layers size={14} aria-hidden />} value="all-projects">
             <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-fg"}`}>All projects</span>
-            {total > 0 && <QueueBadge count={total} />}
+            <SwitcherCounts asks={total("asks")} running={total("running")} ready={total("ready")} />
             <span className="flex w-3 shrink-0 justify-center">{!current && <Check size={12} aria-label="Current" className="text-fg" />}</span>
           </MenuItem>
         </div>
@@ -163,5 +169,39 @@ export function ProjectSwitcher({
         )}
       </MenuContent>
     </Menu>
+  )
+}
+
+/**
+ * A PROJECT'S COUNTS in the switcher's menu, right to left from the check column: its Queue (the accent
+ * badge — the one number in the menu that is the human's to clear), its Running (the bot, the band's own
+ * glyph, BandLabel.tsx), and its asks (the "?" a waiting question or permission wears on its row, in the
+ * accent: those are the Queue rows that cannot move without the human). Each only when non-zero, so a quiet
+ * project's line is its name alone. Upstream's rail counted the same three per project (ProjectRail.tsx
+ * useRailCounts: queued, running, asks); the menu is where the fork lists every project.
+ */
+function SwitcherCounts({ asks, running, ready }: { asks: number; running: number; ready: number }) {
+  if (asks + running + ready === 0) return null
+  const said = [asks ? `${asks} waiting on you` : null, running ? `${running} running` : null, ready ? `${ready} in the queue` : null].filter(Boolean).join(", ")
+  return (
+    <span data-xq-switcher-counts title={said} className="flex shrink-0 items-center gap-2 text-[10.5px] text-muted-55">
+      {asks > 0 && (
+        <span data-xq-switcher-asks={asks} aria-label={`${asks} waiting on you`} className="flex items-baseline gap-[3px] font-semibold text-accent">
+          <span aria-hidden>?</span>
+          <span className="tabular-nums">{asks}</span>
+        </span>
+      )}
+      {running > 0 && (
+        <span data-xq-switcher-running={running} aria-label={`${running} running`} className="flex items-baseline gap-[3px]">
+          {/* The bot's face on the digits' cap band (Sidebar.tsx SubAgentCount measured it: the face centres
+              4.17px above the bottom of a 10px box). */}
+          <span aria-hidden className="flex self-baseline translate-y-[calc(4.17px_-_0.5cap)]">
+            <Bot size={10} />
+          </span>
+          <span className="tabular-nums">{running}</span>
+        </span>
+      )}
+      {ready > 0 && <QueueBadge count={ready} />}
+    </span>
   )
 }

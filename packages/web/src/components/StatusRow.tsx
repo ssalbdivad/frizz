@@ -1,5 +1,6 @@
 import type { ReactNode } from "react"
-import { Settings as SettingsIcon } from "lucide-react"
+import { House, Settings as SettingsIcon } from "lucide-react"
+import { Link } from "react-router"
 import { store } from "../store.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { QuotaChips, useQuotaChipsVisible } from "./QuotaBar.tsx"
@@ -13,6 +14,11 @@ import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 // pushed to the right end, the app's controls and its readouts:
 //
 //   ▣ acme-api ▾                settings · shortcuts · reload │ Claude 83% · Codex 59%
+//
+// and on a project's BOARD (`/project/<slug>`, ProjectBoard.tsx), led by the door home and followed by the
+// project's repo — upstream's crumb and identity, which the board brought back on 2026-10-06:
+//
+//   ⌂ │ ▣ acme-api ▾  acme/api …      settings · shortcuts · reload │ Claude 83% · Codex 59%
 //
 // THE TITLE is the project switcher (ProjectSwitcher.tsx), handed in as `title` — the page's one name for
 // what it shows, where a workspace switcher sits in Linear, Slack or Vercel (maintainer 2026-09-29). It
@@ -29,13 +35,16 @@ import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 // border, no shadow, no z-index. Its two ends land on the composer's own border, which is what makes a
 // borderless strip read as belonging to the box below it.
 //
-// NO DOOR (maintainer 2026-09-28: "there should no longer be an everything or an infinity
-// button on the threads view on the left"). The row led with ∞, the door to Everything, and ended on the
-// page's name — and before that, atop a project's board, on the project's owner/repo linking to its repo.
-// With one page there is nowhere for a door to go and nothing for a name to tell apart. A project's repo
-// is its "Open on GitHub", in the project list's ⋯ menu (ProjectActions.tsx ProjectMenu); the queue's
-// filter sits in the READY header over the cards it filters. The connection indicator went on
-// 2026-08-28: its one informative state, disconnected, is one the page also shows by going stale.
+// THE DOOR HOME, ON A BOARD ONLY (`crumb`). All projects is home, so it has no door: there is nowhere for
+// one to go (maintainer 2026-09-28: "there should no longer be an everything or an infinity button on the
+// threads view on the left"). A project's board is one level in, and upstream led its row with ⌂, the way
+// out to `/` (colinhacks/frizz 0a3b9139 StatusRow.tsx) — a router Link, so leaving keeps the socket and
+// the query cache. A divider follows it: home LEAVES the board, the rest act on what you are in. The
+// board's `identity` (ProjectBoard.tsx BoardIdentity) rides beside the switcher: the project's owner/repo
+// linking to it on GitHub (upstream maintainer 2026-08-28: "Perhaps it should actually be showing
+// owner/repo if a repo is detected"), and its ⋯ menu, which in All projects is on the project's row. The
+// connection indicator went on 2026-08-28: its one informative state, disconnected, is one the page also
+// shows by going stale.
 //
 // ONE DIVIDER, between the buttons and the readouts.
 //
@@ -60,7 +69,15 @@ function Divider() {
  * box, a stray glyph the real-page run flagged as debris (scripts/e2e-sidebar.ts, 2026-10-01); a row of
  * nothing would still hold the box 10px down, so the row is not drawn at all.
  */
-export function StatusRow({ title, settings = true, shortcuts = true }: { title?: ReactNode; settings?: boolean; shortcuts?: boolean } = {}) {
+export function StatusRow({ title, identity, crumb = false, settings = true, shortcuts = true }: {
+  title?: ReactNode
+  /** Beside the title, in its slack: a board's repo and menu (ProjectBoard.tsx BoardIdentity). */
+  identity?: ReactNode
+  /** Lead with the door home, `/` — a project's board, one level in. */
+  crumb?: boolean
+  settings?: boolean
+  shortcuts?: boolean
+} = {}) {
   // Whether there is a quota group behind the second divider at all. Every chip hides itself when it
   // has no reading, so without this a row with neither provider reporting draws a trailing hairline
   // with nothing after it.
@@ -79,8 +96,25 @@ export function StatusRow({ title, settings = true, shortcuts = true }: { title?
       // block rather than a strip parked above a box.
       className="mb-2.5 flex min-w-0 items-center gap-3 text-[12px]"
     >
+      {crumb && (
+        <>
+          {/* `-ml-px` is the ink trim upstream measured: the square's own `-mx-1.5` left the house's ink 1px
+              outside the prompt box's border, and the left edge is where a pixel of overhang shows. */}
+          <Link to="/" data-status-home title="All projects" aria-label="All projects" className={`${STATUS_ROW_ACTION} -ml-px`}>
+            <House size={STATUS_ROW_ICON} aria-hidden="true" />
+          </Link>
+          <Divider />
+        </>
+      )}
       {/* Takes the row's slack, so the controls after it stand at the right end. */}
-      {title ? <div data-status-title className="flex min-w-0 flex-1">{title}</div> : <span aria-hidden="true" className="flex-1" />}
+      {title ? (
+        <div data-status-title className="flex min-w-0 flex-1 items-center gap-2">
+          {title}
+          {identity}
+        </div>
+      ) : (
+        <span aria-hidden="true" className="flex-1" />
+      )}
       {settings && (
         <button
           type="button"
