@@ -75,7 +75,7 @@ import { queueOpsCounts } from "../lib/queueOpsCounts.ts"
 import { trackQueueDock } from "../lib/queueDockInset.ts"
 import { ThreadLifecycleActions } from "./ThreadLifecycle.tsx"
 import { RecurringPromptControl } from "./RecurringPromptControl.tsx"
-import { ContextFact, GoalLoopFact } from "./ThreadHeaderFacts.tsx"
+import { ContextFact, FACTS_LINE_CLASS, Fact, FactSep, GoalLoopFact } from "./ThreadHeaderFacts.tsx"
 import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
 import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
@@ -434,43 +434,52 @@ function CardArticle({
             </a>
             {thread.schedule && <ScheduleMark schedule={thread.schedule} size="title" className="ml-1.5" />}
           </h3>
-          <div className="mt-0.5 flex min-w-0 items-baseline gap-1.5 text-[11px] leading-tight text-muted-75">
-            {chipNode}
+          {/* THE FACTS LINE (ThreadHeaderFacts FACTS_LINE_CLASS): one row in priority order, where a fact
+              that does not fit drops whole with its separator. The project chip leads, so it never drops,
+              and truncates only on a line narrower than its name alone; the project mark at the card's
+              left already names the project. A held card's status and the live status line truncate
+              rather than drop (`give`). */}
+          <div data-facts-line className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75`}>
+            {chipNode && <Fact>{chipNode}</Fact>}
             {status !== undefined ? (
-              <>
-                {chip && <span aria-hidden>·</span>}
+              <Fact give="5em">
+                <FactSep />
                 <span className="min-w-0 truncate">{status}</span>
-              </>
+              </Fact>
             ) : (
-              <LastActive
-                at={thread.lazyPrompt !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
-                label={thread.lazyPrompt !== undefined ? "Added" : queueLabelWord(thread)}
-                fallbackAt={thread.spawnedAt}
-                lead={chip ? <span aria-hidden>·</span> : undefined}
-                className="min-w-0 truncate"
-              />
+              <Fact>
+                <LastActive
+                  at={thread.lazyPrompt !== undefined ? thread.spawnedAt : queueLabelAt(thread)}
+                  label={thread.lazyPrompt !== undefined ? "Added" : queueLabelWord(thread)}
+                  fallbackAt={thread.spawnedAt}
+                  lead={<FactSep />}
+                  className="min-w-0 truncate"
+                />
+              </Fact>
             )}
             {/* The thread-header facts the lifecycle footer used to carry (ThreadHeaderFacts): the context
                 reading — its Compact sent into the CARD's project — and the Goal's loop. */}
             <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-              <ContextFact thread={thread} lead={<span aria-hidden>·</span>} />
-              <GoalLoopFact thread={thread} lead={<span aria-hidden>·</span>} />
+              <Fact><ContextFact thread={thread} lead={<FactSep />} /></Fact>
+              <Fact><GoalLoopFact thread={thread} lead={<FactSep />} /></Fact>
             </ThreadProjectScope>
             {/* Where the agent is working, only when that is off the project root (a worktree, or another folder). */}
-            <ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<span aria-hidden>·</span>} />
+            <Fact><ThreadCheckoutToken checkout={thread.checkout} homeDir={project.homeDir} lead={<FactSep />} /></Fact>
             {/* A SPINOFF CHILD says whose, as its drawer header does — ahead of the status line, which
                 takes the rest of the row. Resolved, addressed and opened in the CARD's project: the
                 page's board names the focused one. */}
-            <SpinoffOf
-              compact
-              thread={thread}
-              lead={<span aria-hidden>·</span>}
-              resolve={(slug) => queueThread(project, slug)}
-              href={(slug) => crossProjectThreadHref(project, slug)}
-              onOpen={(slug) => { const t = queueThread(project, slug); openInPlace(project, slug, t ? displayTitle(t) : undefined) }}
-            />
+            <Fact className="max-w-[40%]">
+              <SpinoffOf
+                compact
+                thread={thread}
+                lead={<FactSep />}
+                resolve={(slug) => queueThread(project, slug)}
+                href={(slug) => crossProjectThreadHref(project, slug)}
+                onOpen={(slug) => { const t = queueThread(project, slug); openInPlace(project, slug, t ? displayTitle(t) : undefined) }}
+              />
+            </Fact>
             {/* What the thread is doing NOW, beside the name that stays put (ThreadStatusLine). */}
-            <ThreadStatusLine thread={thread} lead={<span aria-hidden>·</span>} />
+            <Fact give="7em"><ThreadStatusLine thread={thread} lead={<FactSep />} /></Fact>
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-0.5">

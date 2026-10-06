@@ -697,7 +697,9 @@ export function SpinoffOf({ thread, lead, resolve, href, onOpen, compact = false
       {lead}
       {/* BEFORE the status line, never after it: that line is `flex-1` so it can take whatever the row
           has left, and anything placed after it was pushed to the far end of the row with a hole in
-          front of it. Capped so a long handle truncates before the live status does. */}
+          front of it. Capped so a long handle truncates before the live status does — by the caller, on
+          the facts line's `Fact` that holds this (ThreadHeaderFacts): a percentage here would be a share
+          of that fact's own width, not the line's. */}
       {compact ? (
         // THE QUEUE CARD'S FORM: the mark stands for the words. The card's meta line already carries the
         // ready time and the live status, and at a phone's 420px the full "Spinoff of @handle" left the
@@ -709,13 +711,13 @@ export function SpinoffOf({ thread, lead, resolve, href, onOpen, compact = false
         // cards' 0.2em trim (3.2px of ink to the `@`) the underline read as touching the mark's arrow.
         // At 0.1em: 4.3px, measured by geometry (the glyph's path boxes against the text's canvas ink),
         // sans 11px, 2026-09-30.
-        <span data-spinoff-of={parentSlug} title="Spinoff of" className="flex min-w-0 max-w-[40%] shrink-0 items-baseline gap-1">
+        <span data-spinoff-of={parentSlug} title="Spinoff of" className="flex min-w-0 items-baseline gap-1">
           <SpinoffMark size={11} className="size-[1em] self-baseline -mr-[0.1em] translate-y-[calc(0.5em_-_0.5cap)]" />
           <span className="sr-only">Spinoff of </span>
           {link}
         </span>
       ) : (
-        <span data-spinoff-of={parentSlug} className="min-w-0 max-w-[50%] shrink-0 truncate">
+        <span data-spinoff-of={parentSlug} className="min-w-0 truncate">
           Spinoff of {link}
         </span>
       )}

@@ -92,8 +92,13 @@ test("the header line reads the context beside Last active, done or not", () => 
   }
 })
 
-test("the header line draws no separator and no reading when there is no context", () => {
+test("the header line draws no visible separator and no reading when there is no context", () => {
   const html = facts({ lastActivityAt: new Date(Date.now() - 120_000).toISOString() })
-  assert.doesNotMatch(html, /·/)
   assert.doesNotMatch(html, /data-context-meter/)
+  // Each fact carries its own separator, which CSS shows only after an earlier fact that rendered
+  // (FactSep). With the time alone, its separator is the one in the line's FIRST fact — hidden — and
+  // there is no other.
+  assert.equal(html.match(/data-fact-sep/g)?.length, 1, "one separator, the time's own")
+  assert.match(html, /^<div data-thread-header-facts[^>]*><span data-fact[^>]*><span aria-hidden="true" data-fact-sep/, "and it is in the line's first fact")
+  assert.match(html, /data-fact-sep="true" class="hidden /, "hidden unless a fact precedes it")
 })

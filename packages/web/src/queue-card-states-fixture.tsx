@@ -11,6 +11,7 @@ import { useViewportLock } from "./lib/viewportLock.ts"
 import { drawCardNow } from "./lib/cardVisibility.ts"
 import { registerQueueCursor, releaseAutoOpened, useShortcutListener } from "./lib/keyboardRuntime.ts"
 import { store } from "./store.ts"
+import { FACT_CASES } from "./facts-fixture-cases.ts"
 import "./styles.css"
 
 // The page's QUEUE CARD (components/AllQueuesCard.tsx) in the states its own tests used to cover on the
@@ -40,6 +41,12 @@ import "./styles.css"
 //   ?case=perm-prompt-journaled  the same, but an answerable interaction IS journaled: the net stands down.
 //   ?case=replied              a park queued only for its unread reply (queuedForReply): "Replied", and
 //                              Mark as read records it seen (threadSeen), after which the poll drops it.
+//   ?case=facts                a card whose header facts line carries a context reading (narrow-width check).
+//     &chip=1                  …led by its project, as on a page showing All projects.
+//   ?case=facts-matrix         one card per combination of facts in facts-fixture-cases.ts (a context reading,
+//                              a goal loop, a worktree, a spinoff, a long status line), for judging the line's
+//                              drop-whole rule at every width at once. Takes &chip=1 too.
+//   &cardw=<px>                the queue column's width (default 640px, capped at the viewport).
 //   ?case=many&n=<count>       a long queue (default 60 cards), every third handoff long enough to clamp, on
 //                              a page whose board IS the cards' project (so the `@` typeahead has threads to
 //                              offer). Each card sits in a <Profiler> counting its commits on
@@ -64,6 +71,8 @@ const STALE_POLL = params.get("stalePoll") === "1"
 const STILL_QUEUED = params.get("stillQueued") === "1"
 const MID = params.get("mid") === "1"
 const HANDOFF_DELAY = Number(params.get("handoffDelay") ?? 0)
+// `&chip=1`: the card leads its meta line with its project, as it does on a page showing All projects.
+const CHIP = params.get("chip") === "1"
 // `?asked=update`: the human's last turn was the resting card's "Ask for update", which the server quotes
 // by the wake's head line (router.handoffOf) and the card draws as a marker, not a typed bubble.
 const ASKED = params.get("asked") === "update" ? parkExpiredWakeMessage([], true, true).split("\n")[0]! : "Rotate the signing key without downtime."
@@ -152,6 +161,18 @@ function scenario(): Scenario {
       return {
         threads: [thread("rotate-key", "Rotate the signing key without downtime", { queuedAt: now, queuedForReply: true })],
         text: () => "Yes — the old key stays readable for 24h.\n\n```awaiting\nshells: [b1]\nfor: 2h\n---\nThe dual-read window is open; the old key is retired when it closes.\n```",
+      }
+    // The header's facts line with a context reading beside "Ready …" — judged at a 420px card, where the
+    // line used to squeeze the time to nothing and open on a stray "·".
+    case "facts":
+      return {
+        threads: [thread("rotate-key", "Rotate the signing key without downtime", { context: { tokens: 148_000, window: 200_000 }, lastAssistantAt: new Date(Date.now() - 37 * 60_000).toISOString() })],
+        text: () => "Both regions verified; the old key is retired.",
+      }
+    case "facts-matrix":
+      return {
+        threads: FACT_CASES.filter((c) => c.id !== "no-band").map((c) => thread(c.id, c.title, { lastAssistantAt: new Date(Date.now() - 37 * 60_000).toISOString(), ...c.extra })),
+        text: () => "Both regions verified; the old key is retired.",
       }
     case "many": {
       const count = Number(params.get("n") ?? 60)
@@ -311,7 +332,7 @@ function Queue() {
       {queued.filter((t) => !leaving.hidden(threadKey(project.id, t.id)) && (!filter || filter.test(t.id))).map((t) => {
         const key = threadKey(project.id, t.id)
         return (
-          <CountedCard key={key} id={key} project={project} thread={t} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} onSent={leaving.sent(key)} onLanded={leaving.landed(key)} />
+          <CountedCard key={key} id={key} project={project} thread={t} chip={CHIP} leaving={leaving.isLeaving(key)} onLeave={leaving.leave(key)} onReturn={leaving.restore(key)} onSent={leaving.sent(key)} onLanded={leaving.landed(key)} />
         )
       })}
     </div>
@@ -355,7 +376,7 @@ createRoot(document.getElementById("root")!).render(
     <MemoryRouter>
       <TooltipProvider>
         <div className="min-h-screen bg-bg px-4 py-6 text-sm text-fg">
-          <div data-fixture-queue className="mx-auto w-[640px] max-w-full min-w-0">
+          <div data-fixture-queue className="mx-auto w-[640px] max-w-full min-w-0" style={params.has("cardw") ? { width: `${Number(params.get("cardw"))}px` } : undefined}>
             {CASE === "many" ? <LockedQueue /> : <Queue />}
           </div>
         </div>
