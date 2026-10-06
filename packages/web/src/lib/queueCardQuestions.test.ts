@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { questionAnswerMessage } from "@frizz/shared"
-import { handoffQuestionSlots } from "./queueCardQuestions.ts"
+import { handoffQuestionSlots, transcriptQuestionGroups } from "./queueCardQuestions.ts"
 
 // The queue card's three places for a question while it shows the handoff (lib/queueCardQuestions.ts):
 // above the human's bubble, between the answer and the newest rest, and under the newest rest. The
@@ -103,4 +103,33 @@ test("`here` reads the drawer's whole open set, so a set-aside question the card
   const slots = handoffQuestionSlots(messages, [], [], [current])
   assert.equal(slots.here, true)
   assert.deepEqual(names(slots.tail), [])
+})
+
+// THE TRANSCRIPT VIEW (QueueCardTranscript): every message from the window's base on is drawn, so each
+// group flushes after its own rest and a marker places its card at its exact slot.
+
+test("on the transcript view an older rest's question flushes after that rest, the newest rest's under everything", () => {
+  const messages = [human(0), worker(1), wake(2), worker(3)]
+  const groups = transcriptQuestionGroups(messages, [question("qst_old", 1), question("qst_new", 3)], [], 0)
+  assert.deepEqual([...groups.byAnchor].map(([at, qs]) => [at, names(qs)]), [[1, ["qst_old"]]])
+  assert.deepEqual(names(groups.tail), ["qst_new"])
+  assert.equal(groups.here, true)
+})
+
+test("on the transcript view a marker places its card inside the message, and one above the window falls back to its anchor", () => {
+  const marker = (id: string) => `Before you pick:\n\n\`\`\`question ${id}\n\`\`\`\n\nEither way I re-run the suite.`
+  const inside = transcriptQuestionGroups([human(0), worker(1), wake(2), worker(3, marker("qst_aaaa1111"))], [question("qst_aaaa1111", 1)], [], 0)
+  assert.deepEqual([...inside.placed].map(([at, qs]) => [at, names(qs)]), [[3, ["qst_aaaa1111"]]], "in the message, at the marker")
+  assert.equal(inside.byAnchor.size + inside.tail.length, 0, "and nowhere else")
+  // The window starts at the human's second turn (2): the marker's message (1) is not drawn.
+  const above = transcriptQuestionGroups([human(0), worker(1, marker("qst_bbbb2222")), human(2, "Next."), worker(3)], [question("qst_bbbb2222", 1)], [], 2)
+  assert.equal(above.placed.size, 0)
+  assert.deepEqual([...above.byAnchor].map(([at, qs]) => [at, names(qs)]), [[1, ["qst_bbbb2222"]]], "its anchor, which the card flushes above the window")
+})
+
+test("on the transcript view an answered question above the window is not hoisted into it", () => {
+  const messages = [human(0), worker(1), human(2, "Next."), worker(3), wake(4), worker(5)]
+  const settled = (id: string, askedMin: number, settledMin: number) => ({ id, askedAt: at(askedMin), settledAt: at(settledMin) })
+  const groups = transcriptQuestionGroups(messages, [], [settled("qst_before", 1, 2), settled("qst_inside", 3, 4)], 2)
+  assert.deepEqual([...groups.settled.anchored].map(([at, qs]) => [at, names(qs)]), [[3, ["qst_inside"]]])
 })

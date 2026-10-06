@@ -4,11 +4,11 @@
 // It wears the queue card a project's own board drew until 2026-09-28 (TodosView QueueCard): the same
 // bordered, shadowed shell, the same header with the title and its rest time, the human's last message
 // as their bubble, the handoff as prose with its ```done card (fenced or registered), the thread's registered questions, a reply box, and the lifecycle footer's
-// Snooze and Mark as done. What it deliberately does NOT carry is the transcript — the tool calls, the
-// earlier rounds, the sub-agent rows. That is the next level down, one click away IN PLACE — the title,
-// and "Show earlier messages" at the card's top, open the thread's own drawer on this page
-// (useOpenThreadInPlace) — and it is what makes a page of
-// every project's queue readable at all. The ↗ into a project's view went on 2026-09-28 (maintainer: "too
+// Snooze and Mark as done. What it does NOT open on is the transcript — the tool calls, the earlier
+// rounds, the sub-agent rows — and opening on the handoff is what makes a page of every project's queue
+// readable at all. The transcript is one press away IN THE CARD ("Show earlier messages", with upstream's
+// folds: QueueCardTranscript), the drawer one click away on the title (useOpenThreadInPlace), and the
+// header's collapse folds the card to its header. The ↗ into a project's view went on 2026-09-28 (maintainer: "too
 // many places in the ui where it is easy to navigate to a ui which is not the primary home ui"); the ⤢
 // into /full went with it and came back on 2026-09-29 (ExpandThreadLink), restoring Colin's card.
 //
@@ -19,7 +19,7 @@
 // page's socket, and on this page all three name the FOCUSED project, which is usually not the card's.
 import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Check, CheckCheck, ChevronRight, RotateCcw } from "lucide-react"
+import { Check, CheckCheck, ChevronRight, ChevronsDownUp, ChevronsUpDown, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { parseParkWake, parseScheduledRunPrompt, questionsOwed, type AccountBackend, type AwaitingHint, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
@@ -66,8 +66,10 @@ import { ProjectSquare } from "./ProjectSquare.tsx"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QuestionBlockCard } from "./QuestionBlockCard.tsx"
 import { openQuestionsOf, RegisteredAnsweringContext, RegisteredAnsweringProvider, RegisteredQuestionStack, SettledQuestionStack, useSettledQuestions, type SettledQuestion } from "./RegisteredQuestionCards.tsx"
-import { cardTranscriptQuery, useCardTranscript } from "../hooks/useCardTranscript.ts"
-import { handoffQuestionSlots } from "../lib/queueCardQuestions.ts"
+import { cardTranscriptKey, cardTranscriptQuery, useCardTranscript } from "../hooks/useCardTranscript.ts"
+import { handoffQuestionSlots, transcriptQuestionGroups } from "../lib/queueCardQuestions.ts"
+import { lastHumanTurnIndex } from "../lib/messagePresentation.ts"
+import { EARLIER_CONTROL_CLASS, QueueCardTranscript, stepEarlier, transcriptBase } from "./QueueCardTranscript.tsx"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
 import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
@@ -377,7 +379,17 @@ function CardArticle({
   // The transcript is read only while a question is open (cardNeedsTranscript); until it lands the
   // stacks wait rather than drawing at the tail and then moving, and if it cannot be read they fall back
   // to the tail, where they used to be — never off the card.
-  const needsTranscript = cardNeedsTranscript(thread)
+  // THE TRANSCRIPT VIEW (QueueCardTranscript), opened by "Show earlier messages" for THIS rest: the next
+  // rest is a new handoff, and the card opens on it again. `startId` is where its window starts.
+  const restAt = thread.lastAssistantAt ?? ""
+  const [expandedAt, setExpandedAt] = useState<string | null>(null)
+  const expanded = expandedAt === restAt
+  const [startId, setStartId] = useState<string | null>(null)
+  const [foldsOpen, setFoldsOpen] = useState(false)
+  const [opening, setOpening] = useState(false)
+  // FOLDED TO ITS HEADER (upstream's per-card collapse, TodosView): no body, no dock. Either view.
+  const [collapsed, setCollapsed] = useState(false)
+  const needsTranscript = cardNeedsTranscript(thread) || expanded
   const transcript = useCardTranscript(project, thread, needsTranscript)
   const messages = transcript.data?.messages
   const settledScope = useMemo(() => ({ api, projectId: project.id }), [api, project.id])
@@ -397,6 +409,14 @@ function CardArticle({
   // Keyed on the rest: an answered card keeps its slot while the card holds for the worker's turn, and a
   // NEW handoff — which says what became of it — starts every stack over.
   const restKey = handoff.data?.at ?? ""
+  const showingTranscript = expanded && transcript.data !== undefined && messages !== undefined
+  const transcriptStart = useMemo(() => (showingTranscript ? transcriptBase(messages, startId) : 0), [showingTranscript, messages, startId])
+  // The transcript view draws the DRAWER's open set, a question the human typed past included: it is the
+  // thread read as the drawer reads it, where such a question stays answerable at its rest.
+  const groups = useMemo(
+    () => (showingTranscript ? transcriptQuestionGroups(messages, openQuestions, settledQuestions, transcriptStart) : null),
+    [showingTranscript, messages, openQuestions, settledQuestions, transcriptStart],
+  )
   const placeHref = crossProjectThreadHref(project, thread.id)
   const dismiss = useMemo(() => ({ dismiss: onLeave, cancel: onReturn, hold: onHold }), [onLeave, onReturn, onHold])
   const queryClient = useQueryClient()
@@ -438,7 +458,8 @@ function CardArticle({
     const dock = dockRef.current
     if (!dock || typeof ResizeObserver === "undefined") return
     return trackQueueDock(key, dock)
-  }, [key])
+    // A collapsed card has no dock, and expanding it again mounts a new one.
+  }, [key, collapsed])
 
   // A terminal row on the card — in the strip, or the caption over a prompt's screen — opens the thread,
   // then that terminal's drawer over it when the thread's project is the one in focus (the drawer stack is
@@ -447,6 +468,28 @@ function CardArticle({
     const here = focusedProject(project.slug)
     openInPlace(project, thread.id, displayTitle(thread))
     if (here) openProcessDrawer(thread.id, process)
+  }
+
+  // "Show earlier messages": read the transcript (usually already here — it was prefetched on hover), take
+  // ONE step back past the human's last turn so the label is true, then swap the handoff for it. The card
+  // grows DOWNWARD from the control, which the page's viewport lock holds; "Load earlier messages" inside
+  // then grows upward over what the reader is looking at (QueueCardTranscript).
+  const openTranscript = async () => {
+    if (opening) return
+    setOpening(true)
+    const at = restAt
+    try {
+      const data = await queryClient.fetchQuery(cardTranscriptQuery(project, thread))
+      const step = await stepEarlier(project, thread.id, data, lastHumanTurnIndex(data.messages))
+      if (step.data !== data) queryClient.setQueryData(cardTranscriptKey(project, thread), step.data)
+      setStartId(step.startId)
+      setFoldsOpen(false)
+      setExpandedAt(at)
+    } catch (error) {
+      if (!pageUnloading()) showToast(`Couldn't load earlier messages: ${error instanceof Error ? error.message : String(error)}`)
+    } finally {
+      setOpening(false)
+    }
   }
 
   const openHere = (event: ReactMouseEvent<HTMLAnchorElement>) => {
@@ -462,7 +505,9 @@ function CardArticle({
       aria-label={displayTitle(thread)}
       className={`frizz-card-body flex min-w-0 max-w-full flex-col ${BLOCK_RADIUS} border border-border-strong bg-panel shadow-lg shadow-shadow-ink/25`}
     >
-      <header ref={headerRef} className="flex items-center gap-3 rounded-t-xl border-b border-border/60 px-5 py-3.5">
+      {/* Collapsed, the header IS the card: the whole radius and no rule under it (upstream's state-dependent
+          rounding — a rounded-top header with a rule over nothing reads as a doubled edge). */}
+      <header ref={headerRef} data-xq-collapsed={collapsed || undefined} className={`flex items-center gap-3 px-5 py-3.5 ${collapsed ? "rounded-xl" : "rounded-t-xl border-b border-border/60"}`}>
         {chip && <ProjectMark project={project} onChoose={onChoose} />}
         <div className="min-w-0 flex-1">
           <h3 className="truncate text-[15px] font-semibold leading-snug" title={displayTitle(thread)}>
@@ -545,6 +590,9 @@ function CardArticle({
               sits well inside a 14px box centred in a 28px square, so untrimmed the last mark drew
               ~29px in from the card's right border against the project mark's 20.75px on the left
               (the ⤢ measured 21.0px trimmed, 2026-09-29, ink-gaps.mjs dsf 4, sans). */}
+          {/* COLLAPSE — upstream's per-card fold to the header (TodosView HeaderActions `onCollapse`), beside
+              its other view door as on Colin's card: collapse, then fullscreen. */}
+          <CollapseCardButton collapsed={collapsed} onToggle={() => setCollapsed((c) => !c)} />
           <ExpandThreadLink
             slug={thread.id}
             href={`${placeHref}/full`}
@@ -586,24 +634,43 @@ function CardArticle({
         {/* Everything between the header and the dock, in ONE block whose negative bottom margin hands back
             the dock's header-height top margin (see `--queue-card-header-h` above). Empty for a lazy
             thread, which still needs the hand-back. */}
+        {!collapsed && (
         <div className="flex min-w-0 flex-col mb-[calc(-1*var(--queue-card-header-h,0px))]">
         {/* A lazy thread has no conversation, handoff or process to show: its note is the box below. */}
         {thread.held === undefined && (
         <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
-          {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
-              inside the queue, and the queue is ONE page: whether a page loaded on a press or on a
-              scroll up, the card swelled between the reader and the card above it (tried and
-              reverted 2026-09-29; maintainer: "offer opening the sidebar as a way to see more to not
-              interfere with threads queue"). The drawer is the thread's own scroller, where reading
-              back loads as it goes and the queue under it does not move. */}
-          <a
-            href={placeHref}
-            onClick={openHere}
-            title="Open the thread to read back through it"
-            className="self-center rounded-md border border-border px-2 py-0.5 text-[11px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-border-strong"
+          {/* THE TRANSCRIPT, IN PLACE, once asked for (QueueCardTranscript, whose header says why it is not
+              the drawer as it was from 2026-09-29 to 2026-10-06). Everything from here to the fences is the
+              handoff view's, which the transcript view replaces; the fences and the tail below are both's. */}
+          {showingTranscript && groups ? (
+            <QueueCardTranscript
+              project={project}
+              thread={thread}
+              data={transcript.data!}
+              queryKey={cardTranscriptKey(project, thread)}
+              base={transcriptStart}
+              onStart={setStartId}
+              groups={groups}
+              open={openQuestions}
+              focused={focusedProject(project.slug)}
+              foldsOpen={foldsOpen}
+              onOpenFolds={() => setFoldsOpen(true)}
+            />
+          ) : (
+          <>
+          {/* EARLIER MESSAGES OPEN IN THE CARD: the transcript, folded, one step back past the human's
+              last turn. Read ahead on hover, so the press usually swaps at once. */}
+          <button
+            type="button"
+            data-xq-show-earlier
+            onClick={() => void openTranscript()}
+            onPointerEnter={() => void queryClient.prefetchQuery(cardTranscriptQuery(project, thread))}
+            onFocus={() => void queryClient.prefetchQuery(cardTranscriptQuery(project, thread))}
+            disabled={opening}
+            className={EARLIER_CONTROL_CLASS}
           >
-            Show earlier messages
-          </a>
+            {opening ? "Loading earlier messages…" : "Show earlier messages"}
+          </button>
           {/* A question from a rest older than the human's bubble, flushed first as upstream's window
               flushes it — everything below the bubble is newer than it. */}
           {slots && <RegisteredQuestionStack key={`above-${restKey}`} thread={thread} questions={slots.above} keepAnswered />}
@@ -643,6 +710,8 @@ function CardArticle({
           {parts?.questions.map((question, index) => (
             <QuestionBlockCard key={index} raw={question.raw} questionKind={question.questionKind} danger={question.danger} />
           ))}
+          </>
+          )}
           {/* THE HANDOFF'S SIGNAL FENCES. A ```done is its card. An ```awaiting is the DRAWER'S card for it
               (AwaitingBackgroundCard, through CardAwaiting): the worker's title and prose, the wait table,
               and — the reason it is here at all — the `steps:` a rest hands the human, with their Done.
@@ -655,8 +724,10 @@ function CardArticle({
                   Message's `restingCardShown`) — two cards for one wait is the doubling that rule ends;
                 • any other awaiting fence — a wait that is no longer live, a bg-snoozed thread — is the
                   same card stating the fence, with no verbs of its own (ChatView FenceCard's branch). */}
+          {/* On the transcript view the newest message draws its own ```done card; its ```awaiting stays the
+              card's, from here (Message `restingCardShown`, QueueCardTranscript). */}
           {parts?.fences.map((fence, index) => fence.kind === "done"
-            ? <FenceBody key={index} body={fence.body} />
+            ? (showingTranscript ? null : <FenceBody key={index} body={fence.body} />)
             : drawsSubAgentWait
               ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
               : restingShown ? null
@@ -712,12 +783,17 @@ function CardArticle({
         </div>
         )}
 
-        {/* The newest rest's questions, under everything it said — the card's stack as it always was. */}
-        {slots && <CardSettledStack questions={slots.settledTail} className="shrink-0 px-5 pb-4 pt-0" />}
-        {slots && <RegisteredQuestionStack key={`tail-${restKey}`} thread={thread} questions={slots.tail} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />}
+        {/* The newest rest's questions, under everything it said — the card's stack as it always was. The
+            transcript view flushes its answered ones inside the transcript, as the drawer does. */}
+        {!showingTranscript && slots && <CardSettledStack questions={slots.settledTail} className="shrink-0 px-5 pb-4 pt-0" />}
+        {(showingTranscript ? groups?.tail : slots?.tail) && (
+          <RegisteredQuestionStack key={`tail-${restKey}`} thread={thread} questions={(showingTranscript ? groups?.tail : slots?.tail) ?? []} keepAnswered className="shrink-0 px-5 pb-4 pt-0" />
+        )}
         </div>
+        )}
       </ProjectLinkScope>
 
+      {!collapsed && (
       <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
         {/* THE DOCK (upstream 199adf2c, ported 2026-10-06): the prompt box holds to the bottom of the
             screen while any of the card is above it, so a reply never means scrolling to the card's end
@@ -772,6 +848,7 @@ function CardArticle({
             : <ReplyBox project={project} thread={thread} onSent={onSent} onLanded={onLanded} onFailed={onReturn} />}
         </div>
       </ThreadProjectScope>
+      )}
       </RegisteredAnsweringProvider>
       </QueueDismissContext.Provider>
 
@@ -1031,8 +1108,28 @@ function Prose({ md }: { md: string }) {
   return <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} />
 }
 
+/** Fold the card to its header, or open it again — upstream's IconBtn (HeaderActions) in this strip's chrome.
+ *
+ *  THE `-mx-0.5` IS INK, NOT TASTE. Both chevron pairs paint ~10 of lucide's 24 units across, so at
+ *  upstream's 13px the glyph is ~6.5px of ink centred in the 28px square where its neighbours paint 12px:
+ *  on the strip's uniform `gap-0.5` it drew 20.5px of ink to the spinoff and to the fullscreen door,
+ *  against 17.5px terminal→spinoff and 18.25px fullscreen→⋯ (scripts/ink-gaps.mjs, dsf 4, sans,
+ *  2026-10-06). Two pixels in from each side brings both to ~18.5px; the hover square keeps its size. */
+function CollapseCardButton({ collapsed, onToggle }: { collapsed: boolean; onToggle: () => void }) {
+  const label = collapsed ? "Expand" : "Collapse"
+  const Icon = collapsed ? ChevronsUpDown : ChevronsDownUp
+  return (
+    <Tooltip label={label}>
+      <button type="button" data-xq-collapse aria-label={label} aria-expanded={!collapsed} onMouseDown={(event) => event.preventDefault()} onClick={onToggle} className={`${HEADER_ICON_CLASS} -mx-0.5`}>
+        <Icon size={13} strokeWidth={2} />
+      </button>
+    </Tooltip>
+  )
+}
+
 /** Does the card read its transcript (hooks/useCardTranscript.ts)? While the thread has an open question,
- *  to place it at its rest — the handoff alone cannot say which rest that is. */
+ *  to place it at its rest — the handoff alone cannot say which rest that is — and while the human is
+ *  reading it in the card (QueueCardTranscript). */
 function cardNeedsTranscript(thread: Pick<ThreadView, "questions">): boolean {
   return (thread.questions?.length ?? 0) > 0
 }

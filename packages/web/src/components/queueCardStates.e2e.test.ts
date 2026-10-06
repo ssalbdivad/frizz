@@ -29,6 +29,11 @@ import test, { after, before } from "node:test"
 //        sits under the reply that asked it, over the newest rest, which is bare and so draws "Reply to
 //        continue" beside the older question; one the newest rest asked sits under it with no such card.
 //        The transcript that places them is read through the CARD's project.
+//   14   "Show earlier messages" opens the transcript IN the card, one round back past the human's last
+//        message, with the middle rounds behind "N more rounds"; "Load earlier messages" pages back with the
+//        message on screen held still; the fold expands; the header's collapse folds the card to its
+//        header and back. Every read goes to the card's project.
+//   15   on that transcript view a question sits after the message of the rest that asked it.
 //   7-9  the terminal net: a frozen native ask and a bare permission prompt — two states the server queues a
 //        thread on without journaling an interaction — draw their card, the copy asks the CARD's project
 //        for the command, and the net stands down when an answerable interaction is journaled (B2).
@@ -384,5 +389,73 @@ test("each question sits at the rest that asked it, and a bare newest rest still
   const reads = (await rpcLog()).calls.filter((c) => /\/rpc\/threadTranscript$/.test(c.path)).map((c) => c.path)
   assert.ok(reads.length >= 2, "each card read its transcript")
   assert.deepEqual([...new Set(reads)], ["/_frizz/fixture-card/rpc/threadTranscript"], "through the card's project, never the page's")
+  assert.deepEqual(errors, [])
+})
+
+test("Show earlier messages opens the folded transcript in the card, Load earlier holds the reader's place, and collapse folds it to its header", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  await open("case=long")
+  await page!.$eval(`${FIRST} [data-xq-show-earlier]`, (button) => (button as HTMLButtonElement).click())
+  await page!.waitForSelector(`${FIRST} [data-xq-transcript]`)
+  const said = () => page!.$eval(`${FIRST} [data-xq-transcript]`, (el) => (el as HTMLElement).innerText)
+  let text = await said()
+  assert.match(text, /Earlier ask 4/, "one round back past the human's last message, so the label is true")
+  assert.doesNotMatch(text, /Earlier ask 3/, "and only one")
+  assert.match(text, /Rotate the signing key without downtime\./, "the human's message")
+  assert.match(text, /First pass is in/, "the reply it got")
+  assert.match(text, /20 more rounds/, "the middle rounds behind one line")
+  assert.doesNotMatch(text, /Round 5:/)
+  assert.match(text, /All 22 rounds are green/, "the newest rest")
+  assert.equal(await page!.$eval(FIRST, (el) => el.querySelectorAll("[data-xq-show-earlier]").length), 0, "the handoff view is gone")
+
+  // LOAD EARLIER: the message on screen keeps its place, and the page grows above it.
+  const topOf = (id: string) => page!.$eval(`${FIRST} [data-transcript-source-id="${id}"]`, (el) => el.getBoundingClientRect().top)
+  const firstId = await page!.$eval(`${FIRST} [data-transcript-source-id]`, (el) => (el as HTMLElement).dataset.transcriptSourceId!)
+  const before = await topOf(firstId)
+  await page!.$eval(`${FIRST} [data-xq-load-earlier]`, (button) => (button as HTMLButtonElement).click())
+  await page!.waitForFunction((sel) => /Earlier ask 3/.test((document.querySelector(sel) as HTMLElement | null)?.innerText ?? ""), {}, `${FIRST} [data-xq-transcript]`)
+  await sleep(200)
+  const after = await topOf(firstId)
+  assert.ok(Math.abs(after - before) <= 1, `the message the reader was on stayed put (${before} -> ${after})`)
+
+  // The fold opens, one way.
+  await page!.$eval(`${FIRST} [data-wake-divider="middle-runs-summary"]`, (el) => (el as HTMLElement).click())
+  text = await said()
+  assert.match(text, /Round 5:/)
+  assert.doesNotMatch(text, /more rounds/)
+
+  // COLLAPSE: the header alone, then the same body back.
+  await page!.$eval(`${FIRST} [data-xq-collapse]`, (button) => (button as HTMLButtonElement).click())
+  const folded = await page!.$eval(FIRST, (el) => ({
+    body: el.querySelector("[data-xq-transcript]") !== null,
+    dock: el.querySelector("[data-queue-dock]") !== null,
+    header: el.querySelector("header")?.hasAttribute("data-xq-collapsed"),
+    label: el.querySelector("[data-xq-collapse]")?.getAttribute("aria-label"),
+  }))
+  assert.deepEqual(folded, { body: false, dock: false, header: true, label: "Expand" })
+  await page!.$eval(`${FIRST} [data-xq-collapse]`, (button) => (button as HTMLButtonElement).click())
+  await page!.waitForSelector(`${FIRST} [data-xq-transcript]`)
+  assert.match(await said(), /Round 5:/, "expanding again restores what the reader had open")
+  assert.equal(await page!.$eval(FIRST, (el) => el.querySelector("[data-queue-dock]") !== null), true)
+
+  const reads = (await rpcLog()).calls.filter((c) => /\/rpc\/threadTranscript(Earlier)?$/.test(c.path)).map((c) => c.path)
+  assert.ok(reads.some((p) => p.endsWith("/threadTranscriptEarlier")))
+  assert.ok(reads.every((p) => p.startsWith("/_frizz/fixture-card/")), `every read through the card's project: ${reads.join(", ")}`)
+  assert.equal(await leavingOf(NEIGHBOUR), "false")
+  assert.deepEqual(errors, [])
+})
+
+test("on the transcript view a question sits after the message of the rest that asked it", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  await open("case=questions")
+  await page!.waitForSelector(`${FIRST} [data-registered-questions]`)
+  await page!.$eval(`${FIRST} [data-xq-show-earlier]`, (button) => (button as HTMLButtonElement).click())
+  await page!.waitForSelector(`${FIRST} [data-xq-transcript]`)
+  const order = await page!.$eval(FIRST, (card) => [...card.querySelectorAll<HTMLElement>("[data-transcript-source-id], [data-xq-transcript] > *, [data-registered-questions], [data-rested-card]")].flatMap((el) => {
+    if (el.matches("[data-registered-questions]")) return [`questions:${/Which rollout/.test(el.innerText) ? "rollout" : "?"}`]
+    if (el.matches("[data-rested-card]")) return [`rested:${el.getAttribute("data-rested-card")}`]
+    const said = el.innerText
+    return ["Both rollouts are ready", "CI is green on main"].filter((m) => said.includes(m) && !said.includes("Which rollout"))
+  }))
+  const seen = order.filter((v, i) => order.indexOf(v) === i)
+  assert.deepEqual(seen, ["Both rollouts are ready", "questions:rollout", "CI is green on main", "rested:bare"])
   assert.deepEqual(errors, [])
 })
