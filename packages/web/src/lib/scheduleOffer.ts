@@ -428,10 +428,38 @@ export interface ScheduleOffer {
   readNow: (mode: boolean) => Published
 }
 
+/** The grammar's first reading of a real schedule compiles its regular expressions, builds the zone's
+ *  formatters and walks the rule engine cold: 306ms measured (V8 under nub, 2026-10-06) for the first
+ *  "every Monday at 9am triage new issues", then 1–35ms for every later read of any text. Unwarmed, that
+ *  hitch lands on the first schedule phrase the human types. These reads pay it while the page is idle,
+ *  one per idle slice, once per page. */
+const WARM_TEXTS = [
+  "every Monday at 9am triage new issues",
+  "every weekday at 8:30 check CI, unless it's a holiday",
+  "on the 1st of each month at noon PT send the invoice summary",
+  "every 2 hours check the canary",
+]
+let warmed = false
+function warmGrammar(tz: string): void {
+  if (warmed) return
+  warmed = true
+  const idle: (run: () => void) => void =
+    typeof requestIdleCallback === "function" ? (run) => requestIdleCallback(run) : (run) => setTimeout(run, 0)
+  const reads = WARM_TEXTS.flatMap((text) => (["edges", "anywhere"] as const).map((scope) => () => readSchedulePhrase(text, { nowMs: Date.now(), tz, scope })))
+  const next = () => {
+    const read = reads.shift()
+    if (!read) return
+    read()
+    idle(next)
+  }
+  idle(next)
+}
+
 export function useScheduleOffer(input: ScheduleOfferInput): ScheduleOffer {
   const { prose, mode } = input
   const latest = useRef(input)
   latest.current = input
+  useEffect(() => warmGrammar(latest.current.tz), [])
   const readAt = (text: string, inMode: boolean): Published => {
     const at = Date.now()
     const { exclude, tz } = latest.current
