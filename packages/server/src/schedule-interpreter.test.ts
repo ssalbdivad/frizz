@@ -55,6 +55,9 @@ test("the system prompt teaches intent before rules: time words alone are not a 
   for (const kind of [/describe the past, a deadline/, /pick out what the task covers, once/, /software the task builds/, /one later time and no repetition/, /tie the repeat to an event/, /inside quotes or code/]) {
     assert.match(system, kind)
   }
+  // The first run is today's slot when one is still ahead: without this line both models started rules a
+  // day or a week late (scripts/schedule-extract-eval.ts, 2026-10-06).
+  assert.match(system, /Today counts: at 2:32pm on a Monday, "daily at 3pm" first runs today at 3pm/)
 })
 
 test("change when tells the model the text IS a schedule", async () => {

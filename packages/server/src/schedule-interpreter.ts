@@ -40,8 +40,23 @@ import { cleanThreadName, threadNameProblem } from "./thread-names.ts"
 // Through the same one-shot completer the thread namer uses (backend/claude-oneshot.ts): a throwaway SDK
 // session with no tools, no settings, no MCP servers and one turn.
 //
-// THE MODEL, measured by scripts/schedule-extract-eval.ts (see its header for how to re-run it):
-// MODEL_CHOICE_PLACEHOLDER
+// THE MODEL: sonnet, for every read — the live box and Change when alike. Measured with
+// scripts/schedule-extract-eval.ts (its header says how to re-run it) on 2026-10-06 against this prompt: 214
+// positives graded on their next 5 runs, 20 Change when texts, 10 one-off times, 88 negatives, and the
+// maintainer's 74 past prompts that hold a trigger word; at most 4 reads in flight, load average ~9:
+//            same runs  WRONG  missed  Change when  false positives: one-offs, negatives, history   per read
+//   haiku    179/214    31     4       16/20        4/10, 1/88, 0/74                               2.06s median, 2.86s p90
+//   sonnet   214/214     0     0       20/20        0/10, 1/88, 1/74                               2.96s median, 5.02s p90
+// Haiku's wrong schedules are not noise: 35 cases only haiku got wrong, 0 only sonnet (exact McNemar p <
+// 0.001). Most start late — a week late for "every Tuesday", the wrong half of "every other Friday",
+// tomorrow for a slot still ahead today — and the rest misread intervals and windows ("every hour" as once a
+// day, "from 8 to 6" without 6pm); it also scheduled 4 of the 10 one-off times. The "Today counts" line
+// below was written for the first of those, and took sonnet from 213 to 214 but haiku only from 175 to 179.
+// Sonnet answered identically on a repeat run of the previous prompt (the same one wrong schedule, the same
+// two false positives), so its numbers are not the luck of one draw. Its two false positives: "the report
+// should go out weekly" (a fair ambiguity) and one past prompt asking what to do "at the beginning of each
+// day". The cost is latency, ~0.9s median and ~2s p90 per read at 4 in flight; one read at a time through
+// claude-oneshot with its spare, as the box reads, sonnet answers in 1.69s median (claude-oneshot.ts).
 
 export const SCHEDULE_INTERPRETER_MODEL = "sonnet"
 
@@ -102,7 +117,7 @@ rrule: one RFC 5545 RRULE value without the "RRULE:" prefix, using ONLY these pa
 - a limited run ("for three weeks", "until Christmas"): COUNT, or UNTIL as a date YYYYMMDD.
 - runs must be at least 15 minutes apart.
 
-dtstart: the FIRST run, as local YYYY-MM-DDTHH:MM — the earliest time the rule fires after now, or after the start the text names. It anchors INTERVAL: "every other Friday" starts on the coming Friday, "every 3 days at 9am" at the next 9am, "every 4 hours" at the next whole hour. A time named in another zone ("9am Pacific") is converted into this zone.
+dtstart: the FIRST run, as local YYYY-MM-DDTHH:MM — the earliest time the rule fires after now, or after the start the text names. Today counts: at 2:32pm on a Monday, "daily at 3pm" first runs today at 3pm, "at 10am and 4pm" today at 4pm, and "every Thursday" this Thursday — never a day or a week later than the rule allows. It anchors INTERVAL: "every other Friday" starts on the coming Friday, "every 3 days at 9am" at the next 9am, "every 4 hours" at the next whole hour. A time named in another zone ("9am Pacific") is converted into this zone.
 
 condition: anything the rule cannot express but the run itself can check when it starts, as a short clause that reads after the rule — "unless it's a US public holiday", "only when a release went out the day before", "only if there are new issues". The rule then fires on every candidate day and the run checks the condition first. null when there is none.
 
