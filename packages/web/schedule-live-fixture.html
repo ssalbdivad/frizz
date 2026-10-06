@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en" data-font="sans" data-theme="dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:," />
+    <title>Live schedule reading fixture</title>
+    <!-- THE CLOCK, before any module reads it (lib/liveClock.ts samples Date.now at import). Every reading in
+         plans/schedule-live-reading.md is computed at Mon Oct 5 2026, 2:32pm America/New_York, so the fixture
+         starts there and runs forward in real time; `__clock.skew(ms)` jumps it (§15.2 case 12, T3), and
+         `?clock=real` leaves the real clock alone. Only Date.now moves: the schedule code reads no other clock. -->
+    <script>
+      (function () {
+        if (new URLSearchParams(location.search).get("clock") === "real") return
+        var base = Date.parse("2026-10-05T18:32:00Z")
+        var realNow = Date.now.bind(Date)
+        var start = realNow()
+        var skew = 0
+        window.__clock = { skew: function (ms) { skew += ms }, base: base }
+        Date.now = function () { return base + (realNow() - start) + skew }
+      })()
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/schedule-live-fixture.tsx"></script>
+  </body>
+</html>
