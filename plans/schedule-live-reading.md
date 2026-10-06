@@ -547,6 +547,19 @@ Found while computing §3.3; each one is pinned by a test.
   again.` and only Enter reads. Explicit Enter reads are single-flight but not budgeted.
 - **Cancellation:** client-side discard only. There is no `interpretSchedule` contract change in v1. Server-side
   abort and supersession are phase 2, and only if a measurement shows queueing (§16).
+- *As built (Step 3, `lib/scheduleModelRead.ts`):*
+  - The cache key is `context \0 tz \0 localDate \0 text`: `context` is empty for the box and `schedule:<id>` for a
+    Change when, whose answers are read against that schedule's stored rule and condition and so are not the box's.
+  - Only VERDICTS are cached — a reading, or a refusal of the words (not found, presence, spacing, "couldn't turn
+    that into a schedule", no task). A failed call, a timeout or a switched-off interpreter is shown for its text
+    (`Couldn't read that just now. Press Enter to try again.`) but never cached, and an automatic read never
+    retries it; Enter does.
+  - "Touches the phrase" is concrete: `relocateModelReading` keeps a reading only while its phrase sits on word
+    boundaries AND the word right before and right after it are the ones it had when read. `locatePhrase` alone
+    still finds `every Monday unless it's a holiday` inside `… unless it's a holiday or a weekend post …`, whose
+    meaning changed; the neighbour check drops it. Step 4 must pass the text the MODEL read as `read.text`.
+  - The queued follow-up is only the latest text, and asking for the text already out drops it; `cancelQueued()`
+    is how a box says the grammar reads its words now.
 - **Latency:** *measured* on this box (n=15, sequential, one time of day), Sonnet's full `interpret()` took a
   median of 3.50s with a p90 of 4.27s. Resolve-on-result (§13) takes ~0.45s off every one-shot call, giving ~3.05s.
   The ~7–8s the maintainer saw did not reproduce (2.1–5.0s here). Candidates are a cold spawn, a retry, or a queue
@@ -897,6 +910,20 @@ Rules behind the table:
    prompt re-cut by the shared `cutPhrase` if the task was edited, and no `source`. The server validates it with
    `checkSchedule` as today.
 
+*As built (Step 2, `31590219`):*
+- The two codes ride as the error message's FIRST WORD (`schedule-reading-moved: …`), the `AUTH_REQUIRED:claude`
+  precedent: the RPC envelope carries one readable string, so a separate code field would have meant changing
+  `packages/rpc` and the web client for one feature. `SCHEDULE_READING_MOVED`, `SCHEDULE_GRAMMAR_STALE` and
+  `scheduleRefusalOf(error)` live in `shared/schedules.ts`, so the two sides cannot spell them differently, and a
+  server test reads the code off the envelope of a real mounted router.
+- `rederiveLocalReading` (server `schedules.ts`) is checked in `insert` before `validate`, at the same clock. On
+  `update` it is held to the MERGED spec — the words and rule that will be stored — so a rule sent without its
+  words is refused rather than stored under words that read as another rule. An invalid zone is said plainly,
+  not as a moved reading.
+- "The phrase alone determines the rule" is a property test now (`schedule-phrase.rederive.test.ts`): 2,553
+  exact readings the box can send, over the corpus at five clocks (both corpus clocks, both 2026 DST eves, a
+  year boundary), each re-read identically from its phrase alone under `field`. 0 failures.
+
 ### 10.2 Titles
 - **`provisionalScheduleTitle(prompt)`** (shared, pure):
   - Take the first clause of the cut prompt (up to `, ; . : —`, ` and `, or a newline).
@@ -954,6 +981,29 @@ grammar, the publish policy and the preview rendering on real use first.
   This week and next (or six month columns for monthly rules): kept runs solid, added runs accent with `pop-in`,
   removed runs hollow at 40%, and `was every Monday at 9am` beneath. It never enumerates a dense rule (*measured*:
   48ms for every 30 minutes over 14 days); for `perDay > 1` it takes membership from BYDAY.
+
+*As built (Step 3), where it differs or says more:*
+- **The publish policy is the box's §2.4 in small** (`lib/scheduleWhenField.ts`): a boundary character before
+  the caret, or a wholesale change (paste, drop, undo, redo, autocorrect), publishes at once; mid-word typing
+  waits for the 250ms rest. §2.4's qualifier hold applies too: a boundary inside a qualifier still being typed
+  (`every Thursday at`, `every Monday unless`) holds the exact reading it qualifies until the rest. Without it
+  the preview flipped to `reading “at”…` between two words of an ordinary rule (seen in the browser).
+- **`none` says nothing until the model is asked.** A reading of no schedule at all (the first word, still
+  being typed) hides the preview through the 600ms wait; `Reading when it runs…` appears only once the read
+  is out. A cue shows its core and quotes the rest from the rest onward, as §5.7 draws it.
+- **The 600ms is from the last keystroke**, not from the publish: the timer reads the words fresh when it fires.
+- **Drop is a toggle inside the pending save**, not a write: `Won't check: ~~unless it's a holiday~~ · Keep`,
+  and Save sends `condition: null`. Nothing is written until Save, as everywhere else in the drawer.
+- **A model reading over a local core is held to `readingsConsistent`** here too (§4.3): the disagree lines
+  and a disabled Save.
+- **Copies:** `Updated for the current time. Press Enter to save.` / `Updated to what you typed. Press Enter to
+  save.` (the panel's say "create"), and the stale copy `Frizz has updated since this page loaded. Reload the
+  page to save this.`; an `Updated…` line appears only when a different reading was on screen.
+- **In a Change when, Sonnet may keep the schedule's stored time where the grammar assumes 9am.** Driven: with
+  the schedule at Thursday 3pm, `every Monday unless it's a holiday` read as Monday 3pm; with it at Monday 9am,
+  as 9am. Both pass the consistency check (the core's 9am is assumed, so only dates count), and the dim 9am
+  shows the grammar's guess, but the two tiers fill an unstated time differently. A design call: carrying the
+  stored time into the grammar's `field` reading would make them agree.
 
 ---
 
@@ -1063,6 +1113,25 @@ grades the 133-text probe corpus as written at its own clock, with eight documen
 - **Edit** `components/ScheduleDrawer.tsx` `ChangeWhen` (§11).
 - **New** `components/SchedulePreview.tsx`: the echo with dim assumed parts, plus the next line. The panel reuses it.
 - **New** `lib/scheduleModelRead.ts`: single flight, cache, budget; shared by the drawer and the box.
+- **As built:** see §4.2, §10.1 and §11 *As built*. Beyond them:
+  - Step 2's rest landed in `31590219`: the `source` re-derive, the two codes, the property test. The router
+    needed no change (it passes the input through). §13.1 and §10.2's rename landed before it.
+  - `SchedulePreview` rebuilds the echo from the rule with `scheduleEcho` + `describeScheduleParts`, memoized per
+    rule, zone and minute (16 entries), and splits the SHARED next line, so its dates are byte-for-byte the saved
+    echo's. Dim tooltips: `“Morning” reads as 9am. Add a time to change it.`; with no word, `No time given, so
+    9am. …` / `No day given, so Monday. Add a day to change it.`; several guessed meridiems share one line.
+  - The under-15m tone is `text-attention`: the theme has no `warning` token, and attention is its amber.
+  - The shimmer's 250ms delay is a timer in the component over the existing `shimmer-text` (which already falls
+    back to muted under reduced motion), so `styles.css` is unchanged.
+  - Shared echo fix found on the way: `perDay` counts the 24h from the FIRST run, so `every Monday at 8am and 5pm`
+    asked on a Monday afternoon read `Next: Mon Oct 5 · Mon Oct 12 · Mon Oct 12`. A next line now carries times
+    whenever two of its dates are the same day (`schedule-rule.test.ts` pins it).
+  - Driven on a real stack (`--creds --wakers`) in headless puppeteer, 40/40 checks: typing `every Thursday at 3`
+    one key at a time published ONE change (nothing mid-word, the qualifier held), then `3pm` with only `pm` dim
+    after the rest; a tampered dtstart and a tampered grammar version on the wire came back as the two refusals and
+    wrote nothing; the real save stored the server's re-derived rule with the condition kept; four local refusals
+    made zero model calls; one real Sonnet cue read fired 558ms after the last key, landed in 3.9–6.4s (n=3 across
+    runs), and the same words again were answered from the cache.
 
 ### Step 4: the prompt box
 - **New** `lib/scheduleOffer.ts`:
