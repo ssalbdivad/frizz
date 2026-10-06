@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { QUESTION_DEFAULT_AFTER_MS, QUESTION_DEFAULT_ENGAGED_GRACE_MS, wakeDeliveryToken } from "@frizz/shared"
+import { QUESTION_DEFAULT_AFTER_MS, QUESTION_DEFAULT_ENGAGED_GRACE_MS, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { ANSWER_REOFFER_BACKOFF_MS, createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
@@ -2038,6 +2038,52 @@ test("limit: capping the rung below steps down AGAIN, and the walk is what makes
   assert.equal(h.storage.getSession("m")?.model, "sonnet")
   assert.equal(h.resumes.length, 2)
   h.storage.close()
+})
+
+// ---- The FABLE FALLBACK (opt-in): a base limit with Fable budget left steps UP to Fable ------------
+
+function fableQuota(fableUsed: number): () => Promise<QuotaSnapshot> {
+  const faultMs = Date.parse(SESSION_FAULT_AT)
+  return async () => ({
+    claude: { status: "ok" as const, windows: [
+      { key: "5h", label: "5h", usedPercent: 100, resetsAt: SESSION_RESET_MS / 1000 },
+      { key: "weekly", label: "Weekly", usedPercent: 70, resetsAt: (faultMs + 3 * 24 * 3_600_000) / 1000 },
+      { key: "weekly-fable", label: "Fable wk", usedPercent: fableUsed, resetsAt: (faultMs + 4 * 24 * 3_600_000) / 1000 },
+    ] },
+    codex: { status: "unavailable" as const, windows: [] },
+  })
+}
+
+test("limit: with the Fable fallback ON, a session-limited thread restarts on Fable at once", async () => {
+  const h = limitHarness()
+  cappedRow(h, "f", { model: "opus", effort: "xhigh" })
+  h.tele.set("f", limitTele(sessionFault()))
+  const s = h.make({ readQuota: fableQuota(40), fableFallback: () => true })
+  await s.tick()
+  assert.deepEqual(h.resumes.map((r) => r.slug), ["f"], "Fable's own budget has room, so nothing waits for the 5h reset")
+  assert.match(h.resumes[0].message, /The session limit that interrupted you is still closed — frizz restarted this thread on Fable\. Continue/)
+  const after = h.storage.getSession("f")
+  assert.equal(after?.model, "fable", "persisted before the wake, so the cold fork carries it")
+  assert.equal(after?.effort, "xhigh")
+  h.storage.close()
+})
+
+test("limit: the Fable fallback holds when it is OFF, Fable is nearly spent, or the thread is already on Fable", async () => {
+  const cases = [
+    { label: "setting off", model: "opus", fableUsed: 40, on: false },
+    { label: "Fable nearly spent", model: "opus", fableUsed: 95, on: true },
+    { label: "already on Fable", model: "fable", fableUsed: 40, on: true },
+  ]
+  for (const c of cases) {
+    const h = limitHarness()
+    cappedRow(h, "f", { model: c.model, effort: "medium" })
+    h.tele.set("f", limitTele(sessionFault()))
+    const s = h.make({ readQuota: fableQuota(c.fableUsed), fableFallback: () => c.on })
+    await s.tick()
+    assert.deepEqual(h.resumes, [], `${c.label}: waits for the window`)
+    assert.equal(h.storage.getSession("f")?.model, c.model, c.label)
+    h.storage.close()
+  }
 })
 
 test("limit: a MODEL-scoped pause with NO scoped window on the snapshot holds rather than guessing", async () => {

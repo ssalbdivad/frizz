@@ -362,7 +362,9 @@ function LimitResumeDivider({ window, sourceId, at }: { window: LimitWindow; sou
 // the line exists to carry. This wording is shorter than the resume hairline beside it, so it survives
 // intact at every width the drawer renders at.
 function LimitModelSwitchDivider({ capped, to, sourceId, at }: { capped: string; to: string; sourceId?: string; at?: string }) {
-  const label = `${capped} limit — switched to ${to}`
+  // `capped` is a model ("Fable 5") on a step-down, or a lowercase base window ("session", "weekly") when
+  // the Fable fallback stepped a thread up — so the sentence-case capital is applied here.
+  const label = `${capped.charAt(0).toUpperCase()}${capped.slice(1)} limit — switched to ${to}`
   return (
     <WakeDivider icon={Hourglass} sourceId={sourceId} marker="limit-model-switch" ariaLabel={label} at={at}>
       <span className="min-w-0 truncate">{label}</span>

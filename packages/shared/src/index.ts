@@ -4563,6 +4563,14 @@ export const Settings = z.object({
    * would resurrect the period just cleared. Machine-level.
    */
   deleteDoneThreadsUntouchedDays: z.number().int().min(0).max(3650).optional(),
+  /**
+   * Spend Fable's own weekly budget when the base Claude usage runs low: while the 5-hour or weekly
+   * window is nearly out (90% used) and the Fable window still has room, a new Claude thread launches
+   * on Fable, and a thread a base limit paused restarts on Fable instead of waiting for the reset
+   * (server/backend/fable-fallback.ts). Off by default — it moves work onto a different, costlier
+   * model. Machine-level, because quota is the account's, not a project's.
+   */
+  fableFallback: z.boolean().optional(),
   // There is no `font` key any more. The interface rendered in one of two type families as a machine
   // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
   // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
@@ -4630,7 +4638,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback"] as const satisfies readonly (keyof Settings)[]
 
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a

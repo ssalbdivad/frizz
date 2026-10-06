@@ -24,6 +24,7 @@ import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { OverDrawersFocusLayer } from "./ui/Sheet.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
+import { OnOffToggle } from "./ui/OnOffToggle.tsx"
 import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
 import { embedded } from "../lib/embed.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
@@ -608,31 +609,6 @@ function AppearanceControl() {
       indicatorPosition="right"
       ariaLabel="Appearance"
     />
-  )
-}
-
-// The ONE boolean control shape for the whole form: a segmented Off|On pair, Off always on the LEFT
-// (switch convention — right = on). Active segments use the primary button treatment.
-function OnOffToggle({ value, onChange }: { value: boolean; onChange: (v: boolean) => void }) {
-  const opts: { v: boolean; label: string }[] = [
-    { v: false, label: "Off" },
-    { v: true, label: "On" },
-  ]
-  return (
-    <div className="inline-flex w-fit rounded-md border border-border bg-bg p-0.5">
-      {opts.map((o) => (
-        <button
-          key={o.label}
-          onClick={() => onChange(o.v)}
-          aria-pressed={value === o.v}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${
-            value === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
   )
 }
 

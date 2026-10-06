@@ -1090,6 +1090,8 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // any project, any tab, a thread's own profile control — is what a model-less dispatch launches on.
     dispatchProfile: (kind) => getDispatchPreferences(storage, getSettings(storage, home), home, readCodexModels())[kind] ?? {},
     claudeBin: opts.claudeBin,
+    // The Fable fallback's quota reading — the same cached snapshot the status row polls.
+    readClaudeQuota: async () => (await readQuota({ claudeBin: opts.claudeBin })).claude,
     backendFor,
     codexAppServer,
     acpBridge,
@@ -1168,6 +1170,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     // instant for a weekly limit, whose message text carries a clock but no date; readQuota memoizes,
     // so consulting it per tick costs a live request only every few minutes.
     readQuota,
+    fableFallback: () => getSettings(storage, home).fableFallback === true,
     refreshBoard: () => board.refresh(),
     // The only runtime that can answer is the broker: its daemon record is on disk while the daemon
     // lives and is unlinked when it dies (liveBrokerRecords checks the pid), so "did the process that

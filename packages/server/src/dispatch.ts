@@ -15,6 +15,7 @@ import {
   Settings,
   PermissionMode,
   type ProviderAuth,
+  type ProviderQuota,
 } from "@frizz/shared"
 import { log as frizzLog } from "./logging.ts"
 import { PERM_DIR_ENV, permRequestDir, workDirOf, type Project } from "./project.ts"
@@ -38,6 +39,7 @@ import { acpModelIdFromModel } from "@frizz/shared"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { claudeEffortsFor } from "./backend/thread-profiles.ts"
+import { dispatchFallsBackToFable } from "./backend/fable-fallback.ts"
 import { readCodexModels } from "./backend/codex-models.ts"
 import { AUTO_EFFORT, type ChooseEffort } from "./effort-chooser.ts"
 import { ProviderAuthRequiredError } from "./backend/auth-status.ts"
@@ -412,6 +414,9 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
 // 24,000 characters is ~6k tokens, against a contract already several times that, and it clears the
 // real file with 45% headroom. `frizzConfigBlock injects this repo's own FRIZZ.md IN FULL` fails
 // LOUDLY the next time the file outgrows it, which is the actual guard — the number is only a number.
+// How long a dispatch waits on the quota read the Fable fallback consults before launching without it.
+const FABLE_FALLBACK_QUOTA_TIMEOUT_MS = 3_000
+
 const FRIZZ_MD_MAX_CHARS = 24_000
 const FRIZZ_MD_MAX_BYTES = 64 * 1024
 export function frizzConfigBlock(projectDir: string): string {
@@ -858,6 +863,9 @@ export interface DispatchDeps {
   // --json` for Claude, the local auth.json read for Codex). Absent (tests) ⇒ no preflight, so unit
   // tests never shell out or depend on the developer's real credential state.
   preflightAuth?: (kind: BackendKind) => Promise<ProviderAuth>
+  // The Claude quota reading the `fableFallback` setting consults (quota.ts, cached). Absent (tests) ⇒
+  // no fallback at dispatch.
+  readClaudeQuota?: () => Promise<ProviderQuota>
   // Codex-only: is the `codex` executable actually runnable? Auth says a credential EXISTS; this says
   // whether the binary the dispatch needs is installed. "missing" (a positive ENOENT) rejects EARLY,
   // before any thread state, with a message that names the real problem instead of the deep
@@ -886,6 +894,20 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
 
   function savedProfile(kind: BackendKind, settings: Settings): { model?: string; effort?: Settings["effort"] } {
     return deps.dispatchProfile ? deps.dispatchProfile(kind) : { model: settings.model, effort: settings.effort }
+  }
+
+  // The `fableFallback` setting (backend/fable-fallback.ts): a new Claude thread launches on Fable while
+  // the base usage is nearly out and Fable's own budget has room. The quota read is the shared cached
+  // one the status row polls, bounded so a cold cache can never hold a dispatch hostage — a read that
+  // fails or runs long launches on the chosen model, as if the setting were off.
+  async function fableFallbackModel(kind: BackendKind, model: string | undefined, settings: Settings): Promise<string | undefined> {
+    if (kind !== "claude" || settings.fableFallback !== true || model === "fable" || !deps.readClaudeQuota) return model
+    let timer: NodeJS.Timeout | undefined
+    const quota = await Promise.race([
+      deps.readClaudeQuota().catch(() => undefined),
+      new Promise<undefined>((resolve) => { timer = setTimeout(() => resolve(undefined), FABLE_FALLBACK_QUOTA_TIMEOUT_MS) }),
+    ]).finally(() => clearTimeout(timer))
+    return dispatchFallsBackToFable(model, quota) ? "fable" : model
   }
 
   // "auto" → the level the chooser reads off the prompt, from the ladder this model offers. Everything
@@ -994,8 +1016,10 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // names only a model borrows the saved effort only when it IS the saved model: another model's
       // effort can name a level this one lacks (ultracode on Haiku), so it launches on the CLI default.
       const saved = input.model === undefined || input.effort === undefined ? savedProfile(kind, settings) : {}
-      const model = input.model ?? saved.model
-      const effort = await concreteEffort(kind, model, input.effort ?? (model === saved.model ? saved.effort : undefined), input.prompt)
+      const chosen = input.model ?? saved.model
+      const model = await fableFallbackModel(kind, chosen, settings)
+      // Fable offers every Claude effort (ultracode included), so the chosen level carries across a fallback.
+      const effort = await concreteEffort(kind, model, input.effort ?? (chosen === saved.model ? saved.effort : undefined), input.prompt)
 
       // Session-first: provision the thread's scratch DIRECTORY (empty; the worker fills it or does
       // not) — NO .frizz/<slug>.md file. It keys on the frizz-minted sessionId, which stays the row's

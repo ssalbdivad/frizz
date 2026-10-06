@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { Settings } from "@frizz/shared"
+import type { ProviderQuota, Settings } from "@frizz/shared"
 import { createDispatcher } from "./dispatch.ts"
 import { createStorage } from "./storage.ts"
 import { defaultSettings } from "./settings.ts"
@@ -17,7 +17,11 @@ import type { ChooseEffort, ChooseEffortInput } from "./effort-chooser.ts"
 // the prompt box writes — never on the per-project Settings pair, which no surface has written since
 // that record existed and which therefore held a months-old choice (or nothing) in every project.
 
-function harness(saved: Partial<Record<BackendKind, { model?: string; effort?: Settings["effort"] }>>, chooseEffort?: ChooseEffort) {
+function harness(
+  saved: Partial<Record<BackendKind, { model?: string; effort?: Settings["effort"] }>>,
+  chooseEffort?: ChooseEffort,
+  extra: { settings?: Partial<Settings>; readClaudeQuota?: () => Promise<ProviderQuota> } = {},
+) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-saved-profile-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   const project: Project = { dir, id: "saved-profile", name: "t", label: "o/t", stateDir: dir, cwdSlug: cwdSlug(dir) }
@@ -42,10 +46,11 @@ function harness(saved: Partial<Record<BackendKind, { model?: string; effort?: S
     storage,
     board,
     // The stale per-project pair a Settings blob can still carry: it must never be what launches.
-    getSettings: () => ({ ...defaultSettings(), model: "haiku", effort: "low" }),
+    getSettings: () => ({ ...defaultSettings(), model: "haiku", effort: "low", ...extra.settings }),
     dispatchProfile: (kind) => saved[kind] ?? {},
     claudeBroker,
     ...(chooseEffort ? { chooseEffort } : {}),
+    ...(extra.readClaudeQuota ? { readClaudeQuota: extra.readClaudeQuota } : {}),
   })
   return { storage, dispatcher, spawned }
 }
@@ -100,4 +105,29 @@ test("an auto effort on Haiku is offered no ultracode, and without a chooser lau
   const bare = harness({})
   await bare.dispatcher.dispatch({ prompt: "Rename foo", model: "opus", effort: "auto" }, { backend: "claude" })
   assert.deepEqual(bare.spawned, [{ model: "opus", effort: "high" }])
+})
+
+// The `fableFallback` setting: while a base window is nearly out and Fable's own window has room, a new
+// Claude thread launches on Fable — whatever model was chosen, and keeping the chosen effort.
+test("with the Fable fallback on and the base nearly out, a Claude dispatch launches on Fable", async () => {
+  const lowBase = async (): Promise<ProviderQuota> => ({ status: "ok", windows: [
+    { key: "5h", label: "5h", usedPercent: 93 },
+    { key: "weekly", label: "Weekly", usedPercent: 50 },
+    { key: "weekly-fable", label: "Fable wk", usedPercent: 20 },
+  ] })
+  const on = harness({ claude: { model: "opus", effort: "xhigh" } }, undefined, { settings: { fableFallback: true }, readClaudeQuota: lowBase })
+  const { slug } = await on.dispatcher.dispatch({ prompt: "Do the thing" }, { backend: "claude" })
+  assert.deepEqual(on.spawned, [{ model: "fable", effort: "xhigh" }])
+  assert.equal(on.storage.getSession(slug)?.model, "fable", "the row records what actually launched")
+
+  const off = harness({ claude: { model: "opus", effort: "xhigh" } }, undefined, { readClaudeQuota: lowBase })
+  await off.dispatcher.dispatch({ prompt: "Do the thing" }, { backend: "claude" })
+  assert.deepEqual(off.spawned, [{ model: "opus", effort: "xhigh" }], "off by default")
+
+  const failing = harness({ claude: { model: "opus", effort: "xhigh" } }, undefined, {
+    settings: { fableFallback: true },
+    readClaudeQuota: async () => { throw new Error("endpoint down") },
+  })
+  await failing.dispatcher.dispatch({ prompt: "Do the thing" }, { backend: "claude" })
+  assert.deepEqual(failing.spawned, [{ model: "opus", effort: "xhigh" }], "an unreadable quota launches as chosen")
 })

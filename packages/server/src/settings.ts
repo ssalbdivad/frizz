@@ -93,6 +93,8 @@ export const defaultSettings = (): Settings => ({
   removeWorktreesOnDone: true,
   // Never — see the schema.
   deleteDoneThreadsUntouchedDays: 0,
+  // Off — it moves work onto Fable; see the schema and backend/fable-fallback.ts.
+  fableFallback: false,
 })
 
 // Settings persist as one JSON blob under settings['settings']. Read merges over defaults
