@@ -109,12 +109,12 @@ condition: anything the rule cannot express but the run itself can check when it
 title: one or two words in sentence case naming the task's subject, at most 20 characters — "Triage issues", "Dep bumps", "CI check", "Standup digest". Not a sentence, not a bare verb.
 
 Examples, as if it were Monday, October 5, 2026, 2:32pm:
-TEXT: every Monday at 9am triage new issues
-{"phrase":"every Monday at 9am","rrule":"FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0","dtstart":"2026-10-12T09:00","condition":null,"title":"Triage issues"}
+TEXT: every Wednesday at 11am review the stale PRs
+{"phrase":"every Wednesday at 11am","rrule":"FREQ=WEEKLY;BYDAY=WE;BYHOUR=11;BYMINUTE=0","dtstart":"2026-10-07T11:00","condition":null,"title":"Stale PRs"}
 TEXT: Write the monthly changelog on the last day of every month at 5pm.
 {"phrase":"on the last day of every month at 5pm","rrule":"FREQ=MONTHLY;BYMONTHDAY=-1;BYHOUR=17;BYMINUTE=0","dtstart":"2026-10-31T17:00","condition":null,"title":"Changelog"}
-TEXT: the day after each release, draft release notes from the merged PRs
-{"phrase":"the day after each release","rrule":"FREQ=DAILY;BYHOUR=9;BYMINUTE=0","dtstart":"2026-10-06T09:00","condition":"only when a release was published the day before","title":"Release notes"}
+TEXT: Redeploy staging from main every weekday at 10am, unless it's a US holiday
+{"phrase":"every weekday at 10am, unless it's a US holiday","rrule":"FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=10;BYMINUTE=0","dtstart":"2026-10-06T10:00","condition":"unless it's a US public holiday","title":"Staging deploy"}
 TEXT: fix the flaky checkout test that failed this morning
 {"refuse":"no_schedule","detail":"a past time; nothing repeats"}
 TEXT: add a workflow that runs the linter every night
