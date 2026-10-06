@@ -44,6 +44,6 @@ test("the card's strip hangs in this column under the agents, once", () => {
   const strip = createElement("div", { "data-strip": "" }, "TERM rows")
   const html = render({ after: strip })
   assert.ok(html.indexOf(">quiet-one<") > 0 && html.indexOf(">quiet-one<") < html.indexOf("data-strip"), "the strip hangs under the agent rows")
-  assert.match(render({ agents: false, after: strip }), /^<div class="-mt-3 shrink-0 px-5 pb-3" data-queue-ops="parent">[\s\S]*data-strip/, "the strip alone still gets the column")
+  assert.match(render({ agents: false, after: strip }), /^<div class="flex min-w-0 flex-col gap-0.5" data-queue-ops="parent">[\s\S]*data-strip/, "the strip alone still gets the column")
   assert.equal(render({ agents: false, after: null }), "", "nothing to draw ⇒ no empty inset")
 })

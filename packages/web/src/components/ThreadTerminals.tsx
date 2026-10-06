@@ -7,7 +7,9 @@ import { useBackgroundShellLines, useBoard } from "../hooks.ts"
 import { AGENT_GLYPH_STROKE, CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_DISMISS_TITLE, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS, shellLinesLabel, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser, dismissChildOp } from "../lib/dismissChildOp.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { endedShellStateLabel, humanProcess, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
+import { cardProcesses, endedShellStateLabel, humanProcess, onCard, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
+// The card's rows live in the lib so the queue card's counts line can read them with no component import.
+export { cardProcesses }
 import { liveAgeSince } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { abbreviateHome } from "../lib/paths.ts"
@@ -603,17 +605,6 @@ export function startComposerTerminal(api: Api, slug: string, command: string | 
 
 /** Which rows a queue card's strip draws: the live ones (see ThreadProcessStrip), minus the terminal whose
  *  prompt the card already shows with its own row above its screen (TerminalPromptPane). */
-function onCard(thread: Pick<ThreadView, "terminals">): (p: ThreadProcess) => boolean {
-  const prompting = promptingTerminal(thread)
-  return (p) => processIsLive(p) && !(prompting && p.terminal?.id === prompting.id)
-}
-
-/** The rows a queue card's strip draws. The card gates its strip's wrapper on this, so a card whose
- *  terminals have all finished — or whose only one is the prompt it shows above — draws no empty inset. */
-export function cardProcesses(thread: Pick<ThreadView, "terminals" | "bgShells">, now: number): ThreadProcess[] {
-  return threadProcesses(thread, [], { now }).filter(onCard(thread))
-}
-
 /** Whether a card's thread is the page's focused project's, so its terminal can open over its drawer here. */
 export function focusedProject(slug: string | undefined): boolean {
   const focus = projectSlug()

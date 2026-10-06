@@ -5,7 +5,7 @@ import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, Repeat, TerminalSquare, X } from "lucide-react"
 import { parseRecurringPrompt, parseScheduledRunPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
-import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
+import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, ThreadWatchView, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushScheduleDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { scheduledRunFacts } from "../lib/schedules.ts"
 import { useBoard, useProjectDir, useTranscript, type ChatMessage, type TranscriptData } from "../hooks.ts"
@@ -4582,12 +4582,27 @@ export function BackgroundOpsStrip({
           line counter on the agent's rows is polled inside (the page's project, which a drawer always is). */}
       <ThreadProcessStrip thread={processThread} surface="drawer" transcriptShells={transcriptShells} scopedToSubAgent={Boolean(parentAgentId)} />
       {/* THE PR WATCHERS, last, because they are the least likely to change while you are looking: a
-          sub-agent and a shell are running RIGHT NOW, and a watcher is waiting on somebody else.
-          They are always `running` — a parked watcher IS live, and the row vanishes the moment the
-          fence stops standing (see board.githubWatchViews), so there is no settled state to draw.
-          NO DISMISS ×: there is no registration to drop. The worker owns the fence, and the operator's
-          control for "stop showing me this" is the snooze on the resting card. */}
-      {watchers.map((w) => (
+          sub-agent and a shell are running RIGHT NOW, and a watcher is waiting on somebody else. */}
+      <GithubWatchRows watches={watchers} />
+      <ThreadLinks links={links} />
+    </div>
+  )
+}
+
+/**
+ * A thread's parked GitHub watchers, one GITHUB row each — the drawer's strip (BackgroundOpsStrip) and the
+ * cross-project queue card's ops panel (AllQueuesCard) both draw them. A row opens on GitHub, so nothing
+ * here reads a project.
+ */
+export function GithubWatchRows({ watches }: { watches: readonly ThreadWatchView[] }) {
+  if (watches.length === 0) return null
+  // Always `running` — a parked watcher IS live, and the row vanishes the moment the fence stops standing
+  // (see board.githubWatchViews), so there is no settled state to draw. NO DISMISS ×: there is no
+  // registration to drop. The worker owns the fence, and the operator's control for "stop showing me this"
+  // is the snooze on the resting card.
+  return (
+    <>
+      {watches.map((w) => (
         <ChildOpRow
           key={w.id}
           kind="GITHUB"
@@ -4609,8 +4624,7 @@ export function BackgroundOpsStrip({
           onOpen={() => openExternalUrl(githubRefUrl(w.target, w.subject === "issue" ? "issue" : "pull") ?? `https://github.com/${w.target.replace("#", w.subject === "issue" ? "/issues/" : "/pull/")}`)}
         />
       ))}
-      <ThreadLinks links={links} />
-    </div>
+    </>
   )
 }
 

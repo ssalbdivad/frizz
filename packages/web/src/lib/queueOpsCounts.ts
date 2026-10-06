@@ -1,7 +1,8 @@
 import type { ThreadView } from "@frizz/shared"
-import { mergeBackgroundShells, visibleChildOps } from "./childOps.ts"
+import { visibleChildOps } from "./childOps.ts"
+import { cardProcesses } from "./threadProcesses.ts"
 
-export type QueueOpsKind = "agent" | "shell" | "pr" | "issue" | "file" | "link"
+export type QueueOpsKind = "agent" | "workflow" | "terminal" | "pr" | "issue" | "file" | "link"
 
 export interface QueueOpsCount {
   readonly key: QueueOpsKind
@@ -9,7 +10,8 @@ export interface QueueOpsCount {
   readonly one: string
   readonly many: string
   // The states of the rows behind the count, which pick its liveness mark. A parked watcher IS live —
-  // its row is always `running` (BackgroundOpsStrip) — so a PR or issue count reads as running.
+  // its row is always `running` (BackgroundOpsStrip) — so a PR or issue count reads as running. A
+  // terminal waiting at a prompt is live work too, so it reads as running.
   readonly states: readonly (string | undefined)[]
 }
 
@@ -17,12 +19,24 @@ export interface QueueOpsCount {
 // with the empty kinds dropped. Taken from the same lists the rows in its panel render, by the same
 // filters, so the line and the panel cannot disagree about how many there are.
 //
+// THE FORK'S ROWS, NOT UPSTREAM'S. Upstream counted `agents` and `shells` (the board's bgShells) because
+// its panel drew QueueSubAgentLines and BackgroundOpsStrip. The cross-project card's panel draws the rows
+// its ops column drew under the reply box until 2026-10-06: AGENT and WORKFLOW rows (QueueChildOps), then
+// every live process on the thread — the agent's shells and the human's own terminals, one TERM row each
+// (ThreadTerminals cardProcesses). So the counts are agents, workflows and terminals, then the PR/issue
+// watches and saved files and links upstream's panel added.
+//
+// `agents: false` while the card's awaiting card lists the children itself (drawsSubAgentWaitCard): the
+// panel draws no AGENT rows then, so the line counts none.
+//
 // ONLY GITHUB WATCHES COUNT. A shell watch is not a second object: the shell it waits on is already a
-// shell, from the board's own shell list, and counting the watch too would name one process twice — the
+// terminal, from the board's own shell list, and counting the watch too would name one process twice — the
 // double-naming the lifecycle footer's watcher readout was removed for (2026-08-14).
-export function queueOpsCounts(thread: ThreadView): QueueOpsCount[] {
-  const agents = visibleChildOps(thread.subAgents ?? [], "card")
-  const shells = mergeBackgroundShells(thread.bgShells ?? [], [])
+export function queueOpsCounts(thread: ThreadView, { agents: withAgents = true, now = Date.now() }: { agents?: boolean; now?: number } = {}): QueueOpsCount[] {
+  const children = withAgents ? visibleChildOps(thread.subAgents ?? [], "card") : []
+  const agents = children.filter((child) => !child.workflow)
+  const workflows = children.filter((child) => child.workflow)
+  const processes = cardProcesses(thread, now)
   const watches = (thread.watches ?? []).filter((watch) => watch.kind === "github")
   const prs = watches.filter((watch) => watch.subject !== "issue")
   const issues = watches.filter((watch) => watch.subject === "issue")
@@ -31,7 +45,8 @@ export function queueOpsCounts(thread: ThreadView): QueueOpsCount[] {
   const urls = links.filter((link) => link.kind === "link")
   const counts: QueueOpsCount[] = [
     { key: "agent", n: agents.length, one: "agent", many: "agents", states: agents.map((agent) => agent.state) },
-    { key: "shell", n: shells.length, one: "shell", many: "shells", states: shells.map((shell) => shell.state) },
+    { key: "workflow", n: workflows.length, one: "workflow", many: "workflows", states: workflows.map((flow) => flow.state) },
+    { key: "terminal", n: processes.length, one: "terminal", many: "terminals", states: processes.map((p) => (p.state === "prompt" ? "running" : p.state === "quiet" ? "stale" : p.state)) },
     { key: "pr", n: prs.length, one: "PR", many: "PRs", states: ["running"] },
     { key: "issue", n: issues.length, one: "issue", many: "issues", states: ["running"] },
     { key: "file", n: files.length, one: "file", many: "files", states: [] },

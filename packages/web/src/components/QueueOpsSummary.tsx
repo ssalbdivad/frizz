@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState, type ReactNode } from "react"
 import { ExternalLink, FileText } from "lucide-react"
-import type { ThreadView } from "@frizz/shared"
 import { CHILD_RESTED_DOT_CLASS, CHILD_STALE_DOT_CLASS } from "../lib/childOps.ts"
 import { isRunningOperation } from "../lib/operationIndicators.ts"
-import { queueOpsCounts, type QueueOpsKind } from "../lib/queueOpsCounts.ts"
-import { BackgroundOpsStrip } from "./ChatView.tsx"
-import { QueueSubAgentLines, hasQueueSubAgentLines } from "./QueueSubAgentLines.tsx"
+import type { QueueOpsCount, QueueOpsKind } from "../lib/queueOpsCounts.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 
 // THE QUEUE CARD'S LIVE OPS, CONDENSED: one line of counts at the right, just above the docked prompt
@@ -20,19 +17,20 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 // where it just lists out the number of subagents, the number of files, et cetera … Then you can hover
 // over to see the details").
 //
-// THE ROWS IN THE PANEL ARE THE REAL ONES — QueueSubAgentLines and BackgroundOpsStrip, the components
-// that drew them under the box — so a row still opens its drawer, stops its child, and reads its CI the
-// way it did. The COUNTS are taken from the same lists those components render, by the same filters, so
-// the line and the panel cannot disagree about how many there are (lib/queueOpsCounts.ts).
+// THE ROWS IN THE PANEL ARE THE REAL ONES — the components that drew them under the box — so a row still
+// opens its drawer, stops its child, and reads its CI the way it did. The CALLER composes them and hands
+// in the counts (lib/queueOpsCounts.ts, taken from the same lists by the same filters, so the line and the
+// panel cannot disagree). Upstream's card read its rows off the page's board (QueueSubAgentLines,
+// BackgroundOpsStrip); the fork's cross-project card cannot — on that page the board is the FOCUSED
+// project's, usually not the card's — so AllQueuesCard passes rows drawn from its own project.
 //
 // THE MARK IS THE ROWS' OWN LIVENESS DOT, in the row's hue (yellow agent, blue shell, violet watch), and
 // it pulses only while at least one row of that kind is running. Otherwise it is the rows' own settled
 // mark (lib/childOps.ts): the hollow ring when one of them rested, the flat dot when they went stale.
-export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
+export function QueueOpsSummary({ counts: groups, children }: { counts: readonly QueueOpsCount[]; children: ReactNode }) {
   const [open, setOpen] = useState(false)
   const closeTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined)
   useEffect(() => () => clearTimeout(closeTimer.current), [])
-  const groups = queueOpsCounts(thread)
   const panelRef = useRef<HTMLDivElement>(null)
   const buttonRef = useRef<HTMLButtonElement>(null)
   // The last op can end, or be stopped from its × in the panel, while the panel is open — and nothing
@@ -132,8 +130,7 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
           onClick={(event) => event.stopPropagation()}
           className="flex w-[440px] max-w-[calc(100vw-1.5rem)] flex-col px-3 py-2"
         >
-          <QueueSubAgentLines slug={thread.id} subAgents={thread.subAgents ?? []} className="" />
-          <BackgroundOpsStrip slug={thread.id} includeAgents={false} className={hasQueueSubAgentLines(thread.subAgents ?? []) ? "pt-0.5" : ""} />
+          {children}
         </PopoverContent>
       </Popover>
     </div>
@@ -142,8 +139,9 @@ export function QueueOpsSummary({ thread }: { thread: ThreadView }) {
 
 function CountMark({ kind, states }: { kind: QueueOpsKind; states: readonly (string | undefined)[] }) {
   switch (kind) {
-    case "agent": return <Dot hue="agent" states={states} />
-    case "shell": return <Dot hue="shell" states={states} />
+    case "agent":
+    case "workflow": return <Dot hue="agent" states={states} />
+    case "terminal": return <Dot hue="shell" states={states} />
     case "pr":
     case "issue": return <Dot hue="github" states={states} />
     case "file": return <FileText aria-hidden className="h-[1em] w-[1em] text-muted-45" />

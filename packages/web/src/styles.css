@@ -241,7 +241,7 @@ body {
 /* In the queue card's ops panel (QueueOpsSummary) the saved files and links can be the panel's first
    rows. ThreadLinks rules itself off from the rows above it, which is right in the drawer's strip and
    a stray line across the panel's top edge here, where nothing is above it. */
-[data-queue-ops-panel] > [data-background-ops]:first-child > [data-thread-links]:first-child {
+[data-queue-ops-panel] > :is([data-background-ops], [data-queue-card-ops]):first-child > [data-thread-links]:first-child {
   margin-top: 0;
   border-top-width: 0;
   padding-top: 0;
