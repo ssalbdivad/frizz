@@ -38,7 +38,7 @@ class Box {
   mode: boolean
   dismissed: Dismissed = {}
   /** Every publish step, for counting what the screen showed. */
-  log: { prose: string; shown: string; ev: OfferEvent["kind"] }[] = []
+  log: { prose: string; shown: string; ev: OfferEvent["kind"]; rule: string }[] = []
   constructor(text = "", mode = false) {
     this.mode = mode
     this.state = initialOfferState(text, mode)
@@ -46,7 +46,7 @@ class Box {
   read = (text: string) => (): Published => ({ prose: text, read: text, at: this.t, reading: readSchedulePhrase(text, { nowMs: NOW, tz: NY, scope: this.mode ? "anywhere" : "edges" }) })
   private apply(prose: string, ev: OfferEvent) {
     this.state = publish(this.state, prose, this.read(prose), ev, { mode: this.mode, dismissed: this.dismissed })
-    this.log.push({ prose, shown: this.shownLine(), ev: ev.kind })
+    this.log.push({ prose, shown: this.shownLine(), ev: ev.kind, rule: this.ruleLine() })
   }
   /** The text becomes `next` by one edit. */
   edit(next: string, opts: { inputType?: string; caret?: number; composing?: boolean } = {}) {
@@ -84,6 +84,16 @@ class Box {
   get shown(): PhraseReading | undefined {
     return this.state.shown?.reading
   }
+  /** What the screen shows as a READING — its kind, edge, rule, start and what is dim (a cue: why, and its
+   *  core) — leaving out the marked words, which grow with every word of the phrase as it is typed. */
+  ruleLine(): string {
+    const r = this.state.shown?.reading
+    if (!r) return "dark"
+    if (r.kind === "exact") return `exact ${r.edge} ${r.rrule} ${r.dtstart}${r.assumed.map((a) => ` ~${a.part}`).join("")}`
+    if (r.kind === "cue") return `cue ${r.edge} ${r.why}${r.core ? ` core ${r.core.rrule}` : ""}`
+    if (r.kind === "ambiguous") return `ambiguous ${r.edge} ${r.word}`
+    return r.kind
+  }
   /** What the screen shows, as one line: kind, edge, the marked words, the rule and what is dim. */
   shownLine(): string {
     const s = this.state.shown
@@ -99,6 +109,8 @@ class Box {
 test("classifyEdit: a word ends at whitespace or punctuation, a paste is wholesale, anything else is mid-word", () => {
   assert.equal(classifyEdit("every Monday", "every Monday ", 13), "boundary")
   assert.equal(classifyEdit("every Monday", "every Monday,", 13), "boundary")
+  assert.equal(classifyEdit("every Monday at 10", "every Monday at 10:", 19), "midword", "a colon inside a clock (fix round 1)")
+  assert.equal(classifyEdit("note", "note:", 5), "boundary", "a colon after a word still ends it")
   assert.equal(classifyEdit("every Mon", "every Mond", 10), "midword")
   assert.equal(classifyEdit("", "e", 1), "midword")
   assert.equal(classifyEdit("every Monday at 9am", "every Monday at 9a", 18), "midword", "deleting into a word")
@@ -160,6 +172,71 @@ test("typing stability: at most 4 published changes, none from a mid-word prefix
     final.state = publish(initialOfferState("", false), text, final.read(text), { kind: "edit", edit: "wholesale", caret: text.length, at: NOW }, { mode: false, dismissed: {} })
     assert.equal(box.shownLine(), final.shownLine(), `${text}: after the rest the screen shows the text's own reading`)
   }
+})
+
+test("a clock or a word half-typed through a pause never reaches the screen (fix round 1, publish-flicker-colon-and-rest)", () => {
+  // Every reading the screen showed while `text` was typed with `gaps` (ms before each key).
+  const shownWhile = (text: string, gaps: (i: number) => number, as: "shown" | "rule" = "shown") => {
+    const box = new Box()
+    for (let i = 0; i < text.length; i++) {
+      box.advance(gaps(i))
+      box.edit(box.state.prose + text[i])
+    }
+    box.advance(2_000)
+    const seen: string[] = []
+    for (const step of box.log) if (seen[seen.length - 1] !== step[as]) seen.push(step[as])
+    return seen.filter((x) => x !== "dark")
+  }
+  // A: `:` inside a clock is not the end of a word. At a steady 120ms the screen went 9am (dim) → a cue at
+  // "every weekday at 10:" → 10:30am.
+  for (const text of ["every weekday at 10:30am check CI", "every day at 12:15 check CI"]) {
+    const seen = shownWhile(text, () => 120)
+    assert.deepEqual(seen.filter((x) => x.startsWith("cue")), [], `${text}: ${seen.join(" → ")}`)
+    assert.ok(seen.length <= 2, `${text}: ${seen.join(" → ")}`)
+  }
+  // D: a 400ms pause between the "1" and the "0" of 10am published "every Monday at 1" as 1pm, mid-word.
+  const d = "every Monday at 10am triage new issues"
+  const pauseD = d.indexOf("10am") + 1
+  const seenD = shownWhile(d, (i) => (i === pauseD ? 400 : 120))
+  assert.ok(!seenD.some((x) => /BYHOUR=13/.test(x)), seenD.join(" → "))
+  // B: a pause at "Thursda" published Tuesday alone — the word being typed dropped from the reading.
+  const b = "every Tuesday and Thursday at 9am sync the roadmap"
+  const at = b.indexOf("Thursday")
+  const seenB = shownWhile(b, (i) => (i === at + 5 || i === at + 7 ? 400 : 120))
+  const both = seenB.findIndex((x) => /BYDAY=TU,TH/.test(x))
+  assert.ok(both >= 0, seenB.join(" → "))
+  assert.ok(!seenB.slice(both).some((x) => /BYDAY=TU;/.test(x)), `Thursday never drops once read: ${seenB.join(" → ")}`)
+  // J: 11 phrases, 200 trials each, 15% of keys after a long pause (seeded), counting changes of the READING
+  // (rule, start, what is dim; a cue's why and core) as the finding did. Before the fix, with pauses of
+  // 300-900ms: up to 8 changes, mean 2.3-4.8 per phrase.
+  const phrases = [
+    "every Monday at 9am triage new issues", "every Friday at 4pm write the changelog", "every weekday at 10:30am check CI",
+    "every other Friday at 4pm write the changelog", "every Wednesday at 11am bump deps", "every Thursday at 3 prep the planning notes",
+    "every 2 hours on weekdays from 9 to 5 check CI", "every Monday at 9am for 4 weeks check the dashboards",
+    "the first Monday of every month at 10am bump deps", "every Saturday at 10am clean up branches", "every Tuesday and Thursday at 2:30pm sync the roadmap",
+  ]
+  const jitter = (longest: number) => {
+    let seed = 7
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff)
+    let worst = { n: 0, text: "", seen: [] as string[] }
+    let sum = 0
+    for (const text of phrases) {
+      for (let k = 0; k < 200; k++) {
+        const gaps = [...text].map(() => Math.round(rnd() < 0.15 ? 300 + rnd() * (longest - 300) : 80 + rnd() * 120))
+        const seen = shownWhile(text, (i) => gaps[i]!, "rule")
+        sum += seen.length
+        if (seen.length > worst.n) worst = { n: seen.length, text, seen }
+      }
+    }
+    return { worst, mean: sum / (phrases.length * 200) }
+  }
+  // Every pause shorter than the idle — a pause, never a stop: at most 4, the steady-typing bound (measured: 3).
+  const pauses = jitter(CLOSE_IDLE_MS - 50)
+  assert.ok(pauses.worst.n <= 4, `${pauses.worst.n} changes for ${JSON.stringify(pauses.worst.text)}:\n  ${pauses.worst.seen.join("\n  ")}`)
+  // The finding's 300-900ms: a pause past 800ms IS a stop, and the screen then shows what the words say so far
+  // ("at 9" with its meridiem guessed, "for 4" as a cue) — measured worst 5 in 1 trial of 2,200, mean 2.4.
+  const stops = jitter(900)
+  assert.ok(stops.worst.n <= 5 && stops.mean < 2.6, `${stops.worst.n} changes (mean ${stops.mean.toFixed(2)}) for ${JSON.stringify(stops.worst.text)}:\n  ${stops.worst.seen.join("\n  ")}`)
 })
 
 test("negatives never offer at any prefix", () => {

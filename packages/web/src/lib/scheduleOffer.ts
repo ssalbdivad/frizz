@@ -9,7 +9,8 @@ import { isScheduleOffer, readSchedulePhrase, scheduleEdgeGates, type PhraseRead
 //
 //   - a word ends — the character just typed is whitespace or `, ; : . ! ? )` — or a paste, a drop, an undo,
 //     a redo or any other wholesale change replaced the text, or the box blurred;
-//   - the typing rests (REST_MS) with the caret inside a word;
+//   - the typing rests (REST_MS) with the caret inside a word — unless that word is a clock still being typed
+//     or a word the reading stops short of (`pausePublishes`);
 //   - a phrase at the CLOSE edge waits for the human to stop (CLOSE_IDLE_MS): every sentence being typed
 //     briefly ends in whatever was just typed, so "fix the build every" is not yet an offer;
 //   - while a word is half-typed, the last reading stays;
@@ -119,7 +120,37 @@ export function classifyEdit(before: string, after: string, caret: number, input
   if (inputType && WHOLESALE_INPUT.has(inputType)) return "wholesale"
   const d = diff(before, after)
   if (d.inserted > 1 || d.removed > 1 || (d.inserted > 0 && d.removed > 0)) return "wholesale"
+  // A colon after a digit is a clock being typed ("10:" on the way to "10:30am"), not the end of a word: as a
+  // boundary it published the cue "at 10" between 9am and 10:30am at a steady 120ms a key (fix round 1).
+  if (after[caret - 1] === ":" && /\d/.test(after[caret - 2] ?? "")) return "midword"
   return caret <= 0 || BOUNDARY.test(after[caret - 1] ?? "") ? "boundary" : "midword"
+}
+
+/** A clock still being typed: digits, a colon and minutes, a half-typed meridiem — "1" (of "10am"), "2:3",
+ *  "2:30", "10a". Not "10am", which says all it will. */
+const CLOCK_FRAGMENT = /^\d{1,2}(?::\d{0,2})?(?:[ap]\.?)?$/i
+
+/**
+ * Whether a pause may publish `reading` with the caret inside a word (§0.1; fix round 1). The rest exists so a
+ * phrase whose last word was never ended still shows when the typing stops — but a pause is not always a
+ * stop, and a half-typed word reads as something else:
+ *   - a clock fragment ("every Monday at 1", paused between the "1" and the "0" of 10am) reads as a whole
+ *     hour, 1pm: at a REST it waits for the idle or the word's end instead (an idle is a real stop);
+ *   - a reading that stops short of the word the caret is in ("every Tuesday and Thursda" reads Tuesday
+ *     alone, where "Thurs" had read both) has not read that word at all, and no offer ("every Mond" reads as an
+ *     event) in a word the shown offer runs into is not one either: what is on screen (`shown`, carried) stays.
+ */
+export function pausePublishes(ev: "rest" | "idle", reading: PhraseReading, prose: string, caret: number | null, shown: Published | null): boolean {
+  if (caret === null || caret <= 0) return true
+  const word = /\S*$/.exec(prose.slice(0, caret))![0]
+  if (!word) return true
+  const wordStart = caret - word.length
+  if (ev === "rest" && CLOCK_FRAGMENT.test(word)) return false
+  if (reading.kind === "exact" || reading.kind === "cue" || reading.kind === "ambiguous") return reading.span.end >= wordStart
+  // No offer at all ("every Mond" reads as an event, "every Tuesd" as nothing): a word the shown offer runs
+  // into is still being typed.
+  const on = shown?.reading
+  return !on || on.kind === "none" || on.span.end < wordStart
 }
 
 // ---- carrying a shown reading across an edit ---------------------------------------------------------------
@@ -266,8 +297,15 @@ export function publish(prev: OfferState, prose: string, read: () => Published, 
 
   const now = read()
   const next: OfferState = { ...base, last: now, wait }
-  const qualifierHeld = ev.kind === "edit" && ev.edit === "boundary" && holdsQualifier(prev.shown?.reading, prose, now.reading)
-  if (qualifierHeld) return { ...next, shown: carry(prev.shown, prose), wait: { ...wait, rest: ev.at + REST_MS } }
+  // A pause mid-word publishes only a word the reading has finished with: else the screen keeps what it shows.
+  if (ev.kind === "rest" || ev.kind === "idle") {
+    const kept = carry(prev.shown, prose)
+    if (!pausePublishes(ev.kind, now.reading, prose, caret, kept)) return { ...next, shown: kept }
+  }
+  // A qualifier still being typed holds through a word's end AND a rest: a 250ms pause inside "for" is not the
+  // typing stopping (fix round 1). The idle (800ms) is, and shows the cue.
+  const qualifierHeld = ((ev.kind === "edit" && ev.edit === "boundary") || ev.kind === "rest") && holdsQualifier(prev.shown?.reading, prose, now.reading)
+  if (qualifierHeld) return { ...next, shown: carry(prev.shown, prose), wait: ev.kind === "rest" ? wait : { ...wait, rest: ev.at + REST_MS } }
 
   // In the mode the panel shows whatever the text reads, at any edge (§4.1).
   if (opts.mode) return { ...next, shown: now }
