@@ -59,7 +59,7 @@ export function SnoozeCard({ thread }: {
   const wake = formatSnoozeWake(until, nowMs).replace(/^(Today|Tomorrow)/, (day) => day.toLowerCase())
   const prompt = thread.snoozePrompt?.trim()
 
-  // Same RPC and same toast as the footer's Wake now — two doors, one action.
+  // Same RPC and same toast as the header snooze menu's Wake now — two doors, one action.
   async function wakeNow(): Promise<void> {
     setBusy(true)
     try {

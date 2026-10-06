@@ -10,6 +10,7 @@ import {
   pathSeparatorOf,
   relativeTo,
   splitPath,
+  tildePath,
 } from "./paths.ts"
 
 // The four spellings every case below is run against (Windows audit 2026-09-11, finding 12): a Windows
@@ -125,4 +126,20 @@ test("abbreviateHome collapses the board's homeDir to ~ and keeps the separator 
   assert.equal(abbreviateHome("D:\\Users\\x\\a.ts", "C:\\Users\\x"), "D:\\Users\\x\\a.ts")
   assert.equal(abbreviateHome(POSIX, undefined), POSIX)
   assert.equal(abbreviateHome(POSIX, ""), POSIX)
+})
+
+test("tildePath writes a LEADING home as ~ in the separator that followed it, and only a leading one", () => {
+  assert.equal(tildePath(WIN, "C:\\Users\\x"), "~\\proj\\src\\a.ts")
+  assert.equal(tildePath(WIN_FWD, "c:\\Users\\x"), "~/proj/src/a.ts")
+  assert.equal(tildePath(MIXED, "C:/Users/x"), "~/proj\\src/a.ts")
+  assert.equal(tildePath(POSIX, "/Users/x"), "~/proj/src/a.ts")
+  assert.equal(tildePath(POSIX, "/Users/x/"), "~/proj/src/a.ts")
+  // One path names one place: a home-shaped run further along it is another directory.
+  assert.equal(tildePath("/Volumes/Backup/Users/x/a.ts", "/Users/x"), "/Volumes/Backup/Users/x/a.ts")
+  // Not under the home: a sibling user, another drive, the home itself, no home at all.
+  assert.equal(tildePath("/Users/xy/a.ts", "/Users/x"), "/Users/xy/a.ts")
+  assert.equal(tildePath("D:\\Users\\x\\a.ts", "C:\\Users\\x"), "D:\\Users\\x\\a.ts")
+  assert.equal(tildePath("/Users/x", "/Users/x"), "/Users/x")
+  assert.equal(tildePath(POSIX, undefined), POSIX)
+  assert.equal(tildePath(POSIX, ""), POSIX)
 })

@@ -24,7 +24,7 @@ const DAY_ROLLOVER_HOUR = 5
 /** DURATION presets park for a span ("1d"); CALENDAR ones park until a named instant ("tomorrow").
  *  The split is already real in `snoozePresetInstant` — a calendar preset does calendar arithmetic and
  *  survives DST, a duration is an exact delta — and it governs the GRAMMAR of every label built from a
- *  preset: you snooze FOR a duration but UNTIL an instant. See `snoozePresetAction`. */
+ *  preset: you snooze FOR a duration but UNTIL an instant. */
 type SnoozePresetKind = "duration" | "calendar"
 
 // The DURATION labels are the house duration grammar (`web/src/lib/durationLabels.ts`): `1h`, not
@@ -32,8 +32,9 @@ type SnoozePresetKind = "duration" | "calendar"
 // 2026-08-31. The detail beside each restates the same span one unit down, in the same grammar.
 //
 // The CALENDAR preset is untouched by that, because "tomorrow" and "9am" are not durations. It stays
-// lowercase — sentence case, and it reads as a phrase inside the button beside it ("Snooze until
-// tomorrow"), where a capital would look like a proper noun.
+// lowercase — sentence case, and it reads as a phrase mid-sentence (Settings' "Until tomorrow, 9am"),
+// where a capital would look like a proper noun. The desktop SnoozeMenu lists every preset with its
+// wake time; the phone's swipe and ⋯ sheet use the one chosen in Settings (`prefs.snoozePreset`).
 export const SNOOZE_PRESETS: readonly { value: SnoozePreset; label: string; detail: string; kind: SnoozePresetKind }[] = [
   { value: "1h", label: "1h", detail: "60m", kind: "duration" },
   { value: "tomorrow", label: "tomorrow", detail: "9am", kind: "calendar" },
@@ -57,17 +58,6 @@ function snoozePresetEntry(preset: SnoozePreset) {
     SNOOZE_PRESETS.find((candidate) => candidate.value === preset) ??
     SNOOZE_PRESETS.find((candidate) => candidate.value === DEFAULT_SNOOZE_PRESET)!
   )
-}
-
-/** The snooze button's own words. "Snooze 1d" parks FOR a span; "Snooze until tomorrow" parks UNTIL
- *  an instant — different promises, and gluing the bare label on made the calendar one read as a
- *  duration ("Snooze tomorrow", which sounds like it defers the snoozing itself). This is the visible
- *  label AND the accessible name: a control whose accessible name restates its visible text is the
- *  behaviour screen-reader users expect (WCAG 2.5.3), and the old "Snooze thread for tomorrow" was
- *  ungrammatical on exactly the preset this fixes (maintainer 2026-07-29). */
-export function snoozePresetAction(preset: SnoozePreset): string {
-  const entry = snoozePresetEntry(preset)
-  return entry.kind === "calendar" ? `Snooze until ${entry.label}` : `Snooze ${entry.label}`
 }
 
 export function snoozePresetInstant(preset: SnoozePreset, nowMs = Date.now()): string {

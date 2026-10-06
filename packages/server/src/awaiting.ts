@@ -1,4 +1,4 @@
-import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, awaitingNeedsInput, awaitingSteps, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, awaitingNeedsInput, awaitingQuestions, awaitingSteps, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
 // than in scheduler.ts so a reader can resolve a ref without pulling in the whole waker; scheduler.ts
@@ -58,6 +58,10 @@ export interface AwaitingPark {
   /** `steps:` — what the HUMAN must perform. Non-empty means the park waits on them, which needs no
    *  item and no `for:`: their reply is the wake (see parkIsHonoured). */
   steps: string[]
+  /** `questions:` — the worker's registered questions it is still waiting on, as lowercased ids (see
+   *  awaitingQuestions). Like steps, a wait on the HUMAN: their answer is the wake. Whether every open
+   *  question is named is checked against the question rows, which only the scheduler has (2026-10-05). */
+  questions: string[]
 }
 
 /** Read the structural fence. Unknown keys are already dropped by the tailer's parse, so everything
@@ -77,7 +81,7 @@ export function readAwaitingPark(hints: readonly AwaitingHint[]): AwaitingPark {
       forMs = parseAwaitingDurationRaw(value)
     }
   }
-  return { items, forMs, steps: awaitingSteps(hints) }
+  return { items, forMs, steps: awaitingSteps(hints), questions: awaitingQuestions(hints) }
 }
 
 /** What frizz can see running for one thread, in the shape the check needs. Every id a fence may name
@@ -111,7 +115,7 @@ interface LiveHandleRow {
 
 /** What frizz can actually see running for this thread, in the shape `unaccountedItems` checks against.
  *  Here rather than in the scheduler since 2026-10-01, because the BOARD reads it too: a
- *  `needs_input: false` park keeps its thread out of the queue only while it is honoured, and the board
+ *  `status: working`/`watching` park keeps its thread out of the queue only while it is honoured, and the board
  *  and the scheduler's integrity pass must agree on what "honoured" means (needsInputParkHolds).
  *
  *  A shell and a sub-agent each answer to THREE handles, because the fence names whichever string the
@@ -178,18 +182,30 @@ function liveKey(i: AwaitingItem): string {
  *  and the human is the one party frizz never has to watch: the thread sits in their queue
  *  (awaitingNeedsInput reads steps as `true`), and their reply — the card's Done, or anything they
  *  type — is itself the wake. Any item named beside the steps must still be live, and a
- *  `for:` beside them still runs out (parkExpiresAt), as a re-check the worker asked for. */
+ *  `for:` beside them still runs out (parkExpiresAt), as a re-check the worker asked for.
+ *
+ *  QUESTIONS ARE THE SAME WAIT (2026-10-05): `questions:` names registered questions the worker still
+ *  needs answered, and the answer is the wake. That every open question is named is the scheduler's
+ *  check (evalParkIntegrity), not this one's — it needs the question rows. */
 export function parkIsHonoured(park: AwaitingPark, live: LiveActivity): boolean {
-  const onHuman = park.steps.length > 0
+  const onHuman = parkOnHuman(park)
   if (park.items.length === 0 && !onHuman) return false
   if (park.forMs === null && !onHuman) return false
   return unaccountedItems(park.items, live).length === 0
 }
 
+/** Does the park wait on the HUMAN — steps to perform, or questions to answer? Either needs no item and
+ *  no `for:`, because the human's reply is the wake and the thread sits in their queue meanwhile. */
+export function parkOnHuman(park: AwaitingPark): boolean {
+  return park.steps.length > 0 || park.questions.length > 0
+}
+
 /** Does this fence keep a NEW-CONTRACT thread out of the queue (see `needsInputRequired` in
- *  @frizz/shared)? The worker answered `needs_input: false`, and the park is one frizz can honour and has
- *  not run out. Anything less — `true`, no answer, a dead name, an elapsed `for:` — and the thread
- *  queues, which is the safe direction: a wrong `false` must never be a way to disappear.
+ *  @frizz/shared)? The worker answered `status: working` or `status: watching` (or the older
+ *  `needs_input: false`), and the park is one frizz can honour and has not run out. Anything less —
+ *  `needs_input`, no answer, a dead name, an elapsed `for:` — and the thread queues, which is the safe
+ *  direction: a wrong answer must never be a way to disappear. Which band it sits in once out of the
+ *  queue is board.deriveWaitStatus's call, not this one's.
  *
  *  `fenceAtMs` is when the fence landed (the worker's last word). An unknown instant does NOT hold —
  *  without it there is no `for:` to run out, and a park that cannot run out is the stall this grammar
@@ -213,8 +229,9 @@ export function needsInputParkHolds(hints: readonly AwaitingHint[], live: LiveAc
  *  A SUB-AGENT anywhere in the list caps it at 30 minutes: that wake is the parent's check-in on its
  *  children, not a timeout (AGENT_PARK_FOR_MAX_MS). */
 export function parkForMaxMs(park: AwaitingPark): number {
-  // Steps alone move on the HUMAN's clock, which is no more a day's than a maintainer's review is.
-  if (park.items.length === 0) return park.steps.length > 0 ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
+  // Steps or questions alone move on the HUMAN's clock, which is no more a day's than a maintainer's
+  // review is.
+  if (park.items.length === 0) return parkOnHuman(park) ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS
   if (park.items.some((i) => i.kind === "agent")) return AGENT_PARK_FOR_MAX_MS
   // An issue earns the PR's ceiling for the PR's reason: it sits on its maintainers' clock too.
   return park.items.every((i) => i.kind === "pr" || i.kind === "issue") ? PR_WATCH_FOR_MAX_MS : AWAITING_FOR_MAX_MS

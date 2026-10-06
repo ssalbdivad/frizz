@@ -1,12 +1,15 @@
 import { useEffect, useRef, useState } from "react"
 import { Loader2 } from "lucide-react"
 import { threadCanCompact, type ThreadView } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { useThreadApi } from "../api/threadApi.tsx"
 import { showToast } from "../store.ts"
 import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 
-// HOW FULL THE SESSION'S CONTEXT IS — a glanceable donut in the bottom-left of every thread footer
-// (queue card, drawer, full-screen), rendered once here because all three share ThreadLifecycleFooter.
+// HOW FULL THE SESSION'S CONTEXT IS — "◔ 74% context", in a thread header's second line after "Last
+// active" (queue card, drawer, full-screen), rendered once here so the three cannot drift. It sat as a
+// bare donut in the lifecycle footer until 2026-10-05, when the footer went and the context reading
+// moved to the header with the other whole-thread facts (maintainer: "we say last active two minutes
+// ago, context at 74% or something" — see ThreadLifecycle.tsx for the top/bottom split).
 //
 // It is a READING, never an estimate. Both halves of the fraction are measured by the provider and
 // travel together on ThreadView.context; the server omits the field entirely unless it has both, so
@@ -27,13 +30,14 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 // Settings drawer's "Compaction window" field is where that ceiling is named and changed.
 //
 // SIZE IS INHERITED, NOT SET. The svg is sized in `em` and the arc colors come from `currentColor`, so
-// the footer's own text scale decides how big this is and what tone it takes — exactly the discipline
-// ChildOpRow's duration reading landed on. Do not put a px size on it.
+// the header line's own text scale decides how big this is and what tone it takes — exactly the
+// discipline ChildOpRow's duration reading landed on. Do not put a px size on it.
 //
-// THE NUMBERS LIVE IN THE HOVER PANEL, NOT ON THE SURFACE. A footer is a control strip; spending a line of
-// it on "348,950 / 1,000,000" would make a background reading compete with the lifecycle buttons. A
-// compact "87%" beside the dial was tried and deliberately dropped too — the dial alone is the intended
-// weight for this reading.
+// THE PERCENT IS ON THE SURFACE; THE TOKEN COUNTS ARE IN THE HOVER PANEL. In the footer the dial stood
+// alone — a control strip had no room for a background reading's words, and a bare "87%" beside it was
+// tried and dropped. The header line is a line of facts in words ("Last active 2m ago"), so the reading
+// joins it as one ("74% context") and the dial becomes its glyph. "348,950 of 1,000,000 tokens" stays in
+// the panel: it is the detail, not the reading.
 //
 // So if you are here because a thread appears to have NO indicator: the surface is almost certainly not
 // the reason. All three surfaces render this same component, and the answer is per-THREAD — the drawer
@@ -47,14 +51,13 @@ import { Popover, PopoverAnchor, PopoverContent } from "./ui/Popover.tsx"
 // Geometry for a 16-unit viewBox donut. r + half the stroke is the OUTER edge, held at 7.5 so the ring
 // sits fully inside the box — thinning the stroke therefore RAISES r rather than shrinking the glyph.
 //
-// STROKE IS MATCHED TO THE CLUSTER, not chosen. This dial sits between two lucide glyphs (Hourglass,
-// HeartPulse) that draw at 12px with strokeWidth 2 in a 24-unit viewBox = a 1.0px line. A 16-unit
-// viewBox rendered at the footer's 1.05em (12.6px) scales by 0.7875, so the old strokeWidth 2 painted
-// a 1.575px line — HALF AGAIN as heavy as either neighbour, which is what made a three-glyph status
-// cluster read as three different families (maintainer 2026-08-04: "the icon brightnesses and spacing
-// look absolutely terrible"). 1.25 paints 0.98px and lands the dial in the same weight as the marks
-// beside it. Colour was never the whole story here: two marks in one tone still read as mismatched
-// when one of them is drawn with a fatter pen.
+// STROKE IS MATCHED TO ITS NEIGHBOURS, not chosen. In the footer this dial sat between two lucide
+// glyphs drawn with a 1.0px line, and the old strokeWidth 2 painted 1.575px at that 12.6px size — half
+// again as heavy, which made a three-glyph status cluster read as three different families (maintainer
+// 2026-08-04: "the icon brightnesses and spacing look absolutely terrible"). 1.25 painted 0.98px there.
+// In the header it renders at 1.05em of 11px (11.55px), where the same 1.25 paints 0.9px — a pen the
+// weight of the regular-weight words beside it rather than a bolder mark. Colour was never the whole
+// story: two marks in one tone still read as mismatched when one is drawn with a fatter pen.
 const STROKE = 1.25
 const R = 7.5 - STROKE / 2
 const CIRCUMFERENCE = 2 * Math.PI * R
@@ -68,6 +71,11 @@ function displayPercent(tokens: number, window: number): number {
 // button, so the pointer has to cross the 5px between dial and panel without the panel closing under
 // it; the same grace applies leaving the panel back toward the dial.
 const HOVER_CLOSE_DELAY_MS = 150
+
+/** Whether ContextMeter draws anything for this thread — for the header line, which sets a `·` before it. */
+export function hasContextReading(thread: Pick<ThreadView, "context">): boolean {
+  return !!thread.context && thread.context.window > 0
+}
 
 export function ContextMeter({ thread }: { thread: ThreadView }) {
   // A HOVER PANEL, not a tooltip: the reading used to sit in a Radix tooltip, which cannot hold a
@@ -83,7 +91,7 @@ export function ContextMeter({ thread }: { thread: ThreadView }) {
   const context = thread.context
   // Absent ⇒ nothing. Also guards a window of 0, which would make the fraction meaningless rather
   // than merely unknown.
-  if (!context || context.window <= 0) return null
+  if (!context || !hasContextReading(thread)) return null
   const openNow = () => {
     clearTimeout(closeTimer.current)
     setOpen(true)
@@ -131,18 +139,27 @@ export function ContextMeter({ thread }: { thread: ThreadView }) {
             // the panel, which is portaled to <body> and so is not next in the tab order.
             if (event.detail === 0) requestAnimationFrame(() => panel.current?.querySelector<HTMLElement>("button:not(:disabled)")?.focus())
           }}
-          className="flex shrink-0 items-center rounded-full text-muted-60 outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+          // The line's own tone (the header's muted grey), brightening while the panel is open or the
+          // pointer is on it — the way a link in a line of facts answers a hover.
+          className={`flex shrink-0 items-baseline gap-1 rounded-sm outline-none transition-colors hover:text-fg/85 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${open ? "text-fg/85" : ""}`}
         >
+          {/* ON THE CAP BAND, computed by the browser: `self-baseline` sits the svg's bottom on the
+              text's baseline, then the translate lifts its centre to half the cap height — exact in any
+              font at any size, because the digits it sits beside are cap-height ink. 0.525em is half of
+              the svg's own 1.05em; the shared 0.5em form assumes a 1em glyph. `-mt-[1em]` keeps the
+              svg's box out of the line's height arithmetic (it is taller than the text's ascent), so the
+              reading's line box is the text's and it lines up with "Last active" beside it; nothing
+              painted moves (the ThreadLinks icon idiom). */}
           <svg
             viewBox="0 0 16 16"
-            className="h-[1.05em] w-[1.05em]"
+            className="-mt-[1em] h-[1.05em] w-[1.05em] shrink-0 self-baseline translate-y-[calc(0.525em_-_0.5cap)]"
             aria-hidden
-            // Start the arc at 12 o'clock and fill clockwise — the direction every dial is read in.
-            style={{ transform: "rotate(-90deg)" }}
           >
             {/* The track: the same ink at low opacity, so the empty part of the dial reads as unfilled
                 rather than as a border of some other element. */}
             <circle cx="8" cy="8" r={R} fill="none" stroke="currentColor" strokeOpacity={0.3} strokeWidth={STROKE} />
+            {/* Start the arc at 12 o'clock and fill clockwise — the direction every dial is read in. The
+                rotation rides the arc, not the svg, so it cannot fight the svg's own alignment translate. */}
             <circle
               cx="8"
               cy="8"
@@ -151,12 +168,14 @@ export function ContextMeter({ thread }: { thread: ThreadView }) {
               stroke="currentColor"
               strokeWidth={STROKE}
               strokeDasharray={`${CIRCUMFERENCE * fraction} ${CIRCUMFERENCE}`}
+              transform="rotate(-90 8 8)"
             />
           </svg>
+          <span>{percent}% context</span>
         </button>
       </PopoverAnchor>
       <PopoverContent
-        side="top"
+        side="bottom"
         align="start"
         sideOffset={5}
         ref={panel}
@@ -222,11 +241,13 @@ function CompactNowButton({ thread, compacting, onRequested }: { thread: ThreadV
   const [sending, setSending] = useState(false)
   const tokens = thread.context?.tokens ?? 0
   const busy = turnInFlight(thread) && !compacting
+  // Through the thread's own project (api/threadApi.tsx): a cross-project queue card renders this too.
+  const api = useThreadApi()
   const compact = () => {
     const sessionId = thread.sessionId
     if (!sessionId) return
     setSending(true)
-    rpc
+    api
       .compactThread({ slug: thread.id, sessionId })
       .then(() => {
         pendingCompactions.set(sessionId, { tokens, activity: thread.lastActivityAt, at: Date.now() })

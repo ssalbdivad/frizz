@@ -36,7 +36,7 @@ import {
 import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
 import { isLazyRow } from "./storage.ts"
-import type { AgentBackend, NormalizedEvent } from "./backend/types.ts"
+import { CLAUDE_WORKER_ENV, type AgentBackend, type NormalizedEvent } from "./backend/types.ts"
 import { parseDeliveryLedger, projectDeliveryLedger, suppressCancelledDeliveries, attachmentPromptText } from "./delivery-ledger.ts"
 import { editedFilesOf } from "./edited-files.ts"
 import { repoCarriedEditedFiles } from "./repo-files.ts"
@@ -543,7 +543,29 @@ function claudeSidechainInstruction(text: string): string | undefined {
 // message" instead of "gray forever". Never a splice: a sent message must not vanish, and the text here
 // is the human's own. This is the transcript twin of ageDeliveries' UNCONFIRMED_DROP_MS, which fixed the
 // identical immortality for the ledger's own bubbles.
+//
+// …EXCEPT while the worker provably has not reached a point where it could read the message. Claude Code
+// hands a queued message over BETWEEN tool calls, so while the turn is still inside a FOREGROUND call
+// issued before the message was sent — the newest rendered message holds an unresolved call that is not
+// a background launch — the bubble is queued, not stale. The corpus above predates that wait: since
+// 2026-08-11 a foreground Bash call that names a timeout may block for up to CLAUDE_WORKER_ENV's 24-hour
+// ceiling, and at 2h this un-grayed a message the worker had not seen. That ceiling bounds it instead.
 export const QUEUED_STALE_MS = 2 * 60 * 60_000
+const QUEUED_BLOCKED_CEILING_MS = Number(CLAUDE_WORKER_ENV.BASH_MAX_TIMEOUT_MS)
+// When the newest rendered message holds an unresolved FOREGROUND call, the instant that message was
+// issued: the turn has not reached a tool boundary since, so nothing queued after it was handed over.
+// Event rows (a wake label, a compaction divider) are not the worker passing a boundary, so they are
+// stepped over, like the queued bubbles themselves.
+function blockedInCallSince(messages: TranscriptMessage[]): number | undefined {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const m = messages[i]
+    if (m.queued || m.kind === "event") continue
+    if (m.role !== "assistant" || !m.tools.some((t) => t.status === "pending" && !t.backgroundState)) return undefined
+    const at = m.at === undefined ? NaN : Date.parse(m.at)
+    return Number.isFinite(at) ? at : undefined
+  }
+  return undefined
+}
 export function retireStaleQueuedBubbles(messages: TranscriptMessage[], nowMs: number = Date.now()): TranscriptMessage[] {
   // Fast path: almost every read has nothing queued, and must not pay a copy.
   let stale = false
@@ -556,13 +578,17 @@ export function retireStaleQueuedBubbles(messages: TranscriptMessage[], nowMs: n
     }
   }
   if (!stale) return messages
+  const blockedSince = blockedInCallSince(messages)
   // COPY-ON-WRITE. These objects are owned by the retained fold and are mutated in place when a real
   // delivery lands; rewriting one here would make the retirement permanent and defeat that.
   return messages.map((m) => {
     if (!m.queued) return m
     const at = m.at === undefined ? NaN : Date.parse(m.at)
     // An unparseable timestamp is not evidence of staleness — leave those queued.
-    return Number.isFinite(at) && nowMs - at > QUEUED_STALE_MS ? { ...m, queued: false } : m
+    if (!(Number.isFinite(at) && nowMs - at > QUEUED_STALE_MS)) return m
+    // Sent while the worker was already inside the call it is still inside: not handed over yet.
+    if (blockedSince !== undefined && blockedSince <= at && nowMs - at <= QUEUED_BLOCKED_CEILING_MS) return m
+    return { ...m, queued: false }
   })
 }
 
@@ -1171,7 +1197,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           return
         }
         deliveredDedupe = null
-        // A MANUAL COMPACTION — the footer's "Compact now" — writes two user records after its boundary:
+        // A MANUAL COMPACTION — the context panel's "Compact now" — writes two user records after its boundary:
         // the command's `<command-name>/compact</command-name>` envelope and its
         // `<local-command-stdout>Compacted …</local-command-stdout>` output. Neither is the human
         // speaking, and the compact_boundary divider above already says what happened, with the token

@@ -390,7 +390,7 @@ export function parseCodexLine(line: string): NormalizedEvent[] {
       // Per-request usage telemetry. `last_token_usage.total_tokens` is what the LAST request actually
       // carried — i.e. the size of the context at that moment — which is the reading codex's own TUI
       // uses for its remaining-context meter. `model_context_window` rides the same event and is the
-      // DENOMINATOR for the footer's fullness readout: codex names the window itself, so frizz never
+      // DENOMINATOR for the header's fullness readout: codex names the window itself, so frizz never
       // has to keep a per-model table that would go stale the moment a model ships a bigger context.
       // Consumed by the compaction bracket and by the fold's contextTokens/contextWindow.
       case "token_count": {

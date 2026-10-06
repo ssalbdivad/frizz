@@ -49,7 +49,7 @@ Prefer a window of its own to a browser tab? The desktop app is on [GitHub relea
 Work in VS Code, Cursor or Windsurf? [The extension](packages/vscode/README.md) lets you select code and ask Frizz about it, and opens Frizz's file links in your editor at the line they name.
 
 <p align="center">
-  <img src="assets/board.png" alt="Frizz: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, above Snooze and Mark as done." width="100%">
+  <img src="assets/board.png" alt="The Frizz board: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, with its snooze clock and done check in the card's header." width="100%">
 </p>
 
 <br/>
@@ -116,7 +116,7 @@ Workers can also read issues, diffs, and CI on their own — but only read. A wo
 Park a card for an hour, until tomorrow morning, or until a date you pick. Attach a follow-up prompt and the thread wakes up already working on it.
 
 <p align="center">
-  <img src="assets/snooze.png" alt="The snooze menu open on a queue card, offering 1 hour, tomorrow at 9am, 1 day, 3 days, 1 week, and a custom time and prompt." width="100%">
+  <img src="assets/snooze.png" alt="The snooze menu open from the alarm clock in a queue card's header, offering 1 hour, tomorrow at 9am, 1 day, 3 days, 1 week, and a custom time and prompt." width="100%">
 </p>
 
 ### Goal
@@ -124,7 +124,7 @@ Park a card for an hour, until tomorrow morning, or until a date you pick. Attac
 Give a thread a standing goal. Frizz sends it as a prompt every time the agent comes to rest, on a clock you set in minutes, or both — a scheduled send reaches the agent even mid-turn, without cutting off work in progress.
 
 <p align="center">
-  <img src="assets/goal.png" alt="The goal panel open on a thread card: a goal saying to keep going until the test suite is green, sent at every rest and every 30 minutes." width="100%">
+  <img src="assets/goal.png" alt="The goal panel open above a queue card's prompt box: a goal saying to keep going until the test suite is green, sent at every rest and every 30 minutes." width="100%">
 </p>
 
 <br/>

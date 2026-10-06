@@ -25,6 +25,10 @@
 // User-scope STDIO servers are the one thing deliberately absent. An operator who wants one in the fleet
 // declares it in the project's `.mcp.json`: that is the scope that means "this repo's sessions".
 //
+// WHEN they start is the broker daemon's business, not this module's: it hands every project stdio server
+// to the lazy MCP host, which mounts it in the worker as a loopback `http` server and starts the real
+// command on the first tool call (lazy-mcp-host.ts). What a worker CAN reach is decided here, unchanged.
+//
 // `${VAR}` and `${VAR:-default}` in command/args/env/url/headers are expanded HERE against the worker's
 // environment: under strict mode the CLI receives these servers in a config file frizz writes, and frizz should
 // not depend on whether it expands that config the way it expands a discovered file. A reference with no value

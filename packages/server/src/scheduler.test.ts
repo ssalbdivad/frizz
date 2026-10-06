@@ -354,7 +354,14 @@ test("question: the first rest after a typed message withdraws the questions it 
   assert.equal(gone?.state, "withdrawn")
   assert.equal(gone?.settled_at, humanAt, "stamped with the message's instant, so a later turn may re-ask it")
   assert.equal(refreshes, 1)
-  assert.equal(h.resumes.length, 0, "a withdrawal wakes nobody")
+  // The withdrawal itself wakes nobody. What may wake the worker is the DANGER question, which a typed
+  // message never sets aside: it was asked at an EARLIER rest, so under the carried-question rule
+  // (upstream 2026-10-05) this rest is bumped to name it under `questions:` or withdraw it. The kept one
+  // is not carried — a keep asks it again at this rest — and the withdrawn one is never mentioned.
+  for (const r of h.resumes) {
+    assert.match(r.message, /qst_danger/, "the only wake is the carried danger question's reminder")
+    assert.doesNotMatch(r.message, /qst_plain|qst_kept/)
+  }
   h.storage.close()
 })
 

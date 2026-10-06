@@ -25,14 +25,18 @@ export function StepsList({ steps }: { steps: readonly string[] }) {
     // One markdown block PER STEP inside a real list, rather than the steps joined into one markdown
     // string: a step carries its own code span or link, and joined steps would each need re-indenting
     // to stay inside their item. `md-body` supplies the list rhythm and the muted markers the
-    // transcript's own lists wear. Full strength on a WRAPPER, because `.card-md .md-body` inherits
-    // colour and outranks a utility on the element itself — the steps are the ask, never quieter text.
-    <div data-awaiting-steps className="mt-2 text-fg first:mt-0">
-      <div className={`md-body ${QUEUE_WRAP}`}>
-        <ol>
-          {steps.map((step, i) => <Step key={i} md={step} />)}
-        </ol>
-      </div>
+    // transcript's own lists wear.
+    //
+    // THE SAME PROSE AS THE PARAGRAPH ABOVE IT, in strength and in rhythm. The list sat at full strength
+    // under a paragraph at the card's 75% until 2026-10-05, and the maintainer read it as a defect
+    // ("the paragraphs looks like they're a slightly lighter color than the text in the ol"): one body
+    // is one colour, which is the card's (CardContent). And the gap above the list is the paragraph
+    // break the prose itself uses (`--md-step`, which `.card-md .md-body` sets on this very element), not
+    // a tighter 8px of its own — the two blocks are one handoff rendered in two pieces.
+    <div data-awaiting-steps className={`md-body ${QUEUE_WRAP} mt-[var(--md-step)] first:mt-0`}>
+      <ol>
+        {steps.map((step, i) => <Step key={i} md={step} />)}
+      </ol>
     </div>
   )
 }

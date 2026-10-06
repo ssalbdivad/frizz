@@ -3,9 +3,11 @@
 // is the reason this file exists at all: a fenced question lives and dies with the message carrying it,
 // so it vanishes from view the moment the transcript scrolls or the context is compacted, while a
 // registration is still owed an answer tomorrow. So these cards do NOT ride the transcript on their own:
-// they render at the bottom of the rest they belong to (lib/questionShadow questionStacks), after every
-// word of its handoff and never inside a message (maintainer 2026-09-28: "questions should always appear
-// at the bottom of the thread not in the middle any explanation should occur beforehand").
+// they render at the rest that asked them, or a later one whose ```awaiting fence names them under
+// `questions:` (lib/questionAnchor, upstream e157817a, 2026-10-05), and in the slot of an empty
+// ```question qst_… marker the worker wrote into its handoff (lib/questionShadow PLACEMENT). The fork drew
+// every open card at the bottom of the newest handoff from 2026-09-28 until this merge took upstream's
+// placement instead.
 //
 // The CARD is the shared one (QuestionBlockCard); only the plumbing is new. What a registration adds
 // over the other two producers is the STATIC TREE: an option may carry follow-ups that become live only
@@ -637,8 +639,8 @@ export function RegisteredQuestionStack({
 }: {
   thread: ThreadView | undefined
   // WHICH of the thread's open questions this mount draws. Every surface hangs a question after the REST
-  // IT BELONGS TO rather than at the transcript's tail (lib/questionShadow questionStacks), so one thread
-  // can have several of these mounted at different depths — each handed its own group.
+  // THAT CLAIMS IT rather than at the transcript's tail (lib/questionAnchor questionsByAnchor), so one
+  // thread can have several of these mounted at different depths — each handed its own group.
   questions?: readonly RegisteredQuestionView[]
   // THE ANSWER ALREADY SENT AND NOT YET ON SCREEN ANYWHERE ELSE — the rows of `thread.answersInFlight`
   // the transcript is not already drawing (lib/answersMessage.unrenderedAnswers). Passed IN rather than

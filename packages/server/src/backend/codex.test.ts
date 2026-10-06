@@ -509,7 +509,7 @@ test("parseCodexLine: the top-level `compacted` envelope is a compaction event (
 test("parseCodexLine: token_count reports the LAST request's total as context usage; a shapeless one yields nothing", () => {
   const tokenCount = (info: unknown) => JSON.stringify({ timestamp: "2026-07-20T22:11:14.818Z", type: "event_msg", payload: { type: "token_count", info } })
   const ev = parseCodexLine(tokenCount({ last_token_usage: { input_tokens: 242204, output_tokens: 288, total_tokens: 242492 }, model_context_window: 258400 }))
-  // The window rides the SAME event as the tokens — which is why the footer's fullness readout never
+  // The window rides the SAME event as the tokens — which is why the header's fullness readout never
   // needs a per-model table for codex. It is the DENOMINATOR, so a wrong one is worse than none: a
   // non-numeric or non-positive value must be dropped rather than passed through.
   assert.deepEqual(ev, [{ kind: "context-usage", at: "2026-07-20T22:11:14.818Z", tokens: 242492, window: 258400 }])

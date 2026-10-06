@@ -45,8 +45,8 @@ export function QueueSubAgentLines({
   onOpenChild,
   // The ops COLUMN's padding, which is positional and therefore the caller's to set — the same prop
   // BackgroundOpsStrip takes, for the same reason. These lines and that strip stack into one column,
-  // so only the list that ends the column may carry its bottom air (8px before the lifecycle footer);
-  // a list with the strip beneath it must not, or the two paddings sum into a gap between them.
+  // so only the list that ends the column may carry its bottom air; a list with the strip beneath it
+  // must not, or the two paddings sum into a gap between them.
   // Default = the column's opening padding with no bottom air, i.e. what a lone fixture wants.
   className = "px-1 pt-1.5",
 }: {

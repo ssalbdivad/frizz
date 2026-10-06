@@ -6,7 +6,7 @@ import { supervisorPollMs, supervisorStatusQueryOptions } from "./supervisorStat
 
 // The contract, not an optimisation detail: THREE independent surfaces ask the supervisor the same
 // question — App's control-plane monitor, the Restart Frizz button, and the dev-build verb in a thread
-// footer (one footer per queue card). On the maintainer's board they were measured firing at t+58ms,
+// header (one header per queue card). On the maintainer's board they were measured firing at t+58ms,
 // t+61ms and t+63ms of a single navigation, into a six-connection HTTP/1.1 pool that was already
 // carrying ~11 RPCs. Sharing one query is what keeps that at one request.
 

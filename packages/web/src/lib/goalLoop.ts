@@ -1,14 +1,13 @@
 import { formatGoalFor, type ThreadRecurringPrompt } from "@frizz/shared"
 import { formatRuntimeElapsed } from "./durationLabels.ts"
 
-// THE GOAL AS A LOOP: its run counter and limits, in the one short phrase the thread footer shows beside
-// the goal mark (2026-09-29). A Goal with limits is a bounded loop, and the question an operator asks of
-// one at a glance is "how far through is it, and when does it end" — so the footer answers it without a
-// click: `run 7 of 20`, `run 7`, `run 3 of 20 · 1h 12m left`, and once it has ended, why.
+// THE GOAL AS A LOOP: its run counter and limits, in the one short phrase the thread header's facts line
+// shows after the goal mark (ThreadHeaderFacts; it rode in the lifecycle footer from 2026-09-29 until that
+// footer went). A Goal with limits is a bounded loop, and the question an operator asks of one at a glance
+// is "how far through is it, and when does it end" — so the line answers it without a click: `run 7 of 20`, `run 7`, `run 3 of 20 · 1h 12m left`, and once it has ended, why.
 //
 // Nothing for a Goal that is neither counting toward anything nor has anything to say: an unbounded Goal
-// that has not delivered yet, or one switched off by hand. The footer's left cluster is a status strip,
-// and a reading with nothing in it is noise there.
+// that has not delivered yet, or one switched off by hand. A reading with nothing in it is noise.
 //
 // Durations are the house grammar (`2h 35m`, durationLabels.ts); the bound itself reads back in the
 // `for:` token it was written as (`2h`), because that is the value the operator typed.
@@ -17,8 +16,7 @@ export function goalLoopReading(rp: ThreadRecurringPrompt | undefined, nowMs: nu
   return parts ? [parts.lead, parts.tail].filter(Boolean).join(" · ") : null
 }
 
-/** The reading in its two halves — the count (or the stop) and the time left — because the footer drops
- *  the second half first when the strip gets narrow (see RecurringPromptControl). */
+/** The reading in its two halves — the count (or the stop) and the time left (ThreadHeaderFacts). */
 export function goalLoopParts(rp: ThreadRecurringPrompt | undefined, nowMs: number): { lead: string; tail?: string } | null {
   if (!rp) return null
   const runs = rp.runs ?? 0

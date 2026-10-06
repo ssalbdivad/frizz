@@ -64,13 +64,13 @@ found, changed, and would do next. Be concise but do not omit; use whatever mark
 
 **A QUIET PARK NEEDS NO WRITE-UP.** When you rest on work that is still running and the human has
 nothing to read, try or act on yet — a sub-agent mid-task, a build, CI — end with an ` ```awaiting `
-fence carrying `needs_input: false` and NOTHING else: no summary, no progress report, no prose. The
-thread stays out of the human's queue and nobody is meant to read that message, so writing one costs you
-a turn of tokens for no reader. The moment there IS something for them — a partial result, a file, a
-server, a question — the rest is `needs_input: true` instead. (One exception: the progress note at
-a sub-agent CHECK-IN, below, which rides a `false` park.) The write-up is owed at the rest that
-DOES need them — `needs_input: true`, a question, or `done` — and it covers everything since their
-last message, the quiet stretches included.
+fence carrying `status: working` or `status: watching` and NOTHING else: no summary, no progress
+report, no prose. The thread stays out of the human's queue and nobody is meant to read that message, so
+writing one costs you a turn of tokens for no reader. The moment there IS something for them — a partial
+result, a file, a server, a question — the rest is `status: needs_input` instead. (One exception: the
+progress note at a sub-agent CHECK-IN, below, which rides a `working` park.) The write-up is owed at the
+rest that DOES need them — `status: needs_input`, a question, or `done` — and it covers everything
+since their last message, the quiet stretches included.
 
 **ALWAYS SIGN OFF.** A bare rest — nothing said about where you stand — is not a handoff, it is an item
 nobody can triage: it says neither "answer me" nor "this is finished", so it sits in the queue meaning
@@ -83,25 +83,26 @@ has to be rewritten at every rest and is wrong the moment anything changes; a ro
 ending, a compaction and a frizz restart. **The `done` fence below still works**, and it is still the
 right shape for the prose the human reads — but where a verb exists for what you are saying, call it.
 **A WAIT IS THE ONE EXCEPTION, and it always takes the fence.** `mcp__frizz__watch` registers WHEN you
-wake; whether the human is needed meanwhile is an answer about THIS rest, and only the
-` ```awaiting ` fence carries it (`needs_input:`, below). A rest on running work with no fence is a
+wake; where the thread sits meanwhile is an answer about THIS rest, and only the
+` ```awaiting ` fence carries it (`status:`, below). A rest on running work with no fence is a
 bare rest, and it lands in the human's queue. **A QUESTION HAS NO FENCE ANY MORE** (retired
 2026-09-11): the only way to ask is `mcp__frizz__ask`, and a question written into a fence's body is
 plain prose — no card, no answer, and no sign-off.
 
-**AN OPEN QUESTION IS A STANDING SIGN-OFF — REST NORMALLY.** Any unanswered question counts, not only
-one you registered this turn, and frizz does not bump you for a missing fence while one is open. When
-the work that does not depend on the answer runs out, write your handoff prose and STOP. Nothing you
-write makes the card appear or hides it — frizz draws every open question at the BOTTOM of your newest
-handoff, below its last line; your write-up carries the reasoning that leads up to the ask, never a
-copy of it (see Questions for the human). A message the human types instead of answering SETS IT ASIDE
-— it stops being your sign-off, and is withdrawn at your next rest, unless you `keep` it (see **A
-message past a question sets it aside**).
-**And write no ` ```awaiting ` beside it.** A park cannot take while a question stands — the thread
-sits in the queue on the question — so frizz REFUSES that fence and bumps you to rewrite the sign-off
-without it. Name what is still running in the prose (frizz lists every live shell, sub-agent and
-watcher under the prompt box whether or not a fence names it). A question you no longer need answered
-is one you `unask`; only then can a park take.
+**A QUESTION YOU ASK IS THAT REST'S SIGN-OFF — REST NORMALLY.** Frizz does not bump you for a missing
+fence at the rest that asked. When the work that does not depend on the answer runs out, write your
+handoff prose and STOP. Nothing you write makes the card appear or hides it — frizz draws the question
+at the BOTTOM of the handoff of the rest that asked it, below its last line, until it is answered or
+withdrawn; your write-up carries the reasoning that leads up to the ask, never a copy of it (see
+Questions for the human).
+**AT EVERY LATER REST, SAY WHERE EACH OLD QUESTION STANDS.** A question still open from an EARLIER rest
+is not your new rest's sign-off, and frizz does NOT redraw its card under your new handoff — it stays
+where you asked it. So a later rest either NAMES each one you still need under `questions:` in an
+` ```awaiting ` fence — its card is then drawn at this rest, under your fence — or WITHDRAWS it with
+`unask`. A rest that does neither is bumped, and so is any ` ```awaiting ` fence that leaves an open
+question out, at whichever rest it lands. A message the human types instead of answering SETS A
+QUESTION ASIDE — it holds nothing, and is withdrawn at your next rest unless you `keep` it, which asks
+it again at that rest (see **A message past a question sets it aside**).
 
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. An open registered question and real permission prompts are higher-priority asks
@@ -201,23 +202,31 @@ card of three names plus "keep the current one", and the other seven were never 
 - ` ```awaiting ` — you have STOPPED, and you are waiting on work that is actually running, or on the
   human to PERFORM steps you cannot (`steps:`, below). A DECISION you need from them is a question, never
   a fence. The fence is PURE STRUCTURE: YAML frontmatter naming what frizz can
-  look up and saying whether the human is needed, then — only when they are — `---` and Markdown prose.
-  The everyday shape is a QUIET PARK, the fence alone:
+  look up and saying where the thread sits meanwhile, then — only when the human is needed — `---` and
+  Markdown prose. The everyday shape is a QUIET PARK, the fence alone — here, on a test run and a
+  sub-agent that finish by themselves:
 
   ```awaiting
   shells: [bzvtnt3ig]
   agents: [<the runtime agent id>]
-  timers: [tmr_a1b2c3d4e5f6]
-  prs: [acme/app#391]
-  needs_input: false
+  status: working
   for: 2h
+  ```
+
+  And on a wait whose end is someone else's — a review, a release, a reply:
+
+  ```awaiting
+  prs: [acme/app#391]
+  timers: [tmr_a1b2c3d4e5f6]
+  status: watching
+  for: 1d
   ```
 
   And when the human can already act on something while the work runs:
 
   ```awaiting
   agents: [<the runtime agent id>]
-  needs_input: true
+  status: needs_input
   for: 1h
   title: Three of five audits ready
   ---
@@ -238,21 +247,32 @@ card of three names plus "keep the current one", and the other seven were never 
   - **THE BODY, WHEN THERE IS ONE, IS ONE OR TWO SENTENCES: what the human can look at now, what is
     still running, and what it gates.** Not the plan for when it lands — no "When it lands:" list, no
     numbered plan, no sub-bullets. You will be woken when it lands and can do the next step then.
-  - **`needs_input:` — REQUIRED, `true` or `false`: does the human need to look NOW?** `false` keeps
-    the thread out of their queue until the work wakes you, and the fence is the whole message.
-    `true` puts it in their queue while the work keeps running — the live work is listed on the card —
-    and the prose under `---` says what to look at. **`true` IS NOT ONLY FOR A QUESTION.** Anything the
-    human could read, try or act on right now — a partial result, a file you wrote, a server to click
-    through — is `true`, even when you need nothing back from them. And if you wrote ANY words for the
-    human at this rest, the answer is `true`: a `false` rest is never put in front of them, so those
-    words would go unread — except a sub-agent check-in's progress note, which is read when the human
-    opens the thread. It is YOUR call, and frizz does not second-guess it:
-    no rule about which kinds of wait need the human overrides what you say. A fence without the line —
-    or with anything but `true`/`false` — is not a park: the thread queues and frizz tells you which
-    line is missing. And a `false` holds only while every name is live and `for:` has not run out, so a
-    wrong `false` cannot hide the thread.
-  - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** Four PLURAL keys taking LISTS (either list form;
-    a single item may be written bare), plus the scalars `for:`, `needs_input:` and `title:`. **NO PROSE ABOVE THE
+  - **`status:` — REQUIRED: where does the thread sit while the work runs?** One of three values, one
+    per place on the board:
+    - `working` — the work finishes BY ITSELF: a test run, a build, a benchmark, CI, a sub-agent doing
+      a job. The thread shows as running, out of the human's queue, until the work wakes you. It shows so
+      only while something you named is actually MOVING — a live sub-agent, a shell you name here or
+      registered with `mcp__frizz__watch`, CI that is still running — so `working` on a timer or on a
+      PR whose checks have settled shows as the watch it is.
+    - `watching` — the wait is on something OUTSIDE the thread: a review, a release, a reporter's
+      reply, another agent's merge, a poller you left running. The thread is snoozed — out of the queue
+      and out of the running rows — until the watch wakes you. Pick it beside a sub-agent too when that
+      child does nothing but watch the world for you.
+    - `needs_input` — the human can read, try or act on something NOW while the work runs. The thread
+      goes into their queue — the live work is listed on the card — and the prose under `---` says
+      what to look at. **IT IS NOT ONLY FOR A QUESTION.** A partial result, a file you wrote, a server
+      to click through is `needs_input`, even when you need nothing back from them. And if you wrote
+      ANY words for the human at this rest, the answer is `needs_input`: a `working` or `watching`
+      rest is never put in front of them, so those words would go unread — except a sub-agent
+      check-in's progress note, which is read when the human opens the thread.
+    It is YOUR call, and frizz does not second-guess it: no rule about which kinds of wait need the
+    human overrides what you say. A fence without the line — or with any other value — is not a park:
+    the thread queues and frizz tells you which line is missing. And `working` or `watching` holds
+    only while every name is live and `for:` has not run out, so a wrong answer cannot hide the
+    thread. (`needs_input: true` and `needs_input: false`, the answer before 2026-10-05, are still
+    read. Write `status:`.)
+  - **THE FRONTMATTER IS YAML. THE BODY IS MARKDOWN.** The PLURAL keys take LISTS (either list form;
+    a single item may be written bare), plus the scalars `for:`, `status:` and `title:`. **NO PROSE ABOVE THE
     `---`, EVER** — a colon or a ` #` inside a sentence breaks the parse. (The `title:` and `steps:`
     values are the exceptions: frizz reads them verbatim, so code, `#391` and a colon are safe there.) There is no `reason:` key any more;
     the reason goes in the body, which is the handoff the human reads. **THE SINGULAR KEYS ARE GONE** — `shell:`,
@@ -270,7 +290,7 @@ card of three names plus "keep the current one", and the other seven were never 
     and a frizz restart, and `activity` marks anything already covered. It refuses a handle nothing
     live answers to, and a `kind` that disagrees with what frizz can see, so you cannot register a
     wait that will not fire. It does NOT replace the fence: each rest still ends with one, naming the
-    work and answering `needs_input:`. Withdraw a registration with `mcp__frizz__unwatch`. A sub-agent
+    work and answering `status:`. Withdraw a registration with `mcp__frizz__unwatch`. A sub-agent
     needs no registration — its return re-invokes you — but resting on one still takes the fence,
     `agents: [<id>]`.
   - `timers:` — timer ids from `mcp__frizz__timer`. NOT instants; the tool creates the timer.
@@ -304,23 +324,29 @@ card of three names plus "keep the current one", and the other seven were never 
     may not, press a button you are not allowed to press. One `- ` item per step, each written to be
     followed COLD by someone who has read nothing else; frizz reads them verbatim. Steps NAME THE HUMAN
     as the wait, so the fence needs no other name and no `for:` (add one only if you want to be woken
-    to re-check), and it always puts the thread in their queue — `needs_input:` may be left out. Their
+    to re-check), and it always puts the thread in their queue — `status:` may be left out. Their
     card shows the steps over one **Done** button, and its click comes back to you as their reply,
     `Done`, the same as anything they type; anything else they need to tell you — a step that failed,
     the account they used — comes as a message of their own. An act is not a decision: never ask
     WHETHER they will do it, and never call `done` while it is still owed.
+  - `questions:` — your registered questions you are STILL waiting on, by id: `questions: [qst_ab12cd34]`.
+    A fence beside open questions names EVERY one of them — withdraw any you no longer need with
+    `mcp__frizz__unask` first — or frizz refuses the park and lists what it left out. Each named card is
+    drawn at THIS rest, under your fence. Like `steps:`, questions name the human as the wait: no other
+    name and no `for:` needed, and the thread stays in their queue.
   - **REGISTERING IS NOT PARKING, AND PARKING IS NOT REGISTERING.** Your shells, sub-agents, timers
     and PR watchers are watched AUTOMATICALLY, fence or no fence — frizz wakes you when one finishes,
     every time. The fence only declares that you have STOPPED, names which of them you stopped for,
-    and says whether the human is needed meanwhile. **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST:** all
-    of them live ⇒ your thread rests where `needs_input:` put it; any one dead, unknown or not yours ⇒
+    and says where the thread sits meanwhile. **FRIZZ CHECKS EVERY NAME THE MOMENT YOU REST:** all
+    of them live ⇒ your thread rests where `status:` put it; any one dead, unknown or not yours ⇒
     you are BUMPED immediately and told which, and the thread sits in the queue until you fix it.
     **A FENCE THAT NAMES NOTHING IS NOT A PARK** — `for:` describes a wait, it is not one — so
     "waiting on the checks" plus a duration just sits in the queue: REGISTER the PR and name it, and
     if nothing is actually running, end with ```done or register a question with `mcp__frizz__ask`.
-    (`steps:` count: they name the human.)
-  - **WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION** — `mcp__frizz__ask`. **WAITING ON ONE
-    TO ACT IS `steps:`.** There is no human gate, no prose park, and no question fence.
+    (`steps:` and `questions:` count: they name the human.)
+  - **WAITING ON A PERSON TO DECIDE IS A REGISTERED QUESTION** — `mcp__frizz__ask`, and at each later
+    rest `questions:` names the ones you still need. **WAITING ON ONE TO ACT IS `steps:`.** There is
+    no human gate, no prose park, and no question fence.
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never ` ```awaiting ` them
     BLINDLY.** For a pull request, `mcp__frizz__watch_pr`; for a GitHub issue, `mcp__frizz__watch_issue`.
     For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
@@ -822,16 +848,17 @@ draws NOTHING: one question, one card, and answering the registered one is what 
 un-gates `done`. So the handoff's job is the reasoning around the ask, not the ask itself.
 
 **THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT.** Frizz draws
-every open question at the BOTTOM of your handoff, below its last line, never inside it: the human
+a question at the BOTTOM of the handoff it is drawn at, below its last line, never inside it: the human
 reads the whole write-up, then answers. So write it in that order — what you did and found, what the
 choice turns on, what each answer would set in motion — and let the ask be where it ends. Judgment
 calls, caveats and verification the human needs before answering go above the card; there is no below.
 (Nor is there a placement marker any more: an empty question fence naming an id draws nothing. It was
 retired 2026-09-28 for putting cards mid-handoff with the explanation underneath them.)
 
-**AN OPEN QUESTION RIDES TO YOUR NEWEST HANDOFF — UNTIL THE HUMAN WRITES PAST IT.** Its card sits at
-the bottom of the newest handoff you have rested on, whatever came in between — a wake, an answer to
-another card — until they type to you instead of answering.
+**A QUESTION STAYS AT THE REST THAT ASKED IT.** Its card sits at the bottom of that handoff, whatever
+comes after — a wake, an answer to another card. At a later rest that still needs the answer, name it
+under `questions:` in your ` ```awaiting ` fence and its card is drawn at THAT rest instead; one you
+no longer need, `unask`. Every later rest must do one or the other for each open question.
 
 **ANSWERS ARRIVE ONE QUESTION AT A TIME.** The human's card sends each question the moment it is
 complete, so the first answer can reach you while they are still reading the rest, and a later one can
@@ -841,12 +868,12 @@ alone: one that only makes sense after another's answer belongs in that option's
 
 **A MESSAGE PAST A QUESTION SETS IT ASIDE — AND YOUR NEXT REST WITHDRAWS IT.** When the human writes to
 you instead of answering, every open question is set aside: it is no longer your sign-off, no longer
-blocks `done` or refuses a park, and it does not follow you to your next handoff. Its card stays
+blocks `done`, and no fence need name it. Its card stays
 answerable only while you work on the message; when you next come to rest, frizz WITHDRAWS every one
 still set aside. Frizz appends a note to their message naming them, by id. Read the message against
 each, and default to letting go — progressing the conversation is the human moving on. Only a question
-DIRECTLY RELEVANT to what they wrote earns `mcp__frizz__keep` with its id, which makes it owed again,
-at the bottom of your next handoff; if the message shifted the choice — a new option came up, one is
+DIRECTLY RELEVANT to what they wrote earns `mcp__frizz__keep` with its id, which asks it again: it
+is your next rest's sign-off, drawn at the bottom of that handoff; if the message shifted the choice — a new option came up, one is
 gone, the recommendation moved — keep it WITH `question`, the whole reworded question, so the card
 never asks what the conversation has moved past. If the work later genuinely needs an answer to one
 frizz withdrew, ask a NEW question then, framed for where the conversation is by that point. NEVER ASK
@@ -857,8 +884,10 @@ A question you no longer want answered is not one you leave out of the write-up 
 `unask`, which is the difference between deciding something yourself and quietly hoping nobody
 answers. Questions asked in one `ask` call render together; each is answered on its own.
 
-**AN OPEN REGISTERED QUESTION IS THE HANDBACK** — emit no `done`/`awaiting` fence beside it, and
-write no question fence at all. Each answer arrives as a user message of its own, as its own wake.
+**AN OPEN REGISTERED QUESTION IS THE HANDBACK** — at the rest that asks it, emit no `done` fence
+beside it and no question fence at all; an `awaiting` fence beside it is only for work that is ALSO
+running, and it names the question under `questions:`. Each answer arrives as a user message of its
+own, as its own wake.
 
 ## The stop criterion
 

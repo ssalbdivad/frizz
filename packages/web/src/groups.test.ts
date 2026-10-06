@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { workingThread, type ThreadView } from "@frizz/shared"
-import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, titleIsProvisional, displayTitle, displayName, threadHandleOf, subAgentName, subAgentAddressOf, subAgentTitle, UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { activeBandThread, workingThread, type ThreadView } from "@frizz/shared"
+import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, restIsWorking, titleIsProvisional, displayTitle, displayName, threadHandleOf, subAgentName, subAgentAddressOf, subAgentTitle, UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -1211,6 +1211,41 @@ test("sessionIndicatorKind: a wait on an armed timer wears the hourglass, in the
   assert.equal(sessionIndicatorKind({ ...cardless, bgSnoozed: true }), "snoozed")
   // Only an ARMED row is a wait. A fired one is settled, and the row falls through to the bare rest.
   assert.equal(sessionIndicatorKind({ ...queued, awaitingBackground: false, watches: [{ ...timerRow, state: "fired" as const }] }), "rest")
+  // A `working` rest whose shell the timer backs up spins for the SHELL: the clock is not the motion.
+  const bench = { ...cardless, bgShells: liveShell, waitStatus: "working" as const }
+  assert.equal(sessionIndicatorKind(bench), "background")
+  assert.equal(restIsWorking(bench), true)
+})
+
+// THE BAND IS THE WORKER'S ANSWER (2026-10-05) — ThreadView.waitStatus, which the server derives from the
+// fence's `status:` line and what it can see moving. "Not in the queue" used to mean the Running band, so a
+// thread parked for a day on a watcher spun among the running rows and counted as running work (maintainer
+// 2026-10-03: "it looks like it's actively working on stuff, but it's obviously not"). `working` is the
+// Running band, `watching` is Snoozed — beside a live sub-agent too — and a queued rest carries neither.
+test("waitStatus bands a rest out of the queue: working is Running, watching is Snoozed", () => {
+  const watcher = thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: false, bgShells: liveShell, waitStatus: "watching" })
+  assert.equal(sectionOf(watcher), "snoozed")
+  assert.equal(sessionIndicatorKind(watcher), "snoozed")
+  assert.equal(activeBandThread(watcher), false, "and the rail does not count it as running")
+  const bench = { ...watcher, waitStatus: "working" as const }
+  assert.equal(sectionOf(bench), "active")
+  assert.deepEqual(partitionActive([bench]).running.map((t) => t.id), [bench.id])
+  assert.equal(sessionIndicatorKind(bench), "background")
+  assert.equal(activeBandThread(bench), true)
+  // A sub-agent its worker called a watcher: the parent parks, and the child spins on its own row.
+  const poller = { ...watcher, bgShells: [], subAgents: liveSub }
+  assert.equal(sectionOf(poller), "snoozed")
+  assert.equal(sessionIndicatorKind(poller), "snoozed")
+  assert.equal(sessionIndicatorKind({ ...poller, waitStatus: "working" as const }), "working")
+  // The field speaks only for a REST: a turn that starts again is running, whatever its last fence said.
+  assert.equal(sectionOf({ ...poller, runtime: "running" }), "active")
+  assert.equal(sessionIndicatorKind({ ...poller, runtime: "running" }), "working")
+  assert.equal(restIsWorking({ ...bench, runtime: "running" }), false, "an own turn spins as `working`, not as a rest")
+  // A queued rest is the human's: it carries no band, and nothing on its row spins.
+  const queuedShell = thread({ kind: "session", runtime: "turn-idle", awaitingBackground: true, needsYou: true, bgShells: liveShell })
+  assert.equal(sessionIndicatorKind(queuedShell), "background")
+  assert.equal(restIsWorking(queuedShell), false)
+  assert.equal(isSnoozed(queuedShell), false)
 })
 
 // THE RESTING CARD'S EVENT-SNOOZE PARKS THE ROW IN SNOOZED. The click sets `bgSnoozed` and takes the queue

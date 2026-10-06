@@ -141,3 +141,15 @@ export function abbreviateHome(text: string, homeDir: string | undefined): strin
   const pattern = homeDir ? pathPrefixPattern(homeDir) : null
   return pattern ? text.replace(pattern, (hit) => `~${hit[hit.length - 1]}`) : text
 }
+
+/**
+ * ONE path with a LEADING `homeDir` written as `~`, keeping the separator that followed it
+ * (`~/.claude/CLAUDE.md`, `~\.claude\CLAUDE.md`); the path unchanged when it is not under the home.
+ * Anchored, unlike abbreviateHome: a single path names one place, so a home-shaped run further along
+ * it (`/Volumes/Backup/Users/me/…`) is some other directory, not the home.
+ */
+export function tildePath(path: string, homeDir: string | undefined): string {
+  const rest = homeDir ? relativeTo(homeDir, path) : null
+  // relativeTo's match ends on the separator that followed the home, which sits just before `rest`.
+  return rest === null ? path : `~${path[path.length - rest.length - 1]}${rest}`
+}

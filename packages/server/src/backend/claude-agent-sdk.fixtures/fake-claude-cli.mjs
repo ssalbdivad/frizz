@@ -4,7 +4,7 @@
 // stream-json over stdio, performs no network access, and records only the explicit safe evidence
 // fields the tests need (never credential values).
 
-import { appendFileSync } from "node:fs"
+import { appendFileSync, readFileSync, statSync } from "node:fs"
 import { basename, dirname, join } from "node:path"
 import { createInterface } from "node:readline"
 
@@ -61,9 +61,23 @@ let userInputCount = 0
 // Input uuids sitting in the command queue, unanswered — the only ones a cancel can take back.
 const queuedInputs = new Set()
 
+// Read `--mcp-config` NOW, the way the real CLI does: the factory deletes the file once the session
+// reports init, so a test that wants its content has to get it from here.
+const mcpConfigArg = args.indexOf("--mcp-config") >= 0 ? args[args.indexOf("--mcp-config") + 1] : undefined
+let mcpConfigFileContent
+let mcpConfigFileMode
+try {
+  if (mcpConfigArg && !mcpConfigArg.trimStart().startsWith("{")) {
+    mcpConfigFileContent = readFileSync(mcpConfigArg, "utf8")
+    mcpConfigFileMode = statSync(mcpConfigArg).mode & 0o777
+  }
+} catch {}
+
 record({
   kind: "startup",
   argv: args,
+  mcpConfigFileContent,
+  mcpConfigFileMode,
   cwd: process.cwd(),
   environment: {
     frizzFakeInheritedPresent: process.env.FRIZZ_FAKE_INHERITED !== undefined,

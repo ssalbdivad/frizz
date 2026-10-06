@@ -1799,7 +1799,7 @@ test("push-it-now fails closed for a stale session id", async () => {
 })
 
 // ── Reopening an archived thread by messaging it (every runtime) ─────────────────────────────────
-// There is no Reopen verb in frizz: an archived thread's footer states "Done" and the composer under it
+// There is no Reopen verb in frizz: an archived thread's header states "Done" and the composer under it
 // IS the reopen affordance ("Marked done — send a message to reopen it"). The un-archive that backs that
 // promise lived inside resumeThread, which ONLY the spawned-CLI path reaches — so a broker-backed Claude row
 // and an app-server Codex row resumed their WORKER and left their ROW archived. The thread then executed

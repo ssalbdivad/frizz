@@ -1,6 +1,8 @@
-// Seed a disposable adhoc stack so the FOOTER'S ICON RHYTHM can be judged in the REAL app rather than
-// only in `icon-rhythm-fixture.html` — the strip's spacing is CSS, but the set of marks that actually
-// co-occur on one card is a projection question, and that is what a fixture cannot answer.
+// Seed a disposable adhoc stack so the HEADER'S AND THE RAIL'S ICON RHYTHM can be judged in the REAL app
+// rather than only in `icon-rhythm-fixture.html` — the strip's spacing is CSS, but the set of marks that
+// actually co-occur on one card is a projection question, and that is what a fixture cannot answer. (It
+// seeded the lifecycle footer's strip until 2026-10-05; those marks now close the header's action strip
+// and, for the Goal, lead the prompt box's rail.)
 //
 // ONE broker-backed Claude row, because that is the only shape that renders the whole right cluster:
 // `ReloadPluginsButton` requires `claudeRuntime === "broker"` and `RestartWorkerButton` requires a
@@ -9,10 +11,10 @@
 // cards as exited both verbs hide and the check falls back to the fixture.
 //
 // The snooze and the recurring prompt are armed through the REAL RPCs the controls themselves call, so
-// the hourglass and the heartbeat are in the state production puts them in. The context donut is
-// deliberately absent: a Claude row's context WINDOW arrives only on the live broker event stream
+// the amber snooze clock and the Goal mark are in the state production puts them in. The context reading
+// is deliberately absent: a Claude row's context WINDOW arrives only on the live broker event stream
 // (tailer.ts, applyRuntimeContextWindow), so no seed can produce one — use `seed-context-meter.mjs`,
-// which seeds codex rows, when the donut is what you are judging.
+// which seeds codex rows, when the reading is what you are judging.
 //
 // Usage: nub scripts/seed-icon-rhythm.mjs --home=/abs/temp-home --port=NNNN
 import { mkdirSync, writeFileSync } from "node:fs"
@@ -48,7 +50,7 @@ const at = ago(2)
 const records = [
   {
     parentUuid: null, isSidechain: false, type: "user",
-    message: { role: "user", content: "TASK:\nJudge the footer's icon rhythm in the real app." },
+    message: { role: "user", content: "TASK:\nJudge the header's icon rhythm in the real app." },
     uuid: "bbbbbbbb-1111-4111-8111-bbbbbbbbbbb1", timestamp: ago(30), session_id: SESSION, cwd,
   },
   {

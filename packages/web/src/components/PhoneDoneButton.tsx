@@ -6,12 +6,12 @@ import { completionHoldSummary } from "../lib/threadLifecycle.ts"
 import { Dialog } from "./ui/Dialog.tsx"
 
 // The phone thread bar's Done: the verb a resting thread's empty bar offers (approved phone design,
-// 2026-09-30). It files the thread through the lifecycle footer's own completion path and opens the
+// 2026-09-30). It files the thread through the desktop check's own completion path and opens the
 // next thread that needs you (lib/mobileTriage.ts).
 //
 // The server can still decline — a resting thread whose sub-agents or background shells are running,
-// or a worker cut off mid-turn — and then this asks, as the footer's "Mark as done" does, with the
-// server's own list of what would stop. The dialog's wording is the footer's (completionHoldSummary);
+// or a worker cut off mid-turn — and then this asks, as the desktop header's check does, with the
+// server's own list of what would stop. The dialog's wording is the desktop's (completionHoldSummary);
 // only the layout is the phone's.
 //
 // `data-phone-done`, and never a text match on "Done": every board row carries a hidden swipe button

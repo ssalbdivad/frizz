@@ -134,6 +134,7 @@
   --frizz-scrim: rgb(0 0 0 / 0.62);
   --sheet-shadow: rgb(0 0 0 / .8);
   --overlay-shadow: rgb(0 0 0 / .4);
+  --dock-shadow: rgb(0 0 0 / .75);
   --shadow-ink: #000000;
   --frizz-focus: rgb(232 185 35 / 0.45);
   --code-kw: #f47067;
@@ -300,6 +301,7 @@
   --frizz-scrim: rgb(31 35 40 / 0.42);
   --sheet-shadow: rgb(31 35 40 / .2);
   --overlay-shadow: rgb(31 35 40 / .15);
+  --dock-shadow: rgb(31 35 40 / .14);
   --shadow-ink: rgb(0 0 0 / .3);
   --frizz-focus: #416896;
   --code-kw: #cf222e;
@@ -471,6 +473,7 @@
     --frizz-scrim: rgb(31 35 40 / 0.42);
     --sheet-shadow: rgb(31 35 40 / .2);
     --overlay-shadow: rgb(31 35 40 / .15);
+    --dock-shadow: rgb(31 35 40 / .14);
     --shadow-ink: rgb(0 0 0 / .3);
     --frizz-focus: #416896;
     --code-kw: #cf222e;

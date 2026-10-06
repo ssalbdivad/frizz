@@ -32,9 +32,9 @@ import { PhoneScheduleSheet } from "./PhoneScheduleSheet.tsx"
 // "Needs you" in the accent (the one thing the accent is for), "Working" in the live green while a turn
 // runs, otherwise "Rested" — then the age, then the model and effort. See lib/mobileThread.ts.
 //
-// Everything the icon strip and the lifecycle footer held — Snooze, Goal, the registered files, Rename,
-// Copy link, and Retry / Restart worker / Reload plugins where the header offers them — is in the ⋯
-// sheet (ThreadActionsSheet).
+// Everything the desktop header and the prompt box's rail hold — Snooze, Goal, the registered files,
+// Rename, Copy link, and Retry / Restart worker / Reload plugins where the header offers them — is in
+// the ⋯ sheet (ThreadActionsSheet).
 export function MobileThreadHeader({ slug, onClose }: { slug: string; onClose: () => void }) {
   const board = useBoard()
   const thread = threadBySlug(board, slug)

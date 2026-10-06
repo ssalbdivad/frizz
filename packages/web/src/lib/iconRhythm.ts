@@ -29,56 +29,17 @@
  *  ink gap, for pills and bare glyphs alike, and adding a mark to the strip is a one-line change
  *  rather than a re-tune.
  *
- *  Every constant below is a measurement, not a taste. Re-measure — never re-guess — if a glyph, an
- *  icon size, or a control's padding changes:
+ *  THE STRIP THIS WAS WRITTEN FOR IS GONE. The lifecycle footer went on 2026-10-05: its context
+ *  reading moved up into the header's second line (ContextMeter), its goal down into the composer rail
+ *  below, and snooze and mark as done into the header's action strip as bare icons on that strip's
+ *  uniform 28px squares (ThreadLifecycle.tsx), where every mark carries the same box and no trim
+ *  applies. Its strip gap and its last trim (the snoozed alarm clock's) went with it.
  *
- *      node scripts/ink-gaps.mjs http://localhost:5461/icon-rhythm-fixture.html \
- *        '[data-context-meter],[data-pending-snooze],[data-recurring-prompt],[data-reload-plugins],…'
- *
- *  and read `deadLeft`/`deadRight` off each mark. `packages/web/icon-rhythm-fixture.html` renders the
- *  real footer and the real composer rail side by side for exactly this.
- *
- *  THE ORDER ABOVE IS HISTORY, not the shipping strip, and TWO OF ITS MARKS HAVE LEFT. On 2026-08-11
- *  Reload plugins and Restart worker moved out of the right cluster into the LEFT one, behind the
- *  context meter (which stays far left, maintainer same day); on 2026-08-26 they left the footer
- *  altogether for the header's action strip ("the restart worker button should be at the top. I just
- *  realized it shouldn't be along the bottom"), and `INK_TRIM_PLUG` / `INK_TRIM_REFRESH` went with
- *  them — deleted rather than kept, because that strip is uniform 28px squares on a flat `gap-0.5`
- *  where every mark carries the same box and a trim would pull one verb out of the rhythm.
- *  The footer now reads meter · hourglass · goal … snooze · done. Both re-orders cost nothing to place,
- *  which is the property the trims buy — every mark's box is collapsed onto its own ink, so the
- *  container's one gap governs whatever sits beside whatever. Measured after the 2026-08-11 move:
- *  11.84 / 12.50 / 12.00 / 12.00 across the left cluster and 12.00 from the snooze split button to Mark
- *  as done, against the 12px target.
- *
- *  One consequence worth knowing before you change which mark comes FIRST. The footer's `px-3` clears
- *  the leading mark's BOX, so what the eye reads as the left inset is that padding minus the mark's own
- *  dead space — and the trims are what make the two agree. The meter, which leads it today, needs no
- *  trim (its ring reaches its own svg edge) and its ink lands 12.25px in; the plug, when it led the
- *  strip instead, put its box 4px from the edge and its ink at 12.5px. Either is within half a pixel of
- *  the 12px the right-hand pill keeps on the other side. An UNTRIMMED narrow glyph led there would sit a
- *  full dead-space width in. */
-
-/** The strip's one optical distance: 12px of clear space between any two marks, whatever they are.
- *
- *  Chosen, not inherited. It is where the left cluster already sat (10.3 / 12.5px) — the one part of
- *  the strip the maintainer did NOT call wrong — and it is the tightest value the right cluster can
- *  hold without the two 24px icon hover-squares overlapping by more than a hair. Below ~11px the two
- *  bare glyphs start to read as one mark; above ~14px the two pills come apart. */
-export const STRIP_INK_GAP = "gap-3"
-
-/** `PendingSnooze` — lucide `AlarmClock` at 12px (ink 9.5px across, so 1.25px inset a side) inside `px-0.5`.
- *
- *  It was the `Hourglass` until 2026-09-19 (ink 7px across, 2.5px inset, `-mx-1`); the human's own
- *  snooze wears the alarm clock on every surface now. The clock's bells and feet reach further out than
- *  the hourglass's caps, so the trim is nearly just the padding. Measured on the rail fixture at dsf 8
- *  (scripts/verify-rail-status-glyphs.mjs, the `user-snoozed` slot): the clock inks 0.79 of its box
- *  across against the hourglass's 0.58, and the ratio is the glyph's, whatever the size.
- *
- *  There is deliberately no constant for `ContextMeter`: its `em`-sized ring reaches its own svg edge
- *  (0.3px a side), which is under the floor where a correction smears the mark rather than moving it.
- *  It is measured, not missed. */
-export const INK_TRIM_ALARM = "-mx-[3px]"
+ *  What remains is the composer RAIL, whose marks sit at absolute offsets rather than on a gap — the
+ *  same law applied per mark: each offset is chosen so the INK between neighbours, not their boxes,
+ *  keeps one distance. Every constant below is a measurement, not a taste. Re-measure — never
+ *  re-guess — if a glyph, an icon size, or a control's padding changes (`scripts/ink-gaps.mjs`, and
+ *  read `deadLeft`/`deadRight` off each mark). */
 
 
 /** Bare composer icons carry dead space; the filled Send button paints its full box.
@@ -89,8 +50,19 @@ export const RAIL_ACTION_OFFSET = "right-[43px]"
 export const RAIL_PAPERCLIP_OFFSET = "right-[71px]"
 export const RAIL_PAPERCLIP_PLAIN_OFFSET = "right-[44px]"
 
-/** Reserve the leftmost button's edge (99px with GitHub, 72px without), plus 8px for prose. */
+/** The thread composer's Goal, at the rail's LEFT end beyond the paperclip (Composer `railLead`).
+ *  Its own constant, not the paperclip's or the action's: GoalMark at 15px paints 7px of dead box on
+ *  its right against the paperclip's 8.25px on its left, so a box gap of -1px (the two hover squares
+ *  overlap by a pixel of empty padding) draws 14.25px of ink between them, against 14.75px from the
+ *  paperclip to send. Measured on a real queue card with scripts/ink-gaps.mjs at dsf 4, 2026-10-05;
+ *  the two glyphs also read at one weight there (mean contrast 338.5 against 338.9). */
+export const RAIL_LEAD_OFFSET = "right-[71px]"
+export const RAIL_LEAD_WITH_ACTION_OFFSET = "right-[98px]"
+
+/** Reserve the leftmost button's edge (99px with GitHub or the Goal, 72px with neither, 126px with
+ *  both), plus 8px for prose. */
 export const RAIL_RESERVE_WITH_ACTION = "pr-[6.6875rem]"
+export const RAIL_RESERVE_WITH_BOTH = "pr-[8.375rem]"
 export const RAIL_RESERVE_PLAIN = "pr-20"
 
 /** The new-thread box's lazy-save glyph (`Snail`) takes the slot directly left of Send, and every slot

@@ -77,6 +77,21 @@ test("a running row reads its activity, and a rested row its handoff", () => {
   assert.deepEqual(rowSecondLine(thread({ activity: "Reading ci.yml" }), "rest", false), { text: "Reading ci.yml" })
 })
 
+// A QUIET PARK IS THE FENCE ALONE (`status: working` or `watching`, 2026-10-05), so the newest thing the
+// agent said is YAML. The phone row names the wait instead — moving or parked — and the fence's own prose,
+// or prose the worker wrote before it, still wins when there is any.
+test("a quiet park's line names its wait, never its YAML", () => {
+  const fence = { kind: "awaiting" as const, body: "", hints: [{ kind: "shell" as const, value: "bopxuo7e1" }, { kind: "status" as const, value: "working" }, { kind: "for" as const, value: "30m" }] }
+  // The real shape the board sent for a worker that rested with the fence alone (stack run 2026-10-05).
+  const quiet = thread({ lastFence: fence, lastAssistantLine: "```awaiting", lastAssistant: "```awaiting shells: [bopxuo7e1] status: working for: 30m ```" })
+  assert.deepEqual(rowSecondLine(quiet, "background", true), { text: "Waiting on an agent terminal" })
+  assert.deepEqual(rowSecondLine(quiet, "snoozed", false, now), { text: "Waiting on an agent terminal" })
+  const withProse = thread({ ...quiet, lastFence: { ...fence, body: "the bench is on arm 3 of 3." } })
+  assert.deepEqual(rowSecondLine(withProse, "background", true), { text: "The bench is on arm 3 of 3." })
+  const said = thread({ lastFence: fence, lastAssistantLine: "Started the bench.", lastAssistant: "Started the bench. ```awaiting shells: [bopxuo7e1] status: working for: 30m ```" })
+  assert.deepEqual(rowSecondLine(said, "background", true), { text: "Started the bench." })
+})
+
 test("a parked row says who parked it, and when it wakes", () => {
   const snoozed = thread({ snoozedUntil: ahead(3 * 3_600_000), lastAssistant: "whatever" })
   assert.deepEqual(rowSecondLine(snoozed, "snoozed", false, now), { text: "Snoozed by you" })

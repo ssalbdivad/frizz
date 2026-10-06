@@ -36,7 +36,15 @@ export type RestedCardThread = Pick<
  *  `lastAssistantText` is the transcript's own copy of "no ```done, no ```question" in the final message:
  *  the board's `pendingQuestion` and `lastFence` say the same, but the message is what the reader is
  *  looking at, and a card claiming no sign-off directly under a fenced one would be the two disagreeing. */
-export function showsRestedCard(thread: RestedCardThread | undefined, lastAssistantText: string | undefined): boolean {
+export function showsRestedCard(
+  thread: RestedCardThread | undefined,
+  lastAssistantText: string | undefined,
+  // Does an open question render at THIS rest (lib/questionShadow questionsAtCurrentRest)? Since
+  // 2026-10-05 a question asked at an earlier rest stays there unless a later fence names it, so it is not
+  // this rest's ending, and a bare rest beside it draws this card. A caller without the transcript omits
+  // it, and any open question then counts — the reading from before that change.
+  questionsHere?: boolean,
+): boolean {
   if (!thread || thread.kind !== "session" || thread.foreign) return false
   if (thread.runtime !== "turn-idle" && thread.runtime !== "exited") return false
   // Withheld from the queue for the seconds its wake gets to land (queue-clock.ts) is still a rest: its
@@ -46,7 +54,7 @@ export function showsRestedCard(thread: RestedCardThread | undefined, lastAssist
   // A stall is the exception to every text check below: the final record is often a tool call with no
   // prose at all, and the card is about the process, not the message.
   if (thread.crashed === true) return true
-  if (thread.lastFence || thread.pendingQuestion || questionsOwed(thread.questions).length > 0) return false
+  if (thread.lastFence || thread.pendingQuestion || (questionsHere ?? questionsOwed(thread.questions).length > 0)) return false
   // AN ANSWER IN FLIGHT IS NOT A BARE REST. The human answered a registered question and the worker has
   // not been handed it yet; the registered-question slot draws their answer for those seconds, and this
   // card claiming nobody signed anything off is both wrong and the louder of the two. The same field

@@ -49,7 +49,8 @@ test("Escape on /full unwinds the layers above the page, then exits fullscreen",
     // 2. A popup open on the page takes the press; the page stays. The snooze menu and the goal dialog
     // are Radix layers (they mark the key defaultPrevented); the permission picker claims it through
     // the shared Select registry instead — the ways a popup can own an Escape.
-    for (const trigger of ["Snooze options", "Goal", "Thread permission mode"]) {
+    // "Snooze" is the header's alarm clock (SnoozeMenu); "Goal" sits in the prompt box's rail.
+    for (const trigger of ["Snooze", "Goal", "Thread permission mode"]) {
       await open()
       await page.waitForSelector(`[aria-label="${trigger}"]`, { visible: true })
       await page.click(`[aria-label="${trigger}"]`)

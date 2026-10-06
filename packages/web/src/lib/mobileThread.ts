@@ -68,7 +68,7 @@ export function compactTokens(n: number): string {
   return String(n)
 }
 
-/** `Context 41% · 118k of 288k` — the footer's context meter as one line of text. Null without a reading
+/** `Context 41% · 118k of 288k` — the header's context meter as one line of text. Null without a reading
  *  (the meter renders nothing then, and so does this). Floored like the meter's own tooltip. */
 export function contextLine(context: ThreadView["context"]): string | null {
   if (!context || context.window <= 0) return null

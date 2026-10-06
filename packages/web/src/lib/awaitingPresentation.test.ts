@@ -68,6 +68,8 @@ test("an unrecognized fence line never becomes prose", () => {
   assert.doesNotMatch(awaitingProseBlock(`watch: bvg44v4ij\n${REASON}`) ?? "", /watch:/)
   // The retired SINGULAR keys and the live plural ones are both machinery, and neither may card.
   assert.equal(awaitingProseBlock("pr: acme/app#1\nreason: waiting on your merge"), null)
+  // The answer line is machinery wherever it lands — a `status:` written under the `---` included.
+  assert.equal(awaitingProseBlock(`status: watching\nneeds_input: false\n${REASON}`), REASON)
   assert.equal(awaitingProseBlock("prs: [acme/app#1]\nfor: 2h"), null)
   // …but a handoff that merely CONTAINS a colon is prose, and eating it would be the opposite bug.
   assert.equal(awaitingProseBlock("Note: the macOS leg is the flaky one."), "Note: the macOS leg is the flaky one.")

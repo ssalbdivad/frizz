@@ -147,6 +147,24 @@ export const ClaudeModel = z.object({
 })
 export type ClaudeModel = z.infer<typeof ClaudeModel>
 
+// The DEGRADED catalogue used while Frizz's pinned Codex runtime has not written a compatible
+// `models_cache.json` yet. This is deliberately one shared mirror: the server used to fall back to
+// GPT-5.5 alone while the browser's fallback included the current generation, so an older Codex app
+// rewriting the machine-wide cache made a model visible in one tab and unavailable in another.
+// Keep the order/defaults in step with the pinned runtime's catalogue when that runtime moves.
+// Re-read from codex-cli 0.160.1 on 2026-10-05; defaults vary by model generation. That catalogue hides
+// gpt-5.5 (visibility "hide", so the live picker drops it too), which is why the mirror no longer lists it.
+export const CODEX_MODELS_FALLBACK_VERSION = "0.160.1"
+export const CODEX_MODELS_FALLBACK: CodexModel[] = [
+  { slug: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-6-astra", displayName: "GPT-6 Astra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-6-sol", displayName: "GPT-6 Sol", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-6-luna", displayName: "GPT-6 Luna", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
+  { slug: "gpt-5.6-sol", displayName: "GPT-5.6 Sol", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-5.6-terra", displayName: "GPT-5.6 Terra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
+  { slug: "gpt-5.6-luna", displayName: "GPT-5.6 Luna", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max"] },
+]
+
 // An Agent Client Protocol agent Frizz can launch (server/backend/acp-agents.ts). `available` means
 // its executable was found on the server's PATH; the composer lists only those, as `acp:<id>` models.
 export const AcpAgent = z.object({
@@ -614,11 +632,12 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 
 // ---- THE AWAITING FENCE ---------------------------------------------------------------------------
 // A worker ends every turn in ONE terminal state: it needs the human, it is waiting on work that is
-// actually running, or it is finished. Each is now said EITHER by a fence or by a registration — an
-// open `thread_question` row is a standing sign-off on its own, and so is an armed watch or a recorded
-// done, which is why a worker with a pending question rests normally and writes no fence at all. This
-// is the FENCE form of the middle one, and it is PURE STRUCTURE — a list of things frizz can look up,
-// a duration, and one line of prose.
+// actually running, or it is finished. Each is now said EITHER by a fence or by a registration — a
+// `thread_question` row asked at THIS rest is a standing sign-off on its own, and so is an armed watch or
+// a recorded done, which is why a worker that has just asked rests normally and writes no fence at all.
+// A question still open from an EARLIER rest is not: the worker names it under `questions:` or withdraws
+// it (2026-10-05). This is the FENCE form of the middle one, and it is PURE STRUCTURE — a list of things
+// frizz can look up, a duration, and one line of prose.
 //
 //   shells: [<runtime task id>, …]   background shells it launched   → checked against live telemetry
 //   agents: [<runtime agent id>, …]  sub-agents it dispatched        → checked against live telemetry
@@ -629,15 +648,24 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //                                    `prs:` entry, because an external PR does not move on a day's clock.
 //                                    An `agents:` entry caps it at 30m instead: AGENT_PARK_FOR_MAX_MS.
 //   title:  Waiting on the CI run    OPTIONAL. The resting card's heading, in the worker's own words.
-//   needs_input: false               REQUIRED for a thread dispatched at or after NEEDS_INPUT_REQUIRED_AT.
-//                                    The worker's own answer to "does the human need to look now?" —
-//                                    `false` keeps the thread out of the queue, `true` puts it in the
-//                                    queue while the work keeps running (see awaitingNeedsInput).
+//   status: watching                 REQUIRED for a thread dispatched at or after NEEDS_INPUT_REQUIRED_AT.
+//                                    Where the thread sits while it waits, in the worker's own word:
+//                                    `needs_input` (the human should look now — the queue), `working`
+//                                    (its own work finishes by itself — Running) or `watching` (something
+//                                    must happen outside the thread — Snoozed). See awaitingStatus.
+//   needs_input: false               The 2026-10-01 spelling of the same answer, read as an alias:
+//                                    `true` is `status: needs_input`; `false` leaves the band to the
+//                                    board's default (see awaitingNeedsInput, board.deriveWaitStatus).
 //   steps:                           OPTIONAL. Steps only the HUMAN can perform — a sign-in, an
 //     - Run `npm login`              approval, a merge the worker may not make — one `- ` item per
 //     - Approve the browser prompt   line, read VERBATIM (see awaitingSteps). A fence carrying them
 //                                    waits on the human: it needs no other name and no `for:`, and it
 //                                    always queues (awaitingNeedsInput reads it as `true`).
+//   questions: [qst_…, …]            The worker's registered questions it is STILL waiting on. A fence
+//                                    beside open questions must name every one of them (anything else
+//                                    is withdrawn with `unask`), and a card it names is drawn at THIS
+//                                    rest (see awaitingQuestions). Like `steps:` it names the human as
+//                                    the wait: no other name and no `for:` needed, and it always queues.
 //
 // THE FRONTMATTER IS REAL YAML (2026-08-24), parsed by the `yaml` package — the keys are PLURAL and take
 // SEQUENCES, block or flow. A bare scalar where a sequence is expected is accepted and normalised to a
@@ -693,7 +721,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "needs_input", "step"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "status", "needs_input", "step", "question"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -774,11 +802,11 @@ export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> =
 const AWAITING_KEY_RE = /^([a-z][a-z_-]*):\s*(\S.*)?$/i
 
 /** The keys the frontmatter recognises as STRUCTURE: four PLURAL sequences of things frizz can look up,
- *  the scalars `for:` and `needs_input:`, and `title:` and `steps:` — which are recognised here so they
- *  never fall to the body, but are read verbatim rather than as YAML (see splitAwaitingFrontmatter).
- *  Anything else falls through to the body. `needs-input` is the same key spelled the way the other
- *  hyphenated kinds are. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "for", "title", "steps", "needs_input", "needs-input"])
+ *  the scalars `for:`, `status:` and its alias `needs_input:`, and `title:` and `steps:` — which are
+ *  recognised here so they never fall to the body, but are read verbatim rather than as YAML (see
+ *  splitAwaitingFrontmatter). Anything else falls through to the body. `needs-input` is the same key
+ *  spelled the way the other hyphenated kinds are. */
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "questions", "for", "title", "steps", "status", "needs_input", "needs-input"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -794,15 +822,25 @@ const AWAITING_SEQUENCE_KEYS: { [key: string]: AwaitingItemKind | undefined } = 
   issues: "issue",
 }
 
-/** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row. */
+/** Defensive caps, shared so the sidebar gloss and the in-chat card can never render a divergent row.
+ *  The cap counts NAMED ITEMS only: the scalars (`for:`, `status:`, `needs_input:`, `title:`) ride
+ *  outside it (see AWAITING_SCALAR_KINDS), because each one is at most a single hint and dropping one is
+ *  worse than useless — a fence naming eight shells lost its `needs_input:` line to the cap, and the
+ *  correction for the missing line could never be satisfied by re-sending it. */
 export const AWAITING_HINT_MAX = 8
 export const AWAITING_HINT_VALUE_MAX = 200
+const AWAITING_SCALAR_KINDS: ReadonlySet<AwaitingHint["kind"]> = new Set(["for", "title", "status", "needs_input"])
 
 /** `steps:` has caps of its own. A step is a SENTENCE rather than an id, so it gets a sentence's length;
  *  and the list is appended AFTER the hints capped above, so a long list can never crowd a `prs:` entry
- *  or the `needs_input:` answer out of AWAITING_HINT_MAX. */
+ *  out of AWAITING_HINT_MAX. */
 export const AWAITING_STEPS_MAX = 12
 export const AWAITING_STEP_VALUE_MAX = 500
+
+/** `questions:` rides after the capped hints for the same reason `steps:` does: a thread carrying many
+ *  open questions must still be able to name every one of them — the park is refused for any it leaves
+ *  out — without crowding a `prs:` entry out of AWAITING_HINT_MAX. */
+export const AWAITING_QUESTIONS_MAX = 24
 
 /** `title:` — the resting card's heading in the WORKER'S OWN WORDS, replacing the derived one
  *  ("Awaiting" / "Agent terminals running", see awaitingBackgroundLabel).
@@ -922,7 +960,11 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
     .filter(Boolean)
     .slice(0, AWAITING_STEPS_MAX)
     .map((step) => ({ kind: "step", value: step.slice(0, AWAITING_STEP_VALUE_MAX) }))
-  return { body: rest.join("\n").trim(), hints: [...parsed.hints.slice(0, AWAITING_HINT_MAX), ...stepHints] }
+  const questionHints = parsed.hints.filter((h) => h.kind === "question").slice(0, AWAITING_QUESTIONS_MAX)
+  // The cap counts named items alone (see AWAITING_HINT_MAX); every scalar survives it, in written order.
+  let items = 0
+  const capped = parsed.hints.filter((h) => h.kind !== "question" && (AWAITING_SCALAR_KINDS.has(h.kind) || items++ < AWAITING_HINT_MAX))
+  return { body: rest.join("\n").trim(), hints: [...capped, ...questionHints, ...stepHints] }
 }
 
 /** The steps written ON the `steps:` line: none, one, or a flow list. A flow list YAML cannot read — a
@@ -945,6 +987,25 @@ function inlineSteps(value: string): string[] {
  *  one, which is how every reader tells the two shapes apart. */
 export function awaitingSteps(hints: readonly AwaitingHint[] | undefined): string[] {
   return (hints ?? []).filter((h) => h.kind === "step").map((h) => h.value)
+}
+
+/** The registered questions the fence says it is still waiting on, as lowercased ids in the order
+ *  written — empty for a fence that names none.
+ *
+ *  WHY THE KEY EXISTS (maintainer 2026-10-05). Until then an open question was drawn at whatever rest
+ *  the thread had most recently reached, and it refused any awaiting fence outright — so a question the
+ *  human had replied past, or one a CI wake had buried, kept reappearing UNDER the worker's newest
+ *  handoff and took its place as the sign-off ("the pending questions that may or may not be relevant
+ *  kind of supersede how the agent actually signed off"). Now the card stays where it was asked, and a
+ *  worker that still needs the answer says so here; one it no longer needs it withdraws. A value that
+ *  carries more than the id (`qst_ab12 — the cache call`) is read down to the id, so a gloss never costs
+ *  the name. */
+export function awaitingQuestions(hints: readonly AwaitingHint[] | undefined): string[] {
+  return (hints ?? []).filter((h) => h.kind === "question").map((h) => questionIdOf(h.value))
+}
+
+function questionIdOf(value: string): string {
+  return (/qst_[a-z0-9]+/i.exec(value)?.[0] ?? value.trim()).toLowerCase()
 }
 
 function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] } {
@@ -976,8 +1037,14 @@ function parseAwaitingYaml(text: string): { ok: boolean; hints: AwaitingHint[] }
       // A BARE SCALAR IS ACCEPTED where a sequence is expected — `prs: acme/app#1` is what a worker
       // reaches for with one item, and refusing it would fail a fence that says exactly the right thing.
       for (const entry of Array.isArray(raw) ? raw : [raw]) push(itemKind, entry)
+    } else if (key === "questions") {
+      for (const entry of Array.isArray(raw) ? raw : [raw]) push("question", entry)
     } else if (key === "for") {
       push("for", raw)
+    } else if (key === "status") {
+      // Kept as written, like `needs_input:` below, so a value that is none of the three can be quoted
+      // back by the correction; awaitingStatus reads it as no answer at all.
+      push("status", raw)
     } else if (key === "needs_input" || key === "needs-input") {
       // YAML hands `true`/`false` over as booleans, which `push` stringifies. Anything else — `yes`, a
       // sentence — is kept as written so the correction can quote it back; awaitingNeedsInput reads it
@@ -1003,24 +1070,87 @@ export function awaitingFenceTitle(hints: readonly AwaitingHint[] | undefined): 
   return title
 }
 
-/** The fence's `needs_input:` answer: `true` (the human should look now, while the work keeps running),
- *  `false` (nothing for the human yet), or null when the fence gave no answer or one that is neither —
- *  which a new-contract thread is bumped for and queued on, never parked on. The LAST one wins, as
- *  awaitingFenceTitle's does.
+// ONE ANSWER FOR THREE PLACES (maintainer 2026-10-05). A rest on running work lands in one of three
+// places — the queue, Running or Snoozed — and the 2026-10-01 `needs_input: true|false` chose between
+// only two of them, so "nothing for the human" was drawn as "working": a thread polling five model
+// catalogs every 30 minutes for a day sat in Running behind a spinner ("it looks like it's actively
+// working on stuff, but it's obviously not"). A second boolean beside it was proposed and rejected —
+// two lines give four combinations for three places, and `needs_input: true` with `working: true` means
+// nothing `needs_input: true` does not ("Maybe we should just consolidate all of this to a status
+// enum"). So the answer is one REQUIRED enum, in the worker's own words:
+//
+//   needs_input  the human can read, try or answer something now          → the queue
+//   working      the named work finishes by itself (a test, a build, CI,
+//                a sub-agent with a task)                                  → Running, with the spinner
+//   watching     something must happen outside the thread (a release, a
+//                review, another agent's merge, tomorrow's cycle)          → Snoozed
+//
+// The worker says it because frizz cannot see it: a background shell is a build or a poller through the
+// same telemetry, and the contract routes long waits to sub-agents, so a sub-agent can be a watcher too.
+// What frizz CAN see still bounds it, in the safe direction only: `working` with nothing named in motion
+// draws no spinner (board.deriveWaitStatus), and every park still holds only while each named item is
+// live and its `for:` has not run out (awaiting.needsInputParkHolds).
+export const AWAITING_STATUSES = ["needs_input", "working", "watching"] as const
+export type AwaitingStatus = (typeof AWAITING_STATUSES)[number]
+
+/** What a `status:` value names, or null for one that is none of the three. `needs-input` is read as the
+ *  value spelled the way the alias key's own hyphenated form is. */
+function statusValueOf(value: string): AwaitingStatus | null {
+  const v = value.trim().toLowerCase().replace(/-/g, "_")
+  return (AWAITING_STATUSES as readonly string[]).includes(v) ? (v as AwaitingStatus) : null
+}
+
+/** The fence's two answer lines as written: the `status:` value (null when absent or none of the three)
+ *  and the `needs_input:` alias (null when absent or neither boolean). The LAST of each wins, as
+ *  awaitingFenceTitle's does. */
+function restAnswerLines(hints: readonly AwaitingHint[] | undefined): { status: AwaitingStatus | null; needsInput: boolean | null } {
+  let status: AwaitingStatus | null = null
+  let needsInput: boolean | null = null
+  for (const h of hints ?? []) {
+    if (h.kind === "status") status = statusValueOf(h.value)
+    else if (h.kind === "needs_input") {
+      const value = h.value.trim().toLowerCase()
+      needsInput = value === "true" ? true : value === "false" ? false : null
+    }
+  }
+  return { status, needsInput }
+}
+
+/** Does this fence name the HUMAN as its wait — `steps:` to perform, or `questions:` still owed an answer?
+ *  Either is the answer `needs_input` by construction, whatever the answer line says. */
+function fenceWaitsOnHuman(hints: readonly AwaitingHint[] | undefined): boolean {
+  return awaitingSteps(hints).length > 0 || awaitingQuestions(hints).length > 0
+}
+
+/** The fence's answer to WHERE the thread sits while it waits — `needs_input`, `working` or `watching` —
+ *  or null when it said no more than `needs_input: false` (out of the queue, band left to the board's
+ *  default) or nothing usable at all. A valid `status:` outranks the `needs_input:` alias beside it, so a
+ *  fence that writes both reads as its newer line; `needs_input: true` alone is `needs_input`.
+ *
+ *  STEPS AND QUESTIONS ARE THE ANSWER, whatever the line says (see awaitingNeedsInput). */
+export function awaitingStatus(hints: readonly AwaitingHint[] | undefined): AwaitingStatus | null {
+  if (fenceWaitsOnHuman(hints)) return "needs_input"
+  const { status, needsInput } = restAnswerLines(hints)
+  if (status) return status
+  return needsInput === true ? "needs_input" : null
+}
+
+/** The fence's answer to "does the human need to look now?": `true` (`status: needs_input`, or the alias
+ *  `needs_input: true`), `false` (`status: working`/`watching`, or `needs_input: false`), or null when the
+ *  fence gave no answer or one that is none of them — which a new-contract thread is bumped for and
+ *  queued on, never parked on. This is the QUEUE's question alone; which band a `false` lands in is
+ *  awaitingStatus's.
  *
  *  STEPS ARE THE ANSWER, whatever the line says. A fence listing `steps:` is waiting on the human to
  *  perform them, so the human is needed now by construction: the line may be left out, and a `false`
  *  beside steps is a contradiction read the safe way — a thread that is waiting on its human must never
- *  be the one that disappears from their queue. */
+ *  be the one that disappears from their queue. Questions are the same answer for the same reason: a
+ *  fence still waiting on the human's ANSWER is waiting on the human. */
 export function awaitingNeedsInput(hints: readonly AwaitingHint[] | undefined): boolean | null {
-  if (awaitingSteps(hints).length > 0) return true
-  let answer: boolean | null = null
-  for (const h of hints ?? []) {
-    if (h.kind !== "needs_input") continue
-    const value = h.value.trim().toLowerCase()
-    answer = value === "true" ? true : value === "false" ? false : null
-  }
-  return answer
+  if (fenceWaitsOnHuman(hints)) return true
+  const { status, needsInput } = restAnswerLines(hints)
+  if (status) return status === "needs_input"
+  return needsInput
 }
 
 export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr", "issue"] as const
@@ -1785,8 +1915,9 @@ export function liveOpsLines(ops?: SignoffLiveOps, needsInput = false): string[]
     lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ? fenceScalar(i.id) : "?").join(", ")}]\``)
   }
   section("Background shells still running:", "shells", ops?.shells ?? [])
-  // Under the `needs_input:` contract a sub-agent is no longer optional to name: a rest on one with no
-  // fence is a bare rest and queues, so the heading must not tell the worker it can skip it.
+  // Under the answer-required contract (`status:`, NEEDS_INPUT_REQUIRED_AT) a sub-agent is no longer
+  // optional to name: a rest on one with no fence is a bare rest and queues, so the heading must not
+  // tell the worker it can skip it.
   section(needsInput ? "Sub-agents still running:" : "Sub-agents still running (they re-invoke you on their own, so parking on one is optional):", "agents", ops?.subAgents ?? [])
   section("Timers you have armed:", "timers", ops?.timers ?? [])
   section("Pull requests you registered:", "prs", ops?.prs ?? [])
@@ -1864,12 +1995,14 @@ export function signoffWaitingNudgeMessage(ops: SignoffLiveOps, needsInput = fal
     "```awaiting",
     ...(shells.length ? [`shells: [${shells.map(handle).join(", ")}]`] : []),
     ...(subAgents.length ? [`agents: [${subAgents.map(handle).join(", ")}]`] : []),
-    ...(needsInput ? ["needs_input: false"] : []),
+    ...(needsInput ? ["status: working"] : []),
     `for: ${SIGNOFF_WAITING_FOR}`,
     ...(needsInput ? [] : ["---", "What is running and what it gates, in one sentence."]),
     "```",
-    // Under the `needs_input:` contract the answer decides the queue: false parks with no write-up owed.
-    ...(needsInput ? ["", "`needs_input: false` keeps you out of the human's queue with no write-up owed. If the human can read, try or act on something NOW, make it `true` and add a `---` line with what to look at."] : []),
+    // Under the answer-required contract the `status:` answer decides the band: `working` and `watching`
+    // park with no write-up owed; `needs_input` queues. Pre-filled `working` because the rest this
+    // variant answers is the archetypal build-just-launched wait (see the measurement above).
+    ...(needsInput ? ["", "`status: working` says the work finishes by itself (a build, a test, a sub-agent's task); make it `watching` if it waits on something outside the thread (a release, a review, a poll). Either keeps you out of the human's queue with no write-up owed. If the human can read, try or act on something NOW, make it `needs_input` and add a `---` line with what to look at."] : []),
     // Only a Goal thread reaches here with a child, and it is the one place the child's own park falls
     // short — said in a line, because a worker told "a running child parks you" has no other reason to fence.
     ...(subAgents.length && !needsInput ? ["", "A running sub-agent keeps you out of the queue on its own, but only this fence holds your Goal until it returns."] : []),
@@ -1880,10 +2013,11 @@ export function signoffWaitingNudgeMessage(ops: SignoffLiveOps, needsInput = fal
 }
 
 /** The sign-off nudge for one fenceless rest: the short waiting variant when a background shell (or, on a
- *  Goal thread or under the `needs_input:` contract, a direct child) is still running, the full protocol
+ *  Goal thread or under the answer-required contract, a direct child) is still running, the full protocol
  *  when nothing is. `needsInput` is the worker's contract (`needsInputRequired`): a worker dispatched under
- *  the `needs_input:` cut is taught the key, and one dispatched before it is taught the grammar it can
- *  actually satisfy. */
+ *  the answer-required cut is taught `status:` — the 2026-10-05 spelling, which a worker that learned
+ *  `needs_input:` can write just as well, since the fence reads both — and one dispatched before the cut
+ *  is taught the grammar it can actually satisfy. */
 export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): string {
   if (ops && (ops.shells.length || ops.subAgents.length)) return signoffWaitingNudgeMessage(ops, needsInput)
   const base = needsInput ? SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT : SIGNOFF_NUDGE_MESSAGE
@@ -1891,9 +2025,9 @@ export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): s
   if (lines.length) {
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
     if (needsInput) {
-      lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`) and a required `needs_input: true|false`, then")
-      lines.push("a `---` line and whatever prose the human needs. Frizz checks every id: name something that is")
-      lines.push("not running and you are bumped rather than parked.")
+      lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`) and a required `status:` (`working`, `watching`")
+      lines.push("or `needs_input`), then a `---` line and whatever prose the human needs. Frizz checks every id:")
+      lines.push("name something that is not running and you are bumped rather than parked.")
     } else {
       lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
       lines.push("(optional). Frizz checks every id: name something that is not running and you are bumped")
@@ -1946,22 +2080,27 @@ function signoffNudgeAwaitingLines(needsInput: boolean): string[] {
   return [
     "- `` ```awaiting `` — you are WAITING on work that is actually running: a background shell, a",
     "  sub-agent, a timer or a registered PR. FRONTMATTER, THEN MARKDOWN: one YAML list per kind of thing",
-    "  you are waiting on, a REQUIRED `for:` duration, a REQUIRED `needs_input:` answer, then optionally a",
-    "  `---` line and prose.",
+    "  you are waiting on, a REQUIRED `for:` duration, a REQUIRED `status:`, then optionally a `---` line",
+    "  and prose.",
     "",
     "  ```awaiting",
     "  agents: [<the id your runtime gave you>]",
-    "  needs_input: false",
+    "  status: working",
     "  for: 2h",
     "  ```",
     "",
-    "  `needs_input: false` — nothing for the human yet. The thread stays out of their queue until the work",
-    "  wakes you, and you owe NO write-up: the fence alone is the whole message. `needs_input: true` — the",
-    "  human can read, try or act on something NOW while the work runs (a partial result, a file you wrote,",
-    "  a server to try), even if you need nothing back from them; the thread goes into their queue, and the",
-    "  prose under `---` says what to look at. If you wrote ANY words for the human at this rest, it is",
-    "  `true` — a `false` rest is never put in front of them. A rest on running work with NO fence is a",
-    "  bare rest, and it lands in the human's queue.",
+    "  `status:` says where the thread sits while you wait, in one of three words:",
+    "  - `working` — what you named finishes by itself: a test, a build, a benchmark, CI, a sub-agent doing",
+    "    a task. The thread shows as running until the work wakes you.",
+    "  - `watching` — something has to HAPPEN outside the thread: a release, a review, another agent's",
+    "    merge, the next daily cycle. The thread is snoozed, and nothing on its row moves, until a named",
+    "    item reports or `for:` runs out.",
+    "  - `needs_input` — the human can read, try or act on something NOW while the work runs (a partial",
+    "    result, a file you wrote, a server to try), even if you need nothing back from them. The thread",
+    "    goes into their queue, and the prose under `---` says what to look at.",
+    "  `working` and `watching` owe NO write-up: the fence alone is the whole message. If you wrote ANY",
+    "  words for the human at this rest, it is `needs_input` — nothing else is put in front of them. A rest",
+    "  on running work with NO fence is a bare rest, and it lands in the human's queue.",
   ]
 }
 
@@ -2013,6 +2152,10 @@ function signoffNudgeText(needsInput: boolean): string {
   "  followed cold; frizz reads them verbatim. Steps name the HUMAN as the wait, so the fence needs no",
   "  other name and no `for:`, and the thread goes into their queue. Their Done comes back to you as",
   "  their reply; anything else they need to say comes as a message of their own.",
+  "- `` ```awaiting `` with `questions:` — a question you registered at an EARLIER rest is still open and",
+  "  you still need its answer. Name every such question (`questions: [qst_…]`) and withdraw the rest with",
+  "  `mcp__frizz__unask`: a fence that leaves an open question out is refused. A named card is drawn at",
+  "  this rest; an unnamed one stays where you asked it.",
   "",
   "**STILL OWED counts things you are not going to do yourself.** A decision you are RECOMMENDING, a",
   "draft you wrote but did not send, follow-up work you discovered — all of it dies with the card, even",
@@ -2035,8 +2178,38 @@ function signoffNudgeText(needsInput: boolean): string {
 }
 
 export const SIGNOFF_NUDGE_MESSAGE = signoffNudgeText(false)
-/** The same reminder for a worker dispatched under the `needs_input:` contract (NEEDS_INPUT_REQUIRED_AT). */
+
+/** The same reminder for a worker dispatched under the answer-required contract (NEEDS_INPUT_REQUIRED_AT),
+ *  which it teaches as `status:` since 2026-10-05. */
 export const SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT = signoffNudgeText(true)
+
+/** The reminder for a fenceless rest that leaves questions from an EARLIER rest open (2026-10-05). A
+ *  question asked at THIS rest is the rest's own sign-off; one carried from before is not, because its
+ *  card is no longer drawn under the newest handoff — it stays where it was asked — so a rest that says
+ *  nothing about it reads as a bare stop while the thread sits in the queue on an ask nobody can see at
+ *  the bottom. The worker settles each one: name it, or withdraw it. Same marker as the reminder above,
+ *  so it folds out of the chat the same way. */
+export function carriedQuestionsNudgeMessage(questions: readonly { id: string; question: string }[], ops?: SignoffLiveOps, needsInput = false): string {
+  const one = questions.length === 1
+  const lines = [
+    `${SIGNOFF_NUDGE_MARKER} Nothing about your task has changed, and no new work is being asked of you.`,
+    "",
+    `${one ? "A question you registered at an EARLIER rest is" : "Questions you registered at EARLIER rests are"} still open, and this rest neither names ${one ? "it" : "them"} nor withdraws ${one ? "it" : "them"}:`,
+    "",
+    ...questions.map((q) => `- \`${q.id}\` — ${q.question}`),
+    "",
+    "Frizz does not draw an earlier rest's question under your newest handoff: its card stays where you",
+    `asked it. So say where ${one ? "it stands" : "each one stands"}:`,
+    "",
+    "- STILL NEED THE ANSWER → end with an ```awaiting fence naming it, `questions: [qst_…]`. A fence on",
+    "  questions needs no other name and no `for:`, and the thread stays in the human's queue. The card is",
+    "  drawn at this rest, under the reasoning you write below the `---` — what changed since you asked,",
+    "  if anything did.",
+    "- NO LONGER NEED IT → withdraw it with `mcp__frizz__unask`, then sign off as you otherwise would.",
+    ...liveOpsLines(ops, needsInput),
+  ]
+  return lines.join("\n")
+}
 
 // ---- THE FENCE CORRECTIONS (scheduler SOURCE 12) -------------------------------------------------
 // Frizz refusing a park and telling the worker why: a fence naming something that is not running, a
@@ -2063,11 +2236,14 @@ export const PARK_CORRECTION_NAMES_LEAD = "⚠️ Your ```awaiting fence names "
 export const PARK_CORRECTION_RETIRED_LEAD = "⛔ Your ```awaiting fence uses "
 /** The third refusal (2026-08-28): the fence was well-formed and everything it named was live, but a
  *  REGISTERED QUESTION stood open on the thread. A question outranks a park everywhere else — the queue
- *  rule, the resting card — so the fence is refused rather than drawn beside the ask (maintainer: "it
- *  should not be allowed, basically"). */
+ *  rule, the resting card — so the fence was refused outright rather than drawn beside the ask
+ *  (maintainer: "it should not be allowed, basically"). Since 2026-10-05 a fence may stand beside open
+ *  questions by NAMING every one under `questions:`; the refusal is for the ones it leaves out, or names
+ *  that are not open questions at all. The lead is unchanged, so old corrections on disk still fold. */
 export const PARK_CORRECTION_QUESTION_LEAD = "⚠️ Your ```awaiting fence landed while "
-/** The fourth (2026-10-01): a worker dispatched under the `needs_input:` contract parked without saying
- *  whether the human is needed, or said something that is neither `true` nor `false`. */
+/** The fourth (2026-10-01): a worker dispatched under the answer-required contract parked without saying
+ *  where the thread sits while it waits — no `status:` (2026-10-05; `needs_input:` before it), or a value
+ *  that is none of its answers. The lead is unchanged across the rename, so old corrections still fold. */
 export const PARK_CORRECTION_NEEDS_INPUT_LEAD = "⚠️ Your ```awaiting fence gives no "
 /** Is this delivered wake one of frizz's fence corrections? */
 export function isParkCorrection(text: string): boolean {
@@ -2085,7 +2261,7 @@ export function timerPromptMessage(prompt: string, fireAt: string): string {
  *  composes is frizz's own sentence about something outside the turn, so a hairline says all of it; this
  *  is the WORKER'S OWN prose, arbitrary and up to TIMER_PROMPT_MAX long. The recurring prompt collapses
  *  to a bare label for a reason that does NOT hold here — its text is the ARMED text, still legible and
- *  editable in the footer panel, so repeating it inline adds nothing (see RecurringPromptLine). A fired
+ *  editable in the Goal panel, so repeating it inline adds nothing (see RecurringPromptLine). A fired
  *  one-off has no such second home: the registration is gone the instant it delivers, so a bare hairline
  *  would destroy the only rendering of that text anywhere in the app.
  *
@@ -2343,7 +2519,7 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
     ...(requested
       ? [
         "The human is waiting to read this one: write the progress note — what landed, what is running,",
-        "what changed — and re-park with `needs_input: true` so it reaches them.",
+        "what changed — and re-park with `status: needs_input` so it reaches them.",
         "",
       ]
       : []),
@@ -2359,7 +2535,7 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
         "3. Report: a short progress note above the fence — what landed, what is running, what changed.",
         "   Write it for someone who has read nothing since their last message: where the effort stands",
         "   against its goal, in their words, with no names you coined (round numbers, phase codes, ids).",
-        "   `needs_input: true` when the human can read or act on something now, else `false`.",
+        "   `status: needs_input` when the human can read or act on something now, else `working`.",
         "4. Ask now. A decision the work has surfaced that is the human's to make goes to `mcp__frizz__ask`",
         "   at this check-in — never into the note or a file \"for the human\", which nobody is prompted to",
         "   answer. The children keep running while it waits; rest on the question, with no fence.",
@@ -2848,10 +3024,15 @@ export function questionFencesLive(spawnedAt: string | number | undefined | null
 // contract it started with, so a worker dispatched before this cut never heard of the key and keeps the
 // per-wait rules. An unknown dispatch instant reads as LEGACY for the same reason — the old rules are the
 // ones a worker that never saw the key can satisfy.
+//
+// THE ANSWER BECAME `status:` ON 2026-10-05 WITH NO NEW CUT (see AWAITING_STATUSES). The cut decides only
+// whether an answer is REQUIRED, and a worker taught `needs_input:` still satisfies it: the fence reads
+// the old line as an alias, so nothing this cut gave a running worker is taken away. Every reminder and
+// correction now teaches `status:`, which such a worker can write just as well.
 export const NEEDS_INPUT_REQUIRED_AT = "2026-10-02T00:48:00Z"
 
-/** Does this thread's worker decide its own queue placement with `needs_input:` — was it dispatched at or
- *  after NEEDS_INPUT_REQUIRED_AT? */
+/** Does this thread's worker decide its own placement with the fence's answer line (`status:`, or the
+ *  older `needs_input:`) — was it dispatched at or after NEEDS_INPUT_REQUIRED_AT? */
 export function needsInputRequired(spawnedAt: string | number | undefined | null): boolean {
   if (spawnedAt === undefined || spawnedAt === null) return false
   const at = typeof spawnedAt === "number" ? spawnedAt : Date.parse(spawnedAt)
@@ -3928,6 +4109,13 @@ export const ThreadView = z.object({
   // Optional like needsYou/crashed: absent ⇒ a pre-restart server or a non-session row; the client
   // treats absence as false.
   awaitingBackground: z.boolean().optional(),
+  // SERVER-DERIVED: which band a rest OUT OF THE QUEUE sits in (board.deriveWaitStatus, 2026-10-05).
+  // `working` — the work it waits on finishes by itself, so it is Running and spins; `watching` —
+  // something must happen outside the thread, so it is Snoozed and still. Present only for a thread at
+  // rest behind a wait the server honoured with no queue card; absent everywhere else, including every
+  // queued rest, which never spins. Absent from a pre-2026-10-05 server, which the client reads as the
+  // old Running placement.
+  waitStatus: z.enum(["working", "watching"]).optional(),
   // Exact typed-interaction presence for this CURRENT registered session. The board already derives
   // this from the scoped durable journal to compute needsYou; exposing the reason lets React avoid a
   // pendingInteractions RPC for every unrelated question/completion card. Optional preserves rolling
@@ -3996,7 +4184,7 @@ export const ThreadView = z.object({
   // further to do; otherwise the composer offers the upgrade, and the first message after the thread's
   // next compaction takes it on its own.
   modelUpgrade: z.object({ label: z.string(), staged: z.boolean() }).optional(),
-  // How full the session's context window is right now — the footer's fullness readout. BOTH halves
+  // How full the session's context window is right now — the header's fullness readout. BOTH halves
   // are provider-measured and the field is emitted ONLY when both are present, so a client never has
   // to decide what to do with half a fraction: absent ⇒ no reading, never a 0% dial. Codex reports
   // both on every `token_count`; a Claude row gets `tokens` from each assistant record's usage but
@@ -4071,8 +4259,10 @@ export function isDeclaredAwaiting(t: ThreadView): boolean {
 }
 
 // INTERNAL WORK: a thread with a LIVE sub-agent is awaiting its OWN dispatched child — not an external
-// event — so it is a fully ACTIVE thread and must never be dimmed (maintainer 2026-07-10: "when an
-// agent is merely awaiting its own sub-agents, we should NOT dim it — that's the differentiator").
+// event — so it is a fully ACTIVE thread and is not dimmed (maintainer 2026-07-10: "when an agent is
+// merely awaiting its own sub-agents, we should NOT dim it — that's the differentiator"). The one
+// exception is the worker's own word: a rest it called `watching` parks even with a child out, because
+// that child is watching the world for it (watchingRest, 2026-10-05).
 // Direct children only, matching the server's hasLiveBackgroundWork: `subAgents` also carries the live
 // DESCENDANTS under those children so the rows can nest, and those are a rendering concern that must
 // never move thread state (see isDirectSubAgent). A running descendant sits under a running direct child
@@ -4110,9 +4300,22 @@ export function hasLiveSubAgents(t: ThreadView): boolean {
 // steps: a parked PR watch (2026-08-13), a declared background park, and an ARMED TIMER (2026-08-24,
 // f50f9e60). The flag now means "at rest behind a declared wait the resting card should state", which
 // includes a park with NOTHING running behind it at all. See parkedOnRegistrationAlone.
+//
+// A REST ITS WORKER CALLED `watching` HAS NO MOTION (2026-10-05), and that is the one reading that
+// outranks the sub-agent line: the worker said the thread waits on something outside itself, and the
+// board honoured it (deriveWaitStatus). A live child does not change that — the contract gives a long
+// wait to a sub-agent, so the parent of a polling child is waiting on the world — and the child keeps
+// its own spinner on its own row.
 export function hasLiveOps(t: ThreadView): boolean {
+  if (watchingRest(t)) return false
   if (hasLiveSubAgents(t)) return true
   return t.awaitingBackground === true && !parkedOnRegistrationAlone(t)
+}
+
+/** At rest on a wait its worker called `watching`, which the server honoured — so the thread is
+ *  Snoozed, and nothing on its row moves (see ThreadView.waitStatus). */
+export function watchingRest(t: Pick<ThreadView, "waitStatus" | "runtime">): boolean {
+  return t.waitStatus === "watching" && t.runtime === "turn-idle"
 }
 
 // AN ARMED TIMER IS A PARK, NOT LIVE WORK — it is the archetypal Snoozed row, and it was the one park that
@@ -4188,7 +4391,8 @@ export function futureSnoozedUntil(
 // waits (pr/ci/session), malformed/elapsed timers, and hintless fences stay OUT of it — rested (in the
 // queue) if their turn is over, Active if it isn't — so they cannot hide work an agent should own
 // through an in-band watcher. A canonical blocked+timer status remains a compatibility path only when
-// it carries the same explicit future ISO instant. A live child/Monitor wins, and archived rows go Done.
+// it carries the same explicit future ISO instant. A live child/Monitor wins unless the worker called the
+// rest `watching`, and archived rows go Done.
 export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   const userSnooze = futureSnoozedUntil(t, nowMs) !== undefined
   if (t.state === "archived") return false
@@ -4206,7 +4410,8 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // green PR (maintainer 2026-08-28: "It's resting and snoozed, and for some reason it's in the actively
   // running rail instead of a snoozed rail"). A live SUB-AGENT still wins, as it does over every park:
   // a child's return re-invokes the parent within seconds, so that row keeps spinning in Active
-  // (maintainer 2026-07-10, "when an agent is merely awaiting its own sub-agents, we should NOT dim it").
+  // (maintainer 2026-07-10, "when an agent is merely awaiting its own sub-agents, we should NOT dim it")
+  // — unless the worker itself called the rest `watching` (see hasLiveOps).
   const eventSnooze = t.bgSnoozed === true && t.runtime === "turn-idle"
   // "SNOOZE UNTIL ALL SUB-AGENTS RETURN" IS THE ONE PARK A LIVE SUB-AGENT DOES NOT OUTRANK, because the
   // live sub-agents are exactly what it parks on. The human looked at the card, saw children still out,
@@ -4215,7 +4420,8 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // parent is RUNNING a turn (a child's return woke it) it spins in Active like any snoozed row, and it
   // comes back here at its next rest. The server drops the flag the moment the snooze lets go.
   const subAgentsSnooze = t.subAgentsSnoozed === true && t.runtime === "turn-idle"
-  if (!subAgentsSnooze && (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze))) return false
+  const watching = watchingRest(t)
+  if (!subAgentsSnooze && !watching && (hasLiveSubAgents(t) || (hasLiveOps(t) && !eventSnooze))) return false
   // A user-owned snooze deliberately wins over a concrete ask, permission prompt, or crash. Those
   // states still exist in the transcript/runtime and re-enter Queue at the exact wake deadline; the
   // snooze merely parks their presentation until then. Mid-turn work keeps spinning in the Active band,
@@ -4243,6 +4449,10 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   // The event-snooze needs no fence behind it: a shell-only rest cards without one and its snooze is the
   // same click. It expires by itself at the thread's next rest, which is the wake the human asked for.
   if (eventSnooze || subAgentsSnooze) return true
+  // THE WORKER'S OWN PARK (2026-10-05): `status: watching`, honoured by the server. It is the same
+  // "parked until something wakes it" as the click above, said by the one party that knows the wait is
+  // on the world — and it needs no fence check, because a registered watch with no fence is banded too.
+  if (watching) return true
   // THE SERVER ALREADY DECIDED THIS, and the client must not re-derive it. A park is honoured only when
   // every item the fence names is still live — checked against telemetry and the registries, which the
   // browser cannot see (board.hasDeclaredBackgroundPark). What reaches here is that verdict: the server
@@ -5022,7 +5232,7 @@ export const SetThreadPinnedInput = z.object({
 }).strict()
 export type SetThreadPinnedInput = z.infer<typeof SetThreadPinnedInput>
 
-// The recurring prompt's OPERATOR half — the footer popover, arming and disarming in ONE call. The
+// The recurring prompt's OPERATOR half — the Goal panel, arming and disarming in ONE call. The
 // text, the two triggers and the cadence are all views of one row, and splitting them into separate
 // mutations would let a tab holding only some of them clobber the rest on save.
 //
@@ -5098,7 +5308,7 @@ export const SetOwnThreadRecurringPromptInput = z.object({
 export type SetOwnThreadRecurringPromptInput = z.input<typeof SetOwnThreadRecurringPromptInput>
 
 // What the write ANSWERS with: the row it just overwrote. A `start` REPLACES whatever the thread held —
-// including text the HUMAN edited in the footer panel — and the writer could not previously see what it
+// including text the HUMAN edited in the Goal panel — and the writer could not previously see what it
 // destroyed. Returning the superseded row lets the tool say so in the same breath, so a blind overwrite
 // is at least a REPORTED one. `null` when the thread held nothing.
 export const SetOwnThreadRecurringPromptResult = z.object({
@@ -5108,7 +5318,7 @@ export type SetOwnThreadRecurringPromptResult = z.infer<typeof SetOwnThreadRecur
 
 // The READ half, from `mcp__frizz__goal` with `action: "get"`. Without it a worker can only
 // write: it cannot tell whether it is armed at all, what text it armed before its context was compacted
-// away, or whether the human has since edited it in the footer. Same caller rules as the write above —
+// away, or whether the human has since edited it in the Goal panel. Same caller rules as the write above —
 // keyed on the slug alone, and no thread parameter a model could aim at anyone else's row.
 export const GetOwnThreadRecurringPromptInput = z.object({
   slug: ThreadSlug,
@@ -5195,8 +5405,8 @@ export const OwnThreadActivityResult = z.object({
   activity: z.array(ThreadActivityItem),
   links: z.array(ThreadLinkView).optional(),
   /** Every question still owed an answer. NOT a `ThreadActivityItem` and deliberately its own list: a
-   *  question is not running work, it waits on a PERSON, and there is no `questions:` key in the awaiting
-   *  fence for it to be written into. Until 2026-08-28 a worker could read its open questions back only
+   *  question is not running work, it waits on a PERSON, and the awaiting fence names one only by id,
+   *  under `questions:` (2026-10-05), never as an item to wait on. Until 2026-08-28 a worker could read its open questions back only
    *  as a side effect of `ask` (which registers another) or `unask` (which withdraws one) — so the ids
    *  that block `done` were readable only by mutating something (maintainer: "Is there a way for the
    *  agent to read out the current set of watchers and questions?"). */

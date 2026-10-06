@@ -38,8 +38,8 @@ import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Me
 // glance (the maintainer asked for "some visual indicator" of it): a selection wears the accent, like
 // the box's own focus ring; a file with nothing selected is a quiet outline — a suggestion.
 //
-// The control is a SPLIT button, the app's own (SnoozeButton): the reading adds what it names, the
-// chevron offers the rest. A separate "3 open files" label beside it was tried first and, in a 300px
+// The control is a SPLIT button, the shape the lifecycle footer's snooze had (SnoozeButton, until
+// 2026-10-05): the reading adds what it names, the chevron offers the rest. A separate "3 open files" label beside it was tried first and, in a 300px
 // sidebar, took the room the file's own name needed — `r2-private.ts:91-116` truncated to `r:91-116`.
 //
 // Embed mode only: in a browser tab nothing writes the editor's context, and the bar renders nothing.

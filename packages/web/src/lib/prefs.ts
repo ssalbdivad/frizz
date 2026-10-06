@@ -12,8 +12,10 @@ const KEY = "frizz.prefs.v1"
 export interface Prefs {
   // Collapse rendered diff blocks to just their header row (click a header to expand that one).
   compactDiffs: boolean
-  // Queue-card split Snooze remembers the operator's last duration choice across every card/reload.
-  // A custom date is deliberately one-off and never overwrites this reusable preset.
+  // The PHONE's snooze length: the duration the board's swipe snoozes for, set in Settings and by a pick
+  // in the ⋯ sheet. The desktop snooze menu neither reads nor writes it — every click there lists every
+  // preset (SnoozeMenu.tsx), because a remembered default made one click mean different spans on
+  // different days. A custom date is deliberately one-off and never overwrites this reusable preset.
   snoozePreset: SnoozePreset
   // Direction the Needs-you queue + the sidebar's rested band order by. FIFO (default) surfaces the
   // longest-waiting item first so the human cycles through everything; LIFO surfaces the most recent

@@ -6,10 +6,12 @@ import type { ThreadView } from "@frizz/shared"
 import "./styles.css"
 
 // The measuring surface for the OPTICAL rhythm of frizz's icon strips — the thread HEADER's action
-// row, the thread lifecycle footer, and the composer's right rail. All three are clusters of small
-// marks whose CSS spacing is uniform and whose PERCEIVED spacing was not, because every glyph wears a
-// different amount of dead padding inside its box (maintainer 2026-08-04: "I'm sure the spacing is
-// consistent in terms of the CSS, but what matters here is the visual spacing").
+// row and the composer's right rail. Both are clusters of small marks whose CSS spacing is uniform and
+// whose PERCEIVED spacing was not, because every glyph wears a different amount of dead padding inside
+// its box (maintainer 2026-08-04: "I'm sure the spacing is consistent in terms of the CSS, but what
+// matters here is the visual spacing"). A third strip, the thread lifecycle footer, was measured here
+// until 2026-10-05, when it went: its snooze and mark-as-done verbs joined the header strip after a
+// rule, and its goal joined the thread composer's rail — both rendered below.
 //
 // The header strip joined on 2026-08-26, when Reload plugins and Restart worker moved up out of the
 // footer into it ("the restart worker button should be at the top") and the AI-rename refresh appeared
@@ -44,16 +46,16 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-const { ThreadLifecycleFooter } = await import("./components/ThreadLifecycleFooter.tsx")
+const { ThreadLifecycleActions } = await import("./components/ThreadLifecycle.tsx")
+const { RecurringPromptControl } = await import("./components/RecurringPromptControl.tsx")
 const { HeaderActions } = await import("./components/HeaderActions.tsx")
 const { AiRenameButton } = await import("./components/AiRenameButton.tsx")
 const { Composer } = await import("./components/Composer.tsx")
 const { GithubTrigger } = await import("./components/GithubTrigger.tsx")
 const { TooltipProvider } = await import("./components/Tooltip.tsx")
 
-// Every field the footer's availability check and its children read. A BROKER-backed, live, snoozed
-// Claude session is the one state that renders all seven marks at once — which is the state the
-// maintainer screenshotted.
+// Every field the header strip's availability checks and the rail's goal read. A BROKER-backed, live,
+// snoozed Claude session is the one state that renders every mark at once.
 const thread = {
   id: "icon-rhythm-demo",
   title: "Icon rhythm",
@@ -84,7 +86,8 @@ const thread = {
   // Drives the ContextMeter's arc. 62% is a mid-fill dial — a nearly-empty or nearly-full ring paints
   // a different amount of ink, and the point of this fixture is to compare ink.
   context: { tokens: 124_000, window: 200_000 },
-  // Drives PendingSnooze's hourglass. Far enough out that it stays in the future for any run.
+  // Draws the header's alarm clock in its amber "a snooze is set" tone. Far enough out that it stays in
+  // the future for any run.
   snoozedUntil: new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString(),
   // NO `watches`, and that is not an omission. This carried one to draw ArmedWatches' eye — the Goal
   // mark's right-hand neighbour. That readout was
@@ -119,24 +122,33 @@ function Fixture() {
                       <AiRenameButton thread={thread} />
                     </div>
                   </div>
-                  <HeaderActions
-                    thread={thread}
-                    collapsed={false}
-                    onCollapse={() => {}}
-                    expand
-                    onDone={() => {}}
-                  />
+                  {/* The strip's own `gap-0.5` cluster, as both real headers draw it: the shared actions,
+                      then the rule and the two lifecycle verbs. */}
+                  <div className="flex shrink-0 items-center gap-0.5">
+                    <HeaderActions
+                      thread={thread}
+                      collapsed={false}
+                      onCollapse={() => {}}
+                      expand
+                      onDone={() => {}}
+                    />
+                    <ThreadLifecycleActions thread={thread} />
+                  </div>
                 </div>
               </div>
             </section>
-            <section className="flex flex-col gap-2">
-              <h2 className="text-[11px] uppercase tracking-wide text-muted">Thread lifecycle footer</h2>
-              {/* The queue-card shape (non-sticky), inside a shell so the strip's border and fill land
-                  the way they do on a real card. */}
-              <div data-footer-shell className="overflow-hidden rounded-lg border border-border bg-panel">
-                <div className="h-16" />
-                <ThreadLifecycleFooter thread={thread} />
-              </div>
+            {/* The THREAD composer's rail: the goal at its left end, then attach and send — what every
+                queue card and thread view draws (ThreadComposerBox passes the goal as `railLead`). */}
+            <section data-goal-rail className="flex flex-col gap-2">
+              <h2 className="text-[11px] uppercase tracking-wide text-muted">Composer rail · thread composer with its goal</h2>
+              <Composer
+                value={value}
+                onChange={setValue}
+                onSubmit={() => {}}
+                surface="iconRhythmFixtureGoal"
+                placeholder="Reply to the agent…"
+                railLead={<RecurringPromptControl thread={thread} />}
+              />
             </section>
             <section className="flex flex-col gap-2">
               <h2 className="text-[11px] uppercase tracking-wide text-muted">Composer rail · with a rail action</h2>

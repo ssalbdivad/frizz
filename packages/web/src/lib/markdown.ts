@@ -162,7 +162,10 @@ const customTaskStatusExtension: TokenizerAndRendererExtension = {
   renderer(token) {
     const { status } = token as FrizzTaskStatusToken
     const meta = TASK_STATUS_META[status]
-    return `<span class="md-task${meta.className ? ` ${meta.className}` : ""}" title="${meta.label}"></span> `
+    // NO space after the span (Marked's own checkbox emits one). The box is a zero-advance
+    // inline-block hung in the list's gutter (styles.css `.md-body .md-task`), so a space here is a
+    // real character between box and text and would start line one a space right of line two.
+    return `<span class="md-task${meta.className ? ` ${meta.className}` : ""}" title="${meta.label}"></span>`
   },
 }
 

@@ -6,8 +6,8 @@ import { editedFileSegments, editedFileTree, flattenEditedFileTree } from "./edi
 const file = (path: string): EditedFile => ({ path, edits: 1 })
 
 // The rows as the rail draws them: `depth·kind·name`, so a test reads like the rail looks.
-function rows(files: EditedFile[], projectDir?: string): string[] {
-  return flattenEditedFileTree(editedFileTree(files, projectDir)).map((n) => `${n.depth}${n.kind === "dir" ? "d" : "f"} ${n.name}`)
+function rows(files: EditedFile[], projectDir?: string, homeDir?: string): string[] {
+  return flattenEditedFileTree(editedFileTree(files, projectDir, homeDir)).map((n) => `${n.depth}${n.kind === "dir" ? "d" : "f"} ${n.name}`)
 }
 
 test("a chain of single-child directories collapses into one row, like GitHub", () => {
@@ -53,6 +53,40 @@ test("a file outside the project keeps its absolute path, rooted at / and collap
   )
 })
 
+test("a file under the home directory is rooted at ~ (maintainer 2026-10-05), the project still wins inside it, and /tmp stays absolute", () => {
+  const home = "/Users/me"
+  const files = [
+    "/Users/me/proj/README.md",
+    "/Users/me/proj/src/a.ts",
+    "/Users/me/.claude/CLAUDE.md",
+    "/Users/me/.claude/projects/-demo-/memory/note.md",
+    "/Users/me/.agents/skills/demo/SKILL.md",
+    "/tmp/frizz-x/scratch.md",
+  ].map(file)
+  assert.deepEqual(rows(files, "/Users/me/proj", home), [
+    "0d /tmp/frizz-x",
+    "1f scratch.md",
+    "0d ~",
+    "1d .agents/skills/demo",
+    "2f SKILL.md",
+    "1d .claude",
+    "2d projects/-demo-/memory",
+    "3f note.md",
+    "2f CLAUDE.md",
+    "0d src",
+    "1f a.ts",
+    "0f README.md",
+  ])
+  // A lone chain collapses onto the `~` root the way it does onto any name.
+  assert.deepEqual(rows([file("/Users/me/.claude/CLAUDE.md")], "/Users/me/proj", home), ["0d ~/.claude", "1f CLAUDE.md"])
+  assert.deepEqual(rows([file("/Users/me/notes.md")], "/Users/me/proj", home), ["0d ~", "1f notes.md"])
+  // The directory paths the rail keys on: `~` does not double, and nothing under it reads `/`.
+  const dirs = flattenEditedFileTree(editedFileTree(files, "/Users/me/proj", home)).flatMap((n) => (n.kind === "dir" ? [n.path] : []))
+  assert.deepEqual(dirs, ["/tmp/frizz-x", "~", "~/.agents/skills/demo", "~/.claude", "~/.claude/projects/-demo-/memory", "src"])
+  // A sibling user's home is not this one.
+  assert.deepEqual(editedFileSegments("/Users/meow/a.ts", "/Users/me/proj", home), ["/", "Users", "meow", "a.ts"])
+})
+
 test("without a project directory every path is absolute", () => {
   assert.deepEqual(rows([file("/repo/src/a.ts")]), ["0d /repo/src", "1f a.ts"])
 })
@@ -93,6 +127,12 @@ test("a Windows project nests the same tree: either separator, drive letter case
   // Outside the project the drive is the first segment, and the chain collapses with `/` as every
   // chain does — `C:/Users/x/.claude` is a spelling Windows accepts.
   assert.deepEqual(rows([file("C:\\Users\\x\\.claude\\CLAUDE.md")], project), ["0d C:/Users/x/.claude", "1f CLAUDE.md"])
+  // With the board's home, the same file is rooted at `~`, matched in either separator and drive case;
+  // a path on another drive keeps the drive as its root.
+  assert.deepEqual(
+    rows([file("C:\\Users\\x\\.claude\\CLAUDE.md"), file("D:\\scratch\\a.ts")], project, "c:/Users/x"),
+    ["0d ~/.claude", "1f CLAUDE.md", "0d D:/scratch", "1f a.ts"],
+  )
   assert.deepEqual(editedFileSegments("C:\\Users\\x\\proj\\src\\a.ts\\", "C:\\Users\\x\\proj\\"), ["src", "a.ts"])
   assert.deepEqual(editedFileSegments("C:\\Users\\x\\proj", project), ["C:", "Users", "x", "proj"])
   assert.deepEqual(editedFileSegments("C:\\Users\\x\\proj-other\\a.ts", project), ["C:", "Users", "x", "proj-other", "a.ts"])

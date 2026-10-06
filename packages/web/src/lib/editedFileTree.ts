@@ -14,12 +14,16 @@ import { isRooted, relativeTo, splitPath } from "./paths.ts"
 // tree draws `packages/web/src` when nothing branches off `packages` or `web`. A directory holding a
 // file as well as one subdirectory does branch — the file is a sibling — so it keeps its own row.
 //
-// Paths under the project directory are shown relative to it; anything else (a file under `~`, a
-// scratch file in /tmp) keeps its absolute path, rooted at `/`, and collapses the same way. A Windows
-// path (`C:\Users\x\proj\src\a.ts`, which is how Claude Code and Codex report every file there) splits
-// on either separator, so it nests instead of standing as one flat node carrying the whole path
-// (Windows audit 2026-09-11, finding 12); outside the project its drive is the first segment, so the
-// collapsed row reads `C:/Users/x/.claude` — the tree joins with `/` and Windows accepts it.
+// Paths under the project directory are shown relative to it. A path under the server's home
+// directory is rooted at `~` (maintainer 2026-10-05: "abbreviate the machine's home directory to ~ in
+// the fullscreen view sidebar") — the memory and skill files a worker writes under `~/.claude` and
+// `~/.agents` are the everyday case, and spelled out they read `/Users/<user>/.claude`, a prefix that
+// never varies on a 340px rail. Anything else (a scratch file in /tmp) keeps its absolute path, rooted
+// at `/`. All three collapse the same way. A Windows path (`C:\Users\x\proj\src\a.ts`, which is how
+// Claude Code and Codex report every file there) splits on either separator, so it nests instead of
+// standing as one flat node carrying the whole path (Windows audit 2026-09-11, finding 12); its home
+// collapses to `~` like any other, and outside the home the drive is the first segment, so the
+// collapsed row reads `D:/scratch` — the tree joins with `/` and Windows accepts it.
 //
 // Order is GitHub's: directories before files, each set alphabetical, case-insensitive — not the
 // list's most-recently-edited-first, because a tree that reorders itself on every save cannot be
@@ -38,13 +42,18 @@ function newDir(): Dir {
 }
 
 // The path's segments as the tree should show them: project-relative when under the project
-// directory (never for the directory itself), else absolute with `/` as the first segment — or the
-// drive (`C:`) as the first segment, which splitPath already yields for a drive-rooted path.
-export function editedFileSegments(path: string, projectDir?: string): string[] {
+// directory (never for the directory itself), else home-relative under a `~` first segment, else
+// absolute with `/` as the first segment — or the drive (`C:`) as the first segment, which splitPath
+// already yields for a drive-rooted path. The project wins over the home it almost always sits in.
+export function editedFileSegments(path: string, projectDir?: string, homeDir?: string): string[] {
   const clean = path.replace(/[\\/]+$/, "")
   if (projectDir) {
     const rel = relativeTo(projectDir, clean)
     if (rel !== null) return splitPath(rel)
+  }
+  if (homeDir) {
+    const rel = relativeTo(homeDir, clean)
+    if (rel !== null) return ["~", ...splitPath(rel)]
   }
   const parts = splitPath(clean)
   return /^[\\/]/.test(clean) ? ["/", ...parts] : parts
@@ -58,7 +67,8 @@ function emit(dir: Dir, depth: number, parent = ""): EditedFileTreeNode[] {
     let node = dir.dirs.get(name)!
     let label = name
     // Collapse the chain: a directory whose only content is one directory lends its name to that
-    // child and disappears as a row. The `/` root never joins — `/Users` reads, `//Users` does not.
+    // child and disappears as a row. The `/` root never joins — `/Users` reads, `//Users` does not;
+    // the `~` root joins like any name, `~/.claude`.
     while (node.files.size === 0 && node.dirs.size === 1) {
       const [childName, child] = [...node.dirs.entries()][0]
       label = label === "/" ? `/${childName}` : `${label}/${childName}`
@@ -73,10 +83,10 @@ function emit(dir: Dir, depth: number, parent = ""): EditedFileTreeNode[] {
   return out
 }
 
-export function editedFileTree(files: readonly EditedFile[], projectDir?: string): EditedFileTreeNode[] {
+export function editedFileTree(files: readonly EditedFile[], projectDir?: string, homeDir?: string): EditedFileTreeNode[] {
   const root = newDir()
   for (const file of files) {
-    const segments = editedFileSegments(file.path, projectDir)
+    const segments = editedFileSegments(file.path, projectDir, homeDir)
     if (segments.length === 0) continue
     let dir = root
     for (const segment of segments.slice(0, -1)) {
