@@ -232,6 +232,20 @@ export const PROBE_OVERRIDES: Record<string, { reads: string; why: string; sameR
     reads: "ambiguous open «every weeknight»",
     why: "`weeknights` is the ambiguous kind (§3.2): Sunday–Thursday or Monday–Thursday.",
   },
+  // Fix round 3, the temporal residue: a word of time left in what would be saved as the task makes the reading
+  // a cue, because the grammar cannot know its span is all of WHEN. These three are the price, in this corpus.
+  "every morning summarize overnight Sentry errors": {
+    reads: "cue open leftover «overnight» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00",
+    why: "\"Overnight\" is a time of day; here it names the errors, but \"every hour overnight\" narrows the runs. One time of day over an assumed time keeps the core, so the model's answer agrees with it.",
+  },
+  "Every Friday at 4pm, write a summary of what shipped this week.": {
+    reads: "cue open leftover «this week» core FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0 @2026-10-09T16:00",
+    why: "\"This week\" is the summary's window here; after a run (\"check the canary this week only\") it bounds the schedule. A period can only narrow, so the core stays.",
+  },
+  "every evening at 6 summarize what the agents did today": {
+    reads: "cue open leftover «today»",
+    why: "\"Today\" may add a run of its own (\"…and today\"), so the cue shows no core.",
+  },
 }
 
 /** The two known residual false offers (§2.6), pinned as OFFERS so any change to them is visible. Each costs
@@ -326,6 +340,54 @@ export const SECOND_SENTENCES = [
   "every Monday at 9am triage new issues. Only while the beta runs.",
 ]
 
+/** The third break-it round's MAJOR findings (fix round 3, 2026-10-06), verbatim, by class: each text was read
+ *  EXACT and wrong by grammar v3 — a word of time the reading left out (a zone at the end, a bound later in the
+ *  sentence, a count before the phrase, a day or a time of day it read past) or a part of the phrase it
+ *  dropped. Round 3 answers with the temporal residue (`schedule-phrase.ts`): none may read exact in either
+ *  scope, except the two `ROUND3_READ` now reads in full. */
+export const ROUND3_MAJORS: Record<string, string[]> = {
+  "ordinal prefix eaten": ["review billing on the second last business day of the month", "the second last Friday of the month, review billing", "the 2nd-to-last weekday of the month review billing", "the third-to-last business day of the month review billing", "second to last Friday of every month review billing"],
+  "count before a weekday": ["check the queue twice every Monday", "check the queue three times every Friday", "check the queue 3x every Monday", "check the queue two times every weekday", "check the queue twice on Mondays", "check the queue twice each Monday", "check the queue a couple of times every Monday", "check the queue 4 times on Fridays", "two times every Monday, check the queue"],
+  "zone elsewhere": ["every Monday at 9am triage new issues (PT)", "every Monday at 9am triage new issues, times are PST", "Every Monday at 9am, triage new issues. All times Pacific.", "Every Monday at 9am triage new issues. Use UTC.", "Every Monday at 9am triage new issues, in UTC please", "every Monday at 9am triage new issues, I'm in London", "Every Monday at 9am, triage new issues. I'm in Denver.", "Every Monday at 9am triage new issues. (I'm in Tokyo, so use JST.)"],
+  "a later bound": ["every 15 minutes check the deploy for the next 2 hours", "every hour check the canary today", "every day at 9am check the canary for 3 more weeks", "every Monday at 9am triage new issues for the next two sprints", "every Monday at 9am triage new issues. Then stop.", "every day at 9am check the canary this week only", "every Monday at 9am triage new issues next quarter", "every Monday at 9am triage new issues while the freeze lasts", "every day at 9am check the canary during the freeze", "every Monday at 9am triage new issues on release days", "every Monday at 9am check the canary, and recheck that evening"],
+  "an adverb touching": ["every hour overnight check the queue", "every 2 hours overnight check the queue", "every Monday at 9am latest triage", "every Monday at 9am randomly triage", "every Monday at 9am ± 15m triage", "every Monday at 9am or later triage", "every Monday at 9am temporarily, triage", "check the queue nearly every day", "check the queue almost every day", "check the queue practically every weekday"],
+  "a second day dropped": ["Mon and Fri mornings, run the sync", "Tue and Thu evenings, run the sync", "Sat and Sun mornings, water the plants", "run the sync weekday and Saturday mornings", "on the 1st and 15th and last day review billing", "on the 1st and 15th, and month-end, review billing", "on the 1st and 15th (and the 30th) review billing"],
+  "the same bare clock twice": ["every day at 7 and 7 check the queue", "every day at 9 and 9 check the queue", "every day at 6, 12 and 6 check the queue"],
+  "a said day or time replaced": ["every month on the fifteenth reconcile billing", "every month end, reconcile the ledger", "every week end, back up the laptop", "every Friday lunchtime, order pizza", "every day late morning check the queue", "every day sunset close the blinds", "review billing the first weekend of every month", "on the fifteenth of every month, reconcile billing", "the last week of every month, review billing"],
+}
+/** The two round-3 majors the spelled ordinals now read in full, and right. */
+export const ROUND3_READ: Record<string, string> = {
+  "every month on the fifteenth reconcile billing": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0",
+  "on the fifteenth of every month, reconcile billing": "FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0",
+}
+/** Round 3's cores that refused the faithful reading (a second day or date the core left out), with that reading:
+ *  a cue may carry a core only if this reading passes it (§4.3). */
+export const ROUND3_CORES: { text: string; rrule: string; dtstart: string }[] = [
+  { text: "Tuesday and Thursday afternoons, run the sync", rrule: "FREQ=WEEKLY;BYDAY=TU,TH;BYHOUR=14;BYMINUTE=0", dtstart: "2026-10-06T14:00" },
+  { text: "every Monday-Wednesday-Friday at 9am triage", rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-07T09:00" },
+  { text: "Saturday and Sunday mornings, water the plants", rrule: "FREQ=WEEKLY;BYDAY=SA,SU;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-10T09:00" },
+  { text: "every January 1st and July 1st review billing", rrule: "FREQ=YEARLY;BYMONTH=1,7;BYMONTHDAY=1;BYHOUR=9;BYMINUTE=0", dtstart: "2027-01-01T09:00" },
+  { text: "every Mon Wed Fri at 9 triage", rrule: "FREQ=WEEKLY;BYDAY=MO,WE,FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-07T09:00" },
+  { text: "every Mon, Wed-Fri at 9am triage", rrule: "FREQ=WEEKLY;BYDAY=MO,WE,TH,FR;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-07T09:00" },
+  { text: "every Monday; Thursday at 9 check the canary", rrule: "FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=9;BYMINUTE=0", dtstart: "2026-10-08T09:00" },
+]
+/** Words of time the residue knows, at least one for each of its rules' alternatives, by the kind it reads
+ *  them as — each the first word of time in "check the queue <words> and report". */
+export const RESIDUE_WORDS: Record<string, string[]> = {
+  narrow: ["unless it rains", "on holidays", "temporarily", "while the freeze lasts", "whilst away", "during the freeze", "throughout the launch", "on bank holidays", "in business hours", "in working hours", "in office hours", "in work hours", "from now on", "for now", "for the time being", "until further notice", "then stop.", "stop after the launch", "only if green", "only on green builds", "on release days", "on days when it rains"],
+  bound: ["until the launch", "up until the launch", "till the launch", "til the launch", "through the launch", "thru the launch", "ending with the launch", "stopping oct 30", "up to the release", "no later than the release"],
+  period: ["oct 12-30", "oct 12 – nov 2", "sep–dec", "in january", "in may", "in mar", "this week", "next quarter", "the next 4 weeks", "the last 24 hours", "the past week", "the previous sprint", "yesterday", "the rest of the year", "the remainder of the week", "q4", "fy2026", "fy 26", "in h2", "h1 only", "this summer", "over the summer", "in 2027"],
+  day: ["this morning", "tomorrow night", "next weekend", "month end", "month-end", "eow", "the end of the month", "the start of each quarter", "mondays", "friday", "today", "tonight", "tomorrow", "weekends", "weekdays", "weeknights", "workdays", "the first business day", "the 2nd-to-last weekday", "the last friday of the month", "the second to last", "the 2nd last", "the 15th.", "the third of the month", "the 1st and 15th", "oct 20", "20 oct", "the 20th of october", "on 10/20", "10/20/2026", "2026-10-20", "mon-fri", "mon, wed and fri", "next mon", "mon at 9", "christmas", "new year's eve", "black friday", "labor day"],
+  except: ["except fridays", "excepting fridays", "excluding weekends", "but not fridays", "other than mondays", "apart from fridays", "aside from fridays", "skip holidays", "skipping fridays", "not fridays", "no sundays", "never on fridays", "nor sundays", "without weekends", "w/o weekends", "excl. weekends", "minus weekends", "barring outages", "bar sundays", "besides fridays", "save sundays", "save for sundays", "omitting sundays", "only weekdays"],
+  start: ["starting oct 12", "beginning monday", "from nov 2", "as of monday", "effective monday", "commencing monday", "no earlier than oct 20", "first run on oct 20", "first run next week"],
+  for: ["for 3 weeks"],
+  window: ["between 9 and 5", "within business hours"],
+  zone: ["america/new_york", "europe/berlin", "etc/utc", "utc", "gmt+2", "utc-05:00", "+05:30", "in my time zone", "timezone", "my time", "local time", "server time", "standard time", "daylight savings time", "pacific time", "eastern time", "la time", "times are pacific", "london", "new york", "tokyo"],
+  freq: ["every 2 hours", "each morning", "every other week", "every few days", "twice a week", "3 times a day", "2x a week", "twice weekly", "hourly", "daily", "nightly", "weekly", "biweekly", "semi-monthly", "everyday", "periodically", "from time to time", "every so often", "now and then", "once in a while", "on the hour", "on the half hour", "around the clock", "24/7", "at random times", "on a daily basis"],
+  duration: ["24 hours", "a few days", "3 more weeks", "half an hour", "a couple of weeks", "48h", "30 mins", "2 wks"],
+  clock: ["9am", "9:30", "9h30", "0930 hrs", "at 0930", "noon", "midnight", "overnight", "mornings", "lunchtime", "eod", "first thing", "at lunch", "before standup", "half past nine", "quarter to 5", "ten past noon", "5 past 9", "at 5.", "at 9 and 5, then", "at five in the morning"],
+}
+
 // ---- the pinned cases ------------------------------------------------------------------------------------------
 
 export type CaseSource =
@@ -358,8 +420,8 @@ export const CASES: PinnedCase[] = [
   { text: "daily at 6pm check CI", source: "probe", edges: "exact open «daily at 6pm» FREQ=DAILY;BYHOUR=18;BYMINUTE=0 @2026-10-05T18:00" },
   { text: "triage new issues every Monday at 9am", source: "probe", edges: "exact close «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00", note: "The old hint's trailing-phrase negative, flipped to a close-edge offer by the spec (§14 Step 4)." },
   { text: "Every weekday at 9, post a standup summary of yesterday's merged PRs in #eng", source: "probe", edges: "exact open «Every weekday at 9» FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 meridiem:9am/9pm" },
-  { text: "every morning summarize overnight Sentry errors", source: "probe", edges: "exact open «every morning» FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 time:9am(morning)" },
-  { text: "Every Friday at 4pm, write a summary of what shipped this week.", source: "probe", edges: "exact open «Every Friday at 4pm» FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0 @2026-10-09T16:00" },
+  { text: "every morning summarize overnight Sentry errors", source: "probe", edges: "cue open leftover «overnight» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00", note: "Fix round 3: a word of time left in the task makes the reading a cue. A time of day over an assumed time keeps the core." },
+  { text: "Every Friday at 4pm, write a summary of what shipped this week.", source: "probe", edges: "cue open leftover «this week» core FREQ=WEEKLY;BYDAY=FR;BYHOUR=16;BYMINUTE=0 @2026-10-09T16:00", note: "Fix round 3: \"this week\" can only narrow, so the core stays." },
   { text: "every day at 7am check that the nightly build passed", source: "probe", edges: "exact open «every day at 7am» FREQ=DAILY;BYHOUR=7;BYMINUTE=0 @2026-10-06T07:00" },
   { text: "On Mondays and Thursdays at 10am, review open dependabot PRs", source: "probe", edges: "exact open «On Mondays and Thursdays at 10am» FREQ=WEEKLY;BYDAY=MO,TH;BYHOUR=10;BYMINUTE=0 @2026-10-08T10:00" },
   { text: "every Sunday night clean up stale branches", source: "probe", edges: "exact open «every Sunday night» FREQ=WEEKLY;BYDAY=SU;BYHOUR=21;BYMINUTE=0 @2026-10-11T21:00 time:9pm(night)" },
@@ -368,7 +430,7 @@ export const CASES: PinnedCase[] = [
   { text: "daily: run the e2e suite against staging", source: "probe", edges: "exact open «daily» FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 time:9am" },
   { text: "run the e2e suite against staging nightly", source: "probe", edges: "exact close «nightly» FREQ=DAILY;BYHOUR=21;BYMINUTE=0 @2026-10-05T21:00 time:9pm(nightly)" },
   { text: "Every weekday morning, check if any PRs are waiting on my review", source: "probe", edges: "exact open «Every weekday morning» FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 time:9am(morning)" },
-  { text: "every evening at 6 summarize what the agents did today", source: "probe", edges: "exact open «every evening at 6» FREQ=DAILY;BYHOUR=18;BYMINUTE=0 @2026-10-05T18:00" },
+  { text: "every evening at 6 summarize what the agents did today", source: "probe", edges: "cue open leftover «today»", note: "Fix round 3: \"today\" may name a run of its own (\"…and today\"), so no core." },
   { text: "every Monday at 9am", source: "probe", edges: "exact open «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   { text: "Mondays 9am: update the roadmap doc from Linear", source: "probe", edges: "exact open «Mondays 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00" },
   { text: "every wednesday at 2:30pm run the load test and post results", source: "probe", edges: "exact open «every wednesday at 2:30pm» FREQ=WEEKLY;BYDAY=WE;BYHOUR=14;BYMINUTE=30 @2026-10-07T14:30" },
@@ -705,7 +767,9 @@ export interface SpecRow {
 export const SPEC_TABLE: SpecRow[] = [
   { row: 1, text: "every Monday at 9am triage new issues", scope: "edges", reads: "exact open «every Monday at 9am» FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00", offered: true, describe: "every Monday at 9am", next: "Mon Oct 12" },
   { row: 2, text: "weekdays at 8:30 summarize PRs", scope: "edges", reads: "exact open «weekdays at 8:30» FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR;BYHOUR=8;BYMINUTE=30 @2026-10-06T08:30 meridiem:8:30am/8:30pm", offered: true, describe: "every weekday at 8:30am", next: "Tue Oct 6" },
-  { row: 3, text: "every morning summarize overnight Sentry errors", scope: "edges", reads: "exact open «every morning» FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00 time:9am(morning)", offered: true, describe: "every day at 9am", next: "Tue Oct 6" },
+  // Fix round 3: "overnight" is a word of time the phrase did not take, so the row is a cue (the spec's table
+  // said exact). Its core is the old reading: one time of day over an assumed time cannot contradict it.
+  { row: 3, text: "every morning summarize overnight Sentry errors", scope: "edges", reads: "cue open leftover «overnight» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00", offered: true },
   { row: 4, text: "Every Thursday at 3 prep the planning notes", scope: "edges", reads: "exact open «Every Thursday at 3» FREQ=WEEKLY;BYDAY=TH;BYHOUR=15;BYMINUTE=0 @2026-10-08T15:00 meridiem:3pm/3am", offered: true, describe: "every Thursday at 3pm", next: "Thu Oct 8" },
   { row: 5, text: "every other Friday at 4pm write the changelog", scope: "edges", reads: "exact open «every other Friday at 4pm» FREQ=WEEKLY;INTERVAL=2;BYDAY=FR;BYHOUR=16;BYMINUTE=0 @2026-10-09T16:00", offered: true, describe: "every other week on Friday at 4pm", next: "Fri Oct 9" },
   // The spec's DTSTART is 09:00 today; the grammar anchors on the first run after now (15:00). With an even

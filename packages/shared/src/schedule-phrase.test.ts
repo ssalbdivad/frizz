@@ -12,8 +12,12 @@ import {
   PROBE_NOW,
   PROBE_OVERRIDES,
   RESIDUAL_OFFERS,
+  RESIDUE_WORDS,
   ROUND2_HELD_OUT,
   ROUND2_QUALIFIERS,
+  ROUND3_CORES,
+  ROUND3_MAJORS,
+  ROUND3_READ,
   SECOND_SENTENCES,
   SPEC_NOW,
   SPEC_TABLE,
@@ -29,7 +33,9 @@ import {
   readingsConsistent,
   readSchedulePhrase,
   SCHEDULE_AMBIGUOUS_COPY,
+  SCHEDULE_RESIDUE_FOR_TESTS,
   scheduleWindows,
+  scheduleWordPrefix,
   type PhraseReading,
   type Span,
 } from "./schedule-phrase.ts"
@@ -74,19 +80,26 @@ test("the field reads only a whole phrase", () => {
   for (const c of FIELD_CASES) assert.equal(line(c.text, "field"), c.field, JSON.stringify(c.text))
 })
 
-test("an exact reading's phrase is its span, and a cue's span holds its core and its unread words", () => {
+test("an exact reading's phrase is its span, and a cue's span holds its core and its unread words, or the task lies between", () => {
+  let far = 0
   for (const { text, r } of corpusReadings()) {
     if (r.kind === "exact" || r.kind === "cue" || r.kind === "ambiguous") {
       assert.ok(r.span.start >= 0 && r.span.end <= text.length && r.span.start < r.span.end, text)
     }
     if (r.kind === "exact" || r.kind === "cue") assert.equal(r.phrase, text.slice(r.span.start, r.span.end), text)
     if (r.kind === "cue") {
-      assert.ok(r.span.start <= r.unread.start && r.unread.end <= r.span.end, `${text}: unread inside the span`)
+      // Unread words far from the phrase (fix round 3: "…what shipped this week") stay where they are: the span is
+      // the phrase, and the words between are the task's, which a span over them would cut away.
+      const inside = r.span.start <= r.unread.start && r.unread.end <= r.span.end
+      const between = r.unread.start >= r.span.end ? text.slice(r.span.end, r.unread.start) : r.unread.end <= r.span.start ? text.slice(r.unread.end, r.span.start) : ""
+      if (!inside) far++
+      assert.ok(inside || /[\p{L}\p{N}]/u.test(between), `${text}: unread inside the span, or past the task's words`)
       assert.ok(r.unread.start < r.unread.end, `${text}: unread is not empty`)
       if (r.core) assert.ok(r.span.start <= r.core.span.start && r.core.span.end <= r.span.end, `${text}: core inside the span`)
     }
     if (r.kind === "ambiguous") assert.ok((Object.values(SCHEDULE_AMBIGUOUS_COPY) as string[]).includes(r.copy), text)
   }
+  assert.ok(far > 0, "some cue reads words far from its phrase")
 })
 
 // ---- the probe corpus, graded as it was written ---------------------------------------------------------------
@@ -143,7 +156,7 @@ test("the probe corpus, graded at its own clock against expectations written bef
     assert.equal(isScheduleOffer(edges), !anywhere.once, `${item.text}: ${summarizeReading(item.text, edges)}`)
     tally.exact++
   }
-  assert.deepEqual(tally, { exact: 80, model: 17, none: 28, overridden: 8 })
+  assert.deepEqual(tally, { exact: 77, model: 17, none: 28, overridden: 11 })
 })
 
 // ---- the spec's §3.3 table ------------------------------------------------------------------------------------
@@ -214,7 +227,7 @@ test("an assumed part names what the box dims", () => {
   const thu = read("Every Thursday at 3 prep the planning notes", "edges")
   assert.ok(thu.kind === "exact")
   assert.deepEqual(thu.assumed, [{ part: "meridiem", shown: "3pm", other: "3am", span: { start: 18, end: 19 } }])
-  const morning = read("every morning summarize overnight Sentry errors", "edges")
+  const morning = read("every morning summarize new Sentry errors", "edges")
   assert.ok(morning.kind === "exact")
   assert.deepEqual(morning.assumed, [{ part: "time", shown: "9am", word: "morning" }])
   const weekly = read("once a week check for outdated GitHub Actions versions", "edges")
@@ -557,6 +570,44 @@ test("performance: 20k characters in the box under 3ms, 4k in the mode under 10m
   const anywhere = medianMs(() => read(mid, "anywhere"))
   assert.ok(edges < 3, `20k edges: ${edges.toFixed(2)}ms`)
   assert.ok(anywhere < 10, `4k anywhere: ${anywhere.toFixed(2)}ms`)
+})
+
+test("performance: every read is linear — 20k characters of each pathological shape under 10ms, in every scope", () => {
+  // Round 3 (F20) found three reads quadratic in a run of one character: the field's trailing-run regex (1.4s for
+  // "every Monday at 9am" + 20k spaces + "x"), a conjoined rule's `\s*,?\s*` (836ms) and a zone offset's
+  // `\s*` after the leading run (306ms). Measured after the fix, warm medians: at most 5.7ms here; 80k
+  // characters cost about 3x what 20k do.
+  const N = 20_000
+  const phrase = "every Monday at 9am"
+  const shapes: [string, string][] = [
+    ["spaces, then a phrase", " ".repeat(N) + phrase],
+    ["a phrase, spaces, a word", phrase + " ".repeat(N) + "x"],
+    ["a phrase, tabs, a word", phrase + "\t".repeat(N) + "x"],
+    ["a phrase, dots, a word", phrase + ".".repeat(N) + "x"],
+    ["a phrase, parens, a word", phrase + ")".repeat(N) + "x"],
+    ["a phrase, commas, a word", phrase + ", ".repeat(N / 2) + "x"],
+    ["newlines, then a phrase", "\n".repeat(N) + phrase],
+    ["bullets, then a phrase", "- ".repeat(N / 2) + phrase],
+    ["open parens, then a phrase", "(".repeat(N) + phrase],
+    ["words, then a phrase", "word ".repeat(N / 5) + phrase],
+    ["a phrase, then words", `${phrase} ${"word ".repeat(N / 5)}`],
+    ["a phrase, then bare numbers", `${phrase} ${"9 ".repeat(N / 2)}`],
+    ["dots", ".".repeat(N)],
+    ["parens", ")".repeat(N)],
+    ["newlines", "\n".repeat(N)],
+    ["digits", "1".repeat(N)],
+    ["colons", ":".repeat(N)],
+    ["a word, spaces, a gate word", `a${" ".repeat(N)}every`],
+  ]
+  const slow: string[] = []
+  for (const [label, text] of shapes) {
+    for (const scope of ["edges", "anywhere", "field"] as const) {
+      read(text, scope)
+      const ms = medianMs(() => read(text, scope), 5)
+      if (ms >= 10) slow.push(`${label}, ${scope}: ${ms.toFixed(1)}ms`)
+    }
+  }
+  assert.deepEqual(slow, [])
 })
 
 // ---- helpers ------------------------------------------------------------------------------------------------------
@@ -1161,5 +1212,278 @@ test("break 2: a spelled clock or a second clock is never dropped, and a guess n
   for (const scope of BOTH) {
     const r = read("every day at 6 and 18 check", scope)
     assert.ok(r.kind !== "exact" || /;BYHOUR=6,18;/.test(r.rrule), `${scope}: ${summarizeReading("every day at 6 and 18 check", r)}`)
+  }
+})
+
+// ---- the break-it battery, round 3 (fix round 3, 2026-10-06) ------------------------------------------------------
+// A third pass (journal wf_d162d55f-7fd) found nine classes of exact-and-wrong, most of them a word of time AWAY
+// from the phrase — a zone at the end, a bound later in the sentence, a count before it — which no list of the
+// words beside a phrase could reach. Round 3 adds the temporal residue (`schedule-phrase.ts`): an exact reading
+// is a cue while a word of time is left in the text it would save as the task. These pin the classes, the core
+// rule, what is exempt, and the round's minor findings. The grammar was written first and these after; each
+// fails against the v3 grammar (git show 5447496d:packages/shared/src/schedule-phrase.ts) except where a comment
+// says it pins what v3 already did.
+
+test("break 3: no round-3 major reads exact in either scope, but the two the spelled ordinals now read right", () => {
+  const wrong: string[] = []
+  let reads = 0
+  for (const [cls, texts] of Object.entries(ROUND3_MAJORS)) {
+    for (const text of texts) {
+      for (const scope of BOTH) {
+        reads++
+        const r = read(text, scope)
+        if (r.kind === "exact" && ROUND3_READ[text] !== r.rrule) wrong.push(`${cls} ${scope}: ${JSON.stringify(text)} → ${summarizeReading(text, r)}`)
+      }
+    }
+  }
+  assert.equal(reads, 124)
+  assert.deepEqual(wrong, [])
+  for (const [text, rrule] of Object.entries(ROUND3_READ)) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(r.kind === "exact" && r.rrule === rrule, `${scope}: ${summarizeReading(text, r)}`)
+    }
+  }
+})
+
+test("break 3: a cue's core never refuses the faithful reading of the days it left out (§4.3)", () => {
+  for (const { text, rrule, dtstart } of ROUND3_CORES) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(r.kind !== "exact" || r.rrule === rrule, `${scope}: ${text} → ${summarizeReading(text, r)}`)
+      if (r.kind === "cue" && r.core) assert.ok(readingsConsistent({ ...r.core, tz: NY }, { rrule, dtstart, tz: NY, span: r.span }, SPEC_NOW), `${scope}: ${text} → ${summarizeReading(text, r)}`)
+    }
+  }
+})
+
+test("break 3: a word of time outside the phrase makes it a cue, with its core only when that word can only narrow it", () => {
+  for (const [text, want] of [
+    // A bound, a period, a condition, an exclusion: the faithful reading is some of the core's runs.
+    ["every Monday at 9am triage new issues for the next two sprints", "cue open leftover «for the next two sprints» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00"],
+    ["every day at 9am check the canary this week only", "cue open leftover «this week» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00"],
+    ["every Monday at 9am triage new issues next quarter", "cue open leftover «next quarter» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00"],
+    ["every Monday at 9am triage new issues while the freeze lasts", "cue open condition «while» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00"],
+    // One time of day over a time the core assumed, one weekday over a day it assumed: §4.3 does not compare
+    // an assumed part, so the core cannot contradict the model's answer.
+    ["every morning summarize overnight Sentry errors", "cue open leftover «overnight» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00"],
+    ["every day check the queue around 2", "cue open leftover «2» core FREQ=DAILY;BYHOUR=9;BYMINUTE=0 @2026-10-06T09:00"],
+    // May add a run or move one: no core.
+    ["every Monday at 9am triage new issues (PT)", "cue open zone «PT»"],
+    ["every hour check the canary today", "cue open leftover «today»"],
+    ["every Monday at 9am check the canary, and recheck that evening", "cue open leftover «that evening»"],
+    ["every day at 9am check the queue; rerun it at 5pm", "cue open leftover «5pm»"],
+    // "Overnight" crosses into the next day, so over a core with days it can move one.
+    ["every Monday morning summarize overnight Sentry errors", "cue open leftover «overnight»"],
+  ] as const) {
+    for (const scope of BOTH) assert.equal(line(text, scope), want, `${scope}: ${text}`)
+  }
+  // The same test holds over a core an older check keeps (v3 already read this one so): a weekday over the
+  // day "every week" assumed.
+  assert.equal(line("every week write the report, due Friday", "edges"), "cue open leftover «Friday» core FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0 @2026-10-12T09:00")
+})
+
+test("break 3: unread words far from the phrase stay where they are, and the cut keeps the task", () => {
+  for (const [text, phrase, unread, cut] of [
+    ["every Monday at 9am triage new issues for the next two sprints", "every Monday at 9am", "for the next two sprints", "triage new issues for the next two sprints"],
+    ["every Monday at 9am triage new issues (PT)", "every Monday at 9am", "PT", "triage new issues (PT)"],
+    ["Use UTC for this one: check the queue every Monday at 9am", "every Monday at 9am", "UTC", "Use UTC for this one: check the queue"],
+  ] as const) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(r.kind === "cue", `${scope}: ${summarizeReading(text, r)}`)
+      assert.equal(text.slice(r.span.start, r.span.end), phrase, `${scope}: ${text}`)
+      assert.equal(text.slice(r.unread.start, r.unread.end), unread, `${scope}: ${text}`)
+      assert.equal(cutPhrase(text, r.span), cut, `${scope}: ${text}`)
+    }
+  }
+  // Touching the phrase, the unread words join its span, as they always did.
+  const near = read("check the queue twice every Monday", "edges")
+  assert.ok(near.kind === "cue")
+  assert.equal("check the queue twice every Monday".slice(near.span.start, near.span.end), "twice every Monday")
+})
+
+test("break 3: a word of time that names a thing, is someone's, or is code is the task's, and the reading stays exact", () => {
+  // Each read exact under v3 as well; these pin what the residue must NOT take.
+  for (const text of [
+    "every Monday at 9am post the weekly digest",
+    "every Friday at 4pm book a 30-minute retro",
+    "every morning check the nightly build",
+    "every morning summarize the overnight Sentry errors",
+    "Every weekday at 9, post a standup summary of yesterday's merged PRs in #eng",
+    "every day at 9am summarize the PRs from the weekend's on-call",
+    "every Monday at 9am update docs/weekly-report.md",
+    "every day at 9am run cron_daily",
+    "every day at 9am bump $EOD_TIMEOUT",
+    "every day at 9am set REPORT_DAILY=true",
+    "every Monday at 9am post “weekly wins” to Slack",
+    "every Monday at 9am triage issues labeled `today`",
+  ]) {
+    for (const scope of BOTH) assert.equal(read(text, scope).kind, "exact", `${scope}: ${line(text, scope)}`)
+  }
+  // A file's name is code for the older checks too: v3 read "fix daily.yml" as a second frequency.
+  for (const text of ["every day at 9am fix daily.yml", "every Monday at 9am rotate logs/weekly"]) {
+    for (const scope of BOTH) assert.equal(read(text, scope).kind, "exact", `${scope}: ${line(text, scope)}`)
+  }
+  // At the end of the text the noun is still being typed: no flicker to a cue and back.
+  assert.equal(read("every Monday at 9am check the overnight", "edges").kind, "exact")
+})
+
+test("break 3: the residue's word walk finds exactly what its rules find, tried at every word", () => {
+  const { rules, scan, masked } = SCHEDULE_RESIDUE_FOR_TESTS
+  const all = rules.map((r) => ({ kind: r.kind, re: new RegExp(r.src, "y") }))
+  // Every rule, in order, at every word start: what the walk would find if it tried them all.
+  const reference = (text: string) => {
+    const m = masked(text)
+    const out: { start: number; end: number; kind: string }[] = []
+    for (let i = 0; i < m.length; ) {
+      let hit: { start: number; end: number; kind: string } | undefined
+      if (i === 0 || !/[a-z0-9]/.test(m[i - 1]!)) {
+        for (const { kind, re } of all) {
+          re.lastIndex = i
+          const mm = re.exec(m)
+          if (mm && mm[0].length) {
+            hit = { start: i, end: i + mm[0].length, kind }
+            break
+          }
+        }
+      }
+      if (hit) out.push(hit)
+      i = hit ? hit.end : i + 1
+    }
+    return out
+  }
+  const texts = new Set<string>()
+  for (const c of [...CASES, ...PROBE_CORPUS, ...FIELD_CASES]) texts.add(c.text)
+  for (const t of Object.values(ROUND3_MAJORS).flat()) texts.add(t)
+  for (const q of [...Object.values(ROUND2_QUALIFIERS).flat(), ...Object.values(ROUND2_HELD_OUT).flat(), ...STRONG_QUALIFIERS, ...TOUCH_QUALIFIERS, ...BROAD_QUALIFIERS]) texts.add(`every Monday at 9am triage new issues ${q}`)
+  let tokens = 0
+  for (const [kind, words] of Object.entries(RESIDUE_WORDS)) {
+    for (const w of words) {
+      const text = `check the queue ${w} and report`
+      texts.add(text)
+      // Each is read as its own kind (the rules' order decides: "no earlier than" is a start, not an exclusion).
+      assert.equal(scan(text)[0]?.kind, kind, `${kind}: ${JSON.stringify(w)} → ${JSON.stringify(scan(text))}`)
+    }
+  }
+  // Lowercase, so the walk's capitalized words (a zone in capitals, "Sat", "May") never run: they have no
+  // rule to compare with.
+  for (const text of texts) {
+    const lower = text.toLowerCase()
+    const got = scan(lower)
+    tokens += got.length
+    assert.deepEqual(got, reference(lower), JSON.stringify(lower))
+  }
+  assert.ok(texts.size > 700 && tokens > 1400, `${texts.size} texts, ${tokens} words of time`)
+})
+
+test("break 3: a second clock that repeats one is a cue, never one run (F6)", () => {
+  for (const text of ["every day at 7 and 7 check the queue", "every day at 9 and 9 check the queue", "every day at 6, 12 and 6 check the queue", "every day at 9am and 9am check the queue"]) {
+    for (const scope of BOTH) {
+      const r = read(text, scope)
+      assert.ok(r.kind === "cue" && r.why === "vague" && !r.core, `${scope}: ${summarizeReading(text, r)}`)
+    }
+  }
+  // A said meridiem settles the other: two runs, read (as v3 did).
+  assert.equal(line("every day at 9 and 9pm check the queue", "edges"), "exact open «every day at 9 and 9pm» FREQ=DAILY;BYHOUR=9,21;BYMINUTE=0 @2026-10-05T21:00 meridiem:9am/9pm")
+})
+
+test("break 3: a spelled ordinal is a day of the month or a cue, never an event (F9)", () => {
+  for (const [text, want] of [
+    ["every fifteenth of the month, reconcile billing", "exact open «every fifteenth of the month» FREQ=MONTHLY;BYMONTHDAY=15;BYHOUR=9;BYMINUTE=0 @2026-10-15T09:00 time:9am"],
+    ["every twentieth, reconcile billing", "exact open «every twentieth» FREQ=MONTHLY;BYMONTHDAY=20;BYHOUR=9;BYMINUTE=0 @2026-10-20T09:00 time:9am"],
+    ["on the twenty-first of each month review billing", "exact open «on the twenty-first of each month» FREQ=MONTHLY;BYMONTHDAY=21;BYHOUR=9;BYMINUTE=0 @2026-10-21T09:00 time:9am"],
+    ["every tenth day, rotate the keys", "cue open vague «every tenth day»"],
+  ] as const) {
+    for (const scope of BOTH) assert.equal(line(text, scope), want, `${scope}: ${text}`)
+  }
+})
+
+test("break 3: a day the words name two ways is assumed, dimmed, and says which it took (F10, F11, F12)", () => {
+  const dayOf = (r: PhraseReading) => (r.kind === "exact" ? r.assumed.find((a) => a.part === "day") : undefined)
+  // "Next Tuesday" said on a Monday: tomorrow, or the Tuesday after.
+  const next = read("next Tuesday at 10am run the migration", "anywhere")
+  assert.equal(summarizeReading("next Tuesday at 10am run the migration", next), "exact open «next Tuesday at 10am» FREQ=DAILY;COUNT=1;BYHOUR=10;BYMINUTE=0 @2026-10-06T10:00 day:Tue Oct 6")
+  assert.deepEqual(dayOf(next), { part: "day", shown: "Tue Oct 6", tip: "“Next Tuesday” reads as Tue Oct 6. Type “Oct 13” if you meant the one after.", shift: 7 })
+  // "Next Monday" said on a Monday can only be the one a week out.
+  assert.equal(dayOf(read("next Monday at 10am run the migration", "anywhere")), undefined)
+  // As a bound or a start it is left unread: a cue, never one run tomorrow.
+  for (const text of ["every day until next Tuesday check the canary", "every day starting next Tuesday check the canary"]) {
+    for (const scope of BOTH) assert.equal(read(text, scope).kind, "cue", `${scope}: ${line(text, scope)}`)
+  }
+  // "Tonight" said after midnight is the night under way, not the next one 25 hours out.
+  const late = Date.parse("2026-10-06T00:30:00-04:00")
+  const tonight = read("tonight at 2 run the migration", "anywhere", late)
+  assert.equal(summarizeReading("tonight at 2 run the migration", tonight), "exact open «tonight at 2» FREQ=DAILY;COUNT=1;BYHOUR=2;BYMINUTE=0 @2026-10-06T02:00 day:Tue Oct 6")
+  assert.deepEqual(dayOf(tonight), { part: "day", shown: "Tue Oct 6", tip: "“Tonight” said after midnight reads as the night now under way: Tue Oct 6. Say “tomorrow night” for the next one.", shift: 1 })
+  // "Friday at midnight": the start of Friday, said so; "every day at midnight" names no day to doubt.
+  const midnight = read("every Friday at midnight, rotate the logs", "edges")
+  assert.equal(summarizeReading("every Friday at midnight, rotate the logs", midnight), "exact open «every Friday at midnight» FREQ=WEEKLY;BYDAY=FR;BYHOUR=0;BYMINUTE=0 @2026-10-09T00:00 day:the start of Friday")
+  assert.deepEqual(dayOf(midnight), { part: "day", shown: "the start of Friday", tip: "“Friday at midnight” reads as the start of Friday. Say “Saturday at midnight” if you meant the end of it.", shift: 1 })
+  assert.equal(dayOf(read("every weekday at midnight rotate the logs", "edges"))?.shown, "the start of each day")
+  assert.equal(dayOf(read("every day at midnight rotate the logs", "edges")), undefined)
+  // The model may take the other reading, and it agrees: the day moved by the shift, never by another.
+  assert.ok(midnight.kind === "exact" && tonight.kind === "exact" && next.kind === "exact")
+  const as = (r: Extract<PhraseReading, { kind: "exact" }>) => ({ rrule: r.rrule, dtstart: r.dtstart, tz: NY, assumed: r.assumed })
+  assert.equal(readingsConsistent(as(midnight), { rrule: "FREQ=WEEKLY;BYDAY=SA;BYHOUR=0;BYMINUTE=0", dtstart: "2026-10-10T00:00", tz: NY }, SPEC_NOW), true)
+  assert.equal(readingsConsistent(as(midnight), { rrule: "FREQ=WEEKLY;BYDAY=SU;BYHOUR=0;BYMINUTE=0", dtstart: "2026-10-11T00:00", tz: NY }, SPEC_NOW), false)
+  assert.equal(readingsConsistent(as(next), { rrule: "FREQ=DAILY;COUNT=1;BYHOUR=10;BYMINUTE=0", dtstart: "2026-10-13T10:00", tz: NY }, SPEC_NOW), true)
+  assert.equal(readingsConsistent(as(next), { rrule: "FREQ=DAILY;COUNT=1;BYHOUR=10;BYMINUTE=0", dtstart: "2026-10-07T10:00", tz: NY }, SPEC_NOW), false)
+  assert.equal(readingsConsistent(as(tonight), { rrule: "FREQ=DAILY;COUNT=1;BYHOUR=2;BYMINUTE=0", dtstart: "2026-10-07T02:00", tz: NY }, late), true)
+})
+
+test("break 3: a file's name, a statement about a schedule, or a quote in another typography is not offered (F14, F15, F17)", () => {
+  for (const text of ["daily.yml is failing, fix it", "nightly.yml: add a step for lint", "weekly.json has a bug in the parser", "hourly.sh exits 1 on the new runner", "Mondays.md needs a new section"]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+    assert.equal(read(text, "anywhere").kind, "none", text)
+  }
+  // The phrase as the subject of what follows: an adjective, a bug report.
+  for (const text of [
+    "Quarterly OKRs are due, draft ours",
+    "Biweekly sprints are too short — propose 3-week ones",
+    "Weeknight deploys keep failing, find out why",
+    "Every night, a cron job wipes /tmp. Find out which one.",
+    "Every 30 minutes, pods restart. Find out why.",
+    "Every morning, CI is red. Figure out why.",
+    "Each night at 2am, Postgres autovacuum locks the table — find a fix",
+    "Every Monday I get a flood of dependabot PRs; write a script to auto-merge them",
+    "Every Monday at 9am UTC, a GitHub Action should post the release notes. Write that workflow.",
+  ]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), false, `${text}: ${line(text, "edges")}`)
+  }
+  for (const text of [
+    "„every Monday at 9am“ is the default cron string, document it",
+    "«every Monday at 9am» is the default, document it",
+    "»every Monday at 9am« is the default, document it",
+    "‚every Monday at 9am‘ is the default, document it",
+    "「every Monday at 9am」 is the default, document it",
+    "‘every Monday at 9am’ is the default, document it",
+  ]) {
+    for (const scope of BOTH) assert.equal(read(text, scope).kind, "none", `${scope}: ${line(text, scope)}`)
+  }
+  // An imperative after the phrase is still a request, and a sentence's period is no file extension.
+  for (const text of ["every Monday at 9am triage new issues", "Every night, clean up stale branches", "every day at 9am. check the queue"]) {
+    assert.equal(isScheduleOffer(read(text, "edges")), true, text)
+  }
+})
+
+test("break 3: every quarter hour is every 15 minutes, not the quarterly copy (F18)", () => {
+  for (const text of ["every quarter hour check the deploy", "every quarter-hour check the deploy", "every quarter of an hour check the deploy"]) {
+    const r = read(text, "edges")
+    assert.ok(r.kind === "exact" && r.rrule === "FREQ=HOURLY;BYMINUTE=0,15,30,45", `${text}: ${summarizeReading(text, r)}`)
+    const echo = scheduleEcho({ title: "Check", rrule: r.rrule, dtstart: r.dtstart, tz: NY }, SPEC_NOW, NY)
+    assert.ok(echo.ok)
+    assert.equal(echo.value.describe, "every 15 minutes")
+  }
+  // A quarter of the year is still the ambiguous kind.
+  assert.equal(read("every quarter review the access list", "edges").kind, "ambiguous")
+})
+
+test("scheduleWordPrefix: a word still being typed into a schedule word that reads otherwise (F19)", () => {
+  // "mon" is Monday's abbreviation but "month"'s prefix; "week" is a word and "weekday"'s prefix.
+  for (const w of ["mon", "Mon", "week", "Wedn", "satu", "thursd", "even", "after", "mid", "morn", "ju", "fort", "septem"]) assert.equal(scheduleWordPrefix(w), true, w)
+  // An abbreviation of the only word it can finish as, a whole word, a plural or an adverb of one, a word that
+  // is no prefix, and a single letter.
+  for (const w of ["wed", "tue", "tues", "thurs", "sat", "jul", "mar", "sept", "month", "monday", "Mondays", "weekday", "day", "days", "every", "night", "triage", "m", "july", "may", "quarter", "weekly"]) {
+    assert.equal(scheduleWordPrefix(w), false, w)
   }
 })
