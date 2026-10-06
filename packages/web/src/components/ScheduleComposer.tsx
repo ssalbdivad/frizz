@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Repeat, X } from "lucide-react"
+import { ArrowRightToLine, CornerDownLeft, Repeat, X } from "lucide-react"
 import {
   SCHEDULE_GRAMMAR_VERSION,
   SCHEDULE_PRESENCE_COPY,
@@ -660,11 +660,12 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     setAnnouncement(r.kind === "ambiguous" ? r.copy : `Schedule suggestion: ${words}. Press Tab to schedule it.`)
   }, [offerShowing])
 
+  const each = useEachRun(shownOffer, prose, promptOf)
   const ledge = shownOffer ? (
     <ScheduleSlot
       form="ledge"
-      line={<LedgeLine shown={shownOffer} prose={prose} nowMs={nowMs} tz={tz} promptOf={promptOf} onSchedule={() => key("schedule")} onClose={() => key("close")} />}
-      title={ledgeTitle(shownOffer, prose, promptOf)}
+      line={<LedgeLine shown={shownOffer} prose={prose} each={each} nowMs={nowMs} tz={tz} onSchedule={() => key("schedule")} onClose={() => key("close")} />}
+      title={each ? `Each run: ${each}` : undefined}
     />
   ) : null
   const panel = view ? (
@@ -718,11 +719,17 @@ function toastDetail(view: ScheduleView, nowMs: number): string | undefined {
   return `${describe} · next ${day}${span ? `, in ${span}` : ""}`
 }
 
-function ledgeTitle(shown: Published, prose: string, promptOf: (cut: string) => string): string | undefined {
-  const r = shown.reading
-  if (r.kind !== "exact" && r.kind !== "cue") return undefined
-  const each = firstLine(promptOf(cutPhrase(prose, r.span)))
-  return each ? `Each run: ${each}` : undefined
+/** The ledge's `Each run` text: the first line of the cut prompt, as the text read at the last PUBLISH point.
+ *  Inside a word the offer is carried (`shown.prose` moves on, `shown.read` does not), and the segment holds,
+ *  so it fills in a word at a time (§0.1) rather than flickering with every letter. */
+function useEachRun(shown: Published | null, prose: string, promptOf: (cut: string) => string): string {
+  const held = useRef("")
+  if (!shown) held.current = ""
+  else if (shown.prose === shown.read) {
+    const r = shown.reading
+    held.current = r.kind === "exact" || r.kind === "cue" ? firstLine(promptOf(cutPhrase(prose, r.span))) : ""
+  }
+  return held.current
 }
 
 /** A value that went away, kept for `ms` so what showed it can fold rather than vanish. */
@@ -758,11 +765,36 @@ function useDelayedTrue(on: boolean, ms: number): boolean {
 
 // ---- the slot: one element, a ledge that grows into the panel ---------------------------------------------------
 
+/**
+ * THE LEDGE ROW'S RHYTHM, in one place. `gap` spaces boxes and the eye spaces ink, so every mark's box is
+ * collapsed onto its own ink (iconRhythm.ts's method) and the gaps below are the distances the eye reads.
+ * Dead space is GEOMETRY, not a fit: a lucide glyph's stroke (2 units) reaches 1 unit past its outermost
+ * path, so `Repeat` and `ArrowRightToLine` (paths x 3–21) leave 2 of 24 units a side and `CornerDownLeft`
+ * (x 4–20) and `X` (x 6–18) leave 3 and 5.
+ *
+ * Measured on the real ledge (scratch/optics-live-box.ts, 466px — the All-projects column at 1440 — 12px
+ * sans, dsf 6, 2026-10-06), ink gaps before → after:
+ *   border → ↻ 10.83 → 10.83 (the left inset)    ↻ → reading 9.67 → 7.67
+ *   ⇥ → Schedule 5.83 → 4.9                      ↵ → Start now 6.50 → 4.9
+ *   Schedule → ↵ 13.66 → 12.3                    Start now → × 18.39 → 12.1
+ *   × → border 12.33 → 10.83 (the right inset, now the left's)
+ * Before, the glyph floated halfway between the border and its words, the keycaps sat at two distances from
+ * their own words, and the × hung 6.5px further out than the gap it shared: 4px of button padding plus
+ * 2.5px of its viewBox.
+ */
+const GLYPH_TO_TEXT_TRIM = "-mr-0.5" // ↻: gap-2 (8) + 1px of viewBox − 2 = 7.67 to the reading's first letter
+const PANEL_BODY_INSET = "pl-[28px]" // px-2.5 + the 12px glyph + gap-2 − 2: the body's rows start under the echo
+const CLOSE_TRIM = "-ml-[6.5px] -mr-[5.5px]" // ×: 4px padding + 2.5px of viewBox in, and out to the left inset
+// The keycaps at 11px: 2 units of 24 a side for ⇥ (0.92px), 3 for ↵ (1.375px).
+const KEYCAP_TRIM = { tab: "-mx-[0.92px]", enter: "-mx-[1.375px]" } as const
+
 /** The mode's glyph, on its line's cap band (the house lift: the box's bottom on the baseline, then half the
- *  box less half the cap height — `cap` resolves against the line's own font). */
-function SlotGlyph() {
+ *  box less half the cap height). `cap` resolves against the glyph's own font, so it carries the size of
+ *  the text it sits beside: the panel's echo is 13px on the ledge's 12px row (a 12px cap put it 0.63px
+ *  under the echo's band; 13px measures −0.1). */
+function SlotGlyph({ lead }: { lead: 12 | 13 }) {
   return (
-    <span aria-hidden className="flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)] text-muted">
+    <span aria-hidden className={`flex shrink-0 self-baseline translate-y-[calc(6px_-_0.5cap)] text-muted ${GLYPH_TO_TEXT_TRIM} ${lead === 13 ? "text-[13px]" : ""}`}>
       <Repeat size={12} strokeWidth={2} />
     </span>
   )
@@ -771,26 +803,44 @@ function SlotGlyph() {
 const KBD = "font-sans text-[11px] text-muted-70"
 
 /**
+ * The ledge's keycaps, ⇥ and ↵, as drawn glyphs rather than characters. As text (11px, the panel's `Esc`
+ * treatment) they were FALLBACK glyphs — no UI face carries U+21E5/U+21B5 — so their size and height were
+ * the fallback font's: measured on the real ledge (DejaVu, dsf 6, 2026-10-06) ⇥ inked 5px against an 8.75px
+ * cap and sat 1.00px under the cap band's centre, ↵ 6px and 0.50px under, and a nudge fitted to that face
+ * would be wrong on any other. Lucide's two are symmetric about their viewBox's middle, so the house
+ * cap-band lift (`self-baseline` puts the box's bottom on the baseline; half the box less half the cap
+ * puts its middle on the band, `cap` resolving against the line's own font) centres their INK, in any
+ * font. The name rides in `aria-label`: a screen reader says "Tab Schedule", not an arrow.
+ */
+function KeyCap({ label, icon: Icon, trim }: { label: string; icon: typeof Repeat; trim: string }) {
+  return (
+    <kbd aria-label={label} className={`flex shrink-0 self-baseline translate-y-[calc(5.5px_-_0.5cap)] text-muted-70 ${trim}`}>
+      <Icon aria-hidden size={11} strokeWidth={2} />
+    </kbd>
+  )
+}
+
+/**
  * The hanging slot under the box (§5.1): inset 10px a side and pulled up under the box's bottom edge, with no
  * top border of its own — the box's bottom border is its top — so it reads as a tab hanging off the box, not a
  * new card. As the LEDGE it is one 28px line that never wraps; as the PANEL the same first line stays put and
  * the rows open beneath it (grid rows 0fr → 1fr), so the list below slides rather than jumps.
  */
-function ScheduleSlot({ form, line, body, title, footer }: { form: "ledge" | "panel"; line: ReactNode; body?: ReactNode; title?: string; footer?: ReactNode }) {
+function ScheduleSlot({ form, line, lead = 12, body, title, footer }: { form: "ledge" | "panel"; line: ReactNode; lead?: 12 | 13; body?: ReactNode; title?: string; footer?: ReactNode }) {
   return (
     <div
       data-schedule-slot={form}
       title={title}
-      className={`sched-ledge-in @container mx-2.5 rounded-b-lg border border-t-0 border-border transition-colors duration-[160ms] motion-reduce:transition-none ${form === "ledge" ? "bg-panel-2/60" : "bg-panel-2"}`}
+      className={`sched-ledge-in mx-2.5 rounded-b-lg border border-t-0 border-border transition-colors duration-[160ms] motion-reduce:transition-none ${form === "ledge" ? "bg-panel-2/60" : "bg-panel-2"}`}
     >
-      <div data-schedule-line className="flex min-w-0 items-baseline gap-2 px-2.5 py-1 text-[12px] leading-5 text-muted">
-        <SlotGlyph />
+      <div data-schedule-line className="flex min-w-0 flex-wrap items-baseline gap-x-2 px-2.5 py-1 text-[12px] leading-5 text-muted">
+        <SlotGlyph lead={lead} />
         {line}
       </div>
       <div className={`grid transition-[grid-template-rows] duration-[160ms] ease-out motion-reduce:transition-none ${form === "panel" ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
         <div className="min-h-0 overflow-hidden">
           {form === "panel" && (
-            <div data-schedule-panel className="flex flex-col pb-2 pl-[30px] pr-2.5">
+            <div data-schedule-panel className={`flex flex-col pb-2 ${PANEL_BODY_INSET} pr-2.5`}>
               {body}
               {footer}
             </div>
@@ -802,21 +852,21 @@ function ScheduleSlot({ form, line, body, title, footer }: { form: "ledge" | "pa
 }
 
 /** The offer's line (S1–S3): the reading, then `⇥ Schedule  ↵ Start now  ×`, which never truncate. */
-function LedgeLine({ shown, prose, nowMs, tz, promptOf, onSchedule, onClose }: {
+function LedgeLine({ shown, prose, each, nowMs, tz, onSchedule, onClose }: {
   shown: Published
   prose: string
+  each: string
   nowMs: number
   tz: string
-  promptOf: (cut: string) => string
   onSchedule: () => void
   onClose: () => void
 }) {
   const r = shown.reading
   let reading: ReactNode = null
-  let each = ""
+  let nextNode: ReactNode = null
+  let spanNode: ReactNode = null
   if (r.kind === "exact") {
     const model = schedulePreviewModel({ title: "", rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
-    each = firstLine(promptOf(cutPhrase(prose, r.span)))
     if (model.ok) {
       const span = model.firstAt ? spanUntil(model.firstAt, nowMs) : null
       const soon = model.firstAt !== undefined && Date.parse(model.firstAt) - nowMs < SOON_MS
@@ -824,14 +874,12 @@ function LedgeLine({ shown, prose, nowMs, tz, promptOf, onSchedule, onClose }: {
         <>
           <PreviewDescribe segments={model.describe} capital />
           {model.zone}
-          {model.next[0] && <>{` · next ${model.next[0]}`}</>}
-          {/* Narrowing order (§5.3): Each run goes first, then this, then the reading ellipsizes. */}
-          {span && <span data-schedule-ledge-span className={`hidden @min-[400px]:inline ${soon ? "text-attention" : ""}`}>{`, in ${span}`}</span>}
         </>
       )
+      if (model.next[0]) nextNode = <span data-schedule-ledge-next className="shrink-0 whitespace-nowrap">{`\u00a0· next ${model.next[0]}`}</span>
+      if (span && model.next[0]) spanNode = <span data-schedule-ledge-span className={`shrink-0 whitespace-nowrap ${soon ? "text-attention" : ""}`}>{`, in ${span}`}</span>
     }
   } else if (r.kind === "cue") {
-    each = firstLine(promptOf(cutPhrase(prose, r.span)))
     const quoted = prose.slice(r.unread.start, r.unread.end)
     if (r.core) {
       const model = schedulePreviewModel({ title: "", rrule: r.core.rrule, dtstart: r.core.dtstart, tz, assumed: r.core.assumed }, nowMs, tz)
@@ -855,15 +903,37 @@ function LedgeLine({ shown, prose, nowMs, tz, promptOf, onSchedule, onClose }: {
   }
   return (
     <>
-      <span data-schedule-ledge-reading className="min-w-0 flex-1 truncate">
-        {reading}
-        {each && (
-          <span data-schedule-ledge-each className="hidden @min-[560px]:inline">
-            {" · "}
-            <span className="text-muted-70">Each run:</span> {each}
-          </span>
-        )}
-      </span>
+      {/* THE NARROWING ORDER (§5.3) — `Each run` goes first, then `, in 6d`, then `· next Mon Oct 12`, and only
+          then does the rule itself ellipsize — as a one-line WRAPPING row clipped to its first line: a
+          segment that no longer fits wraps onto the clipped second line and is gone whole, everything after
+          it with it, and the rule, alone on the line, shrinks and truncates. `Each run` joins only with 9rem
+          to spare (its label and a few words), and then truncates first. A fixed container width cannot do
+          this — readings differ in length — and the All-projects column at 1440px (a 466px ledge) showed
+          `Every Monday at 9am · next Mon Oct…` under the old 400px rule: a date cut in half. */}
+      {/* …and when even the rule cannot keep 9rem beside the actions (which never truncate), the actions move
+          to a second row, right-aligned, rather than leave the reading as "Ev…": that is what the narrowest
+          All-projects column (an 800px window, a 248px ledge) showed with one row. */}
+      {r.kind === "ambiguous" ? (
+        // An ambiguous word's line is an INSTRUCTION ("…Say which."), not a reading that can lose its tail:
+        // it wraps inside the ledge rather than ellipsize the part that says what to do.
+        <span data-schedule-ledge-reading className="min-w-36 flex-1 basis-0 text-pretty">
+          <span>{reading}</span>
+        </span>
+      ) : (
+        <span data-schedule-ledge-reading className="flex h-5 min-w-36 flex-1 basis-0 flex-wrap overflow-hidden">
+          <span className="min-w-0 truncate">{reading}</span>
+          {nextNode}
+          {spanNode}
+          {each && (
+            <span data-schedule-ledge-each className="min-w-36 flex-1 basis-0 truncate">
+              {"\u00a0·\u00a0"}
+              <span className="text-muted-70">Each run:</span>
+              {"\u00a0"}
+              {each}
+            </span>
+          )}
+        </span>
+      )}
       <span className="ml-auto flex shrink-0 items-baseline gap-3">
         {r.kind !== "ambiguous" && (
           <button
@@ -873,12 +943,12 @@ function LedgeLine({ shown, prose, nowMs, tz, promptOf, onSchedule, onClose }: {
             onClick={onSchedule}
             className="flex items-baseline gap-1 rounded-sm text-muted outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
           >
-            <kbd className={KBD}>⇥</kbd>
+            <KeyCap label="Tab" icon={ArrowRightToLine} trim={KEYCAP_TRIM.tab} />
             <span>Schedule</span>
           </button>
         )}
         <span data-schedule-start-now className="flex items-baseline gap-1">
-          <kbd className={KBD}>↵</kbd>
+          <KeyCap label="Enter" icon={CornerDownLeft} trim={KEYCAP_TRIM.enter} />
           <span>Start now</span>
         </span>
         <button
@@ -888,7 +958,7 @@ function LedgeLine({ shown, prose, nowMs, tz, promptOf, onSchedule, onClose }: {
           title="Not a schedule (Esc)"
           onMouseDown={(e) => e.preventDefault()}
           onClick={onClose}
-          className="-mr-1 flex size-5 items-center justify-center self-center rounded-sm text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+          className={`${CLOSE_TRIM} flex size-5 translate-y-[calc(6px_-_0.5cap)] items-center justify-center self-baseline rounded-sm text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
         >
           <X size={12} strokeWidth={2} />
         </button>
@@ -950,9 +1020,12 @@ function panelParts(a: {
   creatingLabel: boolean
   onCancel: () => void
   onCreate: () => void
-}): { line: ReactNode; body: ReactNode; footer: ReactNode } {
+}): { line: ReactNode; lead: 12 | 13; body: ReactNode; footer: ReactNode } {
   const { view, nowMs, tz } = a
   let line: ReactNode = null
+  // The first line's size, for the glyph's cap band: 13px when it is the rule's echo (or the core's rule
+  // being read), the row's 12px when it is copy.
+  let lead: 12 | 13 = 12
   let body: ReactNode = null
   let create: "enabled" | "disabled" | "hidden" = "hidden"
   let createTitle = "Create schedule (Enter)"
@@ -965,6 +1038,7 @@ function panelParts(a: {
       const model = schedulePreviewModel({ title: view.title, rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
       if (model.ok) {
         line = <EchoLine title={view.title} segments={model.describe} zone={model.zone} tail={model.tail} />
+        lead = 13
         body = (
           <>
             <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />
@@ -981,6 +1055,7 @@ function panelParts(a: {
       const model = schedulePreviewModel({ title: m.title, rrule: m.rrule, dtstart: m.dtstart, tz: m.tz, condition: m.condition ?? null }, nowMs, tz)
       if (model.ok) {
         line = <span className="overlay-in min-w-0 flex-1"><EchoLine title={m.title} segments={model.describe} zone={model.zone} tail={model.tail} /></span>
+        lead = 13
         body = (
           <>
             <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />
@@ -997,6 +1072,7 @@ function panelParts(a: {
       const core = view.core
       const coreModel = core ? schedulePreviewModel({ title: "", rrule: core.rrule, dtstart: core.dtstart, tz, assumed: core.assumed }, nowMs, tz) : undefined
       line = <ReadingLine view={view} coreSegments={coreModel?.ok ? coreModel.describe : undefined} />
+      if (coreModel?.ok && !view.edited && view.quoted !== undefined) lead = 13
       body = (
         <>
           {coreModel?.ok && !view.edited && <NextLine next={coreModel.next} firstAt={coreModel.firstAt} nowMs={nowMs} />}
@@ -1009,6 +1085,7 @@ function panelParts(a: {
       const m = view.result
       const model = schedulePreviewModel({ title: m.title, rrule: m.rrule, dtstart: m.dtstart, tz: m.tz, condition: m.condition ?? null }, nowMs, tz)
       line = model.ok ? <EchoLine title={m.title} segments={model.describe} zone={model.zone} tail={model.tail} /> : null
+      if (model.ok) lead = 13
       body = (
         <>
           {model.ok && <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />}
@@ -1029,6 +1106,7 @@ function panelParts(a: {
         const r = view.reading
         const model = schedulePreviewModel({ title: "", rrule: r.rrule, dtstart: r.dtstart, tz, assumed: r.assumed }, nowMs, tz)
         line = model.ok ? <EchoLine segments={model.describe} zone={model.zone} tail={model.tail} /> : null
+        if (model.ok) lead = 13
         body = (
           <>
             {model.ok && <NextLine next={model.next} firstAt={model.firstAt} nowMs={nowMs} />}
@@ -1077,7 +1155,7 @@ function panelParts(a: {
     </>
   )
   // The first line keeps the ledge's own 12px row; the echo inside it is 13px, on the same baseline.
-  return { line: line ?? <span className="min-w-0 flex-1" />, body, footer }
+  return { line: line ?? <span className="min-w-0 flex-1" />, lead, body, footer }
 }
 
 /** M2's line (§5.7): the part the grammar IS sure of, then the words the model is reading, quoted — muted,

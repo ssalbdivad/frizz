@@ -1776,9 +1776,17 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
    decoration cannot be revealed left to right. `box-decoration-break: clone` gives each line of a wrapped
    phrase its own padding and its own underline.
 
-   Readings this is set from: see the "underline geometry" note in the commit that set them. */
+   The readings it is set from (scratch/optics-live-box.ts, the real page, 13px sans — system-ui, which
+   resolves to DejaVu Sans on the Linux box measured; dark; dsf 6; 2026-10-06):
+     pad 0.18em → the dots cleared the `y` of "every" by 2.17px (pixels), 5.5px under the baseline: they
+                  read as a line of their own, detached from the words;
+     pad 0.11em → 1.07px clear of the deepest descender (canvas `g y p j q`, geometry) and 1.17px (pixels),
+                  the dots' centre 0.359em under the baseline: attached, and still clear of every
+                  descender. The pixel reading wanders ±1px between runs with the textarea's subpixel
+                  placement over this mirror, which is why geometry is the number to trust.
+   Re-measure, never re-guess, if the box's font size or the family changes. */
 [data-composer-mark] {
-  --sched-underline-pad: 0.18em;
+  --sched-underline-pad: 0.11em;
   --sched-dot: color-mix(in srgb, var(--color-fg) 40%, transparent);
   --sched-dash: color-mix(in srgb, var(--color-fg) 25%, transparent);
   color: transparent;
@@ -1792,11 +1800,18 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
 /* offer — 1.5px dots on a 4px pitch at fg/40: "this reads as a schedule", nothing accepted (never the
    accent before accept, I-12). Drawn left to right on arrival by its MASK, so the dots themselves never
    slide; a mark that keeps its element (Composer keys it) never redraws, so a phrase that extends draws
-   only its new tail. */
+   only its new tail.
+   That tail is a SECOND mark abutting the first, so the seam must not show: no side pad (the fill's 1px
+   overlapped the two by 2px and drew a doubled dot at `Monday|at`), and `round` tiling, which fits a whole
+   number of ~4px tiles to each mark with its dot centred — every mark ends half a pitch from its edge, so
+   the pitch runs straight across the seam. */
 [data-composer-mark="offer"] {
-  background-image: radial-gradient(circle at 0.75px 0.75px, var(--sched-dot) 0.6px, transparent 0.85px);
+  margin: 0;
+  padding-left: 0;
+  padding-right: 0;
+  background-image: radial-gradient(circle at 50% 50%, var(--sched-dot) 0.6px, transparent 0.85px);
   background-size: 4px 1.5px;
-  background-repeat: repeat-x;
+  background-repeat: round no-repeat;
   background-position: 0 100%;
   -webkit-mask-image: linear-gradient(#000, #000);
   mask-image: linear-gradient(#000, #000);
@@ -1834,6 +1849,27 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
   background-image: linear-gradient(color-mix(in srgb, var(--color-accent) 15%, transparent), color-mix(in srgb, var(--color-accent) 15%, transparent));
   background-size: 100% 100%;
 }
+/* Two fills that MEET — the model's grow run beside the core it grew from, and both of them washing — are one
+   run: no side pad and no radius at the seam. With them, the two 1px pads overlapped into a 2px sliver at
+   twice the alpha, and the two radii cut a notch top and bottom (seen at `Monday|unless` in M1, real Sonnet
+   answer, 2026-10-06). `+` skips text nodes, which is safe only because a grow run always abuts its core by
+   construction (ScheduleComposer `marks`), and a wash only ever replaces those. */
+[data-composer-mark="accepted"]:has(+ [data-composer-mark="grow"]),
+[data-composer-mark="grow"]:has(+ [data-composer-mark="accepted"]),
+[data-composer-mark="wash"]:has(+ [data-composer-mark="wash"]) {
+  margin-right: 0;
+  padding-right: 0;
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+[data-composer-mark="accepted"] + [data-composer-mark="grow"],
+[data-composer-mark="grow"] + [data-composer-mark="accepted"],
+[data-composer-mark="wash"] + [data-composer-mark="wash"] {
+  margin-left: 0;
+  padding-left: 0;
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
 [data-composer-mark="accepted"] { animation: sched-fill 160ms cubic-bezier(0.16, 1, 0.3, 1); }
 [data-composer-mark="grow"] { animation: overlay-in 120ms ease-out; }
 /* The wash is the fill as a COLOUR, which interpolates (an image does not): 15% → 30% → 15%. */
@@ -1870,6 +1906,12 @@ html[data-vt-door="expand"]::view-transition-old(thread-chat) {
 @media (prefers-reduced-motion: reduce) {
   [data-composer-mark] { animation: none; }
   .sched-ledge-in { animation: none; }
+  /* The house pop-in / overlay-in carry no override of their own (Radix layers share them, and their exit
+     handshake is theirs to change); inside the slot — Create's arrival, the model's echo fading in — they
+     are this feature's motion, so they stop here. Found by driving the real box under emulated reduced
+     motion: Create still popped. */
+  [data-schedule-slot] .pop-in,
+  [data-schedule-slot] .overlay-in { animation: none; }
   [data-sched-flash] {
     animation: none;
     outline: 2px solid var(--color-accent, #e8b923);

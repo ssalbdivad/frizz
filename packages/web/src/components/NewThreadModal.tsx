@@ -468,6 +468,7 @@ function PromptForm({
           region in it must exist before the line it announces. */}
       <div
         data-schedule-slot-wrap
+        data-open={schedule.slotOpen || undefined}
         className={`-mt-3 grid transition-[grid-template-rows] duration-[140ms] ease-out motion-reduce:transition-none ${schedule.slotOpen ? "grid-rows-[1fr] delay-[60ms]" : "grid-rows-[0fr]"}`}
       >
         <div className="min-h-0 overflow-hidden">{schedule.slot}</div>
