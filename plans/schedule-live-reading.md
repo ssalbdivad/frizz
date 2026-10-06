@@ -625,6 +625,30 @@ A condition, COUNT or UNTIL can only remove runs, so a faithful reading always p
   deleted. Titles: `Schedule every Monday at 9am (Tab)` while an offer shows; `Schedule this? ⌘⌥⏎` for any other
   hint; existing titles otherwise.
 
+*As built (Step 4), the anatomy where it differs:*
+- **The keycaps are drawn, not typed.** `⇥` and `↵` as 11px text were FALLBACK glyphs (no UI face carries
+  U+21E5/U+21B5): measured on the real ledge they inked 5–6px against an 8.75px cap and sat 1.00px and 0.50px
+  under the cap band, and a nudge fitted to the fallback face would be wrong on any other machine. They are
+  lucide `ArrowRightToLine` and `CornerDownLeft` (`KeyCap`, `aria-label` Tab / Enter), symmetric in their viewBox
+  and placed by the house `self-baseline` + `translate-y-[calc(half box − 0.5cap)]` lift, which the browser
+  computes in any font: −0.12px each. The `×` takes the same lift (−1.00 → −0.13px); `↻` was already −0.13px.
+- **The row's rhythm is set on ink**, in one place (`ScheduleComposer.tsx`, the comment above `SlotGlyph`, with
+  the readings): every mark's box is collapsed onto its ink by its viewBox's dead space (geometry, not a fit),
+  so the ledge reads border → `↻` 10.83 · `↻` → reading 7.67 · keycap → word 4.59 / 5.13 · between clusters
+  12.45 / 11.89 · `×` → border 10.83 (it was 9.67 · 5.83 / 6.50 · 13.66 / 18.39 · 12.33, the `×` hanging 6.5px
+  further out than the gap it shared). The panel's body inset follows: `pl-[28px]`.
+- **The panel's `↻` carries the size of the line it sits on** (`lead` 12 | 13): the echo is 13px on the ledge's
+  12px row, and a 12px `cap` put the glyph 0.63px under the echo's band (−0.26px now).
+- **The offer marks tile `round` with no side pad**, so a phrase's two marks (the first draw and its tail) meet at
+  one pitch: the fill's 1px side pad overlapped them by 2px and drew a doubled dot at `Monday|at`. Two FILLS that
+  meet (the model's grow run beside its core, both washing) drop the pad and the radius at the seam — the overlap
+  drew a 2× alpha sliver and a notch at `Monday|unless` on the real Sonnet answer.
+- **The underline sits at `--sched-underline-pad: 0.15em`**, set for the unlucky subpixel placement: the dots are
+  drawn in the mirror, the text the eye reads is the textarea's, and the two land up to ~0.6px apart by layout.
+  Readings in the stylesheet comment (1.59px clear of the deepest descender in geometry, 1.17px in pixels at the
+  unlucky placement, dot centre 0.399em under the baseline).
+- The slot wrap carries `data-open` (the slot lingers 160ms while it folds; a harness tells the two apart).
+
 ### 5.2 S0 — dark
 Today's box, unchanged: no mark, no ledge, glyph `off`. The glyph shows `hint` (fg ink, no ledge) when the edge
 was dismissed but still reads, for a spacing violation, for a close-edge cue, and for a vetoed close edge.
@@ -654,6 +678,19 @@ was dismissed but still reads, for a spacing violation, for a close-edge cue, an
   refinement: `Schedule suggestion: every Monday at 9am. Press Tab to schedule it.`
 - The send button is unchanged (`↑`). The offer never touches it.
 
+*As built (Step 4):* **the narrowing order cannot be a container width**, because readings differ in length: at
+1440px the All-projects column is a 466px ledge, and the 400px rule left `, in 6d` laid out behind an ellipsis
+(`Every Monday at 9am · next Mon Oct…`). The reading is a one-line WRAPPING row clipped to its first line: a
+segment that does not fit wraps below the clip and is gone whole, and everything after it with it. The order is
+`Each run` (joins with 9rem to spare, then truncates first) → `, in 6d` → `· next Mon Oct 12` (a step the spec
+did not have, so a narrow ledge shows a whole rule rather than half a date) → the rule ellipsizes. At 1440 it reads
+`Every Monday at 9am · next Mon Oct 12`; in the 640px dialog the whole reading. **Below 9rem for the reading,
+the actions take a second row**, right-aligned: the narrowest column (an 800px window, a 266px box, a 248px ledge)
+otherwise read `Ev…` beside actions that never truncate. So the ledge is one line except there. `Each run`
+follows the text **at publish points only** (`useEachRun`, held while the offer is carried inside a word), so it
+fills in a word at a time as §0.1 says; it was cut from the live prose and changed with every letter. The glyph's
+title for a CUE is `Schedule this (Tab)` (a cue has no rule to name).
+
 ### 5.4 S2 — offer, cue (open edge only)
 ```
 │ every Monday unless it's a holiday post the digest                            │
@@ -671,6 +708,9 @@ was dismissed but still reads, for a spacing violation, for a close-edge cue, an
 ```
 There is no `⇥`: Tab moves focus. The word gets the dashed `unread` underline. Typing `every other week` turns it
 into an exact offer at the next boundary.
+
+*As built (Step 4):* the copy is an instruction, so it **wraps** inside the ledge rather than ellipsize `Say
+which.` away (at 466px it lost the last sentence).
 
 ### 5.6 M1 — mode, ready (local reading, or a consistent model reading)
 ```
@@ -693,6 +733,8 @@ into an exact offer at the next boundary.
 - Edits re-read locally at publish points and update in place; only the changed part cross-fades. Create stays
   enabled while the reading is `exact`. **This replaces today's "any edit drops the reading."**
 - With no task yet: line 3 reads `Say what each run should do.`, and Create is disabled.
+  *As built (Step 4):* that state is M4 in the key matrix (`modeViewOf` → `copy` with the reading kept on screen),
+  so Enter shakes rather than creates; driven on the stack (K3).
 - The snail is `disabled`, titled `Leave schedule mode to save it for later`. ⌘⇧↵ is consumed and flashes the
   panel's `Esc Cancel` (`kbd-row-flash`).
 
@@ -786,6 +828,21 @@ Never use `transition-all` or `transition-shadow` beside `icon-hover-outline` (`
 | Commit | the mark washes; the panel collapses as the box clears; the project row's count does `queue-flash` | 220ms; 160ms; 280ms |
 
 Nothing re-animates while a reading stays put, and nothing moves on keystrokes inside the task.
+
+*As built (Step 4), where the motion differs:*
+- **The dots reveal by `mask-size`, not `background-size`.** A `repeat-x` dot pattern cannot be revealed by
+  sizing its own background (the tiles re-flow); the mark's mask grows 0 → 100% instead, so the dots never
+  slide. A mark keeps its element while its phrase stays (keyed by start), so a phrase that extends draws only
+  its new tail: measured on the page, the first mark ran no animation while the tail ran `sched-reveal`. Under
+  `box-decoration-break: clone` both lines of a wrapped phrase reveal together, each from its own left edge
+  (frozen at 90ms on the page).
+- **The dots do not fade on dismiss or accept**: the mark is replaced (dismiss: gone with the ledge's 160ms fold;
+  accept: the fill sweeps in over the same words).
+- **The project row's flash is `queue-flash` at 0.9s**, the house ring's own timing, not 280ms; under reduced
+  motion a static outline.
+- **Reduced motion, driven:** under emulation Create still popped — the house `pop-in` / `overlay-in` carry no
+  override (Radix layers share them). Inside the slot they stop now; the offer, the ledge and the accept ran no
+  animation at all (harness M1).
 
 ---
 
@@ -1165,6 +1222,35 @@ grades the 133-text probe corpus as written at its own clock, with eight documen
 - **Delete** `lib/scheduleHint.ts` and its test. Its cases now live in the grammar corpus. Its trailing-phrase
   negative flips to a close-edge offer, and a comment cites this spec.
 - `AllQueues.tsx:467`: no change; nothing floats.
+- **As built (`c347a4d8`, `d7996763`, `32c6e677`):** see the *As built (Step 4)* notes in §5.1, §5.3, §5.5,
+  §5.6, §6, §15.2, §15.3 and §15.4. Beyond them, where it differs from the list above:
+  - `useLiveSchedule` returns `{on, state, glyph, glyphTitle, marks, slot, slotOpen, announcement, sendGlyph,
+    lazyBlocked, key, onTab, onEscape, toggle, onInputEvent}` (plus `ledge` and `panel`). `key(k)` executes the
+    matrix and tells the caller only what is left for it — `dispatch`, `lazy`, `native`, `blur` or `handled` —
+    so `PromptForm.submit` and `submitLazy` open with `schedule.key(…)` and the `schedule.on` gate behind it.
+    ⌘↵ reaches the matrix through the Composer's `onSubmit` (it IS `submit`), so it is Enter in every state.
+  - The publish policy runs during render from the prose and the input event that produced it (`onInputEvent`,
+    a new Composer prop fed by the textarea's `onChange`, `compositionend` and `blur`); timers are absolute
+    deadlines, so a rest firing never cancels the close-edge idle.
+  - `exclude` is `composerExcludeRuns(prose, contextTokens)` in `Composer.tsx`: fences and staged tokens as the
+    backdrop draws them, AND any `@…` / `/…` token (after the start, whitespace or `(`) — a superset, so a
+    mention's or a command's name is never read as a schedule.
+  - The model tier sends the whole prose (its own `phrase` span comes back); the saved prompt is cut locally by
+    the shared `cutPhrase` + `promptOf` (`outgoingMessage` over the staged chips, as a dispatch would send it).
+  - Re-arming a dismissed edge needs `scheduleEdgeGates(text, exclude)`, a small export added to
+    `shared/schedule-phrase.ts` (whether each edge's window still holds a gate word).
+  - M4 reads again on Enter when the text changed OR the read itself failed (unreachable, budget spent); for a
+    local refusal of unchanged text it shakes.
+  - The project-row flash is `store.scheduleFlash` (cleared after 2.5s), drawn by `ProjectList`'s QuietToggles
+    on the schedules count.
+  - `lib/scheduleHint.ts` and its test are deleted; their cases are in the grammar corpus and
+    `scheduleOffer.test.ts`.
+  - Tests: `scheduleOffer.test.ts` (16: the §0.1 storyboard, typing stability, REST / CLOSE_IDLE / HOLD, carry,
+    IME, blur, mode, force, per-edge dismissal, I-3 by grep), `scheduleIntent.test.ts` (10: the §7 table copied
+    by hand, row by row; I-1, I-2, I-3 over every state × key; §8; I-5), `ScheduleComposer.test.ts` (12: the
+    mode views, I-8, I-10, T3 incl. the 2:40pm case, I-12 by grep with a negative control) and
+    `shouldAcceptScheduleTab` in `composerKeyboard.test.ts`.
+  - **Not done:** Step 5 (the phone); the §15.2 fixture e2e (driven on a real stack instead, §15.2 *As built*).
 
 ### Step 5: the phone
 - **Edit** the ledge and panel for `useIsMobile()` (§12), then verify at 360px.
@@ -1305,6 +1391,13 @@ Cases:
     - With new text typed before Undo, both texts are present (`mergeIntoDraft`).
 14. **Reduced motion emulated.** Every state appears with no draw.
 
+*As built (Step 4): this fixture e2e file was NOT written.* Its cases were driven instead on a real disposable
+stack against the real server and the real interpreter (`scratch/verify-live-box.ts`, §15.3): 1, 2, 3, 7, 8, 9,
+10 (a real consistent answer; the inconsistent one is unit-tested only), 11, 12 (on a REAL clock edge and a real
+unpublished edit, not a stubbed `Date.now` — a stubbed browser clock would skew the client against the server's
+re-derive), 13 and 14. Cases 4, 5 and 6 are Step 0's real-stack checks (`scratch/verify-schedule-step0.ts`). The
+cost is that nothing runs them in `nub --test`; the harness is kept in the thread's scratch to re-run.
+
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
    - the schedule row and its next lazy run exist;
@@ -1319,6 +1412,34 @@ Cases:
    without resolve-on-result, on this box **and on the maintainer's machine**. That settles the 7–8s question.
 5. Change when saves a local reading, and a cue through the model.
 6. The phone sheet at 360px.
+
+*As built (Step 4), driven* on a disposable stack (`--creds`, a throwaway git project, headless puppeteer, dark,
+`America/New_York`, Tue Oct 6 2026 ~00:15–01:00), `dispatch`/`createLazyThread` counted and refused on the
+wire so no worker could start; **53/53 checks in one run** (at `d7996763`; the later underline pad is CSS,
+measured in §15.4), then the menu and T3 phases (4/4) separately, no page errors:
+- Typing `every Monday at 9am triage new issues` one key at a time: nothing until the space after `Monday`, then
+  the ledge and the underline under `every Monday`; the underline extended at the space after `9am`; no key
+  inside a word changed the ledge or the marks (A3); 2 screen changes in 37 keys.
+- Enter with the offer on screen: dispatch 1, create 0. Tab: panel, Create enabled, Repeat on the send button,
+  interpret 0. Enter: create 1, dispatch unchanged, body `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0`, prompt
+  `triage new issues`, `source {local, grammar 1}`, `titleAuto`, title `Triage issues`; toast `Triage issues
+  scheduled · Every Monday at 9am · next Mon Oct 12, in 6d` with Undo, Open; the project row's count flashed; no
+  thread running. Undo: delete 1, the text back with the offer and focus, mode off; with text typed since, both
+  kept (`…issues\n\ncheck the flaky tests`).
+- Close edge: the ledge appeared **810–844ms** after the last key (n=4 runs); `go until 10am tomorrow` never.
+- Cue: offered with zero model calls; Tab → the reading state at once, one call; **real Sonnet, Tab → landed
+  2.60–3.28s (n=4; the RPC alone 2.54s)**; the mark grew over the read words; a task-only edit kept the answer
+  with no new call; the create carried the condition and no `source`. The keystroke → cue ledge leg is local and
+  instant: the qualifier was held on screen while typed, and the cue published at the first boundary after it.
+  Not measured: with and without resolve-on-result, and on the maintainer's machine.
+- Event: dark, glyph off; ⌘⌥↵ → the local refusal, zero model calls. Dismissal: Esc and `×` both put it away;
+  `9am → 10am`, `Monday → Tuesday` and a reload stayed dark; deleting the phrase re-armed it. Mode on, reload,
+  Enter: created, never dispatched. Tab with an `@` menu open over an offered phrase took the menu row. T3: a
+  time one minute ahead read as today (`in 53s`); after the minute passed for real, Enter created nothing and said
+  `Updated for the current time…`, and the next Enter created tomorrow's, which the server accepted; an edit
+  Enter beat to the screen said `Updated to what you typed…`.
+- The namer renamed `Summarize errors` (provisional) to `Overnight errors` within 45s — the server's Haiku namer
+  (Step 2) dropped the verb §10.2's provisional title keeps.
 
 ### 15.4 Optics (`visual-review` and `optical-spacing`, dark, `data-font="sans"`, crops at dsf 6–8)
 - **The dotted underline.** Its em offset against the baseline and descenders (`g y p`) at 13px sans; check that
@@ -1337,6 +1458,14 @@ Cases:
   - the drawer preview with `Still checks`;
   - the phone row.
 - Read every shot back critically. Check console and page errors, and confirm the owned browser is closed.
+
+*As built (Step 4):* measured with `scratch/optics-live-box.ts` (the real page, dsf 6) and corrected — the
+readings are in §5.1 *As built* and in the code beside each value. The join: the ledge's side borders meet the
+box's bottom border where its corner curve ends, no seam and no doubled border, in the page box at 1440 and at
+the narrowest column (800px window) and in the 640px dialog. The rail in the offer state reads 14.83 · 14.67 ·
+14.5 (paperclip · glyph · snail · send), inside iconRhythm's band; in the mode the pressed glyph's fill reaches
+the scan's padded clip, so those two gaps were not measured (that treatment is Step 0's, unchanged). 360px is
+Step 5's and was not shot.
 
 ---
 
