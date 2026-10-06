@@ -65,7 +65,9 @@ export function Toaster() {
         {toast.detail ? (
           <span className="min-w-0">
             {toast.text}
-            <span className="block text-[12px] font-normal text-muted">{toast.detail}</span>
+            {/* `text-pretty`: with two verbs beside it the line wraps sooner, and a greedy wrap left a
+                schedule's "in 6d" with its "6d" alone on line three. Pretty wrapping never strands one word. */}
+            <span className="block text-pretty text-[12px] font-normal text-muted">{toast.detail}</span>
           </span>
         ) : (
           toast.text

@@ -930,6 +930,18 @@ Each step lands as its own commit and is safe on its own.
   - `lazyBlocked` prop (⌘⇧↵ consumed; the snail disabled with its mode title).
 - **Edit** `components/PhonePage.tsx:32-35`: make the comment true.
 - **Tests:** `scheduleDraftState.test.ts`, `selectOverlay.test.ts`, the ⌘⇧↵ gate.
+- **As built (5249f97c), where it differs:**
+  - `useScheduleDraftState(key)` takes the key (`draftKey.dispatchSchedule(projectDir)`), because
+    `useScheduleMode` is handed a key, not a project.
+  - The `/login` / `/logout` alias path calls `clearDispatchDraft(projectDir, { keepPick: true })`: the text was
+    an account action, and the pick is the profile about to be signed in to and then dispatched on. Every
+    other site clears all three keys.
+  - The model's reading stays an in-memory, per-tab cache keyed by the mode's key (never in the draft store),
+    so a remount does not re-read; a reload does. It is dropped whenever the mode reads off, including when
+    another box on the key turned it off.
+  - The ⌘⇧↵ `kbd-row-flash` on the panel's `Esc Cancel` (§5.6) lands with the panel in Step 4; Step 0 only
+    consumes the chord (`lazyComposerEnter` in `lib/composerKeyboard.ts`).
+  - Toasts take `actions` now; the create toast still offers Open alone until Undo arrives with Step 4.
 
 ### Step 1: the grammar and echo fixes (shared, no UI)
 - **New** `packages/shared/src/schedule-phrase.ts` (§3.1).
