@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useRef, useState, type KeyboardEvent } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
 import { ChartColumn, Code, Copy, Ellipsis, FileDiff, FileText, Folder, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
 import { useSnapshot } from "valtio"
@@ -11,7 +11,7 @@ import { prefersReducedMotion } from "../lib/sheet.ts"
 import { standaloneThreadHref } from "../lib/standaloneThreadRoute.ts"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { useCommandHandler, useShortcutLabel } from "../lib/keyboardRuntime.ts"
-import { Menu, MenuContent, MenuItem, MenuLabel, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
+import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 import { displayName, displayTitle } from "../groups.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
@@ -101,7 +101,8 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
 /** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
  *  The server resolves the folder, the same one a terminal on the thread starts in. When the thread's
  *  sub-agents work in another checkout it opens nothing and hands back the folders, and `choose` puts
- *  them in front of the human (the ⋯ menu, in its folder mode); the pick comes back as `path`.
+ *  them in front of the human (FolderChoiceDialog, or on a queue card the card's project folder); the
+ *  pick comes back as `path`.
  *
  *  IN AN EDITOR'S SIDEBAR the editor is the one the human is sitting in, so the folder goes there, as a
  *  code-file link does (lib/local-file-links.ts openInHostEditor): the extension reveals it in this
@@ -143,32 +144,47 @@ function folderWorkers(choice: ThreadFolderChoice): string {
 // ThreadProjectScope, with `restart={false}`: Restart worker sends through the eager follow-up path,
 // which always addresses the PAGE's project, so on another project's card it would restart the wrong
 // thread. Every other item resolves through the scoped client.
-export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_ICON_CLASS }: { thread: ThreadView; onDoc?: () => void; restart?: boolean; className?: string }) {
+//
+// `card`: drawn on a queue card. There "Open in editor" never asks which checkout — a card stands for its
+// project, so when the thread and its sub-agents work in different folders the card's PROJECT folder opens
+// (maintainer 2026-10-06: "when … a card is focused default to opening the editor for the project
+// associated with the card"). The scoped client is the card's project's (ThreadProjectScope).
+export function ThreadMenu({ thread, onDoc, restart = true, card = false, className = HEADER_ICON_CLASS }: { thread: ThreadView; onDoc?: () => void; restart?: boolean; card?: boolean; className?: string }) {
   const slug = thread.id
   const trigger = useRef<HTMLButtonElement>(null)
   const queryClient = useQueryClient()
   const api = useThreadApi()
+  const projectId = useThreadProjectId()
   const devBuild = useDevFrizzBuild()
   const ownSession = thread.kind === "session" && thread.foreign !== true
   const terminalCommand = useTerminalCommandMenuItem(slug)
   const [open, setOpen] = useState(false)
   // THE FOLDER CHOICE: when "Open in editor" finds the thread and its sub-agents in different checkouts,
-  // this same menu reopens listing them instead of its actions — anchored where the human already looks,
-  // and keyboard-driven by the menu itself (arrows, Enter, Escape, type-ahead on the folder name).
+  // a centered modal lists them (FolderChoiceDialog). It reopened this ⋯ menu in a folder mode until
+  // 2026-10-06, anchored at a 28px icon in the header's corner, where a press of `e` was easy to miss
+  // (maintainer: "make the dropdown in the middle of the screen as a modal so its more obvious").
   const [folders, setFolders] = useState<ThreadFolderChoice[] | null>(null)
   const onOpenChange = (next: boolean) => {
     setOpen(next)
-    if (!next) setFolders(null)
     if (next && ownSession) terminalCommand.prefetch()
   }
   const chooseFolder = (choices: ThreadFolderChoice[]) => {
+    if (card) {
+      void runExternalOpen(
+        `editor-project:${projectId ?? ""}`,
+        "Opening in editor…",
+        () => api.openProjectFolder({}),
+        () => {},
+        (message) => `Could not open an editor: ${message}`,
+      )
+      return
+    }
     setFolders(choices)
-    setOpen(true)
   }
   const editor = () => openInEditor(api, slug, chooseFolder)
   // The items' keys work without opening the menu: an item exists only while its menu is open, so the
   // trigger — the surface's one always-rendered anchor — carries their commands beside its own `m`.
-  useCommandHandler(trigger, () => { setFolders(null); onOpenChange(true) }, "menu")
+  useCommandHandler(trigger, () => onOpenChange(true), "menu")
   useCommandHandler(trigger, () => { if (ownSession) editor() }, "editor")
   useCommandHandler(trigger, () => { if (ownSession) terminalCommand.copy() }, "copyCommand")
   const editorKeys = useShortcutLabel("thread.editor")
@@ -180,7 +196,6 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
   // connected (lib/reviewChanges.ts says why only there).
   const { editorWindows } = useSnapshot(store)
   const review = ownSession ? reviewLabel(editorWindows, embedded()) : null
-  const projectId = useThreadProjectId()
   return (
     <>
     <Menu open={open} onOpenChange={onOpenChange}>
@@ -201,19 +216,6 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
         </button>
       </MenuTrigger>
       <MenuContent align="end">
-        {folders ? (
-          <>
-            <MenuLabel>Open in editor</MenuLabel>
-            {folders.map((choice) => (
-              <MenuItem key={choice.dir} value={choice.dir} onSelect={() => openInEditor(api, slug, chooseFolder, choice.dir)} icon={<Folder size={12} aria-hidden />}>
-                <span className="flex min-w-0 flex-col" title={choice.dir}>
-                  <span className="truncate text-fg">{baseName(choice.dir)}</span>
-                  <span className="truncate text-[11px] text-muted-55">{folderWorkers(choice)}</span>
-                </span>
-              </MenuItem>
-            ))}
-          </>
-        ) : (<>
         {onDoc && (
           <MenuItem value="doc" onSelect={onDoc} icon={<FileText size={12} aria-hidden />}>
             Frizz document
@@ -257,12 +259,72 @@ export function ThreadMenu({ thread, onDoc, restart = true, className = HEADER_I
             </MenuItem>
           </>
         )}
-        </>)}
       </MenuContent>
     </Menu>
+    {folders && (
+      <FolderChoiceDialog
+        choices={folders}
+        onClose={() => setFolders(null)}
+        onPick={(dir) => {
+          setFolders(null)
+          openInEditor(api, slug, chooseFolder, dir)
+        }}
+      />
+    )}
     {deleting && <DeleteThreadDialog thread={thread} onClose={() => setDeleting(false)} />}
     {info && <ThreadInfoDialog thread={thread} onClose={() => setInfo(false)} />}
     </>
+  )
+}
+
+/**
+ * Which checkout "Open in editor" opens, when the thread and its sub-agents work in different ones. A
+ * centered modal, so the question is in front of the human wherever the press came from. The first
+ * folder takes the focus; ↑/↓ move between them, Enter or a click opens one, Escape closes.
+ */
+function FolderChoiceDialog({ choices, onPick, onClose }: { choices: ThreadFolderChoice[]; onPick: (dir: string) => void; onClose: () => void }) {
+  const list = useRef<HTMLDivElement>(null)
+  const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
+    const rows = [...(list.current?.querySelectorAll<HTMLButtonElement>("button[data-folder]") ?? [])]
+    if (rows.length === 0) return
+    event.preventDefault()
+    const at = rows.indexOf(document.activeElement as HTMLButtonElement)
+    const next = event.key === "ArrowDown" ? (at + 1) % rows.length : (at - 1 + rows.length) % rows.length
+    rows[next]!.focus()
+  }
+  return (
+    <Dialog
+      open
+      onOpenChange={(open) => { if (!open) onClose() }}
+      title="Open in editor"
+      className="w-[420px] max-w-[92vw] max-h-[70vh]"
+      onOpenAutoFocus={(event) => {
+        event.preventDefault()
+        list.current?.querySelector<HTMLButtonElement>("button[data-folder]")?.focus()
+      }}
+    >
+      <div ref={list} role="listbox" aria-label="Folder" onKeyDown={onKeyDown} className="flex flex-col p-1.5">
+        {choices.map((choice) => (
+          <button
+            key={choice.dir}
+            type="button"
+            role="option"
+            aria-selected={false}
+            data-folder
+            title={choice.dir}
+            onClick={() => onPick(choice.dir)}
+            className="flex items-center gap-2.5 rounded-md px-2.5 py-2 text-left outline-none transition-colors hover:bg-panel-2 focus-visible:bg-panel-2 focus:bg-panel-2"
+          >
+            <Folder size={14} className="shrink-0 text-muted" aria-hidden />
+            <span className="flex min-w-0 flex-col">
+              <span className="truncate text-[12.5px] text-fg">{baseName(choice.dir)}</span>
+              <span className="truncate text-[11px] text-muted-55">{folderWorkers(choice)} · {choice.dir}</span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </Dialog>
   )
 }
 

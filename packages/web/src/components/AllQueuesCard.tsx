@@ -469,7 +469,7 @@ function CardArticle({
               against the project mark's 20.75px on the left. In the card's OWN project scope, so the
               snooze and completion address the card's project, not the focused one. */}
           <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-            <ThreadMenu thread={thread} restart={false} className={HEADER_ICON_CLASS} />
+            <ThreadMenu thread={thread} restart={false} card className={HEADER_ICON_CLASS} />
             <ThreadLifecycleActions
               thread={thread}
               className="-mr-2"
