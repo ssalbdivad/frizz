@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import { AlarmClock, Check, ChevronLeft, ChevronRight, Copy, ExternalLink, FileText, Loader2, Pencil, Plug, RefreshCw, RotateCcw, RotateCw } from "lucide-react"
 import { SNOOZE_PROMPT_MAX, type ThreadLinkView, type ThreadView } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
+import { ThreadProjectScope, useThreadApi, useThreadIsForeignToPage, useThreadProjectDir, useThreadProjectId } from "../api/threadApi.tsx"
 import { showToast, store } from "../store.ts"
 import { displayTitle, futureSnoozedUntil, offersRetry } from "../groups.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -21,16 +21,20 @@ import { aiRenameAvailability, manualThreadTitleSeed, THREAD_TITLE_MAX_LENGTH, t
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { outerPath } from "../lib/base-path.ts"
 import { openLocalPath } from "../lib/local-file-links.ts"
-import { retrySession } from "../lib/retrySession.ts"
+import { STALLED_RETRY_MESSAGE, retrySession } from "../lib/retrySession.ts"
 import { restartWorker } from "../lib/restartWorker.ts"
 import { useDevFrizzBuild } from "../lib/devBuild.ts"
-import { offersReloadPlugins, offersRestartWorker, reloadThreadPlugins } from "../lib/threadMaintenance.ts"
+import { offersReloadPlugins, offersRestartWorker } from "../lib/threadMaintenance.ts"
+import { reloadThreadPlugins } from "../lib/workerMaintenance.ts"
+import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
+import { projectMarkdownScope, type QueuesProject } from "../lib/allQueues.ts"
 import { profileGridDisplayParts } from "../lib/profileGrid.ts"
 import { contextLine, displayUrl, effortWord, isLoopbackUrl } from "../lib/mobileThread.ts"
 import { useBackDismiss } from "../lib/backDismiss.ts"
 import { MobileBottomSheet } from "./MobileBottomSheet.tsx"
 import { GoalMark, PromptPanel } from "./RecurringPromptControl.tsx"
 import { StateButton } from "./ThreadLifecycle.tsx"
+import { crossProjectThreadHref } from "./AllQueuesCard.tsx"
 
 // THE PHONE'S ⋯ SHEET — everything a thread can do that is not the bottom bar's one verb.
 //
@@ -39,11 +43,19 @@ import { StateButton } from "./ThreadLifecycle.tsx"
 // recovery verbs. A row that does not apply to this thread is not drawn, rather than drawn disabled: a
 // phone list has no room for things you cannot do.
 //
-// It is built to be opened from TWO places, which is why it takes a slug rather than a thread and owns
-// its whole lifecycle: the thread page's ⋯ (MobileThreadHeader) today, and a long-press on a board row
-// later. Neither caller needs a drawer underneath it.
+// It is opened from TWO places, which is why it takes a slug rather than a thread and owns its whole
+// lifecycle: the thread page's ⋯ (MobileThreadHeader), and a long-press on a phone page row (PhonePage.tsx,
+// upstream 7d768576). Neither caller needs a drawer underneath it.
 //
 //   <ThreadActionsSheet slug={t.id} onClose={() => setOpen(false)} />
+//
+// A ROW OF ANOTHER PROJECT. The phone page lists every project's threads in All projects, and the page's
+// board — what `store.board` and the page's `rpc` address — is one project at most. So a long-press on a row
+// whose project is not the page's hands the sheet that `project` and its own reading of the `thread`, and
+// the sheet draws inside a ThreadProjectScope (api/threadApi.tsx): every write goes to the row's project
+// through its own client, as the desktop list's row verbs and the queue cards' do, and the page-level
+// optimistic overlays (keyed by bare slug for the PAGE's rail) are left alone. A row of the page's own
+// project passes neither and the sheet reads the live board, exactly as the thread page's ⋯ does.
 //
 // MOUNTED MEANS OPEN. The caller renders it while it wants the sheet and drops it in `onClose`. That is
 // the shape the app's other phone sheets have, and it is what lets the sheet take its own history entry
@@ -66,24 +78,40 @@ export interface ThreadActionsSheetProps {
   /** Where the sheet opens. The board's long-press opens the list; a caller that wants one sub-view
    *  straight away (a "files" affordance, say) can name it. */
   initialView?: ThreadActionsView
+  /** The thread's project, when it is NOT the page's (see "A row of another project" above). With it,
+   *  `thread` is the thread itself — the caller's live reading, undefined once it has left the caller's
+   *  list — and every write goes through that project's client. */
+  project?: QueuesProject
+  thread?: ThreadView
 }
 
-export function ThreadActionsSheet({ slug, onClose, onArchived, initialView = "actions" }: ThreadActionsSheetProps) {
+export function ThreadActionsSheet(props: ThreadActionsSheetProps) {
+  const { project } = props
+  if (!project) return <ActionsSheet {...props} />
+  return (
+    <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+      <ActionsSheet {...props} />
+    </ThreadProjectScope>
+  )
+}
+
+function ActionsSheet({ slug, onClose, onArchived, initialView = "actions", project, thread: given }: ThreadActionsSheetProps) {
   const snap = useSnapshot(store)
-  const thread = snap.board?.threads.find((t) => t.id === slug) as ThreadView | undefined
+  const thread = project ? given : (snap.board?.threads.find((t) => t.id === slug) as ThreadView | undefined)
   const [view, setView] = useState<ThreadActionsView>(initialView)
   const dismiss = useBackDismiss(onClose)
   // A thread that leaves the board while its sheet is up (archived elsewhere, another tab) has nothing
-  // left to act on.
+  // left to act on — and so does one that has left the caller's list, for a row of another project.
+  const known = project !== undefined || Boolean(snap.board)
   useEffect(() => {
-    if (snap.board && !thread) dismiss()
-  }, [snap.board, thread, dismiss])
+    if (known && !thread) dismiss()
+  }, [known, thread, dismiss])
   if (!thread) return null
   const title = displayTitle(thread)
   return (
     <MobileBottomSheet title={`Thread actions: ${title}`} onRequestClose={() => dismiss()} dataAttr="data-thread-actions-sheet">
       {view === "actions" ? (
-        <ActionsList thread={thread} title={title} setView={setView} dismiss={dismiss} onArchived={onArchived} />
+        <ActionsList thread={thread} title={title} setView={setView} dismiss={dismiss} onArchived={onArchived} project={project} />
       ) : view === "snooze" ? (
         <SnoozeView thread={thread} back={() => setView("actions")} custom={() => setView("snooze-custom")} dismiss={dismiss} />
       ) : view === "snooze-custom" ? (
@@ -91,7 +119,7 @@ export function ThreadActionsSheet({ slug, onClose, onArchived, initialView = "a
       ) : view === "goal" ? (
         <GoalView thread={thread} back={() => setView("actions")} />
       ) : view === "files" ? (
-        <FilesView thread={thread} back={initialView === "files" ? undefined : () => setView("actions")} dismiss={dismiss} />
+        <FilesView thread={thread} back={initialView === "files" ? undefined : () => setView("actions")} dismiss={dismiss} project={project} />
       ) : (
         <RenameView thread={thread} back={() => setView("actions")} dismiss={dismiss} />
       )}
@@ -101,14 +129,17 @@ export function ThreadActionsSheet({ slug, onClose, onArchived, initialView = "a
 
 // ── the list ──────────────────────────────────────────────────────────────────────────────────────
 
-function ActionsList({ thread, title, setView, dismiss, onArchived }: {
+function ActionsList({ thread, title, setView, dismiss, onArchived, project }: {
   thread: ThreadView
   title: string
   setView: (view: ThreadActionsView) => void
   dismiss: (then?: () => void) => void
   onArchived?: () => void
+  project?: QueuesProject
 }) {
   const queryClient = useQueryClient()
+  const api = useThreadApi()
+  const afterWrite = useAfterScopedWrite()
   const devBuild = useDevFrizzBuild()
   const snoozePreset = useSnapshot(prefs).snoozePreset
   const lifecycle = threadLifecycleAvailability(thread)
@@ -118,14 +149,25 @@ function ActionsList({ thread, title, setView, dismiss, onArchived }: {
   const links = thread.links ?? []
   const running = thread.runtime === "running" || thread.runtime === "spawning"
   const retry = owned && offersRetry(thread)
-  const restart = offersRestartWorker(thread, devBuild)
+  // Restart worker asks for a FRESH process, which only the page's own eager send can (lib/restartWorker.ts
+  // `freshProcess`); the cross-project follow-up has no such flag, so a row of another project goes without
+  // it. It is a dev-build verb, and the thread page's ⋯ still has it.
+  const restart = !project && offersRestartWorker(thread, devBuild)
   const reload = offersReloadPlugins(thread)
   const modelEffort = useModelEffortLabel(thread)
   const context = contextLine(thread.context)
   const foot = [context, modelEffort].filter(Boolean).join(" · ")
 
+  const retryNow = (): Promise<void> => {
+    if (!project) return retrySession(queryClient, thread.id)
+    return deliverProjectFollowUp({ projectId: project.id, projectDir: project.projectDir, slug: thread.id, sessionId: thread.sessionId }, STALLED_RETRY_MESSAGE)
+      .then(() => { showToast("Retrying…"); afterWrite() })
+      .catch((error: unknown) => showToast(`Retry failed: ${(error instanceof Error ? error.message : "unknown error").slice(0, 80)}`))
+  }
   const copyLink = () => {
-    const href = new URL(outerPath(`/thread/${encodeURIComponent(thread.id)}`), location.origin).href
+    // The thread's own project's address: the page's for a thread of the page, the row's project's otherwise.
+    const path = project ? crossProjectThreadHref(project, thread.id) : outerPath(`/thread/${encodeURIComponent(thread.id)}`)
+    const href = new URL(path, location.origin).href
     dismiss(() => {
       copyTextToClipboard(href)
         .then(() => showToast("Link copied"))
@@ -168,6 +210,7 @@ function ActionsList({ thread, title, setView, dismiss, onArchived }: {
           iconSize={19}
           iconClassName="shrink-0 text-muted"
           onArchived={() => dismiss(onArchived)}
+          onCompleted={afterWrite}
           className={`${ROW_CLASS} !gap-[14px] !font-normal`}
         />
       )}
@@ -175,13 +218,13 @@ function ActionsList({ thread, title, setView, dismiss, onArchived }: {
       {owned && <ActionRow data="rename" icon={<Pencil size={19} />} label="Rename" onClick={() => setView("rename")} />}
       <ActionRow data="copy-link" icon={<Copy size={19} />} label="Copy link" onClick={copyLink} />
       {retry && (
-        <ActionRow data="retry" icon={<RotateCcw size={19} />} label="Retry" onClick={() => dismiss(() => void retrySession(queryClient, thread.id))} />
+        <ActionRow data="retry" icon={<RotateCcw size={19} />} label="Retry" onClick={() => dismiss(() => void retryNow())} />
       )}
       {restart && (
         <ActionRow data="restart-worker" icon={<RefreshCw size={19} />} label="Restart worker" onClick={() => dismiss(() => void restartWorker(queryClient, thread.id))} />
       )}
       {reload && (
-        <ActionRow data="reload-plugins" icon={<Plug size={19} />} label="Reload plugins" onClick={() => dismiss(() => void reloadThreadPlugins(thread))} />
+        <ActionRow data="reload-plugins" icon={<Plug size={19} />} label="Reload plugins" onClick={() => dismiss(() => void reloadThreadPlugins(api, thread))} />
       )}
       {foot && <div data-thread-actions-foot className="px-[18px] pt-2.5 text-[12.5px] leading-[17px] text-muted">{foot}</div>}
     </div>
@@ -194,13 +237,16 @@ function ActionsList({ thread, title, setView, dismiss, onArchived }: {
 // toasts. Unlike that menu it keeps the phone's "Snooze length" preference: the preset picked here
 // becomes the default the board's swipe uses, which is the one gesture with no menu to choose from.
 function useSnoozeApply(thread: ThreadView, dismiss: (then?: () => void) => void) {
+  const api = useThreadApi()
+  const afterWrite = useAfterScopedWrite()
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState("")
   async function apply(until: string | null, prompt: string | null = null): Promise<void> {
     setBusy(true)
     setError("")
     try {
-      await rpc.setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until, prompt: until ? prompt : null })
+      await api.setThreadSnooze({ slug: thread.id, sessionId: thread.sessionId ?? "", until, prompt: until ? prompt : null })
+      afterWrite()
       dismiss(() => showToast(until ? `${prompt ? "Bump scheduled" : "Snoozed"} · ${formatSnoozeWake(until)}` : "Snooze cleared"))
     } catch (err) {
       const message = err instanceof Error ? err.message : "Snooze failed"
@@ -328,7 +374,7 @@ function GoalView({ thread, back }: { thread: ThreadView; back: () => void }) {
 // Everything the worker registered for this thread (the rows ThreadLinks draws under the desktop
 // composer), newest first. A file opens in the reader; a link opens in a new tab — except a link to
 // the machine Frizz runs on, which from a phone is the phone itself: it says so and opens nothing.
-function FilesView({ thread, back, dismiss }: { thread: ThreadView; back?: () => void; dismiss: (then?: () => void) => void }) {
+function FilesView({ thread, back, dismiss, project }: { thread: ThreadView; back?: () => void; dismiss: (then?: () => void) => void; project?: QueuesProject }) {
   const links = [...(thread.links ?? [])].reverse()
   return (
     <div data-thread-actions-files>
@@ -338,15 +384,15 @@ function FilesView({ thread, back, dismiss }: { thread: ThreadView; back?: () =>
         <SheetTitle count={links.length}>Files and links</SheetTitle>
       )}
       {links.length === 0 && <p className="px-[18px] pb-2 text-[14px] text-muted">Nothing registered yet.</p>}
-      {links.map((link) => <LinkRow key={link.id} link={link} dismiss={dismiss} />)}
+      {links.map((link) => <LinkRow key={link.id} link={link} dismiss={dismiss} project={project} />)}
     </div>
   )
 }
 
-function LinkRow({ link, dismiss }: { link: ThreadLinkView; dismiss: (then?: () => void) => void }) {
+function LinkRow({ link, dismiss, project }: { link: ThreadLinkView; dismiss: (then?: () => void) => void; project?: QueuesProject }) {
   const isUrl = link.kind === "link"
   const loopback = isUrl && isLoopbackUrl(link.target)
-  const projectDir = useSnapshot(store).board?.projectDir
+  const projectDir = useThreadProjectDir()
   const second = isUrl ? (loopback ? `${displayUrl(link.target)} — not reachable from this phone` : displayUrl(link.target)) : displayPath(link.target, projectDir)
   const body = (
     <>
@@ -370,7 +416,7 @@ function LinkRow({ link, dismiss }: { link: ThreadLinkView; dismiss: (then?: () 
     )
   }
   return (
-    <button type="button" data-thread-link={link.id} title={link.target} className={`${cls} active:bg-hover`} onClick={() => dismiss(() => openLocalPath(link.target))}>
+    <button type="button" data-thread-link={link.id} title={link.target} className={`${cls} active:bg-hover`} onClick={() => dismiss(() => openLocalPath(link.target, null, project ? projectMarkdownScope(project) : null))}>
       {body}
     </button>
   )
@@ -394,8 +440,10 @@ function RenameView({ thread, back, dismiss }: { thread: ThreadView; back: () =>
   const shown = displayTitle(thread)
   const [draft, setDraft] = useState(() => manualThreadTitleSeed(shown, thread.id))
   const input = useRef<HTMLInputElement>(null)
-  const rename = useMutation({ mutationFn: (title: string) => rpc.renameThread({ slug: thread.id, title }) })
-  const aiRename = useMutation({ mutationFn: () => rpc.aiRenameThread({ slug: thread.id }) })
+  const api = useThreadApi()
+  const afterWrite = useAfterScopedWrite()
+  const rename = useMutation({ mutationFn: (title: string) => api.renameThread({ slug: thread.id, title }), onSuccess: afterWrite })
+  const aiRename = useMutation({ mutationFn: () => api.aiRenameThread({ slug: thread.id }), onSuccess: afterWrite })
   const ai = aiRenameAvailability(thread)
   useEffect(() => {
     const frame = requestAnimationFrame(() => {
@@ -459,14 +507,35 @@ function RenameView({ thread, back, dismiss }: { thread: ThreadView; back: () =>
 
 // ── shared pieces ─────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * After a write to a thread of ANOTHER project: re-read the machine-wide queues the phone page lists and
+ * that project's board, so the row moves now rather than at the next poll (the desktop list's rows do the
+ * same, Sidebar.tsx useAfterScopedWrite). A thread of the page's own project needs nothing: its board is
+ * the live socket's.
+ */
+function useAfterScopedWrite(): () => void {
+  const queryClient = useQueryClient()
+  const projectId = useThreadProjectId()
+  const foreign = useThreadIsForeignToPage()
+  return () => {
+    if (!foreign || !projectId) return
+    void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
+    void queryClient.invalidateQueries({ queryKey: ["ofProject", projectId, "board"] })
+  }
+}
+
 /** `Opus 5 · high` — the composer chip's reading, in running text. Reads the composer's own cached
  *  profile query, so it names the same edition the chip does (a running thread's actual model, via
  *  `runningModelLabel`, not whatever its family resolves to now). */
 export function useModelEffortLabel(thread: ThreadView | undefined): string | null {
   const owned = Boolean(thread && !thread.foreign && thread.kind === "session")
+  // The thread's own project's client and cache key — the composer's (useThreadComposerControls) — so a
+  // row of another project asks that project, never the page's for a slug it may not have.
+  const api = useThreadApi()
+  const projectId = useThreadProjectId()
   const profiles = useQuery({
-    queryKey: ["threadProfileOptions", thread?.id ?? ""],
-    queryFn: () => rpc.threadProfileOptions({ slug: thread!.id }),
+    queryKey: projectId ? ["ofProject", projectId, "threadProfileOptions", thread?.id ?? ""] : ["threadProfileOptions", thread?.id ?? ""],
+    queryFn: () => api.threadProfileOptions({ slug: thread!.id }),
     enabled: owned,
     staleTime: 5_000,
   })

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
@@ -25,6 +25,7 @@ import { scheduleKeys, scheduleNextLabel } from "../lib/schedules.ts"
 import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { ScheduleMark } from "./ScheduleMark.tsx"
 import { PhoneScheduleSheet } from "./PhoneScheduleSheet.tsx"
+import { ThreadActionsSheet } from "./MobileThreadActionsSheet.tsx"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { shortPath } from "./ProjectActions.tsx"
 
@@ -77,7 +78,10 @@ import { shortPath } from "./ProjectActions.tsx"
 //
 // NOT PORTED: swipe-to-triage. Its two RPCs were the page project's; on a page whose rows belong to any
 // project they would have to go through each project's own client, with the card's optimistic exit, and
-// a thread's drawer already has Snooze and Mark as done one tap away.
+// a thread's drawer already has Snooze and Mark as done one tap away. What upstream added beside the
+// swipe IS here: a LONG-PRESS on a row opens the thread's ⋯ sheet (7d768576; useLongPress below), so
+// every verb the thread page's ⋯ offers — snooze, Goal, files, rename, Mark as done on a running one — is
+// one hold away from the list, for a row of any project.
 
 /** The row title's size, which its mark's slot reads `cap` at. */
 const TITLE_PX = 15.5
@@ -188,10 +192,11 @@ function ThreadMark({ kind, userSnoozed, moving }: { kind: SessionIndicatorKind;
  *
  * In All projects the second line opens with the row's PROJECT, since the list mixes them.
  */
-function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneTab; last: boolean; withProject: boolean }) {
+function ThreadRow({ row, tab, last, withProject, onLongPress }: { row: PhoneRow; tab: PhoneTab; last: boolean; withProject: boolean; onLongPress: () => void }) {
   const { project, thread: t } = row
   const now = useNowMs()
   const open = useOpenThreadInPlace()
+  const press = useLongPress(onLongPress)
   const kind = sessionIndicatorKind(t)
   // A rest time dates a HANDOFF, so a row that is still going has nothing to date — the rail's own rule,
   // read off the MARK (upstream MobileBoard): a row that reads at-rest carries the time that goes with it.
@@ -209,7 +214,10 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
       <button
         type="button"
         data-mobile-thread-row={row.key}
+        {...press}
         onClick={() => open(project, t.id)}
+        // No callout and no text selection: a hold on a row is the actions gesture, not a copy.
+        style={NO_CALLOUT}
         className="flex w-full items-start gap-3 px-4 py-[11px] text-left active:bg-hover"
       >
         <CapSlot size={18} fontSize={TITLE_PX}>
@@ -257,6 +265,69 @@ function ThreadRow({ row, tab, last, withProject }: { row: PhoneRow; tab: PhoneT
       {last ? null : <div className="ml-[46px] h-px bg-border/70" />}
     </div>
   )
+}
+
+/**
+ * LONG-PRESS A ROW FOR ITS ACTIONS — the thread's own ⋯ sheet, opened from the list (upstream 7d768576,
+ * "no action is reachable only by a gesture": upstream's swipe offered Snooze and Done, and the hold
+ * reached the rest). Here, with no swipe, the hold is the ONLY way to a row's verbs short of opening the
+ * thread, which is why it exists at all.
+ *
+ * Upstream's timing and its cancels, unchanged: 500ms, given up on anything that says the finger meant
+ * something else — a move past the 8px slop (a scroll starting; the browser also cancels the pointer
+ * when it takes the pan), the finger lifting first, the pointer leaving or being cancelled. When it DOES
+ * fire, any click the lift delivers (a mouse held down for the same 500ms delivers one) is swallowed, or
+ * the row would open the thread under the sheet. The flag is cleared at the next press, so a swallowed
+ * click can never outlive the gesture that earned it.
+ */
+const LONG_PRESS_MS = 500
+const LONG_PRESS_SLOP = 8
+
+/** The platform's own hold gesture (iOS's callout, a text selection) would race the sheet. */
+const NO_CALLOUT = { WebkitTouchCallout: "none", WebkitUserSelect: "none", userSelect: "none" } as const
+
+function useLongPress(onLongPress: () => void) {
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const origin = useRef<{ x: number; y: number } | null>(null)
+  const fired = useRef(false)
+  // The latest callback, so a timer armed on one render calls the current one.
+  const callback = useRef(onLongPress)
+  callback.current = onLongPress
+  useEffect(() => () => { if (timer.current) clearTimeout(timer.current) }, [])
+  const cancel = () => {
+    if (timer.current) clearTimeout(timer.current)
+    timer.current = null
+    origin.current = null
+  }
+  return {
+    onPointerDown: (e: ReactPointerEvent) => {
+      if (e.pointerType === "mouse" && e.button !== 0) return
+      fired.current = false
+      origin.current = { x: e.clientX, y: e.clientY }
+      if (timer.current) clearTimeout(timer.current)
+      timer.current = setTimeout(() => {
+        timer.current = null
+        fired.current = true
+        // A short tick where the platform offers one (Android); iOS Safari has no vibration API.
+        navigator.vibrate?.(10)
+        callback.current()
+      }, LONG_PRESS_MS)
+    },
+    onPointerMove: (e: ReactPointerEvent) => {
+      const o = origin.current
+      if (o && Math.hypot(e.clientX - o.x, e.clientY - o.y) > LONG_PRESS_SLOP) cancel()
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onPointerLeave: cancel,
+    onClickCapture: (e: ReactMouseEvent) => {
+      if (!fired.current) return
+      fired.current = false
+      e.preventDefault()
+      e.stopPropagation()
+    },
+    onContextMenu: (e: ReactMouseEvent) => e.preventDefault(),
+  }
 }
 
 /**
@@ -419,6 +490,8 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
   const [tab, setTab] = useState<PageTab>("queue")
   // The schedule whose sheet is up (PhoneScheduleSheet) — mounted means open.
   const [sheet, setSheet] = useState<ScheduleView | null>(null)
+  // The row whose ⋯ sheet a long-press opened (ThreadActionsSheet) — mounted means open.
+  const [actionsFor, setActionsFor] = useState<PhoneRow | null>(null)
   // In the store, not local state: an editor's selection opens it too (lib/editorBridge.ts composeInto).
   const composing = useSnapshot(store).phoneNewThread
   const setComposing = (open: boolean) => (store.phoneNewThread = open ? { focus: true } : null)
@@ -544,7 +617,7 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
         ) : (
           <div role="tabpanel">
             {rows.map((row, index) => (
-              <ThreadRow key={row.key} row={row} tab={tab} last={index === rows.length - 1} withProject={!focused} />
+              <ThreadRow key={row.key} row={row} tab={tab} last={index === rows.length - 1} withProject={!focused} onLongPress={() => setActionsFor(row)} />
             ))}
             {tab === "done" && done.length > donePage ? (
               <button
@@ -579,6 +652,21 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
         </span>
       </button>
       {sheet ? <PhoneScheduleSheet scheduleId={sheet.id} projectId={sheet.projectId} onClose={() => setSheet(null)} /> : null}
+      {actionsFor ? (
+        onPage(actionsFor.project) ? (
+          // The page's own project: the sheet reads its live board, as the thread page's ⋯ does.
+          <ThreadActionsSheet slug={actionsFor.thread.id} onClose={() => setActionsFor(null)} />
+        ) : (
+          // Any other project's: through that project's client, on this list's live reading of the row —
+          // undefined once the row has left every list here, which closes the sheet.
+          <ThreadActionsSheet
+            slug={actionsFor.thread.id}
+            project={shown.find((project) => project.id === actionsFor.project.id) ?? actionsFor.project}
+            thread={[...queue, ...snoozed, ...done].find((row) => row.key === actionsFor.key)?.thread}
+            onClose={() => setActionsFor(null)}
+          />
+        )
+      ) : null}
       {composing ? <PhoneNewThread onClose={() => setComposing(false)}>{composer(() => setComposing(false), composing.focus)}</PhoneNewThread> : null}
     </div>
   )
