@@ -6,12 +6,16 @@ import {
   SCHEDULE_HISTORY_MAX,
   SCHEDULE_OVERLAPS_MAX,
   SCHEDULE_UNREVIEWED_MAX,
+  SCHEDULE_GRAMMAR_STALE,
+  SCHEDULE_GRAMMAR_VERSION,
+  SCHEDULE_READING_MOVED,
   compileSchedule,
   echoOf,
   isActivelyRunning,
   isValidTimeZone,
   occurrencesAfter,
   occurrencesBetween,
+  readSchedulePhrase,
   scheduleEcho,
   scheduledRunHeader,
   scheduledRunPrompt,
@@ -27,6 +31,7 @@ import {
   type ProjectSchedules,
   type ScheduleEcho,
   type ScheduleRunView,
+  type ScheduleSource,
   type ScheduleView,
   type ThreadScheduleRef,
   type ThreadView,
@@ -168,6 +173,40 @@ export function scheduleStartFailure(error: unknown): string {
 function titleProblem(title: string): string | undefined {
   const problem = threadNameProblem(title.trim())
   return problem ? `The title "${title.trim()}" ${problem}. Use one or two short words, like "Triage issues".` : undefined
+}
+
+/**
+ * THE SERVER'S HALF OF THE COMMIT AUTHORITY (plans/schedule-live-reading.md §10.1). A rule the browser read
+ * with the local grammar arrives with `source: { kind: "local", grammar }`, and the server does not take the
+ * browser's word for it: it reads `whenText` again with the SAME grammar (`scope: "field"`, where the whole
+ * string must be the phrase — the phrase alone determines its rule, no window or chip around it) at its own
+ * clock, in the schedule's zone, and writes only a rule that reads back IDENTICALLY, rrule and dtstart both.
+ *
+ * - A different grammar version refuses first (`schedule-grammar-stale`): a tab still running an old bundle
+ *   after an upgrade would re-read the same old answer and be refused forever, so it is told to reload.
+ * - Any other difference (`schedule-reading-moved`): "every day at 2:40pm" read at 2:39 and saved at 2:41
+ *   now starts tomorrow, a midnight moved "tomorrow", or the page sent words it had not read. Nothing is
+ *   written; the client reads the words again and shows what moved.
+ *
+ * A model reading carries no `source`: `checkSchedule` (validate) is its only gate, as it always was.
+ * Exported for the property test that every local reading the prompt box can offer re-derives from its
+ * phrase alone.
+ */
+export function rederiveLocalReading(
+  source: ScheduleSource | undefined,
+  spec: { whenText: string; rrule: string; dtstart: string; tz: string },
+  nowMs: number,
+): void {
+  if (!source) return
+  if (source.grammar !== SCHEDULE_GRAMMAR_VERSION) {
+    throw new Error(`${SCHEDULE_GRAMMAR_STALE}: this page reads schedules with grammar v${source.grammar} and Frizz with v${SCHEDULE_GRAMMAR_VERSION}. Reload the page.`)
+  }
+  if (!isValidTimeZone(spec.tz)) throw new Error(`"${spec.tz}" is not an IANA time zone like America/New_York.`)
+  const words = spec.whenText.trim()
+  const reading = readSchedulePhrase(words, { nowMs, tz: spec.tz, scope: "field" })
+  if (reading.kind === "exact" && reading.rrule === spec.rrule.trim() && reading.dtstart === spec.dtstart.trim()) return
+  const got = reading.kind === "exact" ? `${reading.rrule} from ${reading.dtstart}` : `no exact rule (${reading.kind})`
+  throw new Error(`${SCHEDULE_READING_MOVED}: "${words}" reads as ${got} now, not ${spec.rrule.trim()} from ${spec.dtstart.trim()}. Read it again.`)
 }
 
 export function createScheduleService(deps: ScheduleServiceDeps): ScheduleService {
@@ -797,9 +836,12 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     return echo
   }
 
-  function insert(spec: Spec, state: "active" | "proposed", createdBy: string): ThreadScheduleRow {
+  function insert(spec: Spec, state: "active" | "proposed", createdBy: string, source?: ScheduleSource): ThreadScheduleRow {
     if (storage.countLiveSchedules() >= SCHEDULES_PER_PROJECT_MAX) throw new Error(SCHEDULE_CAP_COPY)
     const nowMs = now()
+    // A local reading is re-read before it is checked: the same clock for both, so the rule checkSchedule
+    // passes is the one the grammar read now.
+    rederiveLocalReading(source, spec, nowMs)
     validate(spec, nowMs)
     const row: ThreadScheduleRow = {
       id: newScheduleId(),
@@ -872,7 +914,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
   }
 
   /** Apply edited fields; re-point the pending next run at the result (§6 "Edits"). */
-  function applyUpdate(id: string, patch: Partial<Spec>, expectedRevision?: number): ThreadScheduleRow {
+  function applyUpdate(id: string, patch: Partial<Spec>, expectedRevision?: number, source?: ScheduleSource): ThreadScheduleRow {
     const nowMs = now()
     const before = requireSchedule(id)
     if (expectedRevision !== undefined && expectedRevision !== before.revision) {
@@ -890,6 +932,9 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       effort: patch.effort ?? before.effort,
       backend: patch.backend ?? before.backend,
     }
+    // A local reading is held to the words that will be STORED: the merged spec, so words sent without
+    // their rule (or a rule without its words) must still read back as the stored pair.
+    rederiveLocalReading(source, spec, nowMs)
     // Only a new RULE has to fire again; an ended schedule keeps the words it had.
     const ruleChanged = spec.rrule !== before.rrule || spec.dtstart !== before.dtstart || spec.tz !== before.tz
     if (ruleChanged || spec.title !== before.title || spec.backend !== before.backend || spec.effort !== before.effort) validate(spec, nowMs)
@@ -1047,7 +1092,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
         title: input.title, prompt: input.prompt, whenText: input.whenText, rrule: input.rrule, dtstart: input.dtstart,
         tz: input.tz ?? viewerZone(), condition: input.condition ?? null, model: input.model,
         effort: input.effort ?? null, backend: input.backend ?? "claude",
-      }, "active", createdBy)
+      }, "active", createdBy, input.source)
       if (input.titleAuto) autoTitle(sch)
       return view(sch)
     },
@@ -1063,7 +1108,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
         ...(input.model !== undefined ? { model: input.model } : {}),
         ...(input.effort !== undefined ? { effort: input.effort } : {}),
         ...(input.backend !== undefined ? { backend: input.backend } : {}),
-      }, input.revision))
+      }, input.revision, input.source))
     },
     setState(id, state) {
       const sch = requireSchedule(id)
