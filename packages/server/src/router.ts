@@ -209,6 +209,7 @@ import { reviewTargetOf } from "./review-target.ts"
 import { openExternalUrl } from "./open-external.ts"
 import { editorKindsForOpener, folderEditor, mainCheckoutCopy, openLocalFile, openLocalFolder, readLocalMarkdown, resolveLocalFileAt, resolveOpenableFile, readLocalTextFile } from "./local-file.ts"
 import { openableFileRoots, workDirOf } from "./project.ts"
+import { projectsNamedIn, resolveSpawnProject, spawnProjectList, type SpawnProject } from "./spawn-project.ts"
 import { resolveThreadLink, threadLinkView } from "./thread-links.ts"
 import { ghInstalled, ghAuthed, ghRepo, gitGithubRemote, listItems, hydrateIssue, hydratePr, renderGithubPrompt, effectiveTemplate, DEFAULT_GITHUB_PROMPT } from "./github.ts"
 import { createGithubHovercardService } from "./github-hovercard.ts"
@@ -1216,14 +1217,16 @@ export function createRouter(ctx: AppContext) {
   // call: past the bound, or for a thread nothing will name, the answer carries no handle and the caller
   // falls back to the link.
   const SPAWNED_NAME_WAIT_MS = 10_000
-  async function spawnedHandle(slug: string): Promise<string | undefined> {
+  // `on` is the project the thread started in — another one's when `spawn_thread` named a project, whose
+  // own namer mints the name and whose own storage holds the row.
+  async function spawnedHandle(slug: string, on: AppContext = ctx): Promise<string | undefined> {
     let timer: ReturnType<typeof setTimeout> | undefined
     await Promise.race([
-      threadNamer().named(slug),
+      (on === ctx ? threadNamer() : on.threadNamer ?? fallbackNamer).named(slug),
       new Promise<void>((resolve) => { timer = setTimeout(resolve, SPAWNED_NAME_WAIT_MS) }),
     ])
     clearTimeout(timer)
-    const row = ctx.storage.getSession(slug)
+    const row = on.storage.getSession(slug)
     const name = row ? rowThreadName(row) : undefined
     return name ? threadHandle(name) : undefined
   }
@@ -2160,6 +2163,50 @@ export function createRouter(ctx: AppContext) {
     return open
   }
 
+  // WHERE A `spawn_thread` STARTS ITS THREAD (spawn-project.ts): the project the caller named, else this
+  // one — unless the caller's prompt names another project's checkout, which is refused with the list of
+  // projects so the worker chooses one. `prompt` is passed only for a worker's dispatch. The candidates
+  // are every REGISTERED project (and Home), not only the ones this process has open: priming opens the
+  // rest in the background, and a project not open yet is opened here, as its first request would.
+  async function spawnTarget(project: string | undefined, prompt: string | undefined): Promise<{ ctx: AppContext; slug: string } | undefined> {
+    if (project === undefined && prompt === undefined) return undefined
+    const tenants = new Map((ctx.activeTenants?.() ?? []).map((t) => [t.project.id, t]))
+    const candidates = new Map<string, SpawnProject>()
+    for (const entry of listWorkspaces()) {
+      if (entry.stale || entry.archived) continue
+      const open = tenants.get(entry.id)?.project
+      candidates.set(entry.id, { id: entry.id, slug: entry.slug, name: entry.name ?? basename(entry.path), dir: open ? workDirOf(open) : entry.path })
+    }
+    for (const { project: open } of tenants.values()) {
+      if (!candidates.has(open.id)) candidates.set(open.id, { id: open.id, slug: open.name, name: open.name, dir: workDirOf(open) })
+    }
+    if (!candidates.has(ctx.project.id)) {
+      candidates.set(ctx.project.id, { id: ctx.project.id, slug: ctx.project.name, name: ctx.project.name, dir: workDirOf(ctx.project) })
+    }
+    const all = [...candidates.values()]
+    const here = candidates.get(ctx.project.id)!
+    const listing = `Projects in Frizz:\n${spawnProjectList(all, here)}`
+    let chosen: SpawnProject | undefined
+    if (project !== undefined) {
+      chosen = resolveSpawnProject(project, all)
+      if (!chosen) throw new Error(`No project is called "${project}". Pass \`project\` as one of these slugs:\n${listing}`)
+    } else {
+      const named = projectsNamedIn(prompt ?? "", here, all)
+      if (!named.length) return undefined
+      const where = named.map(({ project: p, mention }) => `\`${mention}\` is in ${p.name} (\`${p.slug}\`)`).join("; ")
+      throw new Error(
+        `Nothing was spawned. The prompt names another project's checkout — ${where} — but the thread would ` +
+          `start in ${here.name}, this thread's project, where that project's board would never show it. ` +
+          `Call spawn_thread again with \`project\` set to the project the work belongs to ` +
+          `(\`project: "${named[0]!.project.slug}"\`), or to \`"${here.slug}"\` if it really belongs here.\n${listing}`,
+      )
+    }
+    if (chosen.id === ctx.project.id) return undefined
+    const target = tenants.get(chosen.id)?.ctx ?? (await ctx.openProject?.(chosen.id))
+    if (!target) throw new Error(`${chosen.name} could not be opened in Frizz right now, so a thread cannot start there`)
+    return { ctx: target, slug: chosen.slug }
+  }
+
   // A `spawn_thread` that names a spinoff: check it is a pending request of the CALLING thread, write the
   // human's instructions and a link back above the parent's brief (spinoffChildPrompt), dispatch, and
   // stamp the child. Refusals are errors the parent's worker reads, so each says what went wrong.
@@ -2708,20 +2755,27 @@ export function createRouter(ctx: AppContext) {
 
     dispatch: mutation({
       input: DispatchInput,
-      output: z.object({ slug: ThreadSlug, sessionId: z.string(), handle: z.string().optional() }),
+      output: z.object({ slug: ThreadSlug, sessionId: z.string(), project: z.string().optional(), handle: z.string().optional() }),
       // Forward the picker-selected backend into the dispatch opts seam (Codex-support epic, Phase 3).
       // Omitted ⇒ the dispatcher defaults to "claude", so an old client (no backend field) is
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
         // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
-        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, ...rest } = input
+        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, project, spawnedFrom, ...rest } = input
         const request = spinoff ?? spinOff
+        // A spinoff's project was chosen by the human with the request; `project` cannot redirect it.
         if (request) return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
-        const started = await ctx.dispatcher.dispatch(rest, { backend: input.backend })
-        if (!awaitHandle) return started
-        const handle = await spawnedHandle(started.slug)
-        return handle ? { ...started, handle } : started
+        const target = await spawnTarget(project, spawnedFrom === undefined ? undefined : rest.prompt)
+        const on = target?.ctx ?? ctx
+        const started = await on.dispatcher.dispatch(rest, { backend: input.backend })
+        if (target) target.ctx.board.refresh()
+        // Another project's thread is named in the answer, so a caller with no handle to give links
+        // `/project/<slug>/thread/…`: a bare `/thread/…` resolves against the CALLER's project.
+        const placed = target ? { ...started, project: target.slug } : started
+        if (!awaitHandle) return placed
+        const handle = await spawnedHandle(started.slug, on)
+        return handle ? { ...placed, handle } : placed
       },
     }),
 

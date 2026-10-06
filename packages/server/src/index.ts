@@ -51,7 +51,7 @@ import { createTenantMap } from "./tenants.ts"
 import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
 import { startWakeLockLoop, type WakeLockLoop } from "./wake-lock.ts"
-import { HOME_WORKSPACE_ID, findWorkspaceBySegment, homeWorkspaceProject, listWorkspaces, projectForEntry } from "./home-workspace.ts"
+import { HOME_WORKSPACE_ID, findWorkspaceById, findWorkspaceBySegment, homeWorkspaceProject, listWorkspaces, projectForEntry } from "./home-workspace.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
@@ -635,6 +635,12 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // the launching project's own context (built before the map is populated) sees the same live list.
   const activeTenants: NonNullable<AppContext["activeTenants"]> = () =>
     tenants.active().map(({ project: open, ctx: openCtx }) => ({ project: open, board: openCtx.board, ctx: openCtx }))
+  // Open one registered project by id, the way its first request would (routeToTenant below) — for a
+  // `spawn_thread` aimed at a project nothing has opened yet (router spawnTarget).
+  const openProject: NonNullable<AppContext["openProject"]> = async (projectId) => {
+    const entry = findWorkspaceById(projectId)
+    return entry ? tenants.activate(projectForEntry(entry)) : undefined
+  }
   // The editor windows connected over `/_frizz/editor` (editor-bridge.ts): ONE for the machine, like
   // this server, handed to every project's context so any project's file link can reach any window.
   // Its upgrade is answered before tenant routing below; it has no boot phase because it holds nothing
@@ -696,6 +702,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       get codexVersion() { return runtimes?.codex.version === "unknown" ? undefined : runtimes?.codex.version },
       serverLockPath: serverLockPathFor(project),
       activeTenants,
+      openProject,
       teardownProject,
       reopenHomeWorkspace,
       launchProjectId: project.id,
@@ -1026,6 +1033,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         database: frizzDb!.db,
         serverLockPath: serverLockPathFor(project),
         activeTenants,
+        openProject,
         teardownProject,
         reopenHomeWorkspace,
         launchProjectId: project.id,

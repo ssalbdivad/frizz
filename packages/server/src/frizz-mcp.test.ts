@@ -209,7 +209,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
 // back; a thread the server could not name in time has none, and gets the drawer link instead.
 test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its @handle, else links it", async () => {
   const seen: Array<{ url: string; body: unknown }> = []
-  const handles = ["child", undefined]
+  const handles = ["child", undefined, undefined]
   const http = createServer((req, res) => {
     let body = ""
     req.on("data", (c) => (body += c))
@@ -217,14 +217,15 @@ test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its
       seen.push({ url: req.url ?? "", body: JSON.parse(body) })
       const handle = handles.shift()
       res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: { slug: "spawned-child", ...(handle ? { handle } : {}) } }))
+      const asked = JSON.parse(body) as { project?: string }
+      res.end(JSON.stringify({ result: { slug: "spawned-child", ...(handle ? { handle } : {}), ...(asked.project ? { project: asked.project } : {}) } }))
     })
   })
   await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
   const port = (http.address() as { port: number }).port
   const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
   writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir })
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD: "", FRIZZ_THREAD_SLUG: "caller" })
   try {
     rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
     await rpc.next(1)
@@ -239,7 +240,7 @@ test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its
     assert.match(call.result.content[0].text, /It is @child: name it that way/)
     assert.doesNotMatch(call.result.content[0].text, /\/thread\//, "a named thread is not handed over as a link")
     assert.equal(SPAWN_THREAD_RESULT_RE.exec(call.result.content[0].text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
-    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child", awaitHandle: true } }])
+    assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child", awaitHandle: true, spawnedFrom: "caller" } }])
 
     rpc.send({
       jsonrpc: "2.0",
@@ -250,6 +251,20 @@ test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its
     const unnamed = await rpc.next(4)
     assert.match(unnamed.result.content[0].text, /It has no handle yet[\s\S]*\[Child\]\(\/thread\/spawned-child\)/)
     assert.equal(SPAWN_THREAD_RESULT_RE.exec(unnamed.result.content[0].text)?.[1], "spawned-child")
+
+    // Another project: the choice rides to OUR project's RPC (which routes it), and an unnamed thread's
+    // link carries the target's prefix, since a bare `/thread/…` resolves against the caller's project.
+    rpc.send({
+      jsonrpc: "2.0",
+      id: 5,
+      method: "tools/call",
+      params: { name: "spawn_thread", arguments: { prompt: "fix the docs", model: "sonnet", effort: "medium", title: "Docs", project: " arktype " } },
+    })
+    const there = await rpc.next(5)
+    assert.equal(there.result.isError, undefined)
+    assert.match(there.result.content[0].text, /on the `arktype` project's board/)
+    assert.match(there.result.content[0].text, /\[Docs\]\(\/project\/arktype\/thread\/spawned-child\)/)
+    assert.deepEqual(seen[2], { url: "/_frizz/rpc/dispatch", body: { prompt: "fix the docs", model: "sonnet", effort: "medium", title: "Docs", project: "arktype", awaitHandle: true, spawnedFrom: "caller" } })
 
     // model/effort stay REQUIRED server-side, not only in the schema — a lenient client must not be
     // able to skip the deliberate choice.
