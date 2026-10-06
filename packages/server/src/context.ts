@@ -996,7 +996,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // prompt (backend/claude-oneshot.ts). It spawns nothing on its own: every call is a dispatch, a click or
   // a thread's 5th message. With Background summaries off (or FRIZZ_THREAD_NAMER=0) it has no model;
   // uniqueness still holds for every writer without it, because that check reads the registry, not a model.
-  const namerModel = summaries.model("thread name", createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }), namerOff)
+  const namerModel = summaries.model("thread name or status", createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }), namerOff)
   const threadNamer: ThreadNamer = createThreadNamer({
     storage,
     get complete() { return namerModel() },
