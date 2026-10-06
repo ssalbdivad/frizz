@@ -694,6 +694,13 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // thread falls through to the at-rest ellipsis below no matter how many sub-agents it still has out —
   // see restedQueueHandoff. A shell-only rest is carved out because it is never motion at all; the dot
   // below is its mark, and without this clause an event-snoozed one would still spin.
+  //
+  // A SILENT TURN SPINS IN THE QUEUE, on purpose. The server queues a turn that has written nothing for
+  // 15 awake-minutes (board.ts quietTurnSince) and leaves its runtime `running`, so its row sits in Ready
+  // beside its QuietTurnCard — which bends Colin's rule that nothing running shows in the queue (2026-08-01).
+  // The spinner is what keeps his distinction legible there (David 2026-10-06, plans/upstream-superset.md
+  // §4): the card says "this may be stuck on you", the mark says the turn is still in flight. It falls out
+  // of this branch because restedQueueHandoff needs the turn to be OVER; keep it that way.
   if (activelyRunning && !restedQueueHandoff(t) && !restingOnBackgroundWork(t)) return "working"
   // A REGISTERED question (an open thread_question row, arriving as `questions`) is as concrete an ask
   // as any of the explicit flags above, but it deliberately sits BELOW the working branch: a worker
