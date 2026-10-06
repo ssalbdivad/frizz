@@ -29,9 +29,9 @@
 // shell has a body; and three marks on one row that all looked clickable (an underlined title, an
 // accent ref, the corner glyph) with no hierarchy between them.
 import { useContext, useId, useState } from "react"
-import { AlarmClock, Bell, Github, Hourglass, MessageCircleOff, TerminalSquare } from "lucide-react"
+import { AlarmClock, Bell, Github, Hourglass, MessageCircleOff, RefreshCw, TerminalSquare } from "lucide-react"
 import { isGithubWakeBacklog, parseGithubWakeSteer, parseLimitModelSwitchWake, parseLimitResumeWake, parseParkWake, parsePrWatchExpiredWake, parsePrWatchStateWake, parsePrWatchWake, parseQuestionsCancelledWake, parseShellDoneWake, parseTimerWake, stripWakeTrailer, type GithubWakeSteer, type LimitWindow, type ParkWake, type PrWatchStateWake, type PrWatchWake, type ShellDoneWake, type TimerWake } from "@frizz/shared"
-import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { VSpace } from "./rhythm.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
@@ -79,6 +79,7 @@ export function FrizzWake({ steer: served, text, sourceId, at, wrap }: { steer?:
   const switched = parseLimitModelSwitchWake(text)
   if (switched) return <LimitModelSwitchDivider capped={switched.capped} to={switched.to} sourceId={sourceId} at={at} />
   const park = parseParkWake(text)
+  if (park?.kind === "requested") return <UpdateRequestedMarker sourceId={sourceId} items={park.items} />
   if (park) return <ParkDivider wake={park} sourceId={sourceId} at={at} />
   const lapsed = parsePrWatchExpiredWake(text)
   if (lapsed) return <PrWatchExpiredDivider watchRef={lapsed.ref} sourceId={sourceId} at={at} />
@@ -247,13 +248,36 @@ function QuestionsCancelledDivider({ count, sourceId, at }: { count: number; sou
   )
 }
 
+// THE HUMAN'S "Ask for update" CLICK, on their own side of the conversation. It rode the park family's
+// centred hairline until 2026-10-06 ("Update requested · click to expand"), which drew it exactly like the
+// expiries and finishes Frizz raises on its own, so the one wake the human caused was the one nobody could
+// find (maintainer: "it should be obvious in the conversation where I manually requested an update").
+// Right-justified on the user bubble's surface, because right-justification IS the human's side, and with
+// a glyph and fixed wording so it never reads as words they typed. The queue card draws the same marker
+// as the ask its handoff answers (AllQueuesCard; router.handoffOf counts the click as the human's turn).
+// What the wait named rides on the title: it is the worker's own item labels, and nobody asked to read
+// them here.
+export function UpdateRequestedMarker({ sourceId, items = [] }: { sourceId?: string; items?: readonly string[] }) {
+  return (
+    <div data-frizz-msg={sourceId} data-update-requested className="flex max-w-[85%] flex-col items-end self-end">
+      <div
+        title={items.length ? `Asked for an update on:\n${items.join("\n")}` : undefined}
+        className={`flex items-baseline gap-1.5 ${BLOCK_RADIUS} rounded-br-sm bg-user-bubble px-3.5 py-2.5 text-[13px] leading-5 text-user-bubble-fg`}
+      >
+        <RefreshCw aria-hidden="true" className="size-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] opacity-70" />
+        <span>Asked for an update</span>
+      </div>
+    </div>
+  )
+}
+
 function ParkDivider({ wake, sourceId, at }: { wake: ParkWake; sourceId?: string; at?: string }) {
   const [open, setOpen] = useState(false)
   const bodyId = useId()
   // Terse, because every sibling on this rule is ("PR merged on …", "Agent terminal «…» finished"). The
   // first draft read "The declared wait is over — its work finished" and was the longest line on the
   // page by half again.
-  const label = wake.kind === "expired" ? "Wait expired — nothing resolved" : wake.kind === "requested" ? "Update requested" : "Wait over — its work finished"
+  const label = wake.kind === "expired" ? "Wait expired — nothing resolved" : "Wait over — its work finished"
   // No disclosure without items: an empty aside is a control that opens onto nothing.
   if (!wake.items.length) {
     return (

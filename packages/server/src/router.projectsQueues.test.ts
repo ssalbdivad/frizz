@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { tmpdir } from "node:os"
 import test from "node:test"
-import { questionAnswerMessage, SIGNOFF_NUDGE_MESSAGE, type BoardSnapshot, type ThreadView, type TranscriptMessage } from "@frizz/shared"
+import { parkExpiredWakeMessage, parseParkWake, questionAnswerMessage, SIGNOFF_NUDGE_MESSAGE, type BoardSnapshot, type ThreadView, type TranscriptMessage } from "@frizz/shared"
 import { createRouter, handoffOf } from "./router.ts"
 import type { AppContext } from "./context.ts"
 import type { BoardManager } from "./board.ts"
@@ -117,6 +117,25 @@ test("an ANSWER to a registered question is the human's turn, though Frizz deliv
   ])
   assert.equal(handoff.asked, answered, "the card quotes the answer, not the task before it")
   assert.equal(handoff.text, "**Fixed** — seconds it is.")
+})
+
+test("an \"Ask for update\" click is the human's turn, quoted by its head line alone", () => {
+  // 2026-10-06: skipping it quoted a retry typed hours earlier over the progress note the click produced.
+  const requested = parkExpiredWakeMessage(["- `agent: a01b2d20b32feab11` — still running"], true, true)
+  const handoff = handoffOf([
+    msg("user", "Continue exactly where you left off."),
+    msg("assistant", "You've hit your weekly limit"),
+    msg("assistant", "Parked.\n\n```awaiting\nagents: [a01b2d20b32feab11]\nneeds_input: false\nfor: 30m\n```"),
+    msg("user", `${requested}\n\n<!-- frizz-wake:abc -->`, { wake: true, displayText: requested }),
+    msg("assistant", "Progress since my last note: the second review pass is running."),
+  ])
+  assert.equal(handoff.asked, requested.split("\n")[0])
+  assert.equal(parseParkWake(handoff.asked!)?.kind, "requested", "the card can still tell it is the click")
+  assert.equal(handoff.text, "Progress since my last note: the second review pass is running.")
+  assert.equal(handoff.answer, undefined)
+  // The expiry the same park reaches on its own clock is Frizz's, not the human's.
+  const expired = handoffOf([msg("user", "Go."), msg("user", parkExpiredWakeMessage([], true), { wake: true }), msg("assistant", "Still going.")])
+  assert.equal(expired.asked, "Go.")
 })
 
 test("a reply belongs to the human's LAST turn: a turn with no reply yet has an ask and no text", () => {

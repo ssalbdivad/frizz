@@ -240,7 +240,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-wor
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, workingThread } from "@frizz/shared"
+import { questionRepliedPast, ProjectCard, ProjectQueue, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, workingThread } from "@frizz/shared"
 import { EditorComposeInputSchema, EditorReviewTargetSchema, EditorSnapshotSchema, type EditorKind, type EditorReviewTarget, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
@@ -1120,7 +1120,10 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
     }
   }
   const asked = anchor === -1 ? undefined : messages[anchor]!
-  const askedText = asked ? (asked.displayText ?? asked.text).trim() : undefined
+  const askedRaw = asked ? (asked.displayText ?? asked.text).trim() : undefined
+  // An update request quotes its head line only: the rest is the worker's instructions, and the card
+  // draws the click as a marker (web UpdateRequestedMarker) off that line, never as words they typed.
+  const askedText = askedRaw && isUpdateRequest(askedRaw) ? askedRaw.split("\n")[0]! : askedRaw
   return {
     ...(reply ? { text: latest!.texts.join("\n\n"), at: reply.at } : {}),
     ...(answer ? { answer } : {}),
@@ -1147,7 +1150,16 @@ function isHumanTurn(m: TranscriptMessage): boolean {
   const said = (m.displayText ?? m.text).trim()
   if (!said) return false
   // questionAnswerMessage's form; the wake token rides outside `displayText`.
-  return !m.wake || said.startsWith(BURIED_ANSWERS_HEADER)
+  return !m.wake || said.startsWith(BURIED_ANSWERS_HEADER) || isUpdateRequest(said)
+}
+
+/** THE HUMAN'S "Ask for update" click, delivered as a park wake (router.requestParkCheckIn). It counts as
+ *  their turn for the same reason an answer does: the progress note under it is the reply TO the click.
+ *  Skipped, the card quoted whatever they last typed — on 2026-10-06 a "Continue exactly where you left
+ *  off." retry from hours before, over a weekly-limit line and then the progress note, which read as
+ *  though the retry had produced the note. */
+function isUpdateRequest(said: string): boolean {
+  return parseParkWake(said)?.kind === "requested"
 }
 
 /** How many Done threads per project the machine-wide poll carries: the recent ones an `@` mention from

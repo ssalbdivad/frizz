@@ -116,6 +116,10 @@ ${PR_WATCH_ARMED_TRAILER}`),
   // NOTHING TO DISCLOSE is its own shape: a bare hairline, because a control that opens onto an empty
   // aside is worse than no control.
   wake("w18", parkExpiredWakeMessage([])),
+  // THE HUMAN'S "Ask for update" — the one park wake they caused, so it leaves the hairline family for
+  // their side of the conversation. A typed message stands under it so the two can be compared.
+  wake("w18b", parkExpiredWakeMessage(["- `agent: a01b2d20b32feab11` — still running"], true, true)),
+  { sourceId: "typed", role: "user", text: "Continue exactly where you left off.", tools: [], parts: [], at: new Date().toISOString() },
   // A REGISTERED WATCHER whose own `for:` ran out. The ref is the only thing on the line a reader can
   // act on, so it is the link.
   wake("w19", prWatchExpiredWakeMessage("nubjs/nub#777")),

@@ -21,7 +21,7 @@ import { memo, useCallback, useContext, useLayoutEffect, useMemo, useRef, useSta
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, ChevronRight, Hourglass, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
-import { parseScheduledRunPrompt, questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
+import { parseParkWake, parseScheduledRunPrompt, questionsOwed, type AccountBackend, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { prefetchProjectTranscript } from "../hooks.ts"
@@ -56,6 +56,7 @@ import { AwaitingSubAgentsCard, SubAgentWaitSnoozeItems } from "./AwaitingSubAge
 import { drawsSubAgentWaitCard, showsSubAgentWait } from "../lib/subAgentWait.ts"
 import { useThreadComposerControls } from "../hooks/useThreadComposerControls.tsx"
 import { ExpandThreadLink } from "./ExpandThreadLink.tsx"
+import { UpdateRequestedMarker } from "./FrizzWake.tsx"
 import { SpinoffButton, SpinoffOf } from "./Spinoff.tsx"
 import { HEADER_ICON_CLASS } from "../lib/headerIcon.ts"
 import { LastActive } from "./LastActive.tsx"
@@ -485,7 +486,11 @@ function CardArticle({
           {/* A scheduled run's first message opens with Frizz's header for the worker; the card shows only the
               saved prompt under it, the human's own words — the title's repeat glyph already says where the
               run came from (ChatView ScheduledRunOpening does the same in the drawer). */}
-          {handoff.data?.asked && <AskedBubble text={parseScheduledRunPrompt(handoff.data.asked)?.prompt || handoff.data.asked} />}
+          {/* An "Ask for update" click is the human's turn too (router.handoffOf), drawn as the transcript
+              draws it rather than quoting the worker's wake text as if they had typed it. */}
+          {handoff.data?.asked && (parseParkWake(handoff.data.asked)?.kind === "requested"
+            ? <UpdateRequestedMarker />
+            : <AskedBubble text={parseScheduledRunPrompt(handoff.data.asked)?.prompt || handoff.data.asked} />)}
           {answered && (
             <ClampedBody resetKey={thread.lastAssistantAt ?? ""}>
               <Prose md={answered} />
