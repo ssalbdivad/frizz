@@ -316,7 +316,9 @@ const WATCH_PR = {
     "red, you push a fix, CI goes green, a reviewer comments — that is four wakes from one call, and you " +
     "never have to re-register between them. It settles itself when the PR merges or closes, because " +
     "there is then nothing left to report.\n\n" +
-    "REGISTER IT THE MOMENT YOU OPEN OR PUSH A PR. Nothing else watches for you: your runtime knows " +
+    "REGISTER IT THE MOMENT YOU OPEN OR PUSH A PR. Opening or pushing one is not this tool's call: do " +
+    "it only when the human's current request or the project's docs say to — a PR they asked for " +
+    "earlier is no mandate for the next change. Nothing else watches for you: your runtime knows " +
     "nothing about GitHub, and an ```awaiting fence STATES what you are waiting on without creating any " +
     "wait at all. This tool is the wait.\n\n" +
     "THE ```awaiting FENCE IS STILL WORTH WRITING, and it is a different job: it is how you come to REST " +

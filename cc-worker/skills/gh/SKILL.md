@@ -1,6 +1,6 @@
 ---
 name: gh
-description: The gh-CLI playbook for a frizz worker signed into GitHub (invoke as frizz:gh). Load this whenever your effort touches GitHub — reading or triaging an issue or PR, reviewing a diff, checking CI/release status, or searching issues/PRs — to use `gh` eagerly and correctly: the read-vs-write boundary (never comment/label/close/merge unless the human asks), concrete read recipes, and active Monitor/background-Bash CI/PR watches. Only meaningful when you are signed in (`gh auth status --active` exit 0); the session-seed hook injects a pointer here when you are.
+description: The gh-CLI playbook for a frizz worker signed into GitHub (invoke as frizz:gh). Load this whenever your effort touches GitHub — reading or triaging an issue or PR, reviewing a diff, checking CI/release status, or searching issues/PRs — to use `gh` eagerly and correctly: the read-vs-write boundary (never push/open a PR/comment/label/close/merge unless the human asks), concrete read recipes, and active Monitor/background-Bash CI/PR watches. Only meaningful when you are signed in (`gh auth status --active` exit 0); the session-seed hook injects a pointer here when you are.
 version: 0.1.2
 metadata:
   internal: true
@@ -14,9 +14,10 @@ This skill is the full playbook the injected `⟦gh available⟧` block summariz
 
 ## The one hard rule — READ freely, WRITE only when asked
 
-`gh` can mutate the repo, and your token has the scopes to do it. **Do not.** Unless the human **explicitly asks in this session**, you are strictly read-only:
+`gh` can mutate the repo, and your token has the scopes to do it. **Do not.** Unless the human's **current request explicitly asks** (or the project's `FRIZZ.md`/`AGENTS.md`/`CLAUDE.md` tells workers to), you are strictly read-only:
 
-- **NEVER** comment, review, approve, request-changes, label, assign, milestone, edit, close, reopen, merge, or push — no state change of any kind on GitHub.
+- **NEVER** push a branch, open a pull request, comment, review, approve, request-changes, label, assign, milestone, edit, close, reopen, or merge — no state change of any kind on GitHub.
+- **Permission covers the change it was given for.** "Open a PR for this" an hour ago is not a mandate to open one for the next request, nor to push that next change onto its branch because you happen to be standing on it — only a request that names the PR goes to it. Unasked, finished code stays local — uncommitted, or on a worktree's local branch — and your `done` card says where and that it is ready to commit or open a PR.
 - Your deliverable is your **final message** (a findings write-up, a review, a recommendation) — NOT a GitHub post. Producing the review in-session is the job; posting it is a separate action the human authorizes.
 - If posting would genuinely help, don't just do it — **ask** with a two-option `mcp__frizz__ask` question ("Post this review to the PR" / "Keep it in-session only", the recommended one first, and the posting option marked `external` so Frizz's unanswered-question default never posts it), then rest. When the destructive edge is real (a force-merge, a close), that's the same question with `danger` set. Never a ` ```question ` fence — that fence is retired (2026-09-11), and a question in a fence body is plain prose.
 - When the human HAS asked you to write, do exactly the scoped thing and report the resulting URL — nothing extra.

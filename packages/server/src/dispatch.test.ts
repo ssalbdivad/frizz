@@ -508,10 +508,17 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // on awaiting until it merges); a pre-fix bug/issue investigation never earns it, while a
     // commissioned research/audit effort's finished report does (done-requires-landed-work)
     assert.match(c, /COMPLETED\s+the effort's real work/)
-    assert.match(c, /code LANDED on the project's mainline/)
-    assert.match(c, /Code written but not LANDED is not done/)
-    assert.match(c, /open PR is work still ahead of the merge/)
+    assert.match(c, /code LANDED as far as you were asked to land\s+it/)
+    assert.match(c, /Code the human DID ask to land is not done until it lands/)
+    assert.match(c, /open PR\s+is work still ahead of the merge/)
     assert.match(c, /`done` waits for the MERGE/)
+    // …but WHETHER to land is the human's call: a worker asked for one PR opened a second, unasked, for
+    // the next change (maintainer 2026-10-06). Unasked, finished code is `done` where it sits, and an
+    // earlier PR request is no standing mandate.
+    assert.match(c, /COMMIT, PUSH OR OPEN A PULL REQUEST ONLY WHEN THEIR CURRENT\s+REQUEST ASKS FOR IT, OR THE PROJECT'S DOCS TELL WORKERS TO/)
+    assert.match(c, /PR they asked for earlier is no mandate to open one for the\s+next request/)
+    assert.match(c, /Without a mandate, finished code is\s+`done` WHERE IT SITS/)
+    assert.match(c, /commit, push or pull request nobody asked for is not that fork/)
     // `prs:`, NOT the retired `pr:` or the older `pr-watch:` — a fence written either old way parses as
     // prose and the park names nothing (AWAITING_HINT_RE + RETIRED_AWAITING_KINDS).
     assert.match(c, /park the PR on[\s\S]{0,40}`prs:`/)
