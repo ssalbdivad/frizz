@@ -16,9 +16,11 @@ import {
 // server's interpreter (Sonnet, ~3s). That call costs the human's quota and holds the interpreter's
 // per-project `concurrency: 1` queue, so it is spent carefully:
 //
-// - SINGLE FLIGHT PER BOX. At most one request is out. A text that changes while one is out waits as the one
+// - SINGLE FLIGHT PER READER. At most one request is out. A text that changes while one is out waits as the one
 //   queued follow-up — only the LATEST text, so a burst of edits during a read costs exactly one more read,
-//   and a stale request can sit at most one deep in the server's queue. The stale answer is still cached.
+//   and a stale request can sit at most one deep in the server's queue. The stale answer is still cached. The
+//   prompt box's reader is per DRAFT (`sharedModelReader`), so the `c` dialog and the page box under it, which
+//   show one mode, also share one flight; a drawer's Change when has its own.
 // - A 10m CACHE across every box, keyed `context \0 tz \0 local date \0 text`. The date is in the key because
 //   "tomorrow at 8" read yesterday is not today's reading; `context` names what else the read depended on (a
 //   Change when reads against its schedule's stored rule and condition, so its answers are not the box's).

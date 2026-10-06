@@ -117,6 +117,11 @@ These come from design 1 and are kept:
 
    Restoring the pre-accept state gives each intent a single key, Enter (start now) or Tab (schedule again), and
    the ledge prints what both do. It is also what "undo" means in every editor.
+   *As built (fix round 1, X1):* the pre-accept state is restored only if nothing has set the mode since. Inside
+   the 8s window the human can type the next schedule and press Tab; Undo then deletes the first and merges its
+   text back, but leaves that newer mode ON (`draftAfterUndo`, `scheduleIntent.ts`). Undo is not one of the acts
+   I-3 lets end a mode, and ending it here left the merged text one Enter from a dispatch. In the mode the merged
+   text reads as a compound cue, so nothing exact is offered from it.
 2. **Dismissal key.** Judge 1 wanted it keyed by rule shape. Judges 2 and 3 wanted it per edge. **Per edge**, and
    it re-arms only when that edge holds no gate word. Once the human has said "not a schedule", changing Monday to
    Tuesday is not new evidence. The glyph stays lit, so the way back is one key.
@@ -129,6 +134,8 @@ These come from design 1 and are kept:
    one field and two client copies.** Without it, a tab still running an old bundle after a server upgrade would
    re-read the same old answer, get refused, and loop on "Updated…". With it, the second failure tells the human
    to reload (§10.1).
+   *As built (fix round 1):* only the version refusal says reload. A second `reading-moved` on the same words is
+   the page's clock and the server's disagreeing, which a reload does not fix; it gets its own copy (§10.1).
 5. **A settings off switch.** Judge 2 wanted it; judge 3 rejected it for v1. **Not in v1.** Per-edge dismissal
    plus the measured ~0.3% false-offer rate does not justify another setting. It is one row on the theme pattern
    if he asks (§16).
@@ -257,6 +264,23 @@ by the boundary-only publisher in `schedule-phrase.test.ts` over the 156 positiv
 changes with the hold; max 6 without it (`every weekday at 9am for 2 weeks starting Oct 12`), where each bound typed
 after a clock flipped the ledge to a cue and back.
 
+*As built (fix round 1, publish-flicker-colon-and-rest):* the numbers above came from a boundary-only stand-in.
+Driven through the real `publish`, three paths flickered: `:` was a boundary, so `every weekday at 10:30am` showed
+a cue at `10:` between 9am and 10:30am at a steady 120ms a key; the 250ms rest published any prefix (`every Monday
+at 1` as 1pm, paused inside `10am`; `every Tuesday and Thursda` dropping Thursday); and a rest inside a qualifier
+(`… at 9am for`) published its cue. Now:
+- a colon after a digit is mid-word (`classifyEdit`);
+- a pause publishes only a word the reading has finished with (`pausePublishes`): at a REST a clock fragment (`1`,
+  `2:3`, `10a`, not `10am`) waits for the idle or the word's end; at a rest or an IDLE, a reading that stops short of
+  the word the caret is in, or no offer at all inside a word the shown offer runs into (`every Mond` reads as an
+  event), keeps what is on screen;
+- a qualifier being typed holds through a rest as well as a word's end; the idle shows its cue.
+
+*Measured* (`scheduleOffer.test.ts`, 11 phrases × 200 seeded trials, 15% of keys after a pause): with pauses of
+300–900ms, up to 8 changes (means 2.3–4.8) became at most 5 in 1 trial of 2,200 (mean 2.39), every extra change from
+a pause past the 800ms idle, where the screen rightly shows what the words say so far; pauses kept under the idle
+give at most 3; steady 120ms typing at most 3.
+
 ### 2.5 Dark (pinned as negative tests, §15.1)
 - **Pure events:** `every time …`, `each time …`, `whenever …`, `after every …`, `when the … (passes|fails|
   lands|merges)`, and `each|every <non-calendar noun>` (`each PR`, `every file`). The grammar returns `event`.
@@ -307,7 +331,7 @@ ambiguous kind.
 
 ### 3.1 Contract
 ```ts
-export const SCHEDULE_GRAMMAR_VERSION = 1
+export const SCHEDULE_GRAMMAR_VERSION = 2   // 1 until fix round 1 (2026-10-06)
 
 export type Span = { start: number; end: number }                 // into the string given
 export type Edge = "open" | "close" | "inside" | "field"
@@ -383,6 +407,34 @@ Rules that bind every `exact`:
   where the phrase starts, and the reading is `presence`.
 - `in 2 hours` that lands on the repeated hour of a fall-back night is `unsupported`: a local wall clock names the
   first 1:30, an hour early.
+
+*As built (fix round 1, 2026-10-06): `SCHEDULE_GRAMMAR_VERSION = 2`.* The break-it round found exact readings that
+were silently wrong; each is pinned in `schedule-phrase.test.ts` § "the break-it battery":
+- **Night and evening clocks** settle their meridiem from the day part: morning 1–11 am; afternoon 12–6 pm;
+  evening 5–11 pm; night 7–11 pm, 12 midnight, 1–5 am; anything else stays a guess shown dim. `tonight at 2` is
+  tomorrow's 02:00, and a night past midnight on a weekday rule (`Monday nights at 2`) is a vague cue, because
+  "Monday night at 2" is Tuesday 2am to most and Monday to some.
+- **Ordinal units** (`every 2nd week`) and **fractions and hedges** (`and a half`, `and a quarter`, `and change`,
+  `or so`, `-ish`) are cues, never a BYMONTHDAY or a dropped tail.
+- **Named zones** (`EST`, `PT`, `UTC+2`, `Europe/Berlin`, `London time`, `in London`, `my time`, `+0200`) touching
+  the phrase or anywhere in the text are cues with why `zone`.
+- **The silent-prefix rule** (I-9) holds against `BROAD_QUALIFIERS` (corpus): exclusions said other ways
+  (`apart from`, `minus`, `w/o`, `save`), calendar residue (`in Q4`, `on even weeks`), counts and conditions
+  (`x3`, `as needed`, `once the migration lands`), starts and stops (`stopping Oct 30`, `first run next week`) and
+  zones — in five placements, both scopes and the field. A day stated off (`every Monday, Friday is off-limits`)
+  never joins a weekday list, and a clock it cannot parse (`at 0900`, `at 9h30`, `at nine`) is never a silent 9am.
+- **Abbreviation dots** (`Wed.`, `Thurs.`, `Jan.`, `excl.`, `a.m.`) no longer end the reading window.
+- **A clock schedule is never an event** (`every midnight`, `every M/W/F at 9am`, `every lunchtime`).
+- **Edge guards.** At the open edge a phrase followed by a statement (`Every night the backup job fails…`) is a
+  bug report: an exact reading gets veto `about`, a cue is dropped. At the close edge a negation or a statement
+  before it (`don't deploy on Fridays`, `the meeting is every Monday at 9am`) vetoes it, and a lone `on the 15th`
+  is a date (veto `deadline`), as is a phrase that is a label's value (`the label should read: …`, `interval=…`).
+  Text that looks like code (identifier glue like `FREQ=DAILY` or `src/daily`, camelCase, an indented line) is never
+  offered.
+- **Deviation, two pinned cases re-pinned:** `refactor the scheduler so every Monday at 9am isn't parsed as UTC` and
+  `the job that runs every Monday at 9am is broken, fix it` read EXACT inside the text before; they are cues with no
+  core (why `condition`) now, because the words after the phrase make a statement about a schedule rather than set
+  one. In the mode those texts go to the model rather than reading locally.
 
 ### 3.2 Phrase families (exact)
 | | Family | Examples | Reading |
@@ -587,6 +639,21 @@ Found while computing §3.3; each one is pinned by a test.
 
 A condition, COUNT or UNTIL can only remove runs, so a faithful reading always passes.
 
+*As built (fix round 1):*
+- **(b) holds an assumed day to the core's frequency** (X5). With both a day and a time assumed (`every week unless
+  it's a holiday`), the check returned true for any rule: an hourly answer passed and created 24 runs a day. Now an
+  assumed day still asserts the period — WEEKLY: one run per week, in weeks a whole INTERVAL apart; MONTHLY: per
+  month — and an assumed time only frees the clock.
+- **The model's offsets index the text the box sent** (X8). The server trims `text` (`InterpretScheduleInput`) and
+  the interpreter's offsets index the trimmed text, so a prompt starting with a newline drew every mark one
+  character late and cut `y post the digest` into Each run. `alignModelOffsets` adds the trimmed lead back.
+- **One reader per draft, not per box** (X2, §4.2's single flight). The `c` dialog and the page box under it share
+  the mode, and now share the reader (`sharedModelReader`): before, each sent the same text, two Sonnet calls per
+  mode entry and per idle edit.
+- **A rule no words cover is never confirmed as RRULE text** (model-raw-rrule-echo; I-11 for the model). A month
+  filter over a daily or weekly rule now reads in words (`every Friday at 9am, except in December`, `from March to
+  October`, `in January, April and July`); any other unphrasable model reading is refused in the panel (M4).
+
 ---
 
 ## 5. Every visible state
@@ -781,6 +848,11 @@ Create is hidden and the footer keeps `Esc Cancel`. The body is one line:
 | interpreter off | the server's existing `Reading a schedule needs Claude…` | — |
 | stale bundle (§10.1) | `Frizz has updated since this page loaded. Reload the page to create this schedule.` | — |
 
+*As built (fix round 1):* two rows more. **Clocks disagree** (a second `reading-moved` on the same words, §10.1):
+`This computer's clock is off from Frizz's. Press Enter to read it again.` — Enter reads again. **A rule no words
+cover** (a model reading, §4.3): `That schedule is too intricate to show here. Try saying it more simply, like “every
+Friday at 9am”.` On the phone every line here that names a key names the tap instead (§12).
+
 ### 5.10 M5 — mode, empty
 Today's copy: `Type what to do and when it runs, like “every weekday at 9am triage new issues”.` The placeholder
 is `What to do, and when it runs…`.
@@ -803,6 +875,11 @@ in order:
 
 The offer re-derives from the text, so `⇥ Schedule  ↵ Start now` is back on screen. Focus returns to the box, with
 the caret at the end.
+
+*As built (fix round 1, X1):* a mode the human entered after the create, for new text, stays on through Undo
+(§1.3.1); the dismissals are restored only when the mode is off. And the panel folding away after any exit is
+`inert` for its 160ms linger (X3): it was mounted with the handlers of the state it was drawn in, so a press that met
+its Create just after Esc created the schedule.
 
 ---
 
@@ -882,6 +959,10 @@ Rules behind the table:
   on, **and** `document.activeElement` is inside that box's root. `handleDialogEscape` asks the claims first; on
   true it calls `preventDefault()` (the dialog stays open) and `stopPropagation()`. The next Esc closes the dialog,
   as today.
+  *As built (fix round 1, X4):* a claim can also PASS. Radix asks the claim before the box's own handler, so with
+  the box's slash or mention menu open the claim left the mode and the menu stayed open, one Enter from accepting
+  its row. While a menu is open, or an IME composes, the box's claim answers `"pass"`: `preventDefault()` keeps the
+  dialog and the key travels on to the box, which closes its menu — the page box's order, in the dialog.
 - **Phone:** there are no keys. See §12.
 
 ---
@@ -985,6 +1066,19 @@ the row up.
 - "The phrase alone determines the rule" is a property test now (`schedule-phrase.rederive.test.ts`): 2,553
   exact readings the box can send, over the corpus at five clocks (both corpus clocks, both 2026 DST eves, a
   year boundary), each re-read identically from its phrase alone under `field`. 0 failures.
+
+*As built (fix round 1, rederive-refuses-same-runs-across-boundary):* "identical rrule and dtstart" refused the two
+clocks disagreeing about which run comes first: `every 15 minutes` read at 14:44:40 starts 14:45 and at 14:45:10
+starts 15:00, the browser's re-read (still before 14:45 on its clock) sent the same start, and the second refusal
+showed the reload copy. Measured over a day of Enter presses with the server 2s / 30s / 90s ahead: refused 0.23% /
+3.34% / 10.01% (`every 15 minutes`), 0.06% / 0.83% / 2.50% (`every hour`). Now:
+- the server takes the same rrule from another start when the next 20 runs from its now are the same instants, and
+  stores ITS start (`rederiveLocalReading` returns it). A COUNT is anchored at its start and a once is its start, so
+  those are never moved, and neither is an INTERVAL anchored elsewhere. After: 0.00% for both at every skew;
+  `every 2 hours` still 0.06 / 0.83 / 2.50%, correctly — its runs really differ. `every day at 2:40pm` read at 2:39
+  and saved at 2:41 is created from tomorrow (the toast's next run says so) rather than refused;
+- on the client a second `reading-moved` on the same words is the clocks disagreeing, not a stale bundle: the
+  clock copy (§5.9), and Enter reads again. Only `schedule-grammar-stale` says reload.
 
 ### 10.2 Titles
 - **`provisionalScheduleTitle(prompt)`** (shared, pure):
@@ -1100,6 +1194,11 @@ go, and fixes the comment.
 - The glyph's title drops `(Tab)`, and the screen-reader line ends `Tap Schedule to schedule it.`
 - The send button's swap needed nothing new: the sheet holds the desktop box, whose send glyph already follows
   the mode; driven, the repeat glyph's tap created and never dispatched.
+
+*As built (fix round 1, X7):* the panel's keyed lines name the tap on the phone (`phoneCopy`): `Updated for the
+current time. Tap Create schedule.`, `Couldn't read that just now. Tap the repeat button to try again.`, `Tap the
+repeat button to read it again.`, and the clock line. Create's title and the send button's (Composer `sendTitle`)
+drop `(Enter)`. Unit-tested, not driven on the phone.
 
 ---
 
@@ -1440,6 +1539,15 @@ and opacity fades, which run under reduced motion app-wide. Without the emulatio
 `sched-reveal`, `sched-ledge-in` and the slot's `grid-template-rows` at the offer alone. `nub run test:e2e` does
 not reach it today: its `NEEDS_REAL_STACK` cross-check exits first on `projectPickerIcon.e2e.test.ts` (from the
 upstream merge `7142546f`), so run it as `FRIZZ_SCHEDULE_E2E_URL=<vite> nub --test <file>`.
+
+*As built (fix round 1):* cases **15–20**, each run red on the unfixed code first: 15 Undo with a newer mode
+(X1), 16 a prompt starting with a newline (X8; the fixture's interpret now parses with the real
+`InterpretScheduleInput`, so it trims like the server), 17 one model read under the `c` dialog (X2), 18 the
+folding panel's Create after Esc (X3 — the test pins the slot still, its row open and its transitions off, so a real
+key and a real press meet a Create that is still drawn; unpinned, a press one CDP round trip behind the key met it
+in about half the runs), 19 a slash menu's Esc in the dialog (X4), 20 the clock copy after two `reading-moved`.
+`projectPickerIcon.e2e.test.ts` is now in `NEEDS_REAL_STACK`, so `nub run test:e2e -- <this file>` runs it:
+21/21 (case 10 is two tests).
 
 ### 15.3 Real stack (`frizz-stack` + `headless-browser`, `scripts/shot.mjs`, never a visible window)
 1. Create a schedule from the real box through the local path, then assert:
