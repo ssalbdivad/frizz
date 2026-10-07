@@ -398,3 +398,107 @@ intended difference, listed in §4) or a parity bug.
 
 Steps 1–8 change only the fork, and David's default stays All projects. Each step also lowers the cost of
 the daily merge, because the fork's code stops diverging from upstream on the surfaces he keeps editing.
+
+---
+
+## 10. Decisions made while implementing steps 1–9 (branch `upstream-superset`, 2026-10-06)
+
+Where the code showed a plan item to be wrong, ambiguous or impossible, this is what was decided and why.
+Each line names the step it amends.
+
+**Step 1 (parity fixes)**
+- Steps card on the queue card is the drawer's card (numbered steps, one Done), not fe668a8d's note box and
+  "Couldn't do it": upstream dropped both itself; `AwaitingSteps.tsx` on 0a3b9139 is byte-identical to the fork's.
+  Every action on a card's awaiting card goes to the card's own project.
+- Question placement on the queue card follows the drawer's readers. A placement marker picks the rest, but on
+  the clamped handoff view the card draws at that rest's end, since a card inside "Show more" is invisible.
+  No per-question Send: the fork already sends each answer on its own and merges them server-side.
+- Contract text: a placement marker draws its card where it sits, and the contract tells the worker to write
+  none. The fork's ask-last guidance is unchanged.
+- Phone asks are counted the fork's way (the "?" mark, which includes a pending permission request), off each
+  project's own Queue tab, so the list's number always equals the header it opens. Restart worker is not offered
+  in the long-press sheet for another project's row (the cross-project send cannot ask for a fresh process).
+- Single pictures still open the fork's `ImageViewer`; its zoom now comes from the lightbox's own gesture code
+  (`lib/viewerGestures.ts`), so there is one zoom implementation.
+
+**Step 2 (the project board)**
+- The board drops the project's own row; the switcher names the project. That line pays for the five band headers:
+  the board measured exactly 22 rows at 1440x900 before, with no headroom.
+- No rule between Pinned and Queue (Queue's header parts them) and none between two closed quiet headers.
+- Sub-agent rows on the board only; All projects keeps the count (its headroom is one line).
+- A deep link to a queued thread lands on its card only when the page was opened from outside the tab (a bookmark,
+  a pasted URL). Inside the app, threads keep opening drawers, as the fork has since 2026-09-28. All projects, the
+  phone and the editor sidebar never land on a card. Upstream's landing hold was still needed, because the fork's
+  viewport lock holds the reading line, not the landed card.
+- The ⋯ project menu moved into the status row beside the repo link. Folds of the quiet bands persist per project
+  in `frizz.boardOpenBands`, apart from All projects' folds.
+- The phone header keeps "working" for the spinning rows (Colin's own phone board says it) and now says "queued"
+  for the rest of the queue.
+
+**Step 3 (All projects and the capacity test)**
+- Group gap 6px rather than 8: 6px gives 23 lines at 1440x900 (bar 22); 7px and 8px meet the bar exactly with
+  no headroom. David found 6px tight on 2026-10-01, with a muted "N more" row above the gap; that row is gone.
+  `GROUP_GAP` in `ProjectList.tsx` is the one constant to change.
+- "N more" sits right after the project's name, not among the right-edge counts.
+- A folded project adds a Pinned count; the existing accent badge is its Queue count.
+- `pinnedDone` is a separate field on each project's queue, so no other reader of the open list sees a Done
+  thread. `doneCount` excludes pinned Done threads, as the board's Done band does.
+- On the project board the cross-project poll slows to 30s for the switcher's counts, rather than reading on open
+  (counts would change under the pointer). The notification observer now polls only while the tab is hidden.
+- The capacity test boots its own three stacks behind `FRIZZ_CAPACITY_E2E=1` and seeds the database directly,
+  since no RPC can create a running thread without a real agent.
+- Measured on the merged branch: All projects at Colin's load 23 lines at 1440x900 and 30 at 1920x1080 (bars 22 and
+  28); the project board with 70 open threads 22 and 29.
+
+**Step 4 (queue card parity)**
+- **David 2026-10-06: a card's earlier messages open its drawer** (his 2026-09-29 call, b3872adc). The in-card
+  transcript with Colin's folded middle and "Load earlier" was built, verified and then removed; both are in the
+  drawer, one click away. The per-card collapse button, steps card, resting card and per-rest questions stay.
+
+**Step 5 (rules)**
+- The lift-back reverses da8ebaf1's "Archived → Done whatever the worker is doing"; its other half (a human bump
+  really un-archives) stays. The lifted row keeps the Done dim plus the uncheck box with a spinner, which serves as
+  the "finishing" mark.
+- Quiet-turn queueing needed no code: the row's mark already resolves to the spinner. It is now pinned by a test.
+
+**Step 6 (agent surface)**
+- Only `editor` is gated. The fork's other tools back always-on features, and no tool or contract text concerns
+  thread terminals, so nothing is gated on node-pty.
+- "Capability" means an editor window has this project open, not any editor connected; otherwise every project's
+  workers would be shown a tool that answers "none has this project open".
+- A new `workerCapabilities` RPC reports it (`__procedures` lists procedures, not live state). frizz-mcp polls it
+  every 10s and notifies the client; Claude Code 2.1.287 re-reads the tool list. The contract section is fixed per
+  worker process, so the two can briefly disagree.
+
+**Step 7 (hygiene)**
+- `scripts/schedule-extract-eval.*` deleted as listed, though 6554d0ea had kept it that morning as a benchmark. Its
+  numbers are in that commit, in the `SCHEDULE_INTERPRETER_MODEL` comment and in `plans/schedule-live-reading.md`;
+  `git revert 15f776e8` restores it.
+- 29 fork-added scripts deleted (5,124 lines), each with the maintained test that covers it named in the commit;
+  14 kept because a skill, test, doc or kept script uses them.
+- `command_thread` → `thread_terminal` needed a real migration after all: this machine's database has the table.
+  The rename keeps every row; `queued_at` is dropped.
+- Upstream's `pendingCallDeadline` kept with the fork's awake time passed in. Two behaviours now follow upstream: a
+  dead child mid-call reads stale 15m past its call's deadline (the fork said 2m), and only Bash declares a bound.
+- Spinoff's legacy side-turn path is NOT cut. Codex has no session fork in Frizz's app-server client, ACP has none
+  that is portable, cross-project spinoffs use the brief route by David's 2026-09-30 call (cce227b4), and a parent
+  with no transcript has nothing to fork.
+- Quotes: fork-added `maintainer YYYY-MM-DD` quotes dated from the fork point (2026-09-26) whose text is not in
+  upstream's tree now read `David YYYY-MM-DD`.
+
+**Step 8 (Background summaries)**
+- Turning it off also disables "Rename with Claude". The three environment variables still work, as off-only
+  overrides. It applies without a restart. The phone's settings page, which holds only phone-relevant rows, does
+  not list it.
+
+**Step 9 (plugins)**
+- User-visible copy says "Frizz plugins", apart from Claude Code plugins ("Reload plugins"). The final name is
+  Colin's call (§8).
+- The held thread keeps a downgrade-safe shadow: every held row also carries a non-null `lazy_prompt`, so an
+  older server generation reads it as an unstarted thread. Nothing is dropped.
+- A schedule's pending run is a row held by `schedules` and keeps its per-run note in `lazy_prompt`.
+- An orphaned held row (its plugin missing or failed) is not queued; it sits in Running's place as "Not started",
+  with no band stamp, and starts on its next message with base's copy of the latest note.
+- `plugins` is a reserved project slug (the `/_frizz/plugins/<id>/…` asset route).
+- Lazy threads ship in the repo as `plugins/lazy`, installed with `nub plugins/install.ts lazy`. Until it is
+  installed, existing lazy threads leave the queue and wait in Running's place as "Not started".
