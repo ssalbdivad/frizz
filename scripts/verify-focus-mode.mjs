@@ -5,8 +5,10 @@
 //   · `/project/<slug>` shows that project alone: its list, its cards, and a prompt box that dispatches into
 //     it with no picker; the query-era `/?project=<slug>` (2026-09-29 to 2026-10-06) and an older
 //     launcher's `?focus=<slug>` land there;
-//   · the view lives in the ADDRESS, per tab: two tabs on two boards stay there across reloads, and a bare
-//     `/` is always All projects (2026-09-30), as is a retired `/?all`;
+//   · the view lives in the ADDRESS, per tab: two tabs on two boards stay there across reloads; All
+//     projects is `/all` (a retired `/?all` lands there), and a bare `/` goes back to the view this
+//     browser showed LAST — a board for a browser that never chose (2026-10-06; it was All projects from
+//     2026-09-30) — while a phone's `/` is its projects list;
 //   · the status row's switcher changes the view by navigating, and Back undoes it; All projects is the
 //     unified page, with the prompt box's picker carried over to the project just left;
 //   · a thread drawer closes back to the tab's view, not to a guess;
@@ -256,7 +258,7 @@ try {
   })
   await step("All projects is the unified page, its picker carried over from the project left", async () => {
     await choose(page, "all-projects")
-    await waitAddress(page, "/")
+    await waitAddress(page, "/all")
     await showing(page, null)
     const groups = await listed(page)
     check("All projects lists every project", projects.every((p) => groups.includes(p.id)), `${groups.length} groups for ${projects.length} projects`)
@@ -280,7 +282,7 @@ try {
     await page.hover("[data-xq-board-identity]")
     await clickSettled(page, `[data-xq-board-identity] button[aria-label^="More actions for"]`)
     await clickSettled(page, '[role="menuitem"]', { text: "Show all projects" })
-    await waitAddress(page, "/")
+    await waitAddress(page, "/all")
     await showing(page, null)
     await page.hover(`[data-xq-project-row="${A.id}"]`)
     await clickSettled(page, `[data-xq-project-row="${A.id}"] button[aria-label^="More actions for"]`)
@@ -301,23 +303,42 @@ try {
     await second.reload({ waitUntil: "networkidle2" })
     await showing(second, B)
     check("each tab keeps its board across a reload", (await address(first)) === `/project/${A.slug}` && (await address(second)) === `/project/${B.slug}`, `${await address(first)} | ${await address(second)}`)
+    // The memory is the BROWSER's, not the tab's: the second tab's reload was the last view shown.
     await first.goto(`${origin}/`, { waitUntil: "networkidle2" })
-    await waitAddress(first, "/")
-    await showing(first, null)
-    check("a bare / is All projects, even in a tab focused a moment ago", true)
+    await waitAddress(first, `/project/${B.slug}`)
+    await showing(first, B)
+    check("a bare / goes back to the view this browser showed last (the board reloaded last)", true)
     await second.close()
     current = first
   })
-  await step("a fresh browser opens All projects, and a retired ?all lands on /", async () => {
+  await step("a bare / remembers All projects once chosen, and a board once chosen", async () => {
+    await choose(page, "all-projects")
+    await waitAddress(page, "/all")
+    await showing(page, null)
+    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await waitAddress(page, "/all")
+    await showing(page, null)
+    check("after choosing All projects, / opens All projects", true)
+    await choose(page, A.slug)
+    await waitAddress(page, `/project/${A.slug}`)
+    await showing(page, A)
+    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await waitAddress(page, `/project/${A.slug}`)
+    await showing(page, A)
+    check("after choosing a project, / opens its board", true)
+  })
+  await step("a fresh browser at / lands on a board, and a retired ?all lands on /all", async () => {
     const empty = await browser.createBrowserContext()
     const blank = await open(empty, `${origin}/`)
-    await waitAddress(blank, "/")
-    await showing(blank, null)
-    check("a fresh browser at / opens All projects", true)
+    await blank.waitForFunction(() => /^\/project\/[^/]+$/.test(location.pathname), { timeout: 10_000 })
+      .catch(async () => { throw new Error(`a fresh browser at / never reached a board; it is at ${await address(blank)}`) })
+    const landed = decodeURIComponent((await address(blank)).slice("/project/".length))
+    await showing(blank, bySlug[landed] ?? { slug: landed })
+    check("a fresh browser at / opens a project's board, never All projects", Boolean(bySlug[landed]), landed)
     await blank.goto(`${origin}/?all`, { waitUntil: "networkidle2" })
-    await waitAddress(blank, "/")
+    await waitAddress(blank, "/all")
     await showing(blank, null)
-    check("?all is rewritten to /", true)
+    check("?all is rewritten to /all", true)
     await empty.close()
     current = page
   })
@@ -341,7 +362,7 @@ try {
   })
 
   // ── a phone's width ────────────────────────────────────────────────────────────────────────────────
-  for (const [view, url] of [["focused", `/project/${A.slug}`], ["All projects", "/"]]) {
+  for (const [view, url] of [["focused", `/project/${A.slug}`], ["All projects", "/all"]]) {
     await step(`at 420px nothing overflows sideways (${view})`, async () => {
       await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
       await page.goto(`${origin}${url}`, { waitUntil: "networkidle2" })
@@ -353,6 +374,20 @@ try {
       await page.screenshot({ path: join(shots, `focus-mode-narrow-${view === "focused" ? "focus" : "all"}.png`), fullPage: true })
     })
   }
+  await step("a phone's / is its projects list, and choosing from it pushes", async () => {
+    await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
+    await page.goto(`${origin}/`, { waitUntil: "networkidle2" })
+    await page.waitForSelector("[data-mobile-projects-page]")
+    check("a phone's / stays / and shows the projects list", (await address(page)) === "/", await address(page))
+    check("…with nothing marked as the view showing", (await page.$('[data-mobile-project-row][aria-current="page"]')) === null)
+    await clickSettled(page, `[data-mobile-project-row="${B.slug}"]`)
+    await waitAddress(page, `/project/${B.slug}`)
+    await page.waitForSelector('[data-mobile-board="project"]')
+    await page.goBack()
+    await waitAddress(page, "/")
+    await page.waitForSelector("[data-mobile-projects-page]")
+    check("…and Back from the board chosen returns to the list", true)
+  })
 
   check("no page errors", errors.length === 0, errors.slice(0, 4).join(" | "))
 } finally {
