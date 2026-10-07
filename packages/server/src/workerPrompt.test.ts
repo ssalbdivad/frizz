@@ -66,13 +66,13 @@ test("the contract teaches that a registered question draws itself at the bottom
     assert.match(c, /THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
     assert.match(c, /frizz draws the question at the BOTTOM of the handoff of the rest that asked it, below its last line/)
     // A question stays at the rest that asked it (upstream 2026-10-05) — a later rest names it under
-    // `questions:` or withdraws it. A typed message changes nothing about it: it stays open until it is
-    // answered, dismissed or withdrawn. A question dismissed, or withdrawn by the worker after the
-    // human's message, is never asked again.
-    assert.match(c, /A QUESTION STAYS AT THE REST THAT ASKED IT/)
+    // `questions:` or withdraws it, said once, where the worker stops. A typed message changes nothing
+    // about it: it stays open until it is answered, dismissed or withdrawn. The refusal of a re-ask is
+    // `ask`'s own (its description and its refusal say so), so the contract does not restate it.
+    assert.match(c, /AT EVERY LATER REST, SAY WHERE EACH OLD QUESTION STANDS/)
     assert.match(c, /A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU WITHDRAW IT/)
+    assert.match(c, /A message the human types instead of answering changes nothing about it/)
     assert.doesNotMatch(c, /SETS IT ASIDE|`keep`|mcp__frizz__keep/)
-    assert.match(c, /NEVER ASK\s+AGAIN a question the human dismissed, or one you yourself withdrew after their newest message/)
     assert.doesNotMatch(c, /A REPLY PAST A QUESTION IS A PIVOT/)
     assert.doesNotMatch(c, /`unask` the old id and `ask` again/)
     // Answers come a question at a time, so the worker must act on each as it lands — the reason the

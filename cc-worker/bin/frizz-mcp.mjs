@@ -72,8 +72,6 @@ const SPAWN_THREAD = {
     "spawned more, and three descendants independently rediscovered the same root cause over twenty hours. " +
     "Spawn only when the work genuinely cannot ride on your own card: a different repo, a different long-lived " +
     "runtime, an effort that must outlive yours. Never spawn merely to clear your own `done` fence. " +
-    "Work in a DIFFERENT REPO belongs in THAT repo's project: name it with `project`, or the thread lands on " +
-    "your board, out of sight of anyone working that repo. " +
     "You MUST deliberately choose `model` and `effort` to match the NEW thread's task complexity — they are " +
     "required, there is NO default. Do not reflexively pick the cheapest; a hard task on a weak model/effort " +
     "wastes the whole thread.",
@@ -308,9 +306,7 @@ const WATCH_PR = {
     "red, you push a fix, CI goes green, a reviewer comments — that is four wakes from one call, and you " +
     "never have to re-register between them. It settles itself when the PR merges or closes, because " +
     "there is then nothing left to report.\n\n" +
-    "REGISTER IT THE MOMENT YOU OPEN OR PUSH A PR. Opening or pushing one is not this tool's call: do " +
-    "it only when the human's current request or the project's docs say to — a PR they asked for " +
-    "earlier is no mandate for the next change. Nothing else watches for you: your runtime knows " +
+    "REGISTER IT THE MOMENT YOU OPEN OR PUSH A PR. Nothing else watches for you: your runtime knows " +
     "nothing about GitHub, and an ```awaiting fence STATES what you are waiting on without creating any " +
     "wait at all. This tool is the wait.\n\n" +
     "THE ```awaiting FENCE IS STILL WORTH WRITING, and it is a different job: it is how you come to REST " +
@@ -593,21 +589,16 @@ function questionSchema(depth) {
           "Mark the ONE option you would take, and put it first. At most one per question — a " +
           "recommendation on two of three choices says nothing. IF YOU CAN MARK ONE, ASK YOURSELF WHY " +
           "YOU ARE ASKING: you already know the answer, so implement it and say which way you went. " +
-          "This is for the fork you genuinely cannot take yourself. AND IT IS THE DEFAULT: a question " +
-          "still unanswered 10 minutes after you rest on it takes this option for the human (never on " +
-          "a `danger`, `multi` or free-text question), and the answer reaches you marked as Frizz's " +
-          "default — so mark only an option you would act on without them, or mark it `external`.",
+          "This is for the fork you genuinely cannot take yourself. It is also the 10-minute default " +
+          "(see the tool description), so mark only an option you would act on without them, or mark it `external`.",
       },
       external: {
         type: "boolean",
         description:
           "Taking this option acts OUTSIDE this machine: it files an issue, posts a comment or review, " +
           "merges, pushes, publishes, sends a message or spends money — anything that goes out under " +
-          "the human's name or that others see. MARK EVERY SUCH OPTION, recommended or not. Frizz's " +
-          "10-minute default never takes one: if the recommendation is `external`, the default takes " +
-          "the FIRST option that is not, so order the rest with the least-blocking local choice first " +
-          "(\"keep the draft in the handoff\", \"leave it for later\"). A question whose every option is " +
-          "`external` waits for the human.",
+          "the human's name or that others see. MARK EVERY SUCH OPTION, recommended or not: the 10-minute " +
+          "default never takes one, so put the least-blocking local choice right after an `external` recommendation.",
       },
       // `preview` (markdown revealed under the option once picked) is RETIRED from this schema
       // (2026-09-01): detail that decides a choice must be visible before the choice, so it belongs in
@@ -694,9 +685,8 @@ const ASK = {
     "direction that is genuinely the human's taste to set. And ask when you KNOW the answer but cannot " +
     "ACT on it: a merge, a publish, a spend, a comment that goes out under their name. Then the " +
     "recommendation is the point, and it goes first.\n\n" +
-    "ASK LAST, THEN REST. The card reaches the human's queue only when you come to REST: while you are " +
-    "still working your thread spins in the Active band and nobody is prompted to answer it, so a " +
-    "question asked mid-work sits unseen for as long as you keep going. Finish everything that does NOT " +
+    "ASK LAST, THEN REST. The card reaches the human's queue only when you come to REST, so a question " +
+    "asked mid-work sits unseen while you keep going. Finish everything that does NOT " +
     "depend on the answer FIRST, then ask, then stop. If what is left is substantial work you would do " +
     "on your recommended option anyway, the call was yours: take it, say which way you went, and do not " +
     "ask at all.\n\n" +
@@ -713,9 +703,8 @@ const ASK = {
     "that does neither is bumped, and so is any ```awaiting fence that leaves an open question out.\n\n" +
     "AN UNANSWERED QUESTION DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
     "`recommended` option for the human and delivers that as the answer, noting it was the default — " +
-    "UNLESS that option is `external` (it files, posts, merges, pushes or publishes): an act outside " +
-    "this machine needs the human's own answer, so the default takes the first option that is not " +
-    "`external` instead, and you must not then do the external act anyway. A `danger`, `multi` or " +
+    "UNLESS that option is `external` (it files, posts, merges, pushes or publishes): then the default " +
+    "takes the first option that is not `external`, and you must not do the external act anyway. A `danger`, `multi` or " +
     "free-text question, one with no recommendation, or one whose every option is `external`, waits " +
     "for the human.\n\n" +
     "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU `unask` IT. A message " +

@@ -2565,7 +2565,7 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
         "1. Read where each child stands: `mcp__frizz__read_thread` on its address, its output file, or the",
         "   commits and files it has written since the last check-in.",
         "2. Steer any child that is off course, stuck or duplicating another's work. `SendMessage` reaches a",
-        "   plain background sub-agent; never message a Workflow's agent (it starts a second copy).",
+        "   plain background sub-agent and a running Workflow's agent alike.",
         "3. Report: a short progress note above the fence — what landed, what is running, what changed.",
         "   Write it for someone who has read nothing since their last message: where the effort stands",
         "   against its goal, in their words, with no names you coined (round numbers, phase codes, ids).",
