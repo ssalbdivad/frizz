@@ -76,7 +76,7 @@ export default function Home() {
           width={1760}
           height={1100}
           priority
-          alt="The Frizz board: projects and their threads on the left, the prompt box, and a queue card where an agent asks a question with lettered options."
+          alt="Frizz focused on one project: the prompt box and the project's threads on the left, and on the right the first queue card, where an agent asks whether the settings store should use SQLite or a JSON file, with lettered options and a countdown to the recommended pick."
         />
       </section>
 
@@ -96,8 +96,8 @@ export default function Home() {
           <Shot
             src="/img/question.png"
             width={1600}
-            height={590}
-            alt="A queue card asking whether the settings store should use SQLite or a JSON file, with lettered options and the first marked recommended."
+            height={558}
+            alt="A question card asking whether the settings store should use SQLite or a JSON file, with option A marked recommended, a row for typing something else, and below it a countdown to the recommended pick."
           />
         }
       >
@@ -120,7 +120,7 @@ export default function Home() {
             src="/img/projects.png"
             width={1760}
             height={1100}
-            alt="The All projects page: projects listed with their threads beneath them, and every project's queue cards beside them."
+            alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the ready cards from every project are queued on the right."
           />
         }
       >
@@ -155,7 +155,7 @@ export default function Home() {
         title="Schedules, in plain words."
         link={{ href: "/docs/schedules", text: "Schedules" }}
         media={
-          <Shot src="/img/schedule.png" width={1600} height={1000} alt="A schedule in Frizz." />
+          <Shot src="/img/schedule.png" width={1598} height={639} alt="The prompt box reading 'every weekday at 9am triage new issues' as a schedule: the phrase highlighted, the send button turned into a repeat button, and a strip reading 'Every weekday at 9am · next Thu Oct 8, in 22h'." />
         }
       >
         <p>
@@ -169,7 +169,7 @@ export default function Home() {
         flip
         link={{ href: "/docs/time-limits", text: "Time limits" }}
         media={
-          <Shot src="/img/time-limit.png" width={1600} height={1000} alt="A thread with a time limit in Frizz." />
+          <Shot src="/img/time-limit.png" width={1600} height={688} alt="A queue card whose header shows a 43m left countdown, with the time-limit panel open: +15m, +30m and +1h, a field for a new limit, and Remove time limit." />
         }
       >
         <p>

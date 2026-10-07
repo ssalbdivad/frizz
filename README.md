@@ -49,7 +49,7 @@ Prefer a window of its own to a browser tab? The desktop app is on [GitHub relea
 Work in VS Code, Cursor or Windsurf? [The extension](packages/vscode/README.md) lets you select code and ask Frizz about it, and opens Frizz's file links in your editor at the line they name.
 
 <p align="center">
-  <img src="assets/board.png" alt="The Frizz board: the project rail down the left, the composer and the queue of threads beside it, and on the right a card where an agent is asking an answerable question with lettered options, with its snooze clock and done check in the card's header." width="100%">
+  <img src="assets/board.png" alt="Frizz focused on one project: the prompt box and the project's threads on the left, and on the right the first queue card, where an agent asks whether the settings store should use SQLite or a JSON file, with lettered options and a countdown to the recommended pick." width="100%">
 </p>
 
 <br/>
@@ -79,7 +79,7 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Frizz is one page, at `http://127.0.0.1:9393/`: your projects down the left with the threads in flight under each, and every card waiting on you beside them. A project's snoozed and done threads show as small counts on its row; click the row to list them in place, and drag rows to reorder them. The page's title, top-left above the prompt box, switches between **All projects** and a single project. Focused on one, the list, the queue and new threads are all that project's. ⌥↑/⌥↓ step between projects. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
 
 <p align="center">
-  <img src="assets/projects.png" alt="Frizz's one page: a prompt box above a list of projects — marketing-site, acme-api, billing-worker — each with its threads beneath it, and beside the list every project's ready cards in one column, the first asking a question with lettered options." width="100%">
+  <img src="assets/projects.png" alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the ready cards from every project are queued on the right." width="100%">
 </p>
 
 Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**, and its threads are listed under Home in the project list like any project's.
@@ -95,7 +95,7 @@ The queue is strict about what earns a card, which is what keeps it a real todo 
 **Threads are built to run without you.** A worker keeps going until it reaches something only you can settle — a product call, a fork where guessing wrong is expensive to undo, an irreversible action — and then it hands back an answerable *question* rather than a wall of text for you to re-read and interpret.
 
 <p align="center">
-  <img src="assets/question.png" alt="A question card titled Question: 'Should the settings store use SQLite or a JSON file?' with two lettered options, A tagged RECOMMENDED, and a third row for typing something else." width="100%">
+  <img src="assets/question.png" alt="A question card asking whether the settings store should use SQLite or a JSON file, with option A marked recommended, a row for typing something else, and below it a countdown to the recommended pick." width="100%">
 </p>
 
 Options are lettered and answered in one click, and a worker marks its own recommendation when it has one — so the common case is a single keystroke. There is always a row for writing something else instead.
@@ -117,7 +117,7 @@ Not ready to start something? Press ⌘/Ctrl-Shift-Enter in the new-thread box, 
 Browse the repo's issues and pull requests from the composer, select any number of them, and each becomes its own thread.
 
 <p align="center">
-  <img src="assets/github.png" alt="The GitHub picker open over the composer, listing real open issues from colinhacks/zod with numbers, authors, and reaction counts; three are checked and a Start investigations button is enabled." width="100%">
+  <img src="assets/github.png" alt="The GitHub picker listing a repo's open issues with comment, reaction and linked-PR counts, three of them checked, and a Start 3 investigations button." width="100%">
 </p>
 
 Workers can also read issues, diffs, and CI on their own — but only read. A worker never comments, labels, closes, or merges unless you ask it to.
@@ -127,7 +127,7 @@ Workers can also read issues, diffs, and CI on their own — but only read. A wo
 Park a card for an hour, until tomorrow morning, or until a date you pick. Attach a follow-up prompt and the thread wakes up already working on it.
 
 <p align="center">
-  <img src="assets/snooze.png" alt="The snooze menu open from the alarm clock in a queue card's header, offering 1 hour, tomorrow at 9am, 1 day, 3 days, 1 week, and a custom time and prompt." width="100%">
+  <img src="assets/snooze.png" alt="The snooze menu opened from the alarm clock in a queue card's header, offering 1h, tomorrow, 1d, 3d, 1w and a custom time." width="100%">
 </p>
 
 ### Goal
@@ -144,9 +144,17 @@ A goal can stop itself after a number of sends or a span of time, so "check back
 
 Write a recurring prompt the way you'd say it — "every Monday at 9am triage new issues", "first weekday of the month bump deps". When the prompt box sees a schedule word, it reads the schedule as you type and shows the rule it understood and when it next runs, before you press Enter. Press × if you didn't mean a schedule. Each run starts a fresh thread in that project. The next one waits in Snoozed, where you can skip it, move it or run it now. Find every schedule from ⌘K.
 
+<p align="center">
+  <img src="assets/schedule.png" alt="The prompt box reading 'every weekday at 9am triage new issues' as a schedule: the phrase highlighted, the send button turned into a repeat button, and a strip reading 'Every weekday at 9am · next Thu Oct 8, in 22h'." width="100%">
+</p>
+
 ### Time limits
 
 The stopwatch beside the model in the prompt box gives a thread a limit: `2h`, or a clock time like `15:30`. The agent is told, plans for the best result it can hand over by then, and gets reminders as the limit approaches. A sub-agent it starts gets a share of the time that's left. The card counts down, turns amber near the end and red once over. Its chip extends or removes the limit. Running out never interrupts a turn; you still can.
+
+<p align="center">
+  <img src="assets/time-limit.png" alt="A queue card whose header shows a 43m left countdown, with the time-limit panel open: +15m, +30m and +1h, a field for a new limit, and Remove time limit." width="100%">
+</p>
 
 ### Threads and handles
 
@@ -317,6 +325,7 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 <h2 align="center">Docs</h2>
 
+- [frizz.sh/docs](https://frizz.sh/docs) — the full docs: every feature, remote access, the CLI and the FAQ.
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the invariants, layout, and design decisions. Read it before changing anything.
 - [`FRIZZ.md`](FRIZZ.md) — this repo's own worker norms, as a worked example of the optional per-repo prompt.
 - [Remote access](docs/remote-access.md) — reaching Frizz from a phone or another machine.
