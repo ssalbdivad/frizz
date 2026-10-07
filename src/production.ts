@@ -122,7 +122,7 @@ if (options.help) {
 Usage: npx ${PACKAGE_NAME} [options]
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
-all on one page, so a second run joins the one already going. Runs the
+each on its own board, so a second run joins the one already going. Runs the
 npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev only
 for a source checkout.
 

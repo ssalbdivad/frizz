@@ -450,7 +450,7 @@ export function helpText(command = "frizz-dev"): string {
 Usage: ${command} [options]
 
 Run it in the directory you want to work in. One server serves EVERY project on this machine,
-all on one page, so a second run joins the one already going. Frizz serves a
+each on its own board, so a second run joins the one already going. Frizz serves a
 verified immutable artifact, selecting or safely building one on first launch, then opens it in
 your default browser; source edits never restart the shared board.
 
