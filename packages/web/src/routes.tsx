@@ -160,7 +160,7 @@ function PageRoute() {
 }
 
 /**
- * A BARE `/` — what the desktop app opens, what a typed address or an old bookmark is — goes back to the
+ * A BARE `/` — what a typed address or an old bookmark is — goes back to the
  * view this browser showed last: a project's board, or All projects (lib/crossProject.ts lastViewHref). A
  * browser that never showed one gets a board, never All projects, because a board is the default: the
  * project `frizz` was last run in, else the first. With no project at all it is the welcome.

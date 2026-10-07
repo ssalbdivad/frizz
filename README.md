@@ -44,8 +44,6 @@ $ npx frizz
 
 A browser tab opens on acme's board, `http://127.0.0.1:9393/project/acme`, with its prompt box aimed at `acme`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine. A directory you run it in becomes a **project** — at once for a repository or anything with a `package.json`, `Cargo.toml` and the like, and after a confirmation for a plain folder — so running `npx frizz` in a second repo adds that project to the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
-Prefer a window of its own to a browser tab? The desktop app is on [GitHub releases](https://github.com/colinhacks/frizz/releases?q=desktop) for all three — unsigned builds, so the first launch asks once. It needs the same Node, and starts or joins the same server.
-
 Work in VS Code, Cursor or Windsurf? [The extension](packages/vscode/README.md) lets you select code and ask Frizz about it, and opens Frizz's file links in your editor at the line they name.
 
 <p align="center">
@@ -337,7 +335,7 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the invariants, layout, and design decisions. Read it before changing anything.
 - [`FRIZZ.md`](FRIZZ.md) — this repo's own worker norms, as a worked example of the optional per-repo prompt.
 - [Remote access](docs/remote-access.md) — reaching Frizz from a phone or another machine.
-- [The VS Code extension](packages/vscode/README.md) and [the desktop app](packages/desktop/README.md).
+- [The VS Code extension](packages/vscode/README.md).
 
 <br/>
 

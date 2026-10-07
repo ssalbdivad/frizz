@@ -167,11 +167,11 @@ composer. The message is the ⌘I serialization: `@a.ts:12-20 <question>` then `
 and the quoted selection, so the transcript shows the chip.
 
 Finding Frizz (no configuration): the published launcher's address record
-(`<state>/frizz-server/address.json`), trusted only as the desktop app trusts it — the owner record
+(`<state>/frizz-server/address.json`), trusted only as the launcher trusts it — the owner record
 beside it must name the same token, pid and process start, and that process generation must be alive
 (`readStableServerOwner`, replicated in `discovery.ts` with async spawns and no writes, and tested
-against the real one) — then the well-known ports (9393, 19393, 9494, 19494) with the same ownership
-proof the desktop app uses, then frizz-dev's public port (`<data>/projects/<id>/dev-supervisor.lock`),
+against the real one) — then the well-known ports (9393, 19393, 9494, 19494) with the launch-token ownership
+proof, then frizz-dev's public port (`<data>/projects/<id>/dev-supervisor.lock`),
 and last the port in `<data>/server.lock`. Behind the restart supervisor that last one is the control
 plane's private port: RPC and the editor socket work there, but a page opened on it is a different
 origin, with its own tab state, that dies on the next restart. Without a supervisor it IS the public

@@ -51,8 +51,8 @@ export async function wireRemote(options: RemoteWiringOptions): Promise<RemoteWi
   const firstLink = remote.origin() ? supervisor.issueAccessLink() : null;
 
   // One setup, two surfaces: R in this terminal, and Settings → Remote access in a browser on this
-  // machine. Wired whether or not stdout is a terminal, so a board with no terminal to press R in —
-  // the desktop app's, a backgrounded one — can still be set up.
+  // machine. Wired whether or not stdout is a terminal, so a board with no terminal to press R in — a
+  // backgrounded one — can still be set up.
   const setup = {
     port,
     current: () => remote.current(),

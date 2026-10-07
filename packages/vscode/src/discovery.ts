@@ -4,13 +4,13 @@
 //
 //   1. `frizz.serverUrl`, when the human set it. Nothing else is consulted.
 //   2. `<state>/frizz-server/address.json` — the published launcher's address record, naming the port it
-//      serves. Trusted the way the desktop app trusts it (src/server-owner.ts `readStableServerOwner`):
+//      serves. Trusted the way the launcher trusts it (src/server-owner.ts `readStableServerOwner`):
 //      the machine-wide owner record beside it must name the same token, pid and process start, and that
 //      process generation must still be alive. The record outlives a crash, and by then its port can be
 //      anyone's — a `frizz --sandbox` takes the next free well-known port, another account any port.
-//   3. The well-known ports (9393, 19393, 9494, 19494), accepted only with the launch-token proof the
-//      desktop app checks (packages/desktop/src/server.ts `ownedFrizz`): loopback is shared with every
-//      other account on the machine and with a `frizz --sandbox`, so answering proves nothing.
+//   3. The well-known ports (9393, 19393, 9494, 19494), accepted only with the launch-token proof
+//      (`ownedFrizz` below): loopback is shared with every other account on the machine and with a
+//      `frizz --sandbox`, so answering proves nothing.
 //   4. `<data>/projects/<id>/dev-supervisor.lock` — `frizz-dev`'s public port when it is not on a
 //      well-known one. Ours by construction (it is in our own data root), so liveness is enough.
 //   5. `<data>/server.lock` — written by every launch mode, only while the pid that wrote it is alive.

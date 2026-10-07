@@ -349,7 +349,7 @@ export function withRootsPin(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
  * the debris case this exists to ignore — and the next process, seeing the registry this one wrote
  * under the platform root, resolves the same platform root (supersededByInstall again). That reasoning
  * holds for a process that WRITES the install. A process that only LOOKS for a server — the VS Code
- * extension host, the desktop app's main process — has no install of its own to stay consistent with,
+ * extension host — has no install of its own to stay consistent with,
  * and a frozen answer strands it when the server it is looking for chose differently (a reader that
  * resolved on a fresh machine before debris and the first server appeared found nothing, where the
  * unmemoised code found the server). Those use `frizzPathsNow`.
@@ -374,8 +374,8 @@ export function frizzPaths(options: FrizzPathOptions = {}): FrizzPaths {
 /**
  * What a process starting NOW would resolve: the disk as it is at this instant, no memo, no pin.
  *
- * For processes that only DISCOVER a server and own no Frizz data — the VS Code extension host, the
- * desktop app's main process. They live for days, and the server they look for can restart onto other
+ * For processes that only DISCOVER a server and own no Frizz data — the VS Code extension host. It
+ * lives for days, and the server they look for can restart onto other
  * roots (a deliberate move, or a first launch on a fresh machine that picked `~/.frizz`), so each
  * lookup follows the rule a freshly started server follows. Never use it for anything that WRITES
  * Frizz state: that is exactly the mid-run flip `frizzPaths` exists to prevent.

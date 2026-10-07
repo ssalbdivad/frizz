@@ -25,7 +25,7 @@ Full procedure in [plans/runtime-pin-bumps.md](plans/runtime-pin-bumps.md).
 | Path | What it is |
 | --- | --- |
 | [`src/`](src/) | The `frizz` launcher itself — artifact build/promote/verify, port + lock, browser launch. |
-| [`packages/`](packages/) | The app workspace — `shared`, `rpc`, `server`, `web`, `desktop`, `vscode` (see **Packages** below). |
+| [`packages/`](packages/) | The app workspace — `shared`, `rpc`, `server`, `web`, `vscode` (see **Packages** below). |
 | [`board/`](board/) | The zero-dep `.frizz/` board parser + thread writer. The server SHELLS OUT to it; never re-implement it. |
 | [`cc-worker/`](cc-worker/) | The Claude Code plugin every dispatched agent loads: worker contract seed, sub-agent profiles, hooks. |
 | [`plugins/`](plugins/) | Frizz plugins shipped from this repo (`lazy`, the first), and `install.ts`, which links one into the data directory. |
@@ -223,8 +223,6 @@ None of these is worth a rename sweep — but every new comment says Active / Re
   `tailer.ts` (JSONL), `dispatch.ts` (thread file create + prompt compose + spawn),
   `settings.ts`.
 - `web` — React 19 + Vite 8 + Tailwind v4 + valtio + TanStack Query + xterm.js.
-- `desktop` — the Electron app: a window onto the one server, never a server of its own (see
-  **Desktop app** below). Private; nothing it adds reaches the published packages.
 - `vscode` — the VS Code (and Cursor, Windsurf) extension: a client of the one server over the
   machine-wide editor bridge (see **VS Code extension** below). Private; nothing it adds reaches the
   published packages.
@@ -252,7 +250,7 @@ Frizz used to run ONE SERVER PER PROJECT, each on its own port, so every URL was
 | `/project/<slug>/thread/<t>` | the board with `<t>` open in place: a COLD link (a bookmark, a pasted address) to a queued thread lands on its card on a desktop and the address returns to `/project/<slug>` (`lib/queueLandingHold.ts` holds it there); anything else opens its drawer |
 | `/project/<slug>/thread/<t>/full` | the thread's fullscreen page, outside the layout |
 | `/project/<slug>/status/<s>` | the board with every thread in frizz status `<s>` listed in a panel in the queue's place (`components/StatusListView.tsx`, desktop) |
-| `/` | NO VIEW OF ITS OWN (`routes.tsx LastViewRedirect`): it replaces itself with the view this browser showed last — `/all` or `/project/<slug>`, remembered in localStorage (`frizz.lastView`, `lib/crossProject.ts lastViewHref`; navigation memory, not a setting, and never written by an editor's frame) — and a browser that never chose gets a BOARD: the project last focused here, else the one `frizz` last ran in, else the last opened, else the first. It answers a launcher's `?add=` and the server's `?unknown=` on the way through. On a phone it is the projects list instead. With no project at all it is the welcome page (add a project, or start in Home). What the desktop app opens |
+| `/` | NO VIEW OF ITS OWN (`routes.tsx LastViewRedirect`): it replaces itself with the view this browser showed last — `/all` or `/project/<slug>`, remembered in localStorage (`frizz.lastView`, `lib/crossProject.ts lastViewHref`; navigation memory, not a setting, and never written by an editor's frame) — and a browser that never chose gets a BOARD: the project last focused here, else the one `frizz` last ran in, else the last opened, else the first. It answers a launcher's `?add=` and the server's `?unknown=` on the way through. On a phone it is the projects list instead. With no project at all it is the welcome page (add a project, or start in Home). |
 | `/all` | the page showing All projects, bound to the prompt box's pick (the operator's last pick in this browser, else the most recently opened open project — `lib/crossProject.ts`; never the Home workspace, which is picked only when chosen); where an `everything` launch (from $HOME) lands, and what an editor's sidebar frames when no folder maps to a project. It was the bare `/` from 2026-09-30 to 2026-10-06 |
 | `/all/<slug>/thread/<t>` | All projects with `<t>`'s drawer open IN PLACE; the page is bound to `<slug>` while the drawer is open |
 | `/all/<slug>/thread/<t>/full`, `/thread/<t>/full` | the thread's fullscreen page, outside the layout; the unprefixed one is the launching project's |
@@ -406,27 +404,6 @@ ICNS in idle shims). *Windows/Linux Dock branding is an unwired TODO:* Windows w
 `AppUserModelID` on a generated `.lnk`; Linux (X11) would pass `--class=frizz` + a `.desktop` file whose
 `StartupWMClass` matches.
 
-### Desktop app
-
-[`packages/desktop`](packages/desktop/README.md) is Electron, used as a thin client — the one thing it
-must never be is a second place the server runs. The server loads native addons (`node-pty` for thread terminals) built for the SYSTEM Node,
-which Electron's embedded Node cannot load, and the launcher already owns starting it (lease, port,
-self-update, recovery). So the app joins the server the owner record names, or a well-known port's
-server that proves this user's launch token (`ownedFrizz` — loopback answers for every account and
-for `--sandbox`), and otherwise runs `node <launcher> --no-app` exactly as a terminal would:
-**detached, output to a file**, because the launcher supervises the server and would die with the app
-on its pipes. It resolves the launcher with `npx -y frizz --_frizz-print-launcher`, under a login
-shell's environment, since a Dock-launched app gets launchd's bare PATH and the server hands its
-environment to every agent. Quitting leaves the server running.
-
-What it adds over a tab is only what a browser gives a tab free — external links to the OS browser, an
-Edit menu, back/forward, a context menu, window state — plus one preload bridge (`frizzDesktop`), whose
-only web-side caller is the notification click in `board-stream.ts`, since `window.focus()` cannot
-raise an Electron window. `electron` is its one dependency; electron-builder is fetched per
-`desktop:dist` run, never installed. [`desktop.yml`](.github/workflows/desktop.yml) publishes unsigned
-installers to the GitHub release `desktop-v<version>` from `release`, each installed and launched on its
-own OS first.
-
 ### VS Code extension
 
 [`packages/vscode`](packages/vscode/README.md) connects each editor window to the one server, in both
@@ -448,7 +425,7 @@ that has its folder open, at the line it names. Design and protocol: [`plans/vsc
 - **Prompt-box inserts are claimed, not broadcast.** The server holds what an editor sends and
   publishes a payload-free `compose-pending` on every open project's bus; the page that has focus takes
   it with `composeTake`, so exactly one tab inserts it (`web/src/lib/editorBridge.ts`).
-- It finds the server the way the desktop app does (the address record, trusted only with a live owner
+- It finds the server the way the launcher does (the address record, trusted only with a live owner
   generation behind it, as `readStableServerOwner` checks; then the well-known ports with the
   launch-token proof), plus frizz-dev's `dev-supervisor.lock`, and declares `extensionKind: ["workspace"]`
   so a Remote-WSL or SSH window runs it where the files and the server are. It ships as a `.vsix`

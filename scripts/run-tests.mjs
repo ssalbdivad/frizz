@@ -36,7 +36,6 @@ const GLOBS = [
   "packages/registrar/src/**/*.test.ts",
   "packages/relay/src/**/*.test.ts",
   "packages/web/src/**/*.test.ts",
-  "packages/desktop/src/**/*.test.ts",
   "packages/vscode/src/**/*.test.ts",
 ];
 

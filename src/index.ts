@@ -827,7 +827,7 @@ let cachedSlugPath: string | undefined;
  *   - no intent (a supervisor child, an update re-exec): `/`, the browser's own last view.
  *
  * From 2026-09-30 until then every launch landed on All projects at a bare `/` (maintainer: "by default
- * frizz should open the all projects view"). `/` alone is still what the desktop app opens.
+ * frizz should open the all projects view").
  *
  * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
  * the page, which is the only reason an unmarked directory is safe to point the launcher at at all.

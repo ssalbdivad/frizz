@@ -56,7 +56,7 @@ const shared: BuildOptions = {
 }
 
 await build({ ...shared, entryPoints: ["src/extension.ts"], outfile: join(dist, "extension.cjs") })
-// The app's own icon, the one the desktop app and the web manifest use.
+// The app's own icon, the one the web manifest uses.
 copyFileSync(join(pkg, "..", "web", "public", "icon-512.png"), join(dist, "icon.png"))
 writeFileSync(join(pkg, BUILD_FILE), `${JSON.stringify(stamp, null, 2)}\n`)
 const built = ["extension.cjs", "icon.png", "build.json"]

@@ -8,7 +8,7 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { frizzPaths, type FrizzPaths } from "@frizz/server/frizz-paths"
 import { acquireProjectLaunchOwner, processStartTime, projectLaunchTokenProof } from "@frizz/server/project-launch"
-// The desktop app's reader and the launcher's own writer: the extension's replica is pinned to both.
+// The launcher's own reader and writer: the extension's replica is pinned to both.
 import { acquireStableServerOwner, publishStableServerAddress, readStableServerOwner, releaseStableServerOwner, type ServerOwnerLease } from "../../../src/server-owner.ts"
 import { discoverFrizz, launchTokenProof, observeGeneration, originFromSetting, ownedFrizz, pageAddressNote, psGeneration, readOwnerAddress } from "./discovery.ts"
 

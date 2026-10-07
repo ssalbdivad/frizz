@@ -82,7 +82,7 @@ test("a launch is skipped where its project is gone or not open, like every othe
 const project = (slug: string, open = true, stale = false) => ({ slug, open, stale })
 
 // A BARE `/` GOES BACK TO THE LAST VIEW (2026-10-06): a project's board is the default, All projects is one
-// click away, and `/` names neither — the desktop app opens it, and a typed address is it.
+// click away, and `/` names neither — a typed address is it.
 test("/ goes back to the view this browser showed last", () => {
   const cards = [launched("a", "2026-09-30T10:00:00Z"), launched("b", "2026-09-30T09:00:00Z")]
   assert.equal(lastViewHref(cards, "all"), "/all")
