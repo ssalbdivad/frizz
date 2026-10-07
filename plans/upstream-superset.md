@@ -473,7 +473,8 @@ Each line names the step it amends.
 **Step 7 (hygiene)**
 - `scripts/schedule-extract-eval.*` deleted as listed, though 6554d0ea had kept it that morning as a benchmark. Its
   numbers are in that commit, in the `SCHEDULE_INTERPRETER_MODEL` comment and in `plans/schedule-live-reading.md`;
-  `git revert 15f776e8` restores it.
+  reverting the commit "chore(scripts): delete the schedule extraction benchmark now that its choice is made"
+  restores it (named by subject, since the branch is rebased as `main` moves and its hashes change).
 - 29 fork-added scripts deleted (5,124 lines), each with the maintained test that covers it named in the commit;
   14 kept because a skill, test, doc or kept script uses them.
 - `command_thread` → `thread_terminal` needed a real migration after all: this machine's database has the table.
