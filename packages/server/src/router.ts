@@ -4425,6 +4425,15 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // The thread's deadline, read-only, for the worker plugin's dispatch hook
+    // (cc-worker/hooks/agent-deadline.mjs): a sub-agent's share is carved from what this returns at the
+    // moment the worker dispatches it. A query, not `ownDeadline`'s `read`, because a hook speaks GET.
+    threadDeadline: query({
+      input: z.object({ slug: ThreadSlug }).strict(),
+      output: OwnDeadlineResult,
+      handler: async ({ input }) => ({ deadline: deadlineView(input.slug) }),
+    }),
+
     dropOwnWatch: mutation({
       input: DropOwnWatchInput,
       output: DropOwnWatchResult,

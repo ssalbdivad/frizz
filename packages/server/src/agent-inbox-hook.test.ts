@@ -40,7 +40,7 @@ function newSession(agents: Array<{ id: string; label?: string; done?: boolean }
 }
 
 function runHook(event: Record<string, unknown>, env: Record<string, string> = { FRIZZ_THREAD: "some-thread" }): string {
-  return execFileSync("node", [HOOK], { input: JSON.stringify(event), encoding: "utf8", env: { ...process.env, FRIZZ_THREAD: "", ...env } })
+  return execFileSync("node", [HOOK], { input: JSON.stringify(event), encoding: "utf8", env: { ...process.env, FRIZZ_THREAD: "", FRIZZ_PERM_DIR: "", ...env } })
 }
 
 const postToolUse = (transcript: string, agentId?: string) => ({

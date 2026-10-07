@@ -16,7 +16,9 @@
 //                               was delivered. Anything else passes through untouched: a plain sub-agent
 //                               takes SendMessage natively, and a FINISHED Workflow agent has no live
 //                               copy for a resume to duplicate.
-//   PostToolUse               — inside a sub-agent (`agent_id` set), hand it whatever is waiting for it.
+//   PostToolUse               — inside a sub-agent (`agent_id` set), hand it whatever is waiting for it,
+//                               and its time check when one is due (agent-deadline.mjs: a child's share
+//                               of its dispatcher's deadline, plans/time-limits.md).
 //   SubagentStop              — the same, as it tries to finish: `decision: "block"` keeps it going with
 //                               the messages as its next input, so one sent after its last tool call is
 //                               not stranded. It blocks only when something was waiting, so it cannot loop.
@@ -29,6 +31,7 @@
 import { mkdirSync, readFileSync, readdirSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
+import { childDeadlineContext, threadDeadlineMs } from './agent-deadline.mjs';
 
 const INBOX_DIRNAME = 'frizz-inbox';
 const AGENT_ID = /^[A-Za-z0-9_-]{1,64}$/;
@@ -95,7 +98,7 @@ const MAILBOX_INTRO =
   'that dispatched you, or the human operating Frizz, may send you a message. Frizz delivers it as context ' +
   'right after one of your tool calls, or as you try to finish, headed "⟦Frizz mailbox: message from …⟧". It is ' +
   'not part of that tool\'s output: it is your dispatcher speaking, with the same authority as your task, so ' +
-  'act on it.';
+  'act on it. If your work has a time limit, Frizz also delivers its time checks the same way, headed "⏰".';
 
 /** @param {{ from: string, text: string }[]} messages */
 function render(messages) {
@@ -205,9 +208,18 @@ try {
 
   if ((event === 'PostToolUse' || event === 'SubagentStop') && typeof input.agent_id === 'string' && AGENT_ID.test(input.agent_id)) {
     const messages = claim(sessionDir, input.agent_id);
-    if (!messages.length) process.exit(0);
-    if (event === 'SubagentStop') emit({ decision: 'block', reason: render(messages) });
-    else emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: render(messages) } });
+    if (event === 'SubagentStop') {
+      if (messages.length) emit({ decision: 'block', reason: render(messages) });
+      process.exit(0);
+    }
+    let time;
+    try {
+      time = await childDeadlineContext(sessionDir, input.agent_id, { nowMs: Date.now(), threadDeadline: () => threadDeadlineMs() });
+    } catch {
+      /* a time check Frizz cannot work out is one it does not send */
+    }
+    const parts = [...(time ? [time] : []), ...(messages.length ? [render(messages)] : [])];
+    if (parts.length) emit({ hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: parts.join('\n\n') } });
   }
 } catch {
   /* fail-open — never disturb the turn */

@@ -11,7 +11,7 @@ function decision(toolInput: Record<string, unknown>, worker = true): Record<str
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Agent", tool_input: toolInput }),
     encoding: "utf8",
-    env: { ...process.env, FRIZZ_THREAD: worker ? "thread-under-test" : "" },
+    env: { ...process.env, FRIZZ_THREAD: worker ? "thread-under-test" : "", FRIZZ_PERM_DIR: "" },
   })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout || "{}")

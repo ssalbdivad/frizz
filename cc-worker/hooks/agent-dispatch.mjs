@@ -12,6 +12,11 @@
 //      the scratch directory, no fan-out of its own unless asked, and how a helper it DID dispatch
 //      is collected. It carries no handoff format and no build, test, git or process policy — the
 //      maintainer had the handoff-format doctrine cut on 2026-08-26.
+//   4) CARVE THE CHILD'S TIME SHARE (plans/time-limits.md § Sub-agents). When the dispatcher has a
+//      deadline — the thread's, read from the server, or for a nested dispatch the dispatching child's
+//      own — or the prompt declares one with a `Time limit: 20m` line, the child gets a deadline of its
+//      own, never past its dispatcher's minus a reserve, stated in a paragraph above the epilogue that
+//      ends in a marker its own hook reads back. agent-deadline.mjs has the binding and the arithmetic.
 //
 // WHY THE LIFECYCLE PARAGRAPH EXISTS (2026-09-05): a child cannot be re-invoked, and nothing told it
 // so. Claude's own task-notification states the rule from the dispatcher's side — "a task-notification
@@ -63,6 +68,7 @@
 //
 // FAIL OPEN: any parse error → allow unmodified. A broken dispatch hook must never halt work.
 import { readFileSync } from 'node:fs';
+import { agentDeadline, shareIntoPrompt, threadDeadlineMs } from './agent-deadline.mjs';
 
 const EPILOGUE = `
 
@@ -73,6 +79,28 @@ If the worker names its scratch directory: Write your OWN file there — never e
 Upward channel: \`SendMessage({to: "main", summary: "<5-10 words>", message: "…"})\` reaches your dispatcher while you work (load it first with ToolSearch \`select:SendMessage\` if it is deferred). Use it only when the dispatcher acting before you finish would change the outcome — a blocker, a milestone another task needs, instructions that should change — not for progress updates.
 Do the work yourself: do NOT dispatch sub-agents of your own unless your dispatch prompt explicitly tells you to. You are already one prong of someone else's fan-out; a slice that feels large is still yours to work through in your own turn.
 If your prompt DOES ask you to dispatch a helper, the rule above still binds — a helper cannot wake you either: a dispatcher that stops is never resumed to read the reply. So collect it before your turn ends, or do not dispatch it. Never hand-roll a wait loop over a helper's transcript or \`.output\` path: that path is a SYMLINK (\`stat\` without \`-L\` reports the link's own ~150-byte size and frozen mtime) and the \`"type":"result"\` record is not reliably written, so a helper working hard reads as tiny, stale and dead, and you will discard live work and redo it. Judge a helper only by what it actually returns to you, and give it a \`description\` naming its narrower slice.`;
+
+/** The prompt with the child's time share carved in, or unchanged — never a reason to fail the dispatch.
+ *  @param {any} input @param {string} prompt */
+async function timeShared(input, prompt) {
+  try {
+    const nowMs = Date.now();
+    let parentDeadlineMs;
+    if (typeof input.agent_id === 'string' && input.agent_id) {
+      // A nested dispatch: the dispatcher is itself a sub-agent, and its own deadline is the ceiling.
+      const sessionDir = typeof input.transcript_path === 'string' && input.transcript_path.endsWith('.jsonl')
+        ? input.transcript_path.slice(0, -'.jsonl'.length)
+        : undefined;
+      const own = sessionDir ? await agentDeadline(sessionDir, input.agent_id, { nowMs, threadDeadline: () => threadDeadlineMs() }) : undefined;
+      parentDeadlineMs = own && 'atMs' in own ? own.atMs : undefined;
+    } else {
+      parentDeadlineMs = await threadDeadlineMs();
+    }
+    return shareIntoPrompt(prompt, { nowMs, parentDeadlineMs }).prompt;
+  } catch {
+    return prompt;
+  }
+}
 
 /** @param {unknown} obj @returns {never} */
 function emit(obj) {
@@ -107,7 +135,7 @@ try {
   const prompt = typeof ti.prompt === 'string' ? ti.prompt : '';
   const updatedInput = prompt.endsWith(EPILOGUE)
     ? tiStripped
-    : { ...tiStripped, prompt: prompt + EPILOGUE };
+    : { ...tiStripped, prompt: (await timeShared(input, prompt)) + EPILOGUE };
 
   emit({
     hookSpecificOutput: {
