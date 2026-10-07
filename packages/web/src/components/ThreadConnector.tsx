@@ -162,6 +162,36 @@ function measure(key: string, rail: Rail, dpr: number): ThreadGeometry | null {
   return { x1, y1, x2, y2: snapToPixels(at, dpr), edge: [Math.max(c.top, header) + CORNER, c.bottom - CORNER] }
 }
 
+/** The page's columns: their sizes, and every mutation inside them, can move either end of a thread. */
+const ROOTS = "#workpane, aside[aria-label='Projects'], [data-sidebar-page]"
+
+/**
+ * EVERY BOX WHOSE SIZE CAN MOVE THE RAIL'S ROWS, which the cords are drawn from. The cords are measured, not
+ * laid out, so they move only when something says the rows did — and a row moves without a scroll, a resize
+ * of the window, or any mutation whenever a box ABOVE it changes height on its own: the prompt box's
+ * schedule strip folding open (a 140ms `grid-template-rows` transition, which mounts its contents one frame
+ * and grows for the next 200ms), the box growing a line, a project's rows growing. The columns themselves
+ * never change size for any of that — the rail's column is `h-screen` — so observing them alone measured the
+ * strip at the height it had when it mounted and left every crossing a strip's height (51px) off, behind the
+ * row icons, until something unrelated re-measured (2026-10-07).
+ *
+ * A box's place is the sizes of the boxes before it, at every level up to the page: so the rail list, each
+ * project in it, and every earlier sibling of the list and of each of its ancestors. A ResizeObserver
+ * reports each of those once per frame while it changes, so the cords follow a transition frame by frame
+ * (threadCords.e2e.test.ts, on thread-cords-fixture.html).
+ */
+function movers(): Set<Element> {
+  const out = new Set<Element>(document.querySelectorAll(ROOTS))
+  for (const list of document.querySelectorAll("[data-xq-rail]")) {
+    out.add(list)
+    for (const project of list.querySelectorAll("[data-xq-rail-project]")) out.add(project)
+    for (let el: Element | null = list; el && el !== document.body; el = el.parentElement) {
+      for (let sibling = el.previousElementSibling; sibling; sibling = sibling.previousElementSibling) out.add(sibling)
+    }
+  }
+  return out
+}
+
 const mix = (a: number, b: number, t: number) => a + (b - a) * t
 
 /** Write an attribute only when it changed: most frames move the thread and leave the cords alone. */
@@ -289,13 +319,24 @@ export function ThreadConnector({ activeKey }: { activeKey: string | null }) {
     document.addEventListener("pointerover", onOver)
     document.documentElement.addEventListener("pointerleave", onLeave)
     // Anything that moves either end without a scroll: a card growing ("Show more", a question answered),
-    // rows coming and going, a card starting to leave.
+    // rows coming and going, a card starting to leave — and everything that moves the rail's rows (`movers`),
+    // re-collected whenever the DOM changes, since a mutation can mount a new box above them.
     const resize = new ResizeObserver(schedule)
-    const mutations = new MutationObserver(schedule)
-    for (const el of document.querySelectorAll("#workpane, aside[aria-label='Projects'], [data-sidebar-page]")) {
-      resize.observe(el)
+    let observed = new Set<Element>()
+    const track = () => {
+      const next = movers()
+      for (const el of next) if (!observed.has(el)) resize.observe(el)
+      for (const el of observed) if (!next.has(el)) resize.unobserve(el)
+      observed = next
+    }
+    const mutations = new MutationObserver(() => {
+      track()
+      schedule()
+    })
+    for (const el of document.querySelectorAll(ROOTS)) {
       mutations.observe(el, { childList: true, subtree: true, attributes: true, attributeFilter: ["data-queue-leaving"] })
     }
+    track()
     schedule()
     return () => {
       cancelAnimationFrame(frame)
