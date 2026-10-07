@@ -3,7 +3,7 @@ import { homedir } from "node:os"
 import { projectStateDir } from "./frizz-paths.ts"
 import { canonicalFolder, expandHomeFolder } from "./home-folder.ts"
 import { cwdSlug, projectFromRegistryEntry, type Project } from "./project.ts"
-import { findById, findProjectBySegment, listProjects, readRegistry, type RegistryEntry } from "./project-registry.ts"
+import { findById, findProjectBySegment, listProjects, readRegistry, reorderProjects, writeRegistry, type RegistryEntry } from "./project-registry.ts"
 import { readMachineSettings } from "./settings.ts"
 
 // THE HOME WORKSPACE — where a prompt that belongs to no project runs.
@@ -87,14 +87,37 @@ function isDirectory(path: string): boolean {
 }
 
 /**
- * Every registered project and then Home, in the order the project list and the rail draw them. Home
- * is LAST: it is always there, so it is furniture rather than news, and an arranged rail stays exactly
- * as the operator left it.
+ * Every registered project and Home, in the order the project list draws them. Home is LAST until the
+ * operator drags it somewhere: it is always there, so by default it is furniture rather than news. Once
+ * placed, it sits above the first project whose `order` is at or past the registry's `homeOrder` — so a
+ * project registered afterwards, which has no order, still arrives at the end, below Home.
  */
 export function listWorkspaces(home = homedir()): (RegistryEntry & { stale: boolean })[] {
   const projects = listProjects(home)
   const entry = homeWorkspaceEntry(home, new Set(projects.map((project) => project.slug)))
-  return [...projects, { ...entry, stale: !isDirectory(entry.path) }]
+  const homeOrder = readRegistry(home).homeOrder
+  const at =
+    homeOrder === undefined ? -1 : projects.findIndex((project) => project.order === undefined || project.order >= homeOrder)
+  const listed = [...projects]
+  listed.splice(at < 0 ? listed.length : at, 0, { ...entry, stale: !isDirectory(entry.path) })
+  return listed
+}
+
+/**
+ * Pin the project list's order to exactly `ids`, Home included (reorderProjects, which knows nothing of
+ * Home). Home's place is recorded as the `order` of the project now below it — reorderProjects numbers
+ * the named projects 0…n-1 in `ids`' order — so it is the count of projects named above it. A list that
+ * does not name Home leaves its place as it was.
+ */
+export function reorderWorkspaces(ids: readonly string[], home = homedir()): void {
+  const projects = ids.filter((id) => !isHomeWorkspace(id))
+  reorderProjects(projects, home)
+  const index = ids.indexOf(HOME_WORKSPACE_ID)
+  if (index < 0) return
+  const registry = readRegistry(home)
+  const known = new Set(registry.projects.map((project) => project.id))
+  registry.homeOrder = ids.slice(0, index).filter((id) => known.has(id)).length
+  writeRegistry(registry, home)
 }
 
 /** findProjectBySegment, and Home by its slug or id. A registered project wins its own slug. */

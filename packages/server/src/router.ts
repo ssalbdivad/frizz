@@ -249,8 +249,8 @@ import { postToAgentInbox, workflowSessionDir } from "./agent-inbox.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
-import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, reorderProjects, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
-import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces } from "./home-workspace.ts"
+import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VERSION, listProjects, moveProjectDirectory, renameProject, setProjectIcon, type RegistryEntry } from "./project-registry.ts"
+import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces, reorderWorkspaces } from "./home-workspace.ts"
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
@@ -5658,8 +5658,8 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ ids: z.array(z.string().min(1)).max(500) }),
       output: z.array(ProjectCard),
       handler: async ({ input }) => {
-        // Home has no registry entry to hold a position: reorderProjects skips its id, and it stays last.
-        reorderProjects(input.ids)
+        // Home has no registry entry to hold a position, so reorderWorkspaces records its place beside them.
+        reorderWorkspaces(input.ids)
         return listWorkspaces().map((entry) => projectCard(entry, entry.stale))
       },
     }),

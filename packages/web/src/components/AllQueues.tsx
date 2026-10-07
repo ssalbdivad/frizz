@@ -564,7 +564,8 @@ export function AllQueuesPage() {
 function Switcher({ projects, hidden, current, row = false }: { projects: QueuesProject[]; hidden: (key: string) => boolean; current: QueuesProject | undefined; row?: boolean }) {
   const choose = useChooseView()
   const add = useAddProject()
-  // The list's own order (ProjectList): busy projects first, then the quiet ones; Home last, on its own.
+  // Busy projects first, then the quiet ones; Home last, on its own — unlike ProjectList, where Home is
+  // dragged into place like any project.
   const listed = projects.filter((project) => !project.card?.home)
   const ordered = [...listed.filter(isBusy), ...listed.filter((project) => !isBusy(project))]
   const item = (project: QueuesProject): SwitcherProject => ({
