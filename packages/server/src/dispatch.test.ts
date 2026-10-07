@@ -491,7 +491,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // boolean beside the first.
     assert.match(c, /`status:` — REQUIRED: where does the thread sit while the work runs\?/)
     assert.match(c, /`working` — the work finishes BY ITSELF/)
-    assert.match(c, /`watching` — the wait is on something OUTSIDE the thread/)
+    assert.match(c, /`watching` — NOTHING of yours is doing work, and the wait ends on someone else's act OUTSIDE/)
+    assert.match(c, /The HUMAN'S review of what you handed over is never `watching`/)
+    assert.match(c, /Answer in that order, top first/)
     assert.match(c, /`needs_input` — the human can read, try or act on something NOW/)
     assert.match(c, /`needs_input: true` and `needs_input: false`, the answer before 2026-10-05, are still read/)
     // A rest the human is not queued to read owes them nothing to read (maintainer 2026-10-01).

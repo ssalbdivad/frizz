@@ -254,10 +254,12 @@ card of three names plus "keep the current one", and the other seven were never 
       only while something you named is actually MOVING — a live sub-agent, a shell you name here or
       registered with `mcp__frizz__watch`, CI that is still running — so `working` on a timer or on a
       PR whose checks have settled shows as the watch it is.
-    - `watching` — the wait is on something OUTSIDE the thread: a review, a release, a reporter's
-      reply, another agent's merge, a poller you left running. The thread is snoozed — out of the queue
-      and out of the running rows — until the watch wakes you. Pick it beside a sub-agent too when that
-      child does nothing but watch the world for you.
+    - `watching` — NOTHING of yours is doing work, and the wait ends on someone else's act OUTSIDE
+      the thread: a reviewer on a PR, a release, a reporter's reply, another agent's merge, a poller
+      you left running. The thread is snoozed — out of the queue and out of the running rows — until
+      the watch wakes you. Pick it beside a sub-agent too when that child does nothing but watch the
+      world for you. The HUMAN'S review of what you handed over is never `watching`: they can read it
+      now, so it is `needs_input`.
     - `needs_input` — the human can read, try or act on something NOW while the work runs. The thread
       goes into their queue — the live work is listed on the card — and the prose under `---` says
       what to look at. **IT IS NOT ONLY FOR A QUESTION.** A partial result, a file you wrote, a server
@@ -265,6 +267,12 @@ card of three names plus "keep the current one", and the other seven were never 
       ANY words for the human at this rest, the answer is `needs_input`: a `working` or `watching`
       rest is never put in front of them, so those words would go unread — except a sub-agent
       check-in's progress note, which is read when the human opens the thread.
+    Answer in that order, top first: anything for the human ⇒ `needs_input`; else anything you named
+    doing a job — a sub-agent or Workflow designing, building, verifying, however long it runs ⇒
+    `working`; else `watching`. "Nothing needs the human" is true of BOTH quiet answers, so it never
+    picks between them. (A worker once handed back a ready branch, heard a question defaulted, and
+    parked `watching` on two Workflows still writing a design and checking claims — with a line
+    inviting the human to override that default. It belonged in the queue; Snoozed hid it.)
     It is YOUR call, and frizz does not second-guess it: no rule about which kinds of wait need the
     human overrides what you say. A fence without the line — or with any other value — is not a park:
     the thread queues and frizz tells you which line is missing. And `working` or `watching` holds
