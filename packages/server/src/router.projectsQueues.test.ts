@@ -241,6 +241,27 @@ test("wakes that rest after the human's answer keep that answer on the card, as 
   assert.equal(silent.text, "Here.")
 })
 
+test("an answer written before the work it starts rides the rest's card; narration between tool calls does not", () => {
+  // @disk-usage, 2026-10-07: the human asked, the worker answered, dispatched a sub-agent, and rested on a
+  // fence whose body was one status line. The card showed the status line alone.
+  const answer = "A few real risks, and each one has a fix:\n\n- Ignored files that cannot be rebuilt."
+  const fence = "```awaiting\nagents: [ada5091be0b1e047e]\nstatus: needs_input\nfor: 30m\n---\nThe sub-agent is building it.\n```"
+  const handoff = handoffOf([
+    msg("user", "Any real risk?"),
+    msg("assistant", answer),
+    msg("assistant", "Dispatching the build."),
+    msg("assistant", "", { tools: [{ id: "t1", name: "Agent" } as TranscriptMessage["tools"][number]] }),
+    msg("assistant", "Agent started", { kind: "event" }),
+    msg("assistant", fence),
+  ])
+  assert.equal(handoff.text, `${answer}\n\n${fence}`, "the answer, then the rest; the one-line narration stays off")
+  assert.equal(handoff.asked, "Any real risk?")
+  // An EARLIER turn's write-up is not this rest's: a rest or wake line ends the turn.
+  const rest = msg("assistant", "Agent rested", { kind: "event", boundary: "rest" })
+  const earlier = handoffOf([msg("user", "Go."), msg("assistant", answer), rest, msg("assistant", "Agent finished", { kind: "event", boundary: "wake" }), msg("assistant", "Still going.")])
+  assert.equal(earlier.text, "Still going.")
+})
+
 test("an empty window has no handoff, a thread that has not spoken has only its ask, and a very long ask is clipped", () => {
   assert.deepEqual(handoffOf([]), {})
   assert.deepEqual(handoffOf([msg("user", "TASK:\nGo.")]), { asked: "TASK:\nGo.", askedAt: "2026-09-23T10:00:00.000Z" })

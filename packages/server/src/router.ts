@@ -1141,20 +1141,29 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
   // own, that line WAS the card: the real answer sat one message up, reachable only by opening the
   // thread (David 2026-09-30). So walk back over every nudge-and-reply pair and carry the earlier
   // text too, oldest first. Only the nudge bridges: any other wake is new input with its own answer.
+  //
+  // AN ANSWER WRITTEN BEFORE THE WORK IT STARTS IS PART OF THE REST TOO. A worker answers the human,
+  // dispatches a sub-agent or a build, and rests on a fence whose body is a one-line status, so the card
+  // showed "building it" over the human's question and the answer sat behind "Show earlier messages"
+  // (@disk-usage, 2026-10-07). So an earlier message in the SAME turn joins the rest when it runs to more
+  // than one paragraph. A one-paragraph line ("Looking.", "Reading the cursor.") is the narration a
+  // worker writes between tool calls, and stays off the card as before. The turn ends, walking back, at
+  // the human's or any other non-nudge user message, and at a rest, wake or compaction line.
   const restEndingAt = (end: number): { texts: string[]; start: number } => {
     const texts = [messages[end]!.text]
     let start = end
     for (let i = end - 1, bridged = false; i > anchor; i--) {
       const m = messages[i]!
       if (says(m)) {
-        if (!bridged) break
-        texts.unshift(m.text)
-        start = i
+        if (bridged || isParagraphs(m.text)) {
+          texts.unshift(m.text)
+          start = i
+        }
         bridged = false
       } else if (m.role === "user") {
         if (!isNudge(m)) break
         bridged = true
-      }
+      } else if (m.boundary && !bridged) break
     }
     return { texts, start }
   }
@@ -1197,6 +1206,9 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
     ...(askedText ? { asked: askedText.length > HANDOFF_ASKED_MAX ? `${askedText.slice(0, HANDOFF_ASKED_MAX - 1)}…` : askedText, askedAt: asked!.at } : {}),
   }
 }
+
+/** More than one paragraph: an answer or a write-up, as against a line of narration between tool calls. */
+const isParagraphs = (text: string): boolean => /\S\s*\n\s*\n\s*\S/.test(text.trim())
 
 /** What a transcript message SAID, as the chat shows it. */
 const saidOf = (m: TranscriptMessage): string => (m.displayText ?? m.text).trim()
