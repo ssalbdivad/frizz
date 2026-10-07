@@ -7,7 +7,7 @@ import { useBackgroundShellLines, useBoard } from "../hooks.ts"
 import { AGENT_GLYPH_STROKE, CHILD_ARROW, CHILD_ARROW_CLASS, CHILD_DISMISS_TITLE, CHILD_KIND_TAG_CLASS, CHILD_MARK_SLOT_CLASS, shellLinesLabel, type TranscriptShellRecord } from "../lib/childOps.ts"
 import { childOpDismisser, dismissChildOp } from "../lib/dismissChildOp.ts"
 import { PRIMER } from "../lib/primer.ts"
-import { cardProcesses, endedShellStateLabel, humanProcess, onCard, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
+import { cardProcesses, collapseFinished, endedShellStateLabel, humanProcess, onCard, processIsLive, threadProcesses, type ProcessState, type ThreadProcess } from "../lib/threadProcesses.ts"
 // The card's rows live in the lib so the queue card's counts line can read them with no component import.
 export { cardProcesses }
 import { liveAgeSince } from "../lib/durationLabels.ts"
@@ -531,11 +531,13 @@ export function ThreadProcessStrip({
   const watchedTargets = new Set((thread.watches ?? []).filter((w) => w.kind === "shell" && w.state === "armed").map((w) => w.target))
   const isWatched = (p: ThreadProcess) =>
     p.owner === "agent" && (watchedTargets.has(p.shell?.taskId ?? "") || watchedTargets.has(p.shell?.id ?? "") || watchedTargets.has(p.label))
+  const [expanded, setExpanded] = useState(false)
   if (processes.length === 0) return null
   const open = onOpen ?? ((p: ThreadProcess) => openProcessDrawer(thread.id, p))
+  const { shown, hidden, foldable } = collapseFinished(processes, expanded)
   return (
     <div data-thread-processes={surface} className={`flex min-w-0 flex-col gap-0.5 ${className ?? ""}`}>
-      {processes.map((p) => (
+      {shown.map((p) => (
         <ProcessRow
           key={p.key}
           process={p}
@@ -546,6 +548,26 @@ export function ThreadProcessStrip({
           onOpen={processOpenable(p) ? () => open(p) : undefined}
         />
       ))}
+      {foldable && (
+        <div className={ROW}>
+          <button
+            type="button"
+            data-process-fold={expanded ? "expanded" : "collapsed"}
+            onClick={() => setExpanded((v) => !v)}
+            onMouseDown={(event) => event.stopPropagation()}
+            aria-expanded={expanded}
+            className={`${IDENTITY} cursor-pointer`}
+          >
+            {/* The arrow, mark slot and kind tag held invisibly, so the words sit on the rows' label column. */}
+            <span aria-hidden className={`${CHILD_ARROW_CLASS} invisible`}>{CHILD_ARROW}</span>
+            <span aria-hidden className={OWNER_SLOT} />
+            <span aria-hidden className={`${CHILD_KIND_TAG_CLASS} invisible`}>TERM</span>
+            <span className="min-w-0 truncate text-muted-45 group-hover:text-fg/80 group-hover:underline">
+              {expanded ? "Show fewer" : `Show ${hidden} more`}
+            </span>
+          </button>
+        </div>
+      )}
     </div>
   )
 }

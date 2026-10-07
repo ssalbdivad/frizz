@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { BgShellView, ThreadTerminal } from "@frizz/shared"
-import { threadProcesses } from "./threadProcesses.ts"
+import { collapseFinished, FINISHED_SHOWN, threadProcesses } from "./threadProcesses.ts"
 
 // ONE LIST for every process on a thread — yours and the agent's — in the order every surface draws it.
 
@@ -83,4 +83,19 @@ test("a row carries what its surfaces read: the checkout, the budget, the monito
   assert.equal(agent!.budget?.text, "times out in 15m")
   assert.equal(agent!.checkout, undefined, "the root carries no checkout")
   assert.deepEqual(human!.checkout, { dir: "/repo/.frizz/worktrees/x", kind: "worktree" })
+})
+
+test("a long strip folds its finished rows past the newest few; live rows never fold; one extra is drawn, not folded", () => {
+  const done = (n: number) => term({ id: `done-${n}`, state: "exited", exitCode: 0, startedAt: at("01"), exitedAt: at(String(10 + n)) })
+  const list = (finished: number) => threadProcesses({ terminals: [term({ id: "live" }), ...Array.from({ length: finished }, (_, i) => done(i))] }, [], { now: NOW })
+
+  const many = list(10)
+  const folded = collapseFinished(many, false)
+  assert.equal(folded.hidden, 10 - FINISHED_SHOWN)
+  assert.equal(folded.foldable, true)
+  assert.deepEqual(folded.shown.map((p) => p.key), ["t:live", "t:done-9", "t:done-8", "t:done-7"], "live first, then the newest finished")
+  assert.deepEqual(collapseFinished(many, true), { shown: many, hidden: 0, foldable: true }, "expanded draws all and keeps its toggle")
+
+  const oneOver = list(FINISHED_SHOWN + 1)
+  assert.deepEqual(collapseFinished(oneOver, false), { shown: oneOver, hidden: 0, foldable: false })
 })

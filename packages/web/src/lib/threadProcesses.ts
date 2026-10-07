@@ -155,6 +155,23 @@ export function threadProcesses(
   return [...prompt, ...live, ...finished]
 }
 
+/** How many FINISHED rows a collapsed strip keeps (newest end first, per threadProcesses' order). */
+export const FINISHED_SHOWN = 3
+
+/**
+ * The rows a collapsed strip draws, and how many it folds away. Every live row stays: it is work happening
+ * now. Finished rows past FINISHED_SHOWN fold behind one "Show N more" row — a docs session left 21 TERM
+ * rows under the prompt box (maintainer 2026-10-06: "this looks cooked"). Folding a single row would trade
+ * one row for another, so a strip one over the limit draws it.
+ */
+export function collapseFinished(processes: readonly ThreadProcess[], expanded: boolean): { shown: ThreadProcess[]; hidden: number; foldable: boolean } {
+  const finished = processes.filter((p) => !processIsLive(p))
+  const foldable = finished.length - FINISHED_SHOWN > 1
+  if (expanded || !foldable) return { shown: [...processes], hidden: 0, foldable }
+  const kept = new Set(finished.slice(0, FINISHED_SHOWN))
+  return { shown: processes.filter((p) => processIsLive(p) || kept.has(p)), hidden: finished.length - FINISHED_SHOWN, foldable }
+}
+
 /** Whether a process is alive — what the sidebar mark and the rail's "Terminals" group count. */
 export function processIsLive(p: ThreadProcess): boolean {
   return p.state === "running" || p.state === "quiet" || p.state === "prompt"

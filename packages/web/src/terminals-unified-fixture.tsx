@@ -86,6 +86,10 @@ const bgShells: BgShellView[] = [
 const endedShells: EndedShellView[] = [
   { id: "e-quick", label: "Quick build at the root", status: "completed", startedAt: ago(8), finishedAt: ago(7), cwd: ROOT, atRoot: true },
   { id: "e-lint", label: "Lint the probe worktree", status: "failed", startedAt: ago(15), finishedAt: ago(14), cwd: WT.dir, checkout: WT },
+  // Older runs, enough that the drawer's strip folds its finished rows past the newest three (collapseFinished).
+  { id: "e-old1", label: "Restarting the docs dev server", status: "killed", startedAt: ago(50), finishedAt: ago(45), cwd: ROOT, atRoot: true },
+  { id: "e-old2", label: "Running the root test suite", status: "completed", startedAt: ago(58), finishedAt: ago(52), cwd: ROOT, atRoot: true },
+  { id: "e-old3", label: "Building the docs site for production", status: "completed", startedAt: ago(66), finishedAt: ago(60), cwd: ROOT, atRoot: true },
 ]
 const thread = { id: "fixture", terminals, bgShells, endedShells, watches: [], ...(here ? { checkout: here } : {}) } as Pick<ThreadView, "id" | "terminals" | "bgShells" | "endedShells" | "watches" | "checkout">
 
