@@ -143,6 +143,22 @@ export function localMarkdownTarget(raw: string | null | undefined): LocalMarkdo
   }
 }
 
+/**
+ * The place in the file a link's LABEL names when its destination names none: `[a.ts:12](/repo/a.ts)`.
+ * Agents write the line into the text and forget the href, and the click then opened the file at its
+ * top. Taken only when the label's own path is the target's path or a trailing piece of it (`a.ts`,
+ * `src/a.ts`), so a label that merely mentions a number never moves the cursor.
+ */
+export function labelPosition(target: LocalMarkdownTarget, label: string): LocalMarkdownTarget {
+  if (!target.filePath || target.position) return target
+  const { path, position } = splitFilePosition(label.trim())
+  if (!position || !path) return target
+  const named = path.replace(/\\/g, "/")
+  const full = target.filePath.replace(/\\/g, "/")
+  if (full !== named && !full.endsWith(`/${named.replace(/^\.?\//, "")}`)) return target
+  return fileTarget(target.filePath, position)
+}
+
 export function localImageUrl(path: string): string {
   return `${apiBase()}/local-image?path=${encodeURIComponent(path)}`
 }

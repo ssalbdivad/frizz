@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { setHomeFocus } from "./base-path.ts"
-import { isLocalMarkdownFile, localFileDir, localImageUrl, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalPath, resolveRelativeLocalTarget } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, labelPosition, localFileDir, localImageUrl, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalPath, resolveRelativeLocalTarget } from "./markdownTargets.ts"
 
 test("absolute POSIX and file URLs become local targets with decoded proxy paths", () => {
   assert.deepEqual(
@@ -338,4 +338,19 @@ test("a relative link keeps its line, and the rebase hands it on through the hre
     assert.deepEqual(localMarkdownTarget(`C:\\repo\\a.ts${positionFragment(position)}`)?.position, position)
   }
   assert.equal(positionFragment(undefined), "")
+})
+
+test("a link whose label names the line opens there when its destination names none", () => {
+  const path = "/repo/ark/type/__tests__/cyclic.test.ts"
+  const linked = localMarkdownTarget(path)!
+  const at = { display: `${path}:1473`, filePath: path, position: { line: 1473 } }
+  assert.deepEqual(labelPosition(linked, "cyclic.test.ts:1473"), at)
+  assert.deepEqual(labelPosition(linked, " __tests__/cyclic.test.ts#L1473 "), at)
+  assert.deepEqual(labelPosition(linked, path + ":1473"), at)
+  // The label must name THIS file; a destination's own line always wins.
+  assert.deepEqual(labelPosition(linked, "scope.ts:1473"), linked)
+  assert.deepEqual(labelPosition(linked, "test.ts:1473"), linked)
+  assert.deepEqual(labelPosition(linked, "cyclic.test.ts"), linked)
+  const own = localMarkdownTarget(`${path}:9`)!
+  assert.deepEqual(labelPosition(own, "cyclic.test.ts:1473"), own)
 })

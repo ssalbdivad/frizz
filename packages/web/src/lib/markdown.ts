@@ -1,7 +1,7 @@
 import { Marked } from "marked"
 import type { Token, Tokens, TokenizerAndRendererExtension } from "marked"
 import { CODE_BLOCK_CLASS, renderHighlightedCode } from "./syntaxHighlight.ts"
-import { isLocalMarkdownFile, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalTarget } from "./markdownTargets.ts"
+import { isLocalMarkdownFile, labelPosition, localImageUrlForTarget, localMarkdownTarget, positionFragment, resolveRelativeLocalTarget } from "./markdownTargets.ts"
 import { LOCAL_POSITION_ATTRS, stampLocalPosition } from "./localFilePosition.ts"
 import { ANSI_STYLE_PATTERN } from "./ansi.ts"
 import { prefixedAppRoute } from "./base-path.ts"
@@ -409,7 +409,8 @@ function walk(node: ParentNode, ctx: WalkContext) {
     if (tag === "a") {
       const inApp = prefixedAppRoute(el.getAttribute("href"), ctx.appPath)
       if (inApp) el.setAttribute("href", inApp)
-      const target = localMarkdownTarget(el.getAttribute("href"))
+      const linked = localMarkdownTarget(el.getAttribute("href"))
+      const target = linked && labelPosition(linked, el.textContent ?? "")
       if (target) {
         const imageUrl = localImageUrlForTarget(target)
         if (imageUrl) {
