@@ -232,6 +232,14 @@ The evidence and harness live in the implementing thread's scratch directory (`v
   check-ins arrived after its tool calls, and it returned 18.6s before its deadline. Two children
   dispatched in one message (2m and 3m) each got their own marker, check-ins and state file, with none
   crossed. The parent had 10m, because with 6m left the reserve caps a child at about 2m 45s.
+- **Step 3: passed, on fixtures (`deadline-fixture.html`, the queue-card fixture) rather than a live stack.**
+  Headless shots in the under-time, last-stretch and over-time states, and a browser test that drives
+  every flow (6/6): dispatch, a failed dispatch, extend, remove, the ⋯ menu, a refused RPC. Measured in
+  DejaVu Sans, not SF. The stopwatch's dial is within 0.12px of the reading's cap band on the rail and the
+  facts line, and ink gaps match their neighbours. The chip is quiet until 80% of the budget (the
+  `converge` check-in), amber after that, and red over. When space runs out, over time is the last thing
+  the facts line drops. The prompt box's pill shows the value in the grammar's lowercase (`2h`), on its
+  neighbour's baseline.
 - **Changed by these runs:**
   - Worker-facing countdowns are now exact and rounded down under 10m. The rounded-up `2m left` reached
     a child that had 80s left.
