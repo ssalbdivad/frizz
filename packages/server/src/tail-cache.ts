@@ -91,11 +91,8 @@ export interface TailStateCache {
 // list because the signal-fence parser (`splitAwaitingFrontmatter`, `lastFence`'s hints) has lived
 // there since 2026-08-24 — a parser fix on 2026-09-10 would otherwise have left every cached
 // `lastFence` carrying the old derivation until its transcript happened to grow.
-// spinoff-side-turn.ts joined 2026-09-30: the side-turn reading and the rest it saved ride the TailState.
-// shell-writes.ts the same day: whether a side turn is clean now reads a pre-spawn shell command through
-// its parser, so a parser fix changes what a cached side turn's `clean` should say.
-// fork-point.ts joined 2026-09-30 too: where a forked thread's fold STARTS is part of what it derives.
-const FOLD_SOURCES = ["transcript.ts", "tailer.ts", "spinoff-side-turn.ts", "fork-point.ts", "backend/claude.ts", "backend/codex.ts", "../../shared/src/index.ts", "../../shared/src/shell-writes.ts"]
+// fork-point.ts joined 2026-09-30: where a forked thread's fold STARTS is part of what it derives.
+const FOLD_SOURCES = ["transcript.ts", "tailer.ts", "fork-point.ts", "backend/claude.ts", "backend/codex.ts", "../../shared/src/index.ts"]
 
 let foldSchemaMemo: string | null = null
 

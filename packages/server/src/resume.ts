@@ -98,8 +98,6 @@ export class RetryableDeliveryError extends Error {
  * human bump, never auto-resurrects a deliberately-shelved one.)
  */
 export function reopenArchivedThreadForFollowUp(
-  // `refresh` is only ever CALLED (never read), so the board can hand its own deferred refresh when it
-  // reopens a row from inside a build (board.ts surfaceSideTurn).
   deps: { storage: Pick<Storage, "setStateIfCurrent">; board: { refresh(): unknown } },
   row: Pick<SessionRow, "slug" | "session_id" | "runtime_generation" | "state" | "archived">,
 ): void {

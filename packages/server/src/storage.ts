@@ -581,7 +581,7 @@ export interface ThreadSpinoffRow {
   id: string
   parent_slug: string
   instructions: string
-  /** Null until the parent's worker has dispatched it. */
+  /** Null only on a request an older build handed to the parent's worker that never became a thread. */
   child_slug: string | null
   created_at: number
   spawned_at: number | null
@@ -590,8 +590,8 @@ export interface ThreadSpinoffRow {
   /** Where the child starts when that is ANOTHER project (a cross-project spinoff); null for this one. */
   child_project_id: string | null
   /** 1 when the child is a FORK of the parent's session (the Claude route, router.ts forkSpinoff), 0 when
-   *  the parent's worker briefed it. A forked request leaves nothing in the parent's transcript, so the
-   *  parent's chat draws its card from this row (transcript.ts withForkedSpinoffRequests). */
+   *  it started fresh on the context Frizz assembled (router.ts summarySpinoff) — or, on an older row,
+   *  when the parent's worker briefed it. */
   forked: number
 }
 
@@ -926,8 +926,6 @@ export interface Storage extends ScheduleStore {
   // A label is a stable slot: re-registering it updates the destination without moving the row.
   /** `childProjectId` names the project the child is to start in when that is not this one. */
   insertSpinoff(row: { id: string; parentSlug: string; instructions: string; createdAtMs: number; childProjectId?: string; forked?: boolean }): void
-  getSpinoff(id: string): ThreadSpinoffRow | undefined
-  dropSpinoff(id: string): boolean
   /** Stamp the dispatched child onto a PENDING spinoff. False when it is unknown or already spawned, so
    *  one request can never produce two threads. */
   completeSpinoff(id: string, childSlug: string, atMs: number): boolean
@@ -935,15 +933,9 @@ export interface Storage extends ScheduleStore {
    *  from — including a child of THIS project whose parent is in another (its row is filed under the
    *  parent's project; `project_id` says which). */
   spinoffsBySlug(): Map<string, ThreadSpinoffRow[]>
-  /** The spinoff `childSlug` (a thread of THIS project) came from, if it is a spinoff child — wherever
-   *  its parent is. */
-  spinoffOfChild(childSlug: string): ThreadSpinoffRow | undefined
-  /** Every spinoff still waiting for its thread (no child yet) that is to start in THIS project, oldest
-   *  first. A cross-project request is left out: the edge recovery that reads this looks its child up here. */
-  pendingSpinoffs(): ThreadSpinoffRow[]
-  /** The FORKED spinoffs `parentSlug` (a thread of this project) was asked for, oldest first — the ones
-   *  whose request left no record in its transcript (ThreadSpinoffRow.forked). */
-  forkedSpinoffsOf(parentSlug: string): ThreadSpinoffRow[]
+  /** Every spinoff `parentSlug` (a thread of this project) was asked for, wherever its child started,
+   *  oldest first — what the parent's chat draws its spinoff cards from (transcript.ts withSpinoffCards). */
+  spinoffsOf(parentSlug: string): ThreadSpinoffRow[]
   upsertThreadLink(link: { id: string; slug: string; kind: "link" | "file"; label: string; target: string; createdAtMs: number }): ThreadLinkRow
   listThreadLinks(slug: string): ThreadLinkRow[]
   threadLinksBySlug(): Map<string, ThreadLinkRow[]>
@@ -1483,11 +1475,10 @@ export const STORAGE_SCHEMA = `
       ON pr_watch(project_id, thread_slug, state, created_at);
     -- Saved destinations have no liveness or expiry. The label is a stable slot within one thread.
     -- A SPINOFF (2026-09-29): the human asked for a NEW thread from this one ("fix this", "investigate
-    -- perf"). The row is the request, and the link it becomes. It is created when the human asks and
-    -- delivered to the PARENT's worker, which gathers the context the new thread needs and dispatches it
-    -- through spawn_thread naming this id; the dispatch then stamps CHILD_SLUG. So a row with no child is
-    -- a request the parent has not acted on yet, and one with a child is the edge both threads render
-    -- (the parent's card links forward, the child's header links back).
+    -- perf"). The row is the request, and the link it becomes: Frizz starts the child itself (router.ts
+    -- spinoff) and writes the row with CHILD_SLUG already stamped, the edge both threads render (the
+    -- parent's card links forward, the child's header links back). A row with no child is a request an
+    -- older build handed to the parent's worker that never became a thread.
     --
     -- SOURCE_ID and EXCERPT are written EMPTY. They held the one message a spinoff was asked from on its
     -- first day, before it became a thread-level action that same evening; they stay only because the
@@ -2544,15 +2535,11 @@ export function createStorage(source: string | Database, projectId: string): Sto
   // So "this project's child end" is either a row of this project whose child stays here, or a row of
   // another project whose child was started here. A same-project row always writes NULL, never this id.
   const CHILD_HERE = "((project_id = @project_id AND child_project_id IS NULL) OR child_project_id = @project_id)"
-  const getSpinoffStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND id = ?`)
   const completeSpinoffStmt = scope.prepare(
     "UPDATE thread_spinoff SET child_slug = ?, spawned_at = ? WHERE project_id = @project_id AND id = ? AND child_slug IS NULL",
   )
   const spinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id OR child_project_id = @project_id ORDER BY created_at, rowid`)
-  const dropSpinoffStmt = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND id = ?")
-  const spinoffOfChildStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE ${CHILD_HERE} AND child_slug = ? ORDER BY created_at, rowid LIMIT 1`)
-  const pendingSpinoffsStmt = scope.prepare<[], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND child_project_id IS NULL AND child_slug IS NULL ORDER BY created_at, rowid`)
-  const forkedSpinoffsStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ? AND forked = 1 AND child_project_id IS NULL ORDER BY created_at, rowid`)
+  const spinoffsOfStmt = scope.prepare<[string], ThreadSpinoffRow>(`SELECT ${SPINOFF_COLUMNS} FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ? ORDER BY created_at, rowid`)
   const delSpinoffs = scope.prepare("DELETE FROM thread_spinoff WHERE project_id = @project_id AND parent_slug = ?")
   // The CHILD end of a forgotten thread's edges — see forgetOwnedRow.
   const delChildSpinoffs = scope.prepare(`DELETE FROM thread_spinoff WHERE ${CHILD_HERE} AND child_slug = ?`)
@@ -2851,16 +2838,10 @@ export function createStorage(source: string | Database, projectId: string): Sto
     // …and the edge that makes it a spinoff CHILD (2026-09-30). The line above only ever dropped the
     // requests this thread made as a PARENT, which left a forgotten child's `child_slug` behind — and a
     // forgotten slug is free again (resolveSlug checks only live rows and legacy files). The next thread
-    // dispatched under it then inherited the dead one's edge: `spinoffOfChild` named it a spinoff child,
-    // withSpinoffChildOrigin replaced its opening turn with the OLD request's instructions and folded the
-    // human's real prompt away as "context", the board linked it back to a parent it never came from,
-    // and the edge recovery refused a genuine new child under the slug as "already another spinoff's
-    // child". A dismissed stalled child is exactly what deleteThread exists for, so this was reachable.
-    //
-    // Deleted rather than un-stamped: a row with `child_slug` NULL is a PENDING request, which the
-    // recovery would stamp again onto whatever thread next holds the slug, and which fulfilSpinoff would
-    // let the parent's worker spawn a second time. With the row gone the parent's card reads as a request
-    // with no thread, which is what it now is.
+    // dispatched under it then inherited the dead one's edge, and the board linked it back to a parent
+    // it never came from. A dismissed stalled child is exactly what deleteThread exists for, so this was
+    // reachable. Deleted rather than un-stamped: with the row gone the parent's card reads as a spinoff
+    // whose thread is gone, which is what it now is.
     delChildSpinoffs.run(existing.slug)
     delThreadQuestions.run(existing.slug)
     delThreadDone.run(existing.slug)
@@ -3482,8 +3463,6 @@ export function createStorage(source: string | Database, projectId: string): Sto
     settlePrWatch: (id, settledAtMs) => settlePrWatchStmt.run(settledAtMs, id).changes === 1,
     setPrWatchCursor: (id, cursor) => prWatchCursorStmt.run(cursor, id).changes === 1,
     insertSpinoff: (row) => { insertSpinoffStmt.run({ id: row.id, parentSlug: row.parentSlug, instructions: row.instructions, createdAtMs: row.createdAtMs, childProjectId: row.childProjectId ?? null, forked: row.forked ? 1 : 0 }) },
-    getSpinoff: (id) => getSpinoffStmt.get(id),
-    dropSpinoff: (id) => dropSpinoffStmt.run(id).changes === 1,
     completeSpinoff: (id, childSlug, atMs) => completeSpinoffStmt.run(childSlug, atMs, id).changes === 1,
     spinoffsBySlug: () => {
       const bySlug = new Map<string, ThreadSpinoffRow[]>()
@@ -3502,9 +3481,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       }
       return bySlug
     },
-    spinoffOfChild: (childSlug) => spinoffOfChildStmt.get(childSlug),
-    pendingSpinoffs: () => pendingSpinoffsStmt.all(),
-    forkedSpinoffsOf: (parentSlug) => forkedSpinoffsStmt.all(parentSlug),
+    spinoffsOf: (parentSlug) => spinoffsOfStmt.all(parentSlug),
     upsertThreadLink: (link) => upsertThreadLinkStmt.get(link)!,
     listThreadLinks: (slug) => threadLinksBySlugStmt.all(slug),
     threadLinksBySlug: () => groupBySlug(threadLinksStmt.all()),

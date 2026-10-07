@@ -15,8 +15,8 @@
 //   (d) MID-TURN: a spinoff requested while the parent is running a foreground command starts the child
 //       while the parent keeps running, and the parent's turn finishes as it would have — its transcript
 //       never sees the request.
-//   (e) is NOT here: a Codex/ACP parent keeping the brief route is pinned by router.spinoff-fork.test.ts
-//       (real router + real dispatcher, stubbed bridges) — a real Codex run is out of scope for this one.
+//   (e) is NOT here: every other parent (Codex, ACP, cross-project, no transcript yet) takes the summary
+//       route, pinned by router.spinoff-fork.test.ts (real router + real dispatcher, stubbed bridges).
 //
 // Needs a stack booted from THIS checkout with real credentials:
 //

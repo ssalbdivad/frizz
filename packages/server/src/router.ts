@@ -177,12 +177,13 @@ import {
   acpModelIdFromModel,
   AcpAgentModels,
   AcpAgentModelsInput,
+  Backend,
   SpinoffInput,
   SpinoffResult,
   spinoffChildPrompt,
+  spinoffContext,
   spinoffForkPrompt,
   spinoffNameSource,
-  spinoffRequestMessage,
   parseRecurringPrompt,
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
@@ -196,12 +197,11 @@ import { editedFilesOf } from "./edited-files.ts"
 import { removableWorktrees, removeThreadWorktrees, unsavedWorktreeRefusal, worktreesAddedBy } from "./worktree-cleanup.ts"
 import { worktreeRootFor } from "../../../cc-worker/hooks/worktree.mjs"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
-import { appServerTurnStalled, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
+import { appServerTurnStalled, registeredDoneFence, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
 import { repairThreadFile } from "./repair.ts"
 import { reopenArchivedThreadForFollowUp, resumeThread, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { appendDelivery, beginDelivery, cancelDelivery, deliverOutstandingDeliveries, deliveryItem, dismissFailedDelivery, recordDeliveryFailure, retireOutstandingDeliveries } from "./delivery-ledger.ts"
-import { SPINOFF_DELIVERY_PREFIX, spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
 import { noteSubAgentsEndedByInterrupt, runningSubAgentsOf } from "./interrupt-ended.ts"
 import {
   readEarlierThreadTranscriptPage,
@@ -212,7 +212,6 @@ import {
   readThreadTranscript,
   projectTranscriptPageAgentLifecycles,
   threadTranscriptSource,
-  withSpinoffChildOrigin,
 } from "./transcript.ts"
 import { readThreadStats, unrecordedStats } from "./thread-stats.ts"
 import { liftCheckout, resolveThreadWorkingDir, subAgentFolders, terminalFolder } from "./thread-cwd.ts"
@@ -1154,6 +1153,18 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
   }
 }
 
+/** What a transcript message SAID, as the chat shows it. */
+const saidOf = (m: TranscriptMessage): string => (m.displayText ?? m.text).trim()
+
+/** Text cut to `max` characters, saying so. */
+const clipText = (text: string, max: number): string => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+
+/** A thread's opening request: its first user turn with words in it — never a spinoff request (see
+ *  isHumanTurn), which asks for ANOTHER thread. What `read_thread` quotes and a summary spinoff carries. */
+function openingRequestOf(messages: readonly TranscriptMessage[]): TranscriptMessage | undefined {
+  return messages.find((m) => m.role === "user" && !m.kind && !m.spinoff && saidOf(m))
+}
+
 /** Is this the human's turn, for the question "what did the human last SAY that this handoff answers"?
  *
  *  An answers delivery COUNTS here, and it differs on purpose from the two readings that no longer count
@@ -1165,9 +1176,8 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
  *  message before it, over a reply about something else.
  *
  *  A spinoff request does NOT count (2026-09-30), though the human asked for it: it asks for another
- *  thread, so nothing this thread says afterwards answers it, and its side turn is dropped from the chat
- *  when it did only that (spinoff-side-turn.ts). Anchoring on it would quote the spinoff's instructions
- *  over no reply at all — the card's handoff is the one the request found. */
+ *  thread, so nothing this thread says afterwards answers it. Anchoring on it would quote the spinoff's
+ *  instructions over a reply about something else. */
 function isHumanTurn(m: TranscriptMessage): boolean {
   if (m.role !== "user" || m.kind || m.queued || m.peerFrom || m.agentInstruction || m.spinoff) return false
   const said = (m.displayText ?? m.text).trim()
@@ -2162,33 +2172,6 @@ export function createRouter(ctx: AppContext) {
     return await gitGithubRemote(ctx.project.dir)
   }
 
-  // The followUp handler, captured where it is defined below so `spinoff` delivers through the SAME
-  // handler rather than a copy of its ~350 lines of runtime routing.
-  let deliverFollowUp: ((args: { input: z.infer<typeof FollowUpInput> }, delivery?: FollowUpDelivery) => Promise<void>) | undefined
-
-  // How a delivery reaches the worker, for callers INSIDE the server. It is a second parameter of the
-  // handler, never a field of FollowUpInput: a client could set a wire field, and nothing a tab sends may
-  // claim that its message is not the human speaking.
-  //
-  // `sideRequest` (2026-09-30): the message is a spinoff request — an errand the thread was asked to run on
-  // the side (start another thread), NOT the human picking this one back up. Everything a follow-up does
-  // BECAUSE the human re-engaged is skipped for it:
-  //   • the riders (humanGapNote, openQuestionsNote) — they tell the worker about ITS work ("the human
-  //     answered after 4h", "these questions are still open"), which is noise on an errand whose answer is
-  //     one spawn_thread call, and an invitation to reopen the thread's own work inside the side turn;
-  //   • reopening an archived thread and clearing a snooze — the human finished or shelved THIS thread, and
-  //     a spinoff from it did not change their mind. The request's side turn is kept out of the thread
-  //     entirely when it is clean (spinoff-side-turn.ts), so the row should be exactly where it was;
-  //   • the model upgrade at compaction — it restarts the worker's process, which is the thread's business
-  //     at the next real turn, not the errand's.
-  // What it keeps is everything about GETTING the message to a working process: the runtime routing, the
-  // limit restart, the ledger entry, the `exited` clearing.
-  interface FollowUpDelivery { sideRequest?: boolean }
-
-  // One request can become one thread. The check-then-stamp below spans an await (the dispatch), so two
-  // racing `spawn_thread` calls for the same id would both pass the pending check; this set closes that.
-  const spinoffsInFlight = new Set<string>()
-
   // WHERE A SPINOFF'S THREAD STARTS (2026-09-30): this project, or another one this server has OPEN. Never
   // by opening one — the same rule `resolveElsewhere` keeps — so a project the human could not see in the
   // picker is not one a request can name. `undefined` is this project; a project that is not open throws.
@@ -2254,70 +2237,23 @@ export function createRouter(ctx: AppContext) {
     return { ctx: target, slug: chosen.slug }
   }
 
-  // A `spawn_thread` that names a spinoff: check it is a pending request of the CALLING thread, write the
-  // human's instructions and a link back above the parent's brief (spinoffChildPrompt), dispatch, and
-  // stamp the child. Refusals are errors the parent's worker reads, so each says what went wrong.
-  async function fulfilSpinoff(id: string, from: string | undefined, input: Omit<DispatchInput, "spinoff" | "spinoffFrom" | "spinOff" | "spinOffFrom">) {
-    const request = ctx.storage.getSpinoff(id)
-    if (!request) throw new Error(`No spinoff request ${id} exists in this project`)
-    if (from !== undefined && from !== request.parent_slug) {
-      throw new Error(`Spinoff ${id} was requested from another thread, so this thread cannot fulfil it`)
-    }
-    if (request.child_slug) throw new Error(`Spinoff ${id} already started thread ${request.child_slug}; do not spawn it twice`)
-    if (spinoffsInFlight.has(id)) throw new Error(`Spinoff ${id} is already being dispatched`)
-    // Resolved before the claim: a target project closed since the request is a refusal the worker can
-    // read, not a thread started somewhere the human did not choose.
-    const target = spinoffTarget(request.child_project_id)
-    spinoffsInFlight.add(id)
-    try {
-      const parent = ctx.storage.getSession(request.parent_slug)
-      // The parent by the handle the board SHOWS (handleOf over the name registry — the same name the
-      // rail, `read_thread` and the child's own autolinks resolve), so the child's prompt says
-      // `@liveSubAgents` rather than a link titled with the parent's stored dispatch words.
-      const named = threadNamer().threads().find((t) => t.slug === request.parent_slug)
-      const prompt = spinoffChildPrompt({
-        parentSlug: request.parent_slug,
-        parentTitle: parent?.title || request.parent_slug,
-        ...(named ? { parentHandle: handleOf(named) } : {}),
-        instructions: request.instructions,
-        brief: input.prompt,
-      })
-      // Named from what the human asked (and the brief under it), never from the prompt's opening
-      // "A spinoff of @parent…" line — see Dispatcher.dispatch's `nameSource`, and aiRenameThread, which
-      // names a spinoff child from the same text.
-      const nameSource = spinoffNameSource({ instructions: request.instructions, brief: input.prompt })
-      // A cross-project request dispatches through the TARGET's own dispatcher, so the thread is that
-      // project's in every respect — its board, its checkout, its names. The edge stays filed here.
-      const result = await (target ?? ctx).dispatcher.dispatch({ ...input, prompt }, { backend: input.backend, nameSource })
-      ctx.storage.completeSpinoff(id, result.slug, Date.now())
-      ctx.board.refresh()
-      target?.board.refresh()
-      return result
-    } finally {
-      spinoffsInFlight.delete(id)
-    }
-  }
-
-  // THE CLAUDE SPINOFF ROUTE: FORK THE PARENT (David 2026-09-30). The brief route below hands the
-  // request to the parent's own worker, which writes a cold start for the new thread and dispatches it —
-  // an errand run INSIDE the parent's conversation, which is why ~800 lines exist to keep that side turn
-  // out of the parent's chat, rest and queue place (spinoff-side-turn.ts, spinoff-edge-recovery.ts). On a
-  // Claude thread the new thread instead starts as a FORK of the parent's session: it continues the
-  // parent's whole conversation, then the human's instructions. Measured over 18 graded handoffs
-  // (Opus, 118k-235k-token parents), the fork matched the brief on correctness and scope in every run,
-  // cost the same (the child reads the parent's prompt cache) and was ~1.1-2x faster, because nothing
-  // waits on the parent to finish its turn and write a brief. And the parent is never touched: no
-  // message reaches it, so a running turn runs on, and a rested one keeps its handoff, its unread and
-  // its place in the queue exactly as they were.
+  // A SPINOFF NEVER TOUCHES ITS PARENT. No message reaches the parent and no model is called on its
+  // behalf, so a running turn runs on, and a rested one keeps its handoff, its unread and its place in the
+  // queue exactly as they were. The child starts one of two ways:
   //
-  // What stays the brief route, and why:
+  // THE FORK (David 2026-09-30), on a Claude parent with a transcript in this project: the child starts as
+  // a FORK of the parent's session, continuing its whole conversation, then the human's instructions.
+  // Measured over 18 graded handoffs (Opus, 118k-235k-token parents), the fork matched a brief the
+  // parent's worker wrote on correctness and scope in every run, cost the same (the child reads the
+  // parent's prompt cache) and was ~1.1-2x faster.
+  //
+  // THE SUMMARY (David 2026-10-07, summarySpinoff below), everywhere else — a fresh thread whose opening
+  // prompt is the human's instructions over context Frizz assembles from what it already stores:
   //   • Codex and ACP threads — nothing here can fork their sessions.
   //   • A CROSS-PROJECT spinoff. The Claude CLI finds a session to fork from any cwd (measured on 2.1.284),
-  //     but the conversation it would copy is full of paths relative to ANOTHER checkout, the target's
-  //     tool surface differs so the fork would not read the parent's cache anyway, and the brief route
-  //     already tells the worker to write for a different checkout (spinoffRequestMessage).
-  //   • A parent with no transcript on disk yet — there is nothing to fork; the brief queues behind its
-  //     first turn like any message.
+  //     but the conversation it would copy is full of paths relative to ANOTHER checkout, and the target's
+  //     tool surface differs so the fork would not read the parent's cache anyway.
+  //   • A parent with no transcript on disk yet — there is nothing to fork.
   function forkSource(parent: SessionRow, target: AppContext | undefined): string | undefined {
     if (target || !isBrokerClaudeRow(parent)) return undefined
     const source = threadTranscriptSource(ctx.project, ctx.storage, parent.slug, ctx.backendFor)
@@ -2359,9 +2295,76 @@ export function createRouter(ctx: AppContext) {
     ctx.storage.completeSpinoff(id, result.slug, now)
     ctx.board.refresh()
     // The parent's transcript did not move, so nothing else would re-push its chat — and the request card
-    // there is drawn from the row just written (transcript.ts withForkedSpinoffRequests).
+    // there is drawn from the row just written (transcript.ts withSpinoffCards).
     ctx.transcriptChange.emit([parent.slug])
     return { id }
+  }
+
+  // THE SUMMARY ROUTE: a fresh thread on context Frizz assembles from the parent (spinoffContext) — its
+  // original request, its latest handoff and, across projects, where it lives. Until 2026-10-07 this was a
+  // `<spinoff-request>` message to the parent's worker, which wrote a brief and dispatched it: a model call
+  // inside the parent's conversation that took ~800 lines to keep out of the parent's chat, rest and queue
+  // place. What it wrote is now read off the parent instead, and `read_thread` is there for the rest.
+  //
+  // The child inherits the parent's backend, model and effort, as a fork does: the human asked for more of
+  // this thread's kind of work, and an ACP parent's model names its agent. A cross-project child dispatches
+  // through the TARGET's own dispatcher, so it is that project's thread in every respect — its board, its
+  // checkout, its names. The edge stays filed here, under the parent.
+  async function summarySpinoff(parent: SessionRow, target: AppContext | undefined, instructions: string): Promise<{ id: string }> {
+    const named = threadNamer().threads().find((t) => t.slug === parent.slug)
+    const handle = named ? handleOf(named) : undefined
+    const ref = { parentSlug: parent.slug, parentTitle: parent.title || parent.slug, ...(handle ? { parentHandle: handle } : {}) }
+    const { request, handoff } = spinoffParentDigest(parent.slug)
+    const brief = spinoffContext({
+      ...ref,
+      readAs: handle ?? parent.slug,
+      ...(request ? { request } : {}),
+      ...(handoff ? { handoff } : {}),
+      ...(target ? { project: { name: ctx.project.name, dir: workDirOf(ctx.project) } } : {}),
+    })
+    const backend = Backend.safeParse(parent.backend ?? "claude")
+    const effort = Settings.shape.effort.safeParse(parent.effort ?? undefined)
+    const result = await (target ?? ctx).dispatcher.dispatch(
+      {
+        prompt: spinoffChildPrompt({ ...ref, instructions, brief }),
+        ...(parent.model ? { model: parent.model } : {}),
+        ...(effort.success && effort.data !== undefined ? { effort: effort.data } : {}),
+      },
+      // Named from the human's words and the context under them, never the "A spinoff of @parent…" line.
+      { backend: backend.success ? backend.data : "claude", nameSource: spinoffNameSource({ instructions, brief }) },
+    )
+    const id = `spn_${randomBytes(8).toString("hex")}`
+    const now = Date.now()
+    ctx.storage.insertSpinoff({ id, parentSlug: parent.slug, instructions, createdAtMs: now, ...(target ? { childProjectId: target.project.id } : {}) })
+    ctx.storage.completeSpinoff(id, result.slug, now)
+    ctx.board.refresh()
+    target?.board.refresh()
+    ctx.transcriptChange.emit([parent.slug])
+    return { id }
+  }
+
+  // What a summary spinoff quotes of its parent: the opening request (as `read_thread` reads it), and the
+  // latest handoff — the registered done while it stands (the board's own reading), else the last
+  // message the worker came to rest on. A thread mid-turn hands over its PREVIOUS rest, never the
+  // narration in flight; one that has never rested hands over nothing.
+  function spinoffParentDigest(slug: string): { request?: string; handoff?: string } {
+    const messages = readThreadTranscript(ctx.project, ctx.storage, slug, ctx.backendFor)
+    const opening = openingRequestOf(messages)
+    const tele = ctx.tailer.get(slug)
+    const done = registeredDoneFence(ctx.storage.getThreadDone(slug), tele?.lastUserAt, tele?.lastToolCallAt, tele)
+    let spoken: TranscriptMessage | undefined
+    let rested: TranscriptMessage | undefined
+    for (const m of messages) {
+      if (m.role === "assistant" && !m.kind && saidOf(m)) spoken = m
+      else if (m.boundary === "rest") rested = spoken
+    }
+    // An ACP transcript draws no rest divider, so an idle thread's newest words are its rest.
+    const resting = tele?.turn === "idle" ? spoken : rested
+    const handoff = done?.body.trim() || (resting ? saidOf(resting) : "")
+    return {
+      ...(opening ? { request: clipText(saidOf(opening), 4_000) } : {}),
+      ...(handoff ? { handoff: clipText(handoff, 8_000) } : {}),
+    }
   }
 
   const router = {
@@ -2821,8 +2824,7 @@ export function createRouter(ctx: AppContext) {
       // byte-identical. The resume path needs NO analog — resume reads the backend from the row's
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
-        // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
-        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, project, spawnedFrom, ...dispatched } = input
+        const { awaitHandle, project, spawnedFrom, ...dispatched } = input
         // A TIME LIMIT IS THE HUMAN'S TO SET at dispatch (deadline.ts). A worker's `spawn_thread` cannot
         // pass one — the shim sends none — and one that arrives from a worker's transport anyway is dropped
         // rather than refused, so the spawn itself still goes through. The spawned thread's own worker may
@@ -2830,9 +2832,6 @@ export function createRouter(ctx: AppContext) {
         const { deadline: askedDeadline, ...undated } = dispatched
         const rest = dispatchCaller() === "worker" ? undated : dispatched
         void askedDeadline
-        const request = spinoff ?? spinOff
-        // A spinoff's project was chosen by the human with the request; `project` cannot redirect it.
-        if (request) return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
         // A worker's spawn is checked for another project's checkout. A current shim says so with
         // `spawnedFrom`; one older than it (a session started before 2026-10-06 16:44 keeps its shim for
         // life) is known by its request instead, which a browser's never resembles (dispatch-caller.ts).
@@ -2872,14 +2871,8 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => startHeldThreadRow(currentOwnedSession(input.slug, input.sessionId), input.prompt, input),
     }),
 
-    // SPINOFF a new thread from this one (SpinoffInput). Records the request, then hands it to THIS
-    // thread's worker as a message — through the very path a typed follow-up takes, so it wakes a rested
-    // (or hibernated) worker and queues behind a running turn exactly as the human's own words would. It
-    // is delivered as a SIDE REQUEST (FollowUpDelivery above): a done thread stays done and a snoozed one
-    // stays snoozed, because the human asked for a new thread, not for this one back. The worker answers
-    // by dispatching through `spawn_thread` with the request's id, which lands in `fulfilSpinoff` above. A
-    // delivery that fails drops the row: a request the worker never received must not sit on the thread
-    // as one it is ignoring — and so does one the human takes back out of the queue (unqueueFollowUp).
+    // SPINOFF a new thread from this one (SpinoffInput): a fork of this thread's session where one can be
+    // made, else a fresh thread on context Frizz assembles. Either way this thread is sent nothing.
     spinoff: mutation({
       input: SpinoffInput,
       output: SpinoffResult,
@@ -2887,31 +2880,7 @@ export function createRouter(ctx: AppContext) {
         const parent = currentOwnedSession(input.slug, input.sessionId)
         const target = spinoffTarget(input.project)
         const from = forkSource(parent, target)
-        if (from) return forkSpinoff(parent, from, input.instructions)
-        const id = `spn_${randomBytes(8).toString("hex")}`
-        ctx.storage.insertSpinoff({
-          id, parentSlug: input.slug, instructions: input.instructions, createdAtMs: Date.now(),
-          ...(target ? { childProjectId: target.project.id } : {}),
-        })
-        // BEFORE the delivery, so the edge recovery's read of this parent starts where its transcript
-        // stands now — the request's answer can only come after it (spinoff-edge-recovery.ts).
-        ctx.spinoffEdges?.noteRequest(input.slug, id)
-        try {
-          await deliverFollowUp!({ input: {
-            slug: input.slug,
-            sessionId: input.sessionId,
-            message: spinoffRequestMessage({
-              id, instructions: input.instructions,
-              ...(target ? { project: { name: target.project.name, dir: workDirOf(target.project) } } : {}),
-            }),
-            deliveryId: `${SPINOFF_DELIVERY_PREFIX}${id}`,
-          } }, { sideRequest: true })
-        } catch (err) {
-          ctx.storage.dropSpinoff(id)
-          throw err
-        }
-        ctx.board.refresh()
-        return { id }
+        return from ? forkSpinoff(parent, from, input.instructions) : summarySpinoff(parent, target, input.instructions)
       },
     }),
 
@@ -2926,8 +2895,7 @@ export function createRouter(ctx: AppContext) {
       input: FollowUpInput,
       // Wrapped so a delivery that throws keeps the operator's words — see keepFailedFollowUp — and so a
       // repeat of a deliveryId still in flight joins the first attempt (joinInflightFollowUp).
-      handler: deliverFollowUp = ({ input }, delivery = {}) => joinInflightFollowUp(input.slug, input.deliveryId, () => keepFailedFollowUp(input, async (openWriteAhead) => {
-        const side = delivery.sideRequest === true
+      handler: ({ input }) => joinInflightFollowUp(input.slug, input.deliveryId, () => keepFailedFollowUp(input, async (openWriteAhead) => {
         // Every follow-up crosses a TYPED CONTROL CHANNEL now, never a terminal: a codex row goes to the
         // app-server bridge and a claude row to the session broker, each of which owns its own
         // steer-vs-start decision and reconnects or cold-resumes a dead session itself. Nothing types
@@ -2954,14 +2922,12 @@ export function createRouter(ctx: AppContext) {
         // A HELD THREAD HAS NO AGENT TO DELIVER TO: its first message is what starts one, through the dispatch
         // path (startHeldThreadRow). Every sender lands here — the drawer's prompt box, a snooze carrying a
         // prompt, another thread's message — so each of them starts the held thread rather than resuming a
-        // session no provider has heard of. A side request is the exception: it asks this thread's worker
-        // for an errand, and there is no worker to ask.
+        // session no provider has heard of.
         //
         // A HOLDER may want the message first (plugins/project.ts `send`): it may start the thread on it and
         // drop whatever it kept. With no holder by that id — the plugin removed, turned off or failed — or one
         // whose onSend throws, base starts the thread on the message itself, so no held thread is stranded.
         if (isHeldRow(row)) {
-          if (side) throw new Error("This thread has not started yet; send it a message to start it")
           if (await ctx.plugins?.send(row, input.message)) return
           await startHeldThreadRow(row, input.message)
           return
@@ -3009,8 +2975,7 @@ export function createRouter(ctx: AppContext) {
         // uses below): what the human typed is what the board shows. Only the copy handed to the worker
         // carries the note, and the note names frizz as its author because the message it rides on is
         // not frizz's.
-        // Neither rider rides a side request (FollowUpDelivery): both speak to the thread's own work.
-        const gapNote = side ? undefined : humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
+        const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
         // …AND THE QUESTIONS THIS MESSAGE SETS ASIDE, the same way and for the same reader. A typed
         // message sets every current question aside (shared questionRepliedPast, 2026-09-30): its card
         // stays answerable until the worker's next rest withdraws it (2026-10-02), and the worker — which
@@ -3018,16 +2983,14 @@ export function createRouter(ctx: AppContext) {
         // ones and by what id. Read BEFORE the message moves `lastHumanAt`, so this names the questions
         // that were current up to now, not ones an earlier message already set aside. Appended AFTER the
         // gap note, so that note's "the message above" still means the human's words.
-        const questionsNote = side ? undefined : openQuestionsNote(heldQuestions(input.slug))
+        const questionsNote = openQuestionsNote(heldQuestions(input.slug))
         const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
         const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
-        if (row && !side) reopenArchivedThreadForFollowUp(ctx, row)
+        if (row) reopenArchivedThreadForFollowUp(ctx, row)
         // Un-park HERE, above the runtime branches, for the same reason the reopen is here: a broker
         // Claude row and an app-server Codex row both return from their own branch below, so anything
-        // that must hold for every runtime has to run before the split. A side request does neither — until
-        // its side turn stops being quiet (it goes unclean, or blocks on the human), when the board runs
-        // these same two helpers for it (board.ts surfaceSideTurn).
-        if (row && !side) wakeParkedThreadForFollowUp(ctx, row)
+        // that must hold for every runtime has to run before the split.
+        if (row) wakeParkedThreadForFollowUp(ctx, row)
         // Every Codex follow-up flows through the app-server bridge — no terminal composer, no queue, no
         // stale-draft class. The bridge owns the steer-vs-start decision atomically and dedups on
         // deliveryId. A LEGACY Codex row (dispatched before the cutover) is migrated on its first
@@ -3150,8 +3113,7 @@ export function createRouter(ctx: AppContext) {
           // family has since moved past takes this message in a fresh process, forked from the current pin.
           // Only at rest — the gate refuses a turn in flight, a sub-agent, a shell, an approval or an
           // undelivered send, so a steer never restarts anything.
-          // Not for a side request: the errand runs in the process the thread has (FollowUpDelivery).
-          const upgradeCandidate = side ? undefined : claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
+          const upgradeCandidate = claudeUpgradeCandidate({ stateDir: ctx.project.stateDir, projectId: ctx.project.id, storage: ctx.storage, telemetry: ctx.tailer.get(input.slug) }, row)
           const upgrade = upgradeCandidate
             ? claudeModelUpgradeDue(upgradeCandidate, { catalogue: peekClaudeModels(), nowMs: Date.now(), serverStartedAtMs: SERVER_STARTED_AT_MS })
             : undefined
@@ -3374,13 +3336,6 @@ export function createRouter(ctx: AppContext) {
         // would hide a message the agent is about to read — the one failure this feature must not have.
         if (!cancelled) return tooLate
         cancelDelivery(ctx.storage, input.slug, input.deliveryId)
-        // A spinoff request taken back before the worker read it is a request that will never be answered,
-        // so its row goes the way a failed delivery's does (the `spinoff` mutation): left behind, it would
-        // sit on the thread as a pending spinoff card nothing is ever going to fulfil. Only a PENDING row of
-        // THIS thread — one already fulfilled is a thread that exists.
-        const spinoffId = spinoffIdOfDelivery(input.deliveryId)
-        const spinoff = spinoffId ? ctx.storage.getSpinoff(spinoffId) : undefined
-        if (spinoff && spinoff.parent_slug === input.slug && spinoff.child_slug === null) ctx.storage.dropSpinoff(spinoff.id)
         ctx.board.refresh()
         return { unqueued: true }
       },
@@ -5261,12 +5216,11 @@ export function createRouter(ctx: AppContext) {
           if (read?.found) return { ...read, project: elsewhere!.tenant.project.name }
           return { found: false, known: knownHandles(threads, input.slug) }
         }
-        const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}\n…[truncated]` : text)
+        const clip = clipText
         if (childPath.length > 0) return readSubAgent(hit.slug, handleOf(hit), childPath, clip)
         const messages = readThreadTranscript(ctx.project, ctx.storage, hit.slug, ctx.backendFor)
-        const said = (m: (typeof messages)[number]) => (m.displayText ?? m.text).trim()
-        // Never a spinoff request (isHumanTurn): it asks for ANOTHER thread, so it is never this one's request.
-        const opening = messages.find((m) => m.role === "user" && !m.kind && !m.spinoff && said(m))
+        const said = saidOf
+        const opening = openingRequestOf(messages)
         // The newest assistant words: the handoff when it is resting, the latest narration when it is not —
         // and the three before them, which is where the APPROACH lives when the newest is a terse handoff.
         const spoken = messages.filter((m) => m.role === "assistant" && !m.kind && said(m))
@@ -5409,11 +5363,8 @@ export function createRouter(ctx: AppContext) {
         // A SPINOFF CHILD is the exception (2026-09-30): its opening turn's `displayText` is the human's
         // bare instructions (the spinoff header's projection), which are often subject-less —
         // "evaluate whether this is a good idea" — so it is named from the instructions AND the parent's
-        // brief, the same text its dispatch minted its name from (spinoffNameSource). The whole
-        // projection goes through withSpinoffChildOrigin first, so a legacy child whose prompt predates
-        // the framing is named from its row's instructions and its raw brief the same way.
-        const opening = withSpinoffChildOrigin(readTranscript(ctx.project, row.session_id, row.fork_anchor), ctx.storage, input.slug, true)
-          .find((m) => m.role === "user")
+        // context, the same text its dispatch minted its name from (spinoffNameSource).
+        const opening = readTranscript(ctx.project, row.session_id, row.fork_anchor).find((m) => m.role === "user")
         const description = (opening?.spinoffOrigin && spinoffNameSource(opening.spinoffOrigin)) ||
           opening?.displayText?.trim() || opening?.text?.trim() || row.title?.trim() || input.slug
         // Frizz's own namer, not the provider's titler (`bridge.renameSession`): that one runs Claude

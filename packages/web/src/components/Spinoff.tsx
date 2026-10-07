@@ -1,4 +1,4 @@
-import { useContext, useEffect, useId, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent as ReactMouseEvent, type ReactNode } from "react"
+import { useContext, useEffect, useId, useRef, useState, type ReactNode } from "react"
 import { ArrowRight, Check, ChevronDown, ChevronRight, Loader2, Split } from "lucide-react"
 import { useQuery } from "@tanstack/react-query"
 import { type ProjectCard, type SpinoffView, type ThreadView } from "@frizz/shared"
@@ -12,10 +12,9 @@ import { mentionHref } from "../lib/mentionAutolink.ts"
 import { spaNavigate } from "../lib/router.ts"
 import { displayTitle, threadHandleOf } from "../groups.ts"
 import { useBoard } from "../hooks.ts"
-import { draftKey, draftStore, useDraft } from "../lib/drafts.ts"
-import { useUnqueueFollowUp, useUnqueueSupported } from "../lib/unqueueFollowUp.ts"
+import { draftKey, useDraft } from "../lib/drafts.ts"
 import { transcriptMetaChevronClass } from "../lib/transcriptMetaLabels.ts"
-import { showToast, threadBySlug } from "../store.ts"
+import { threadBySlug } from "../store.ts"
 import { ThreadHandleLink } from "./MentionLinks.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
 import { ProjectSquare } from "./ProjectSquare.tsx"
@@ -29,12 +28,12 @@ import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
 // thread supplying the context. Three surfaces, one concept:
 //
 //   · SpinoffButton — the icon in every thread header: each queue card's, and the drawer's and /full's.
-//     It opens the one-field dialog, and the request goes to this thread's worker (the `spinoff` RPC),
-//     which briefs and dispatches the new one.
+//     It opens the one-field dialog, and the `spinoff` RPC starts the new thread — a fork of this one's
+//     session, or a fresh thread on context Frizz assembles — without sending this one anything.
 //   · SpinoffCard — the request, in this thread's timeline where the human sent it: the human's
 //     instructions under the `@handle` of the thread it became.
 //   · SpinoffOriginCard — the same card at the other end, heading the new thread: whose spinoff it is,
-//     the human's instructions, and the context the parent's worker wrote folded beneath them.
+//     the human's instructions, and the context it started with folded beneath them.
 //   · SpinoffOf — the child's way back, on its header's second line (and its queue card's meta line).
 //
 // A spinoff belongs to the THREAD. On its first day (2026-09-29) it was a hover action on every message,
@@ -52,8 +51,8 @@ function SpinoffMark({ size, className = "" }: { size: number; className?: strin
   return <Split size={size} strokeWidth={2} aria-hidden className={`shrink-0 rotate-90 ${className}`} />
 }
 
-/** Whether a thread can be asked for a spinoff: a live Frizz session, whose worker is the one that briefs
- *  the new thread. A foreign row has no worker of ours, and neither does a held thread that has not started. */
+/** Whether a thread can be asked for a spinoff: a live Frizz session. A foreign row is not ours to read,
+ *  and a held thread that has not started has nothing to spin off. */
 function canSpinoff(thread: ThreadView | undefined): thread is ThreadView & { sessionId: string } {
   return Boolean(thread && thread.kind === "session" && thread.foreign !== true && thread.held === undefined && thread.sessionId)
 }
@@ -378,7 +377,7 @@ function useFarEnd(projectId: string | undefined, slug: string | null | undefine
 // be a special UI affordance for referencing spinoff context … Make a dedicated spinoff header UI", and
 // of the parent, "dedicated UI and link to the spinoff, much cleaner"). The request drew as the human's
 // filled bubble with a small caption under it, and the child's first turn as one giant bubble holding
-// the whole brief — the parent worker's words wearing the human's voice.
+// the whole brief — another thread's words wearing the human's voice.
 //
 // So both ends wear one card, and it borrows exactly half of the bubble: its PLACE (right-aligned, 85%,
 // the tail corner — the human asked for this) and its type size, but an OUTLINE where the bubble has a
@@ -395,14 +394,14 @@ const CARD_SHELL = `${BLOCK_RADIUS} rounded-br-sm border border-border-strong px
 // glyph's ink on the text's cap band in whatever font resolved (lib/transcriptMetaLabels.ts carries the
 // derivation); the negative top margin stops the 1em box, which reaches above the text's ascent, from
 // growing the row. The same rule every mark-beside-text in the transcript uses. Measured ink-to-cap-band
-// residual, sans at 13px: -0.26px for the Split mark, the spinner and the disclosure chevron alike —
+// residual, sans at 13px: -0.26px for the Split mark and the disclosure chevron alike —
 // under the device grid, so left alone.
 //
 // HORIZONTAL: `gap-1.5` is a BOX distance. Between "Spinoff" and the handle it draws 5.3–5.5px of ink (a
 // word space, which is what it should read as), but between the mark and "Spinoff" it drew 8.25px — the
 // glyph's own 1px of dead box on its right plus the S's side bearing — so the mark floated off the word
 // it labels. `-mr-[0.2em]` takes the difference back, putting the three marks of the row on one even
-// rhythm (scripts/ink-gaps.mjs, dsf 4, sans, 2026-09-30; the spinner in the same slot measured the same).
+// rhythm (scripts/ink-gaps.mjs, dsf 4, sans, 2026-09-30).
 const HEADER_ROW = "flex min-w-0 items-baseline gap-1.5 text-[13px] leading-5 text-muted"
 const HEADER_GLYPH = "size-[1em] shrink-0 self-baseline -mt-[calc(1em_-_1cap)] -mr-[0.2em] translate-y-[calc(0.5em_-_0.5cap)]"
 // The other thread is the row's prominent element — the thing the card exists to point at.
@@ -411,202 +410,55 @@ const HEADER_LINK = "min-w-0 truncate rounded-sm font-medium text-fg underline d
 const BODY = "mt-1.5 whitespace-pre-wrap [overflow-wrap:anywhere]"
 
 /** Where a spinoff request stands, as its card shows it. */
-export type SpinoffCardState = "started" | "starting" | "waiting" | "unconfirmed" | "unstarted" | "detached"
+export type SpinoffCardState = "started" | "unstarted" | "detached"
 
-/** What the card reads a request's standing from: the edge, the delivery ledger's state for the send
- *  (while the ledger still holds it), and the parent thread's live reading. */
-export interface SpinoffCardInputs {
-  /** The ledger's state for the send, present only until the transcript's own record takes over. */
-  deliveryState?: "sending" | "pending" | "enqueued" | "delivered" | "unconfirmed" | "failed"
-  /** The send is still waiting to be read (the ledger's `queued`, or the transcript's enqueue record). */
-  queued?: boolean
-  runtime?: ThreadView["runtime"]
-  /** The turn is paused on a decision only the human can make — a typed interaction or a native ask. */
-  blocked?: boolean
-  /** A later message reached the thread after this request, so the thread's LIVE reading (running,
-   *  blocked) is about some later turn, not the one this request was in. */
-  superseded?: boolean
-  /** The thread's board row carries its spinoff edges, but none for this request — the row is gone. */
-  edgeGone?: boolean
-}
-
-/** A request with a child has STARTED. One without says "didn't start" ONLY once the worker has genuinely
- *  finished a turn after receiving it without starting it — every earlier moment is some other state:
- *
- *   · UNCONFIRMED — the ledger found no receipt from the worker inside its window. Nothing is in progress,
- *     and nothing proves it failed either, so it says exactly that, as the human's own bubble does
- *     ("Delivery unconfirmed"). Before 2026-09-30's review this read as STARTING — a spinner for the hour
- *     the ledger keeps an unconfirmed send, then the card simply vanished.
- *   · WAITING — the turn the request is in (or queued behind) is paused on the human: a permission
- *     prompt, a typed interaction, a native ask. Neither "starting…" (nothing is moving) nor "didn't
- *     start" (the turn has not ended — the human may re-request and get two threads). Ahead of the
- *     running check because a Codex approval reads `running` and `actionableInteraction` together.
- *   · STARTING — still able to become one: the ledger holds the send (pending or enqueued, or `delivered`:
- *     the provider took it straight into a turn whose record is not on disk yet, which the tailer still
- *     reads as idle — the "didn't start" flash the review caught), or the worker is at work.
- *  The worker's own words about an unstarted request sit in the chat under the card, and so does the
- *  call it made, when that call failed (lib/spinoffCalls.ts). */
-//
-//  Two readings sit outside that order (review, 2026-09-30):
-//   · SUPERSEDED — a later message reached the thread after this request, so its turn is over and the live
-//     runtime is about a LATER turn. An old request with no child is then "didn't start" whatever the
-//     thread is doing now; without this, every old unstarted card in the transcript turned "starting…"
-//     or "waiting on you" whenever a later turn ran or stopped on an approval.
-//   · DETACHED — the board row lists the thread's spinoffs and this request is not among them: the row is
-//     gone, which in practice means its child was forgotten (storage drops the edge with the child so a
-//     thread that later reuses the slug is not mistaken for it). The card then states only that it was a
-//     spinoff — not "didn't start", which would be false, and no link to a thread that no longer exists.
-export function spinoffCardState(edge: SpinoffView | undefined, opts: SpinoffCardInputs): SpinoffCardState {
+/** A request with a child has STARTED — every request Frizz makes now, since the row is written once the
+ *  child exists (server router.ts `spinoff`). The other two are older rows:
+ *   · UNSTARTED — a request an older build handed to the parent's worker, which never started a thread.
+ *   · DETACHED — the board row lists the thread's spinoffs and this request is not among them: the row is
+ *     gone, which in practice means its child was forgotten (storage drops the edge with the child so a
+ *     thread that later reuses the slug is not mistaken for it). The card then states only that it was a
+ *     spinoff — not "didn't start", which would be false, and no link to a thread that no longer exists.
+ *  `edgeGone` says the thread's board row carries its spinoff edges, but none for this request. */
+export function spinoffCardState(edge: SpinoffView | undefined, edgeGone: boolean): SpinoffCardState {
   if (edge?.childSlug) return "started"
-  if (opts.deliveryState === "unconfirmed") return "unconfirmed"
-  // The server kept a send whose delivery threw (delivery-ledger.ts `failed`): it never reached the worker.
-  if (opts.deliveryState === "failed") return "unstarted"
-  if (opts.queued || opts.deliveryState !== undefined) return opts.blocked || opts.runtime === "perm-prompt" ? "waiting" : "starting"
-  if (!edge && opts.edgeGone) return "detached"
-  if (opts.superseded) return "unstarted"
-  if (opts.blocked || opts.runtime === "perm-prompt") return "waiting"
-  return opts.runtime === "running" || opts.runtime === "spawning" ? "starting" : "unstarted"
+  return !edge && edgeGone ? "detached" : "unstarted"
 }
 
-/** The words each state without a child reads. */
-const PENDING_LABEL: Record<Exclude<SpinoffCardState, "started">, string> = {
-  starting: "starting…",
-  waiting: "waiting on you",
-  unconfirmed: "delivery unconfirmed",
-  unstarted: "didn't start",
-  detached: "",
-}
-
-/** The thread a transcript belongs to, off the board — the card's own read of the edge and of whether the
- *  worker is at work, so Message passes nothing through for it and its memo holds on every board tick. */
+/** The thread a transcript belongs to, off the board — the card's own read of the edge, so Message passes
+ *  nothing through for it and its memo holds on every board tick. */
 function useTranscriptThread(): ThreadView | undefined {
   const board = useBoard()
   return threadBySlug(board, useContext(ThreadSlugContext))
 }
 
-/** The request as it sits in the parent's timeline where the human sent it: the thread it became, and
- *  the human's instructions under it. `queued`, `deliveryState` and `deliveryId` are the delivery ledger's
- *  word on the send (the ledger's echo of it, or the transcript's enqueue record it tagged), and `rawText`
- *  the message's own text, which the transcript cache is keyed on for a take-back. */
-export function SpinoffCard({ id, instructions, at, queued, deliveryState, deliveryId, rawText, sourceId }: {
-  id: string
-  instructions: string
-  /** When the request reached the worker (the transcript record's instant); absent while the ledger holds it. */
-  at?: string
-  queued?: boolean
-  deliveryState?: SpinoffCardInputs["deliveryState"]
-  deliveryId?: string
-  rawText?: string
-  sourceId?: string
-}) {
+/** The request as it sits in the parent's timeline where the human asked for it: the thread it became,
+ *  and the human's instructions under it. */
+export function SpinoffCard({ id, instructions, sourceId }: { id: string; instructions: string; sourceId?: string }) {
   const thread = useTranscriptThread()
   const edge = thread?.spinoffs?.find((o) => o.id === id)
-  const state = spinoffCardState(edge, {
-    queued,
-    deliveryState,
-    runtime: thread?.runtime,
-    blocked: thread?.actionableInteraction === true || thread?.pendingAsk !== undefined,
-    // The request itself reads as the human speaking, so the thread's newest human instant IS this request
-    // until something later arrives. ISO instants from the same transcript compare as strings.
-    superseded: at !== undefined && thread?.lastUserAt !== undefined && thread.lastUserAt > at,
-    edgeGone: thread?.spinoffs !== undefined,
-  })
-  // TAKE IT BACK (2026-09-30, review). A request still in the parent's queue can be withdrawn exactly as a
-  // queued human bubble can (ChatView UserBubble, lib/unqueueFollowUp.ts) — the same gates, the same click,
-  // the same truthfulness: the card goes only once the provider confirms the send left its queue, and the
-  // server drops the pending request with it (router.ts unqueueFollowUp), so no card is left standing for
-  // a request nothing will answer. When the request drew as a gray bubble this came for free; the card
-  // took it away, and the server's half had no way in.
-  //
-  // What differs is where the words go back to: the Spinoff dialog, not the prompt box. From the prompt
-  // box they would be sent as an ordinary message to THIS thread, which is not what the human asked for.
-  // The dialog they reopen is the header's own (the nearest `[data-spinoff-button]` above the card, the
-  // way focusComposerNear finds its composer), resolved at click time because the card unmounts the moment
-  // the take-back lands. A surface with no such button gets the words back in the dialog's draft all the
-  // same, and a toast says where.
-  const slug = useContext(ThreadSlugContext)
-  const projectDir = useThreadProjectDir()
-  const unqueueSupported = useUnqueueSupported(slug)
-  const { unqueue, pending: unqueuePending } = useUnqueueFollowUp(slug)
-  const unqueueable = Boolean(queued && deliveryId && slug && unqueueSupported && state !== "started")
-  const takeBack = (from: HTMLElement) => {
-    if (window.getSelection()?.toString()) return
-    const button = spinoffButtonNear(from, slug!)
-    unqueue({
-      deliveryId: deliveryId!,
-      text: instructions,
-      rawText: rawText ?? instructions,
-      from,
-      restore: () => {
-        const key = draftKey.spinoff(projectDir, slug!)
-        const existing = draftStore.get(key)
-        draftStore.set(key, existing && existing !== instructions ? `${instructions}\n\n${existing}` : instructions)
-        if (button?.isConnected) button.click()
-        else showToast("Spinoff taken back. Its instructions are in the Spinoff dialog.")
-      },
-    })
-  }
+  const state = spinoffCardState(edge, thread?.spinoffs !== undefined)
   return (
     <div data-frizz-msg={sourceId} data-spinoff={id} data-spinoff-card="request" data-spinoff-state={state} className="self-end flex min-w-0 max-w-[85%] flex-col">
-      <div
-        {...(unqueueable ? {
-          role: "button",
-          tabIndex: 0,
-          "data-unqueue": deliveryId,
-          "aria-label": "Take back this spinoff request",
-          title: unqueuePending ? "Taking it back…" : undefined,
-          onClick: (e: ReactMouseEvent<HTMLDivElement>) => takeBack(e.currentTarget),
-          onKeyDown: (e: ReactKeyboardEvent<HTMLDivElement>) => {
-            if (e.key !== "Enter" && e.key !== " ") return
-            e.preventDefault()
-            takeBack(e.currentTarget)
-          },
-        } : {})}
-        // QUEUED READS AS THE BUBBLE DOES: half opacity is the transcript's one channel for "the worker has
-        // not read this yet", and a take-back-able one lifts to full under the pointer — the bubble's own
-        // hover language (see UserBubble), so the two things you can take back look alike. Not when
-        // UNCONFIRMED: the bubble puts its warning OUTSIDE its dimmed fill, and this card's warning is its
-        // own header, which at half opacity read as a muddy olive nobody would take for a warning.
-        className={`${CARD_SHELL} ${queued && (state === "starting" || state === "waiting") ? "opacity-50" : ""} ${unqueueable ? "cursor-pointer transition-opacity hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent focus-visible:ring-offset-2 focus-visible:ring-offset-bg" : ""} ${unqueuePending ? "!opacity-30" : ""}`}
-      >
+      <div className={CARD_SHELL}>
         <div className={HEADER_ROW}>
-          {/* STARTING, the mark's own slot spins — one glyph that changes, rather than a spinner added
-              beside the mark that then has to be spaced and aligned against it. */}
-          {state === "starting"
-            ? <Loader2 aria-hidden className={`${HEADER_GLYPH} animate-spin`} />
-            : <SpinoffMark size={14} className={HEADER_GLYPH} />}
+          <SpinoffMark size={14} className={HEADER_GLYPH} />
           <span className="shrink-0">Spinoff</span>
           {state === "started" ? (
             <SpinoffEndLink slug={edge!.childSlug!} projectId={edge!.childProjectId} />
-          ) : state === "detached" ? null : (
-            // Unconfirmed wears the attention tone the bubble's own "Delivery unconfirmed" line does: it is
-            // the one state the human may need to act on (send it again), and the only one that is a warning.
-            <span data-spinoff-pending className={`min-w-0 truncate ${state === "unconfirmed" ? "text-attention-80" : "text-muted-70"}`}>{PENDING_LABEL[state]}</span>
-          )}
+          ) : state === "unstarted" ? (
+            <span data-spinoff-pending className="min-w-0 truncate text-muted-70">didn't start</span>
+          ) : null}
         </div>
         <p className={BODY}>{instructions}</p>
       </div>
-      {/* Only the in-flight take-back gets a line ("did my click land?"), reserving no layout — the bubble's
-          rule, for the bubble's reason. */}
-      {unqueueable && unqueuePending && (
-        <div aria-hidden className="h-0 self-end overflow-visible text-[11px] text-muted">Taking it back…</div>
-      )}
     </div>
   )
 }
 
-/** The Spinoff button of the surface `from` sits in: the nearest ancestor holding one for `slug`. */
-function spinoffButtonNear(from: HTMLElement, slug: string): HTMLButtonElement | null {
-  for (let node: HTMLElement | null = from; node; node = node.parentElement) {
-    const button = node.querySelector<HTMLButtonElement>(`[data-spinoff-button="${CSS.escape(slug)}"]`)
-    if (button) return button
-  }
-  return null
-}
-
 /** The head of a spinoff child's transcript: whose spinoff it is, what the human asked for, and — folded,
- *  one click away — the context the parent's worker gathered. `context` is that brief already rendered
- *  (the transcript's markdown renderer, which lives in ChatView). */
+ *  one click away — the context it started with. `context` is that context already rendered (the
+ *  transcript's markdown renderer, which lives in ChatView). */
 export function SpinoffOriginCard({ instructions, context, sourceId }: { instructions: string; context: ReactNode; sourceId?: string }) {
   const thread = useTranscriptThread()
   const edge = thread?.spinoffs?.find((o) => o.childSlug === thread.id && !o.childProjectId)
@@ -634,12 +486,13 @@ export function SpinoffOriginCard({ instructions, context, sourceId }: { instruc
           )}
         </div>
         <p className={BODY}>{instructions}</p>
-        {/* THE BRIEF, FOLDED. It is the parent worker's cold start for this thread — often thousands of
-            characters — and the human already knows what it says, having been in that conversation; the
-            instructions above are the part they wrote. Collapsed it is one quiet line, the transcript's
-            own disclosure (label, then the chevron, as `Ran N tool calls ›` reads); open, the ruled muted
-            aside another agent's words wear everywhere else in the chat (PeerSessionMessageLine). A child
-            whose parent wrote no brief has nothing to fold, and no disclosure. */}
+        {/* THE CONTEXT, FOLDED. It is the parent's request and latest handoff Frizz quoted for this thread
+            (or, on an older child, the brief the parent's worker wrote) — often thousands of characters —
+            and the human already knows what it says, having been in that conversation; the instructions
+            above are the part they wrote. Collapsed it is one quiet line, the transcript's own disclosure
+            (label, then the chevron, as `Ran N tool calls ›` reads); open, the ruled muted aside another
+            thread's words wear everywhere else in the chat (PeerSessionMessageLine). A forked child has no
+            context to fold, and no disclosure. */}
         {context != null && (
         <div className="mt-2.5 border-t border-border/60 pt-2">
           <button

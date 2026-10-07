@@ -146,21 +146,6 @@ test("a row that is not a resting broker thread is not this sweep's business", (
   assert.deepEqual(decide({ row: row({ exited: 1 }) }), { hibernate: false, blockedBy: "stopped" })
 })
 
-// A done thread's worker is woken by a spinoff request without reopening the thread (router.ts
-// FollowUpDelivery), so its daemon outlives the side turn under a row Mark as done already stopped once.
-// Nothing else reclaims it; the SWEEP does, through every guard a resting thread gets — while the verdict's
-// other reader, the one-click model upgrade, still refuses a done thread (above).
-test("the sweep reclaims a done thread's idle daemon, and leaves a busy one alone", () => {
-  for (const done of [row({ state: "archived" }), row({ archived: 1 })]) {
-    const { deps, retired } = sweepDeps({ rows: () => [done] })
-    assert.deepEqual(sweepHibernationOnce(deps).hibernated.map((h) => h.slug), ["fix-the-queue"])
-    assert.equal(retired.length, 1)
-  }
-  const { deps, retired } = sweepDeps({ rows: () => [row({ state: "archived" })], telemetry: () => tele({ turn: "in-flight" }) })
-  sweepHibernationOnce(deps)
-  assert.deepEqual(retired, [], "a done thread still running its side turn keeps its worker")
-})
-
 // The newest of the three can only ever make a thread look MORE recently active, which is the safe
 // direction. `lastActivityAt` alone would have called this thread two hours idle.
 test("idle age takes the NEWEST activity reading, not just lastActivityAt", () => {

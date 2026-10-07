@@ -804,7 +804,7 @@ export interface Dispatcher {
   // caller title's disambiguating word, and the async mint — when that is not the prompt itself. Only
   // the server sets it: a spinoff's prompt opens with Frizz's own "A spinoff of @parent…" boilerplate,
   // and naming from that produced slugs like `a-spinoff-of-shell-budgets-thread-…` (2026-09-30), so
-  // fulfilSpinoff names the child from the human's instructions and the brief instead. Deliberately
+  // router.ts names the child from the human's instructions and its context instead. Deliberately
   // not a DispatchInput field: the RPC is callable by any worker and the web, and what a thread is
   // named from is not theirs to decouple from what it was asked.
   //

@@ -30,8 +30,6 @@ import { githubStatusKey, liveActivityOf, needsInputParkHolds, parkExpiresAt, pa
 import { findByPath } from "./project-registry.ts"
 import { homeWorkspaceSlug, isHomeWorkspace } from "./home-workspace.ts"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
-import { spinoffIdOfDelivery } from "./spinoff-side-turn.ts"
-import { reopenArchivedThreadForFollowUp, wakeParkedThreadForFollowUp } from "./resume.ts"
 import { effectivePermissionMode, fallbackTitle, resolveLegacyThreadFile } from "./dispatch.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
@@ -208,7 +206,7 @@ export function telemetryVouched(tele: SessionTelemetry | undefined): tele is Se
 //
 // Nothing here is EVIDENCE: the queue clock reads `telemetryVouched` off the tailer's own reading, never
 // off this, and is told which rows were drawn from a stand-in (`standIn`); and every stand-in carries
-// `primed: false`, which surfaceSideTurn keys on.
+// `primed: false`.
 export function boardTelemetry(
   row: Pick<SessionRow, "rested_at" | "delivery_ledger">,
   tele: SessionTelemetry | undefined,
@@ -1370,23 +1368,10 @@ export function fenceWatchViews(
 // from under it). The thread's ```done card was already sitting in the queue; this excusal took it
 // out, and nothing put it back. Neither queued nor carded: invisible — the delivery twin of the
 // sub-agent phantom deriveRuntime's `headlessLostWork` fixed, and the same lesson.
-//
-// A SPINOFF REQUEST is not one (2026-09-30). It rides the ledger like any send (router.ts `spinoff`), but
-// it answers nothing on the card: the human asked for ANOTHER thread, and this one's handoff is exactly as
-// unanswered as it was. Counting it does two wrong things at once. It pulls the card out of the queue the
-// moment the request is sent, before the worker has even read it — and now that the request's side turn
-// leaves the rest untouched (spinoff-side-turn.ts), the card would come back with nothing new on it. And it
-// reads as the human acting on the thread (the queue clock's `humanOut`, built off this through
-// `heldByDelivery`), which breaks the thread's claim on its place, so the card would come back at the
-// BOTTOM of the queue. Without it, the thread stays queued until its worker actually starts the side turn, leaves
-// for the turn's few seconds as any running thread does, and takes its old place back when it rests —
-// the claim a departure the human did not cause leaves (queue-clock.ts). A side turn that turns into real
-// work keeps that place too, with its new handoff on the card: it never took a person's action to get
-// there, which is the only thing that costs a place.
 function hasFreshDelivery(row: SessionRow, processGone: boolean): boolean {
   if (processGone) return false
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined)
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered"))
 }
 
 /** How long a message on its way to the worker keeps its row SPINNING (see deriveDeliveryInFlight). A
@@ -1415,9 +1400,8 @@ export function deriveDeliveryInFlight(
   if (needsYou || (runtime !== "turn-idle" && runtime !== "exited")) return false
   if (wakeInFlight) return true
   if (deliveryProcessGone) return false
-  // A spinoff request is not the human's message to THIS thread (see hasFreshDelivery), so it spins nothing.
   return parseDeliveryLedger(row.delivery_ledger).some((d) =>
-    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") && spinoffIdOfDelivery(d.id) === undefined &&
+    (d.state === "sending" || d.state === "pending" || d.state === "enqueued" || d.state === "delivered") &&
     nowMs - Date.parse(d.at) < DELIVERY_IN_FLIGHT_SPIN_MS
   )
 }
@@ -2820,65 +2804,14 @@ export function createBoard(
   // (queueUrgency) with the All queues page's notifier, so the two agree on what is news.
   const urgencyOf = queueUrgency
 
-  // AN ARCHIVED OR SNOOZED PARENT'S SIDE TURN THAT STOPS BEING QUIET (review, 2026-09-30). A spinoff
-  // request's delivery leaves the row where it is — no reopen, no unsnooze (router.ts FollowUpDelivery) —
-  // because a side turn that only starts the new thread is not the thread's news, and a thread the human
-  // marked done or put away until Friday should stay there through it. That is right only while the side
-  // turn IS quiet. Otherwise the parent is stuck exactly where nobody looks: an archived row's needsYou is
-  // forced false and a future snooze returns before every hard gate in deriveNeedsYou, so a permission
-  // prompt the brief-gathering `git log` raised, an approval, a worker that refused the spawn and said
-  // why, or one that went on to do real work, reached neither the queue nor a notification — and the
-  // request the human just made sat blocked on them without a sign.
-  //
-  // So once the side turn surfaces, the row is taken out of Done/Snoozed through the SAME helpers an
-  // ordinary follow-up uses, which is what the delivery would have done had it known: the thread is then
-  // an ordinary open thread, and the queue, its notification and every card follow with no special case
-  // downstream. It surfaces when
-  //   • it went UNCLEAN — the turn is real (spinoff-side-turn.ts), whether it has ended or not; or
-  //   • it is still running and BLOCKED on the human (an approval, a permission prompt, a native ask) or
-  //     died (crashed). Clean so far, and it may yet finish clean — but not without the human.
-  // EDGE-TRIGGERED per side turn: done ONCE when it first surfaces, whichever reason that was, so a human
-  // who puts the thread back after seeing it is not overruled on a later build — not when the same side
-  // turn goes on from blocked to unclean either (review: keyed on id AND reason, a parent reopened for a
-  // permission prompt, re-archived by the human, was reopened again when the worker then declined the
-  // spawn). A restart re-primes silently, like the notify, except a side turn that is blocked RIGHT NOW:
-  // that one still waits on the human, and a boot that swallowed it would strand it again.
-  const sideTurnPrimed = new Set<string>()
-  const sideTurnSurfaced = new Map<string, string>() // slug → the side turn already surfaced (or primed past)
-  function surfaceSideTurn(row: SessionRow, tele: SessionTelemetry | undefined, view: ThreadView, nowMs: number): void {
-    if (!tele || tele.primed === false) return
-    const first = !sideTurnPrimed.has(row.slug)
-    sideTurnPrimed.add(row.slug)
-    const turn = tele.sideTurn
-    if (turn === undefined) return
-    const blocked = !turn.ended &&
-      (view.actionableInteraction === true || view.runtime === "perm-prompt" || view.pendingAsk !== undefined || view.crashed === true)
-    const reason = !turn.clean ? "unclean" : blocked ? "blocked" : undefined
-    if (reason === undefined || sideTurnSurfaced.get(row.slug) === turn.id) return
-    sideTurnSurfaced.set(row.slug, turn.id)
-    if (first && reason !== "blocked") return
-    if (view.archived !== true && futureSnooze(row, nowMs) === undefined) return
-    const deps = { storage, board: { refresh: queueSnoozeRefresh } }
-    try {
-      reopenArchivedThreadForFollowUp(deps, row)
-    } catch {
-      // A CAS miss: the row was re-dispatched under this build. Its new session is not this side turn's.
-      return
-    }
-    wakeParkedThreadForFollowUp(deps, row)
-  }
-
   // Fire a needs-decision notify for every registered session that newly enters the queue.
   // Edge-triggered + deduped; primed on the first build.
   //
   // EXCEPT ONE THAT COMES BACK TO THE PLACE IT LEFT WITH THE REST IT LEFT WITH (2026-09-30). That is not a
   // new entry: nobody acted on the thread (the queue clock gave it its old place back, which only an
   // unbroken claim does) and its worker said nothing new (the same rest), so the notification would
-  // announce the card the human was already told about. The case that made it matter is a spinoff
-  // request's side turn: the worker runs for the seconds it takes to start the new thread, which takes
-  // the queued parent out of the queue, and the rest it comes back to is the one it left with, put back
-  // by the tailer (spinoff-side-turn.ts). A departure that came back with anything new — another
-  // message, or a fresh stamp because the human acted — still notifies.
+  // announce the card the human was already told about. A departure that came back with anything new —
+  // another message, or a fresh stamp because the human acted — still notifies.
   //
   // "Anything new" INCLUDES A NEW REASON TO BE QUEUED, not only a new message (review, same day). The
   // same place and the same rest are not enough on their own: the queue clock hands an unbroken claim its
@@ -2888,7 +2821,7 @@ export function createBoard(
   // the rest it left with and was let through in silence, blocked on a request nobody was told about. So
   // the reasons are part of the identity too (urgencyOf): the same card is the same place, the same rest
   // and the same reasons. Not "never while urgent" — a rest that asks a question is urgent, and it must
-  // stay quiet through its own spinoff exactly as a plain handoff does.
+  // stay quiet through a departure that changed nothing exactly as a plain handoff does.
   function notifyNeedsYou(sessionThreads: ThreadView[]): void {
     const seen = new Set<string>()
     for (const t of sessionThreads) {
@@ -2998,11 +2931,7 @@ export function createBoard(
       }
       const view = plugins ? plugins.threadView(scheduled, row) : scheduled
       out.push(view)
-      surfaceSideTurn(row, tele, view, nowMs)
     }
-    const live = new Set(rows.map((row) => row.slug))
-    for (const slug of sideTurnPrimed) if (!live.has(slug)) sideTurnPrimed.delete(slug)
-    for (const slug of sideTurnSurfaced.keys()) if (!live.has(slug)) sideTurnSurfaced.delete(slug)
     for (const key of pendingInteractionCache.keys()) {
       if (!currentInteractionKeys.has(key)) pendingInteractionCache.delete(key)
     }

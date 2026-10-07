@@ -74,10 +74,8 @@ export function focusComposerNear(from: HTMLElement | null): void {
   document.getElementById("followup-input")?.focus()
 }
 
-/** What to take back. `text` goes back into the prompt box — unless `restore` is given, which then owns
- *  where the words go instead (a spinoff request's go back into its own dialog, Spinoff.tsx: in the
- *  prompt box they would be sent as an ordinary message to this thread, which is not what was asked). */
-export type UnqueueInput = { deliveryId: string; text: string; rawText: string; from: HTMLElement | null; restore?: () => void }
+/** What to take back. `text` goes back into the prompt box. */
+export type UnqueueInput = { deliveryId: string; text: string; rawText: string; from: HTMLElement | null }
 
 export function useUnqueueFollowUp(slug: string | null): {
   unqueue: (input: UnqueueInput) => void
@@ -103,7 +101,6 @@ export function useUnqueueFollowUp(slug: string | null): {
         // this send; drop the copy already in the cache so the retraction is instant rather than
         // waiting on that round trip.
         removeQueuedMessage(queryClient, slug, input.rawText, input.deliveryId)
-        if (input.restore) { input.restore(); return }
         restoreDraft(projectDir, slug, sessionId, input.text)
         focusComposerNear(input.from)
       },

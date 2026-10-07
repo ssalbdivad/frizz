@@ -116,7 +116,7 @@ test("a dispatch NAMED from another text takes its fallback title, slug and mint
   })
   const nameSource = "investigate perf\n\nBrief: the N+1 in loadUsers"
   const { slug } = await dispatcher.dispatch(
-    { prompt: "A spinoff of @shell-budgets, at the human's request. Their instructions:\n\n> investigate perf\n\nThe context @shell-budgets gathered for you:\n\nBrief: the N+1 in loadUsers", title: "Visualization distinctions" },
+    { prompt: "A spinoff of @shell-budgets, at the human's request. Their instructions:\n\n> investigate perf\n\nContext from @shell-budgets:\n\nBrief: the N+1 in loadUsers", title: "Visualization distinctions" },
     { nameSource },
   )
   assert.equal(slug, "investigate-perf")

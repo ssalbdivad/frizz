@@ -6,10 +6,11 @@ import test from "node:test"
 // provided: start `vite` in packages/web and set FRIZZ_SPINOFF_E2E_URL to its origin (or run it through
 // `nub run test:e2e`, which does both).
 //
-// What only a browser settles: that the whole pipeline (not the card alone) hides the `spawn_thread` call
-// a spinoff card stands for — and only that one, never a call that failed; that the delivery ledger's raw envelope never reaches the screen; that the
-// brief stays folded until asked for and then renders as markdown; and the thread link's click contract —
-// a plain click opens the drawer in place, a modified click is left to the browser.
+// What only a browser settles: that the whole pipeline (not the card alone) draws each request as its card
+// — whether the server drew it from the spinoff's row or an older build's `<spinoff-request>` turn — and
+// never the envelope; that the context stays folded until asked for and then renders as markdown; and the
+// thread link's click contract — a plain click opens the drawer in place, a modified click is left to the
+// browser.
 const baseUrl = process.env.FRIZZ_SPINOFF_E2E_URL
 
 async function launch() {
@@ -27,7 +28,7 @@ async function launch() {
 
 const fixtureUrl = (query: string) => new URL(`/spinoff-fixture.html${query}`, baseUrl).href
 
-test("the parent draws each request as its card, and never the spawn_thread call that started one", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("the parent draws each request as its card, an older build's delivered request included", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
     await page.goto(fixtureUrl("?panel=parent"), { waitUntil: "domcontentloaded" })
@@ -47,10 +48,7 @@ test("the parent draws each request as its card, and never the spawn_thread call
       { state: "started", link: "@audit-every-transcript-projection-path", header: "Spinoff@audit-every-transcript-projection-path" },
       { state: "unstarted", link: null, header: "Spinoffdidn't start" },
     ])
-    // The two ordinary runs keep their digests; the two spawn calls add none (a spawn-only message would
-    // have drawn `Ran 1 tool call`, and the mid-work one would have been folded into the run after it).
-    // …but the call behind the request that did NOT start is drawn, because it failed: its error is the one
-    // record of why (review 2026-09-30).
+    // The two ordinary runs keep their digests, and the older build's spawn_thread call is an ordinary line.
     assert.deepEqual(read.digests, ["Expand 2 tool calls: Ran 2 tool calls", "Expand 2 tool calls: Ran 2 tool calls, edited 1 file", "Expand 1 tool call: Ran 1 tool call"])
     const refusal = await page.evaluate(async () => {
       const digest = [...document.querySelectorAll<HTMLElement>("[data-tool-activity]")].at(-1)!
@@ -99,68 +97,7 @@ test("the parent draws each request as its card, and never the spawn_thread call
   }
 })
 
-test("a request still in the delivery ledger draws as the starting card, not its raw envelope", { skip: !baseUrl, timeout: 60_000 }, async () => {
-  const { browser, page, errors } = await launch()
-  try {
-    await page.goto(fixtureUrl("?panel=busy"), { waitUntil: "domcontentloaded" })
-    await page.waitForSelector("[data-spinoff-card=request]")
-    const read = await page.evaluate(() => ({
-      state: document.querySelector<HTMLElement>("[data-spinoff-card=request]")!.dataset.spinoffState,
-      spinner: Boolean(document.querySelector("[data-spinoff-card=request] .animate-spin")),
-      body: document.querySelector("[data-spinoff-card=request] p")!.textContent,
-      text: document.body.innerText,
-    }))
-    assert.equal(read.state, "starting")
-    assert.equal(read.spinner, true)
-    assert.equal(read.body, "Profile the cold-start path while I keep going on the cache.")
-    assert.doesNotMatch(read.text, /spinoff-request|<instructions>|Do this now/)
-
-    // TAKE IT BACK (review 2026-09-30): the queued card is the queued bubble's control — click, the provider
-    // confirms (stubbed), the card leaves, and the words go back into the Spinoff dialog, not the prompt box.
-    const card = await page.$("[data-spinoff-card=request] [data-unqueue]")
-    assert.ok(card, "a queued request offers the take-back")
-    assert.equal(await card.evaluate((el) => el.getAttribute("aria-label")), "Take back this spinoff request")
-    await card.click()
-    await page.waitForSelector("[data-spinoff-dialog]", { timeout: 5_000 })
-    const after = await page.evaluate(() => ({
-      unqueued: (window as unknown as { __unqueued?: string[] }).__unqueued ?? [],
-      card: Boolean(document.querySelector("[data-spinoff-card=request]")),
-      field: document.querySelector<HTMLTextAreaElement>("[data-spinoff-instructions]")?.value,
-      focused: document.activeElement?.hasAttribute("data-spinoff-instructions") ?? false,
-      composer: document.querySelector<HTMLTextAreaElement>("[data-thread-composer-box] textarea")?.value ?? "",
-    }))
-    assert.deepEqual(after.unqueued, ["spinoff-spn_d000000000000004"], "unqueued by the request's own delivery id")
-    assert.equal(after.card, false, "the card leaves once the provider confirms")
-    assert.equal(after.field, "Profile the cold-start path while I keep going on the cache.", "the dialog reopens on the instructions")
-    assert.equal(after.focused, true)
-    assert.equal(after.composer, "", "never into the prompt box, where they would be sent to this thread")
-    assert.deepEqual(errors, [])
-  } finally {
-    await browser.close()
-  }
-})
-
-test("a request with no child says why it is not moving: a turn paused on the human, or a send with no receipt", { skip: !baseUrl, timeout: 60_000 }, async () => {
-  const { browser, page, errors } = await launch()
-  try {
-    await page.goto(fixtureUrl("?panel=states"), { waitUntil: "domcontentloaded" })
-    await page.waitForSelector("[data-fixture-panel=docs-pass] [data-spinoff-card=request]")
-    await page.waitForSelector("[data-fixture-panel=flaky-e2e] [data-spinoff-card=request]")
-    const read = await page.evaluate(() => Object.fromEntries(["flaky-e2e", "docs-pass"].map((slug) => {
-      const card = document.querySelector<HTMLElement>(`[data-fixture-panel=${slug}] [data-spinoff-card=request]`)!
-      return [slug, { state: card.dataset.spinoffState, label: card.querySelector("[data-spinoff-pending]")?.textContent, spinner: Boolean(card.querySelector(".animate-spin")) }]
-    })))
-    assert.deepEqual(read, {
-      "flaky-e2e": { state: "waiting", label: "waiting on you", spinner: false },
-      "docs-pass": { state: "unconfirmed", label: "delivery unconfirmed", spinner: false },
-    })
-    assert.deepEqual(errors, [])
-  } finally {
-    await browser.close()
-  }
-})
-
-test("the child heads itself with the spinoff card, its brief folded until asked for", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("the child heads itself with the spinoff card, its context folded until asked for", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
     await page.goto(fixtureUrl("?panel=child"), { waitUntil: "domcontentloaded" })
@@ -180,7 +117,7 @@ test("the child heads itself with the spinoff card, its brief folded until asked
     assert.equal(collapsed.expanded, "false")
     assert.equal(collapsed.context, false)
     assert.equal(collapsed.bubbles, 0, "the first turn is not a user bubble")
-    assert.doesNotMatch(collapsed.text, /Where this came from|A spinoff of|gathered for you/, "neither the brief nor the prompt's framing shows folded")
+    assert.doesNotMatch(collapsed.text, /Where this stands|A spinoff of|original request/, "neither the context nor the prompt's framing shows folded")
 
     await page.click("[data-spinoff-context-toggle]")
     const open = await page.evaluate(() => ({
@@ -189,8 +126,8 @@ test("the child heads itself with the spinoff card, its brief folded until asked
       code: document.querySelectorAll("[data-spinoff-context] code").length,
     }))
     assert.equal(open.expanded, "true")
-    assert.deepEqual(open.headings, ["Where this came from", "What exists today", "The open question"], "the brief renders as markdown")
-    assert.ok(open.code > 5, "inline code in the brief is code, not backticks")
+    assert.deepEqual(open.headings, ["Where this stands", "What exists today", "The open question"], "the context renders as markdown")
+    assert.ok(open.code > 5, "inline code in the context is code, not backticks")
 
     await page.click("[data-spinoff-context-toggle]")
     assert.equal(await page.$("[data-spinoff-context]"), null, "a second click folds it again")

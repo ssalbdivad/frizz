@@ -49,17 +49,13 @@ export interface QueueArrival {
  * EXCEPT ONE THAT COMES BACK TO THE PLACE IT LEFT WITH THE REST IT LEFT WITH (2026-09-30), the server's own
  * rule (board.ts notifyNeedsYou, `resumed`) mirrored here so the two notifiers agree. Nobody acted on the
  * thread (the queue clock gave it its old place back, which only an unbroken claim does) and its worker
- * said nothing new, so a notification would announce a card the human was already told about. The case
- * that made it matter: a spinoff asked for on another project's queued card (the All queues page's
- * SpinoffButton) takes that parent out of the queue for its side turn — a cold resume plus the spawn,
- * several of this poll's 3s reads — and the side turn puts the same rest back (spinoff-side-turn.ts), so
- * this watcher saw an absent → present edge and raised a desktop notification for nothing. A re-entry that
+ * said nothing new, so a notification would announce a card the human was already told about. A re-entry that
  * comes back with a NEW urgent reason — a permission prompt, a question, a crash it did not leave with —
  * still notifies whatever its place and rest: the queue clock gives the old place back to an urgent entry
  * too, and a Codex approval moves no rest, so "same place, same rest" cannot tell a new blocking ask from
- * nothing happening. The reasons are compared whole (queueUrgency), the server's own rule: a parent resting
- * on a question keeps that question through its side turn and must stay as quiet as a plain handoff — the
- * first cut exempted anything urgent, and announced exactly that parent while the server stayed silent.
+ * nothing happening. The reasons are compared whole (queueUrgency), the server's own rule: a thread resting
+ * on a question that keeps that question through a departure must stay as quiet as a plain handoff — the
+ * first cut exempted anything urgent, and announced exactly that thread while the server stayed silent.
  */
 export function queueArrivals(prev: QueueSightings | null, queues: readonly ProjectQueue[]): { next: Map<string, Map<string, QueueSighting>>; arrivals: QueueArrival[] } {
   const next = new Map<string, Map<string, QueueSighting>>()

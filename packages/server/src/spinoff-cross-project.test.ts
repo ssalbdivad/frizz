@@ -1,15 +1,15 @@
 // A SPINOFF INTO ANOTHER PROJECT (2026-09-30) — the real router and real SQLite, two projects in ONE
 // database the way the singleton serves them, with only the session broker and the dispatchers stubbed.
 //
-// The request is filed under the PARENT's project and names the child's; the parent's worker dispatches
-// through its own project's `spawn_thread` as always, and the router sends that dispatch to the chosen
-// project. Each end of the edge then shows on its own project's board, and nowhere else.
+// The edge is filed under the PARENT's project and names the child's. Frizz dispatches the child through
+// the chosen project's own dispatcher, on context it assembles from the parent, and sends the parent
+// nothing. Each end of the edge then shows on its own project's board, and nowhere else.
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { spinoffRequestMessage, type BoardSnapshot, type DispatchInput, type Settings } from "@frizz/shared"
+import { type BoardSnapshot, type DispatchInput, type Settings } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { Emitter } from "./bus.ts"
 import { createClaudeBackend } from "./backend/claude.ts"
@@ -77,33 +77,28 @@ function harness() {
   }
 }
 
-const brief = { prompt: "the context", model: "opus", effort: "high" } as const
-
-test("a spinoff into another project dispatches there, and each end shows on its own project's board", async () => {
+test("a spinoff into another project starts there on Frizz's context, and each end shows on its own project's board", async () => {
   const h = harness()
   try {
     const { id } = await h.router.spinoff.handler({ input: { slug: "parent", sessionId: "sid-parent", instructions: "port it to beta", project: "beta" } })
-    assert.deepEqual(h.alpha.sent, [spinoffRequestMessage({ id, instructions: "port it to beta", project: { name: "beta", dir: h.beta.ctx.project.dir } })])
-    assert.match(h.alpha.sent[0]!, /starts in the beta project/, "the parent's worker is told where the thread starts")
-    assert.equal(h.alpha.storage.getSpinoff(id)?.child_project_id, "beta")
-    assert.deepEqual(h.alpha.storage.pendingSpinoffs(), [], "the edge recovery, which looks its child up here, never sees it")
-
-    const result = await h.router.dispatch.handler({ input: { ...brief, spinoff: id, spinoffFrom: "parent" } as DispatchInput })
-    assert.equal(result.slug, "child-in-beta")
+    assert.deepEqual(h.alpha.sent, [], "nothing reaches the parent's worker")
     assert.equal(h.alpha.dispatched.length, 0, "nothing starts in the parent's project")
     assert.equal(h.beta.dispatched.length, 1)
-    assert.match(h.beta.dispatched[0]!.prompt, /^A spinoff of @parent[\s\S]*> port it to beta[\s\S]*the context$/)
+    const prompt = h.beta.dispatched[0]!.prompt
+    assert.match(prompt, /^A spinoff of @parent, at the human's request\. Their instructions:\n\n> port it to beta\n\nContext from @parent:\n\n/)
+    assert.ok(prompt.includes(`@parent is in the alpha project (\`${h.alpha.ctx.project.dir}\`), not this one`), prompt)
+    assert.match(prompt, /`read_thread` tool on `parent`/)
     assert.ok(h.beta.refreshes() > 0, "the child's board learns of its edge")
 
     // Each end on its own board — and the child's slug never among the parent project's threads.
+    const [edge] = h.alpha.storage.spinoffsOf("parent")
+    assert.deepEqual([edge?.id, edge?.child_slug, edge?.child_project_id], [id, "child-in-beta", "beta"])
     assert.deepEqual([...h.alpha.storage.spinoffsBySlug().keys()], ["parent"])
     assert.deepEqual([...h.beta.storage.spinoffsBySlug().keys()], ["child-in-beta"])
-    assert.equal(h.beta.storage.spinoffOfChild("child-in-beta")?.id, id, "the child's opening turn finds its request")
-    assert.equal(h.alpha.storage.spinoffOfChild("child-in-beta"), undefined)
 
     // Forgetting the child in ITS project drops the edge, as a same-project forget does.
     h.beta.storage.forgetSession("child-in-beta")
-    assert.equal(h.alpha.storage.getSpinoff(id), undefined)
+    assert.deepEqual(h.alpha.storage.spinoffsOf("parent"), [])
   } finally {
     h.close()
   }
@@ -113,16 +108,17 @@ test("a spinoff that names this project, or none, starts here; one naming a proj
   const h = harness()
   try {
     const here = await h.router.spinoff.handler({ input: { slug: "parent", sessionId: "sid-parent", instructions: "here", project: "alpha" } })
-    assert.equal(h.alpha.storage.getSpinoff(here.id)?.child_project_id, null, "its own project is written as no project")
-    await h.router.dispatch.handler({ input: { ...brief, spinoff: here.id, spinoffFrom: "parent" } as DispatchInput })
+    assert.equal(h.alpha.storage.spinoffsOf("parent").find((r) => r.id === here.id)?.child_project_id, null, "its own project is written as no project")
     assert.equal(h.alpha.dispatched.length, 1)
     assert.equal(h.beta.dispatched.length, 0)
+    assert.doesNotMatch(h.alpha.dispatched[0]!.prompt, /project \(`/, "no project note for a same-project child")
 
     await assert.rejects(
       h.router.spinoff.handler({ input: { slug: "parent", sessionId: "sid-parent", instructions: "nowhere", project: "gamma" } }),
       /not open in Frizz/,
     )
     assert.equal(h.alpha.storage.spinoffsBySlug().get("parent")?.length, 1, "a refused request leaves no row")
+    assert.deepEqual(h.alpha.sent, [])
   } finally {
     h.close()
   }
@@ -138,13 +134,12 @@ test("storage: a cross-project edge's child end is found only in the child's pro
     for (const s of [a, b]) s.upsertSession(sessionRow("same"))
     a.insertSpinoff({ id: "spn_00000000000000a1", parentSlug: "p", instructions: "x", createdAtMs: 1, childProjectId: "b" })
     assert.ok(a.completeSpinoff("spn_00000000000000a1", "same", 2))
-    assert.equal(a.spinoffOfChild("same"), undefined)
-    assert.equal(b.spinoffOfChild("same")?.project_id, "a")
     assert.deepEqual(a.spinoffsBySlug().get("same"), undefined)
+    assert.equal(b.spinoffsBySlug().get("same")?.[0]?.project_id, "a")
     assert.equal(b.spinoffsBySlug().get("same")?.length, 1)
     // A forget of the same slug in the PARENT's project leaves the other project's child edge alone.
     a.forgetSession("same")
-    assert.equal(b.spinoffOfChild("same")?.id, "spn_00000000000000a1")
+    assert.equal(b.spinoffsBySlug().get("same")?.[0]?.id, "spn_00000000000000a1")
   } finally {
     a.close(); b.close(); db.close(); rmSync(root, { recursive: true, force: true })
   }

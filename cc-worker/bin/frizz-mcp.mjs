@@ -121,15 +121,6 @@ const SPAWN_THREAD = {
           "refused, and the refusal lists every project.",
       },
       title: { type: "string", description: "Optional name for the new thread: one or two SHORT words naming its subject — its kebab-case handle (\"Shell budgets\" → @shell-budgets) at most 20 characters — distinct from the project's other open threads. A longer one is ignored and frizz names the thread from the prompt instead." },
-      spinoff: {
-        type: "string",
-        description:
-          "Set ONLY when fulfilling a spinoff request — a message from frizz wrapped in `<spinoff-request id=\"spn_…\">` " +
-          "asking for a new thread from your conversation. Pass that id verbatim. Frizz then puts the " +
-          "human's own instructions and a reference back to your thread above your `prompt`, links the two threads on " +
-          "the board, and shows the human the new thread itself — so do not announce it afterwards. A spinoff is " +
-          "the human's explicit request, so the last-resort caution above does not apply to it.",
-      },
     },
     required: ["prompt", "model", "effort"],
   },
@@ -1896,44 +1887,18 @@ async function spawnThread(args) {
   if (typeof args.title === "string" && args.title.trim()) body.title = args.title.trim()
   if (args.backend === "claude" || args.backend === "codex") body.backend = args.backend
   if (typeof args.project === "string" && args.project.trim()) body.project = args.project.trim()
-  // A spinoff names the request it fulfils, and the CALLER — read from our own identity, never from the
-  // arguments — so the server can refuse a request that belongs to another thread.
-  if (typeof args.spinoff === "string" && args.spinoff.trim()) {
-    body.spinoff = args.spinoff.trim()
-    body.spinoffFrom = threadSlug()
-  } else {
-    // The caller, from our own identity: it marks this as a WORKER's dispatch, whose prompt the server
-    // checks for another project's checkout when no `project` was named (server spawn-project.ts). A
-    // spinoff's project was the human's pick, so it carries none.
-    const caller = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
-    if (caller) body.spawnedFrom = caller
-  }
+  // The caller, from our own identity: it marks this as a WORKER's dispatch, whose prompt the server
+  // checks for another project's checkout when no `project` was named (server spawn-project.ts).
+  const caller = process.env.FRIZZ_THREAD_SLUG || process.env.FRIZZ_THREAD
+  if (caller) body.spawnedFrom = caller
 
-  // Ask for the new thread's `@handle` with the answer — not for a spinoff, whose result names nothing.
-  if (!body.spinoff) body.awaitHandle = true
+  // Ask for the new thread's `@handle` with the answer.
+  body.awaitHandle = true
 
   const payload = await postToFrizz("dispatch", rpcPath("dispatch"), body)
   const slug = payload?.result?.slug
   if (typeof slug !== "string" || !slug) throw new Error(`dispatch response missing a slug: ${JSON.stringify(payload)?.slice(0, 300)}`)
-  // The result OPENS with the same sentence either way, and the server depends on it: a spinoff whose
-  // MCP server predated the `spinoff` argument is recovered from this line in the parent's transcript
-  // (packages/server/src/spinoff-edge-recovery.ts, SPAWN_THREAD_RESULT_RE). Reword it there too.
   const spawned = `Spawned a new frizz thread \`${slug}\`.`
-  // A SPINOFF is already on the human's screen: the chat draws the request as a card that links to this
-  // new thread by name. What the worker once wrote after it — "I started [Sub-agent addresses](…)", then
-  // a whole second sign-off reading "Nothing new landed here" — was the confusing part (maintainer
-  // 2026-09-30), so the result tells it to announce nothing, and a resting worker that ends on two words is
-  // a side turn the server folds away. Two words rather than none: a worker told to end in silence did, and
-  // Claude Code re-prompted it for visible output — one more model call for every spinoff.
-  if (body.spinoff) {
-    return (
-      `${spawned} The human's chat already shows this spinoff, linked to the new thread, so do not ` +
-      `announce it, paste a link to it, or summarize your brief. If you had come to rest when the request ` +
-      `arrived, end your turn now with the two words \`Spun off.\` and nothing else: Frizz keeps your previous handoff and this ` +
-      `thread's state exactly as they were, so do not sign off again. If you were in the middle of work, ` +
-      `carry on with it. Do not wait on the new thread; it reports to the human, not to you.`
-    )
-  }
   // Started in ANOTHER project (`project`): the server names it, so the result says whose board it is on.
   const project = typeof payload?.result?.project === "string" ? payload.result.project : undefined
   const intro =

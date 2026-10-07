@@ -1,6 +1,5 @@
 import type { LimitWindow, LiveTool, PermissionMode, ProviderError } from "@frizz/shared"
 import type { FenceView, SubAgentView, BgShellView, PendingAskData, TurnState } from "../tailer.ts"
-import type { SideTurnFold } from "../spinoff-side-turn.ts"
 
 // A turn cut off by an exhausted SUBSCRIPTION window, as a backend's fold observed it. Carries only
 // typed data — which window, when it happened, and the provider's stated reset clock in structured
@@ -278,10 +277,6 @@ export interface FoldState {
   // records `cwd: ~/repo` on every line while every edit lands in `~/repo-perf`. The tailer takes it
   // only when `cwd` reads the project root and this names a worktree of the project's own repository.
   toolCwd?: string
-  // The spinoff SIDE TURN reading (spinoff-side-turn.ts): whether the worker is at rest in its terms, the
-  // side turn in progress, and the rest its request found — which the tailer's view presents while a
-  // hidden side turn stands. Absent until the first record that means anything to it.
-  sideTurn?: SideTurnFold
 }
 
 // A file a backend needs on disk BEFORE the detached spawn (e.g. codex's session-scoped AGENTS.md).

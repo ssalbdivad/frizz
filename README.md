@@ -160,7 +160,7 @@ The stopwatch beside the model in the prompt box gives a thread a limit: `2h`, o
 
 Every thread has a short `@handle`, and a sub-agent is addressed under its thread (`@port-the-parser.cache-keys`). Type `@` in a prompt to mention one, and agents link the threads they name. Agents can read another thread or message it by handle, and wait for its answer. `#slug` names a project the same way.
 
-Spinoff (→ on a card) starts a new thread from the one you're reading. On a Claude thread it forks the parent's session, so the new thread starts out knowing everything the parent did.
+Spinoff (→ on a card) starts a new thread from the one you're reading, without interrupting it. On a Claude thread it forks the parent's session, so the new thread starts out knowing everything the parent did. Anywhere else (a Codex or ACP thread, or a new thread in another project), the new thread starts with the parent's original request and latest handoff, and can read the rest of the parent with `read_thread`.
 
 ### Terminals
 

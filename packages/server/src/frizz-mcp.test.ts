@@ -8,7 +8,6 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { resolveFrizzMcp } from "./dispatch.ts"
 import { FRIZZ_MCP } from "./backend/types.ts"
-import { SPAWN_THREAD_RESULT_RE } from "./spinoff-edge-recovery.ts"
 
 // Drives the REAL cc-worker/bin/frizz-mcp.mjs over its real stdio JSON-RPC transport (no mocks, no
 // re-implementation of the protocol) and — for the tool call — against a REAL http server standing in
@@ -361,7 +360,6 @@ test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its
     assert.equal(call.result.isError, undefined)
     assert.match(call.result.content[0].text, /It is @child: name it that way/)
     assert.doesNotMatch(call.result.content[0].text, /\/thread\//, "a named thread is not handed over as a link")
-    assert.equal(SPAWN_THREAD_RESULT_RE.exec(call.result.content[0].text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
     assert.deepEqual(seen, [{ url: "/_frizz/rpc/dispatch", body: { prompt: "do the thing", model: "opus", effort: "high", title: "Child", awaitHandle: true, spawnedFrom: "caller" } }])
 
     rpc.send({
@@ -372,7 +370,6 @@ test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its
     })
     const unnamed = await rpc.next(4)
     assert.match(unnamed.result.content[0].text, /It has no handle yet[\s\S]*\[Child\]\(\/thread\/spawned-child\)/)
-    assert.equal(SPAWN_THREAD_RESULT_RE.exec(unnamed.result.content[0].text)?.[1], "spawned-child")
 
     // Another project: the choice rides to OUR project's RPC (which routes it), and an unnamed thread's
     // link carries the target's prefix, since a bare `/thread/…` resolves against the caller's project.
@@ -2229,48 +2226,3 @@ test("`watch_issue` registers, lists and drops against the CALLING thread, and l
   }
 })
 
-// A SPINOFF names its request AND its caller — the caller from the server's own identity, never from the
-// model's arguments — so the dispatch can refuse a request that belongs to another thread. Its result
-// tells the worker to write NOTHING about the spinoff: the human's chat already shows it, linked to the new
-// thread, and what workers wrote here (a link, then a second sign-off) was the confusing part (2026-09-30).
-test("spawn_thread with a spinoff forwards the request id and the calling thread, and asks for no announcement", async () => {
-  const seen: unknown[] = []
-  const http = createServer((req, res) => {
-    let body = ""
-    req.on("data", (c) => (body += c))
-    req.on("end", () => {
-      seen.push(JSON.parse(body))
-      res.writeHead(200, { "content-type": "application/json" })
-      res.end(JSON.stringify({ result: { slug: "spawned-child" } }))
-    })
-  })
-  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
-  const port = (http.address() as { port: number }).port
-  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
-  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
-  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "the-parent" })
-  try {
-    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
-    await rpc.next(1)
-    rpc.send({
-      jsonrpc: "2.0",
-      id: 2,
-      method: "tools/call",
-      params: { name: "spawn_thread", arguments: { prompt: "brief", model: "opus", effort: "high", spinoff: " spn_0123456789abcdef " } },
-    })
-    const call = await rpc.next(2)
-    assert.equal(call.result.isError, undefined)
-    assert.deepEqual(seen, [{ prompt: "brief", model: "opus", effort: "high", spinoff: "spn_0123456789abcdef", spinoffFrom: "the-parent" }])
-    const text: string = call.result.content[0].text
-    assert.equal(SPAWN_THREAD_RESULT_RE.exec(text)?.[1], "spawned-child", "the sentence an old spinoff's edge is recovered from")
-    assert.match(text, /already shows this spinoff/)
-    assert.match(text, /do not announce it, paste a link to it, or summarize your brief/)
-    assert.match(text, /If you had come to rest[^.]*end your turn now with the two words `Spun off\.` and nothing else/)
-    assert.match(text, /do not sign off again/)
-    assert.match(text, /If you were in the middle of work, carry on with it/)
-    assert.doesNotMatch(text, /Paste this link|\/thread\//, "no link to paste")
-  } finally {
-    rpc.kill()
-    http.close()
-  }
-})

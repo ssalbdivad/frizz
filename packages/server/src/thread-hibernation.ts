@@ -136,7 +136,7 @@ export function lastActivityMs(tele: Pick<SessionTelemetry, "lastActivityAt" | "
  */
 export function hibernationVerdict(
   candidate: HibernationCandidate,
-  opts: { nowMs: number; idleMs: number; minDaemonAgeMs?: number; reclaimArchived?: boolean },
+  opts: { nowMs: number; idleMs: number; minDaemonAgeMs?: number },
 ): HibernationVerdict {
   const { row, telemetry: tele } = candidate
   // Only the broker owns a per-thread daemon whose death is recoverable by `resume: true`. A codex row
@@ -144,16 +144,7 @@ export function hibernationVerdict(
   if (!isBrokerClaudeRow(row)) return { hibernate: false, blockedBy: "not-a-broker-thread" }
   // An archived or stopped row should have no daemon at all; one that does is a leak for
   // releaseSession/the orphan reaper to answer for, not a resting thread to reclaim.
-  //
-  // EXCEPT THAT THE SWEEP RECLAIMS AN ARCHIVED ONE (`reclaimArchived`, 2026-09-30). A done thread has a
-  // live daemon on purpose now: a spinoff request asked of it is delivered without reopening it (router.ts
-  // FollowUpDelivery), which cold-resumes its worker for the seconds the side turn takes and then leaves
-  // that process — ~345 MB — idle under a row nothing else will ever stop, since Mark as done already ran
-  // and the orphan reaper does not reap broker daemons. Every guard below still applies, so a done thread
-  // whose worker is actually doing something (the side turn itself, a child it started) is left alone
-  // until it is not. The one-click model upgrade reads this verdict too, and for it a done thread is
-  // still one to reopen first — so the refusal stays the default.
-  if ((row.state === "archived" || row.archived === 1) && opts.reclaimArchived !== true) return { hibernate: false, blockedBy: "archived" }
+  if (row.state === "archived" || row.archived === 1) return { hibernate: false, blockedBy: "archived" }
   if (row.exited === 1) return { hibernate: false, blockedBy: "stopped" }
 
   // No state is not evidence of no work. On 2026-08-06 a 566 MB transcript could not be primed, the
@@ -253,7 +244,7 @@ export function sweepHibernationOnce(deps: HibernationDeps): HibernationResult {
           pendingInteractions: (() => { try { return deps.pendingInteractions(row.slug, daemon.sessionId) } catch { return 1 } })(),
           daemonStartedAtMs: instant(daemon.createdAt),
         },
-        { nowMs, idleMs, minDaemonAgeMs: deps.minDaemonAgeMs, reclaimArchived: true },
+        { nowMs, idleMs, minDaemonAgeMs: deps.minDaemonAgeMs },
       )
     } catch {
       continue // a decision that threw decided nothing

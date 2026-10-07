@@ -22,9 +22,7 @@ import { createTailer } from "./tailer.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import { Bus } from "./bus.ts"
 import type { Project } from "./project.ts"
-import { __clearTranscriptCacheForTests, readLatestThreadTranscriptPage, readThreadTranscript, readTranscript, withForkedSpinoffRequests } from "./transcript.ts"
-import { createSpinoffEdgeRecovery } from "./spinoff-edge-recovery.ts"
-import { createClaudeBackend } from "./backend/claude.ts"
+import { __clearTranscriptCacheForTests, readLatestThreadTranscriptPage, readThreadTranscript, readTranscript, withSpinoffCards } from "./transcript.ts"
 import { discoverTranscriptId } from "./discover.ts"
 import { composePrompt } from "./dispatch.ts"
 
@@ -81,7 +79,7 @@ test("fork prompt: the child's header projects the human's words with no brief, 
   const linked = spinoffForkPrompt({ parentSlug: "parent-x", parentTitle: "A [bracketed] title", instructions: "go" })
   assert.match(linked, /^A spinoff of \[A bracketed title\]\(\/thread\/parent-x\)/)
   assert.deepEqual(parseSpinoffChildPrompt(linked), { instructions: "go", brief: "" })
-  // The brief route's prompt is untouched by the second shape.
+  // The summary route's prompt is untouched by the second shape.
   assert.deepEqual(parseSpinoffChildPrompt(spinoffChildPrompt({ parentSlug: "p", parentTitle: "P", parentHandle: "a", instructions: "i", brief: "b" })), { instructions: "i", brief: "b" })
 })
 
@@ -239,69 +237,41 @@ test("chat: a forked child opens on its spinoff header, with none of the parent'
   }
 })
 
-test("chat: a forked request draws its card in the parent's chat, at the instant it was asked", () => {
+test("chat: a request draws its card in the parent's chat from its row, at the instant it was asked", () => {
   const f = projectFixture()
   try {
     f.storage.upsertSession(row({ slug: "parent", session_id: PARENT_SID, thread_name: "frizz-parent" }))
     f.storage.setBackend("parent", "claude")
     f.storage.setClaudeRuntime("parent", "broker")
-    const parentLines = [user(1, "fix the cache bug"), say(6, "Fixed."), user(20, "and the docs?"), say(21, "Done too.")].map((l) => l.replace(CHILD_SID, PARENT_SID))
+    // An older build DELIVERED one request to the worker: it is in the transcript, and draws from there.
+    const legacy = `<spinoff-request id="spn_00000000000000bb">\nThe human asked to spinoff a NEW thread from this conversation. Their instructions for it:\n<instructions>\nbriefed\n</instructions>\n\nDo this now, before anything else: …\n</spinoff-request>`
+    const parentLines = [user(1, "fix the cache bug"), say(6, "Fixed."), user(15, legacy), say(16, "Spun off."), user(20, "and the docs?"), say(21, "Done too.")].map((l) => l.replace(CHILD_SID, PARENT_SID))
     writeFileSync(join(f.logDir, `${PARENT_SID}.jsonl`), lines(parentLines))
     f.storage.upsertSession(row())
     const asked = Date.parse(ts(10))
     f.storage.insertSpinoff({ id: "spn_00000000000000aa", parentSlug: "parent", instructions: "load test it", createdAtMs: asked, forked: true })
     f.storage.completeSpinoff("spn_00000000000000aa", "child", asked)
-    // A brief-route row draws from its own transcript record, never from here.
-    f.storage.insertSpinoff({ id: "spn_00000000000000bb", parentSlug: "parent", instructions: "briefed", createdAtMs: asked })
+    f.storage.insertSpinoff({ id: "spn_00000000000000bb", parentSlug: "parent", instructions: "briefed", createdAtMs: Date.parse(ts(14)) })
 
     // The turn-boundary dividers are the fold's own punctuation; the question is where the card sits.
     const page = readLatestThreadTranscriptPage(f.project, f.storage, "parent").messages.filter((m) => m.kind !== "event")
     const texts = page.map((m) => m.displayText ?? m.text)
-    assert.deepEqual(texts, ["fix the cache bug", "Fixed.", "load test it", "and the docs?", "Done too."])
+    assert.deepEqual(texts, ["fix the cache bug", "Fixed.", "load test it", "briefed", "Spun off.", "and the docs?", "Done too."])
     const card = page[2]!
     assert.deepEqual(card.spinoff, { id: "spn_00000000000000aa", instructions: "load test it" })
     assert.equal(card.sourceId, "spinoff:spn_00000000000000aa")
     assert.equal(card.at, ts(10))
-    assert.equal(page.filter((m) => m.spinoff).length, 1, "the brief-route row adds nothing")
-    // A window that starts after the request does not pull it in.
-    const later = withForkedSpinoffRequests([page[3]!, page[4]!], f.storage, "parent", false)
+    assert.deepEqual(page.filter((m) => m.spinoff).map((m) => m.spinoff!.id), ["spn_00000000000000aa", "spn_00000000000000bb"], "the delivered request draws once, from its record")
+    assert.notEqual(page[3]!.sourceId, "spinoff:spn_00000000000000bb")
+    // A window that starts after the requests does not pull them in.
+    const later = withSpinoffCards([page[5]!, page[6]!], f.storage, "parent", false)
     assert.equal(later.length, 2)
   } finally {
     f.close()
   }
 })
 
-// ---- the edge recovery and discovery -------------------------------------------------------------------
-
-test("edge recovery: a forked thread's copied spinoff calls are never read as its own", () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-fork-edge-"))
-  try {
-    const storage = createStorage(join(dir, "ui.db"), "p")
-    storage.upsertSession(row())
-    storage.upsertSession(row({ slug: "stolen", thread_name: "frizz-stolen", session_id: "33333333-3333-4333-8333-333333333333", spawned_at: ts(30) }))
-    // A pending request OF THE CHILD whose id also appears in a copied call — impossible for real ids,
-    // which is exactly why a read from byte 0 would be the only way this could ever stamp.
-    storage.insertSpinoff({ id: "spn_00000000000000cc", parentSlug: "child", instructions: "x", createdAtMs: Date.parse(ts(0)) })
-    const copied = [
-      toolUse(3, "toolu_spawn", "mcp__frizz__spawn_thread", { prompt: "b", spinoff: "spn_00000000000000cc" }),
-      toolResult(4, "toolu_spawn", "Spawned a new frizz thread `stolen`."),
-    ]
-    const path = join(dir, "child.jsonl")
-    writeFileSync(path, lines([...copied, ...FORK_POINT]))
-    const start = Buffer.byteLength(lines(copied))
-    const backend = createClaudeBackend({ logDir: dir })
-    const recovery = (from: number | undefined) => createSpinoffEdgeRecovery({
-      storage, transcriptOf: () => ({ path, ...(from !== undefined ? { start: from } : {}), parseLine: (l) => backend.parseLine(l) }),
-    })
-    recovery(start).sweep()
-    assert.equal(storage.getSpinoff("spn_00000000000000cc")?.child_slug, null, "read from the fork point: nothing to stamp")
-    recovery(undefined).sweep()
-    assert.equal(storage.getSpinoff("spn_00000000000000cc")?.child_slug, "stolen", "negative control: from byte 0 the copy stamps it")
-    storage.close()
-  } finally {
-    rmSync(dir, { recursive: true, force: true })
-  }
-})
+// ---- discovery -------------------------------------------------------------------------------------------
 
 test("discovery: a parent whose transcript went missing never adopts its forked child's file", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-fork-discover-"))
@@ -331,9 +301,7 @@ test("storage: the anchor survives a resume of the same session and is dropped b
     assert.equal(storage.getSession("child")?.fork_anchor ?? null, null, "a fresh session holds no copy")
     storage.insertSpinoff({ id: "spn_00000000000000dd", parentSlug: "child", instructions: "x", createdAtMs: 1, forked: true })
     storage.insertSpinoff({ id: "spn_00000000000000ee", parentSlug: "child", instructions: "y", createdAtMs: 2 })
-    assert.deepEqual(storage.forkedSpinoffsOf("child").map((r) => r.id), ["spn_00000000000000dd"])
-    assert.equal(storage.getSpinoff("spn_00000000000000dd")?.forked, 1)
-    assert.equal(storage.getSpinoff("spn_00000000000000ee")?.forked, 0)
+    assert.deepEqual(storage.spinoffsOf("child").map((r) => [r.id, r.forked]), [["spn_00000000000000dd", 1], ["spn_00000000000000ee", 0]])
     storage.close()
   } finally {
     rmSync(dir, { recursive: true, force: true })

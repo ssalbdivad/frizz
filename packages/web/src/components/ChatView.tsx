@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, Repeat, TerminalSquare, X } from "lucide-react"
-import { parseRecurringPrompt, parseScheduledRunPrompt, parseSpinoffRequest, questionFencesLive } from "@frizz/shared"
+import { parseRecurringPrompt, parseScheduledRunPrompt, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, ThreadWatchView, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushScheduleDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { scheduledRunFacts } from "../lib/schedules.ts"
@@ -55,7 +55,6 @@ import { useDeliverQueuedNow, useDeliverQueuedNowSupported } from "../lib/delive
 import { useInnerHtml } from "../lib/innerHtml.ts"
 import { useLocalFileCodeLinks } from "../lib/localFileCode.ts"
 import { lastAskIndex, messagePresentationText } from "../lib/messagePresentation.ts"
-import { startedSpinoffsKey, withoutSpinoffCalls } from "../lib/spinoffCalls.ts"
 import { stampHostFor } from "../lib/stampHost.ts"
 import { ICON_LABEL_NUDGE } from "../lib/iconAlign.ts"
 import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
@@ -281,11 +280,7 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
   // useLiveAnswering's `liveMsg` identity check compares objects from THIS same list.
   const messages = useMemo(() => q.data?.messages ?? [], [q.data])
   const liveTranscriptShells = useMemo(() => transcriptBackgroundShells(messages), [messages])
-  // …minus the `spawn_thread` call behind each spinoff card that STARTED its thread, which the card
-  // already stands for — a failed or unrecorded one keeps its line (lib/spinoffCalls.ts). Keyed on the
-  // string of started request ids, not on `thread`, which is a new object on every board push.
-  const startedSpinoffs = startedSpinoffsKey(thread)
-  const presentationMessages = useMemo(() => withoutSpinoffCalls(withoutLiveTranscriptBackgroundTools(messages), startedSpinoffs), [messages, startedSpinoffs])
+  const presentationMessages = useMemo(() => withoutLiveTranscriptBackgroundTools(messages), [messages])
   // Cut over presentationMessages, not messages: the coalesced entries below carry a messageIndex into
   // THIS list, and comparing the two index spaces is how a live fence gets marked settled.
   const lastAgentIdx = useMemo(() => lastAssistantIndex(presentationMessages), [presentationMessages])
@@ -3749,17 +3744,11 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // It is settled first because it is not a child: no report verb, no drawer, and a body to keep.
     if (m.peerSession && m.peerFrom) return <PeerSessionMessageLine from={m.peerFrom} unnamed={m.peerUnnamed} text={text} sourceId={m.sourceId} at={m.at} />
     if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
-    // A SPINOFF REQUEST: the human's instructions for a new thread, not the brief Frizz handed the worker.
-    // `m.spinoff` is the server's tell on a transcript turn. A send the transcript has not echoed yet
-    // arrives from the delivery ledger as its RAW text — the whole `<spinoff-request>` envelope — so it is
-    // read here too, or the brief to the worker printed at the human as a gray bubble until the echo.
-    // The ledger's word on the send rides along whole (2026-09-30, review): its state is what tells a
-    // send with no receipt from one in progress, and its id is what a queued request is taken back by —
-    // the two things the gray bubble this card replaced already did.
-    const spinoff = m.spinoff ?? parseSpinoffRequest(m.text)
-    if (spinoff) return <SpinoffCard id={spinoff.id} instructions={spinoff.instructions} at={m.at} queued={m.queued} deliveryState={m.deliveryState} deliveryId={m.deliveryId} rawText={m.text} sourceId={m.sourceId} />
-    // A SPINOFF CHILD'S FIRST TURN: the human's instructions, and the parent worker's brief folded
-    // beneath them — never one bubble holding both, since the brief is not the human speaking.
+    // A SPINOFF REQUEST: the human's instructions for a new thread, drawn as the card that links to it.
+    // `m.spinoff` is the server's tell (transcript.ts withSpinoffCards).
+    if (m.spinoff) return <SpinoffCard id={m.spinoff.id} instructions={m.spinoff.instructions} sourceId={m.sourceId} />
+    // A SPINOFF CHILD'S FIRST TURN: the human's instructions, and the context Frizz gave it folded
+    // beneath them — never one bubble holding both, since the context is not the human speaking.
     if (m.spinoffOrigin) return <SpinoffOriginCard instructions={m.spinoffOrigin.instructions} context={m.spinoffOrigin.brief.trim() ? <ProseHtml md={m.spinoffOrigin.brief} wrap /> : null} sourceId={m.sourceId} />
     // `rawText` rides alongside the presentation text because the two differ: the bubble shows the
     // stripped/normalized copy, while the optimistic cache entry an unqueue has to evict is keyed on

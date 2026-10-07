@@ -36,49 +36,49 @@ test("a project's first appearance is a baseline too, and a thread that leaves a
   assert.deepEqual(back.arrivals.map((a) => a.thread.id), ["b"])
 })
 
-// Review 2026-09-30: a spinoff asked for on another project's queued card takes that parent out of the queue
-// for its side turn, and the side turn puts back the very rest it left with. The server stays quiet for
-// that return (board.ts notifyNeedsYou `resumed`); this watcher must too, or the tab bound elsewhere raises
-// a desktop notification for a card nothing happened to.
+// Review 2026-09-30: a thread that leaves another project's queue for a moment and comes back with the very
+// rest it left with is not news. The server stays quiet for that return (board.ts notifyNeedsYou `resumed`);
+// this watcher must too, or the tab bound elsewhere raises a desktop notification for a card nothing
+// happened to.
 test("a thread back at the place it left, with the rest it left with, is not a new arrival — unless it is urgent", () => {
   const place = { queuedAt: "2026-09-30T09:30:00.000Z", lastAssistantAt: "2026-09-30T09:29:00.000Z" }
   const read = (over: Partial<ThreadView>) => [project("beta", [thread("p", { ...place, ...over })])]
   const first = queueArrivals(null, read({}))
-  const sideTurn = queueArrivals(first.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
-  assert.deepEqual(sideTurn.arrivals, [])
+  const away = queueArrivals(first.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
+  assert.deepEqual(away.arrivals, [])
 
-  const back = queueArrivals(sideTurn.next, read({}))
+  const back = queueArrivals(away.next, read({}))
   assert.deepEqual(back.arrivals, [], "the same place and the same rest: nothing new to say")
 
   // Anything new still notifies: the worker said something (a new rest)…
-  assert.deepEqual(queueArrivals(sideTurn.next, read({ lastAssistantAt: "2026-09-30T09:31:00.000Z" })).arrivals.map((a) => a.thread.id), ["p"])
+  assert.deepEqual(queueArrivals(away.next, read({ lastAssistantAt: "2026-09-30T09:31:00.000Z" })).arrivals.map((a) => a.thread.id), ["p"])
   // …the human acted, so it re-entered at the back (a new place)…
-  assert.deepEqual(queueArrivals(sideTurn.next, read({ queuedAt: "2026-09-30T09:31:00.000Z" })).arrivals.map((a) => a.thread.id), ["p"])
+  assert.deepEqual(queueArrivals(away.next, read({ queuedAt: "2026-09-30T09:31:00.000Z" })).arrivals.map((a) => a.thread.id), ["p"])
   // …or it came back on something only a person can clear, which moves neither for a Codex approval.
-  assert.deepEqual(queueArrivals(sideTurn.next, read({ runtime: "perm-prompt" })).arrivals.map((a) => a.thread.id), ["p"])
-  assert.deepEqual(queueArrivals(sideTurn.next, read({ actionableInteraction: true })).arrivals.map((a) => a.thread.id), ["p"])
-  assert.deepEqual(queueArrivals(sideTurn.next, read({ crashed: true })).arrivals.map((a) => a.thread.id), ["p"])
+  assert.deepEqual(queueArrivals(away.next, read({ runtime: "perm-prompt" })).arrivals.map((a) => a.thread.id), ["p"])
+  assert.deepEqual(queueArrivals(away.next, read({ actionableInteraction: true })).arrivals.map((a) => a.thread.id), ["p"])
+  assert.deepEqual(queueArrivals(away.next, read({ crashed: true })).arrivals.map((a) => a.thread.id), ["p"])
 
   // The remembered sighting survives more than one read out of the queue — a cold resume spans several polls.
-  const stillAway = queueArrivals(sideTurn.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
+  const stillAway = queueArrivals(away.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
   assert.deepEqual(queueArrivals(stillAway.next, read({})).arrivals, [])
   // …but not the thread leaving the board altogether: that is forgotten, as on the server.
-  const gone = queueArrivals(sideTurn.next, [project("beta", [])])
+  const gone = queueArrivals(away.next, [project("beta", [])])
   assert.deepEqual(queueArrivals(gone.next, read({})).arrivals.map((a) => a.thread.id), ["p"])
 })
 
-// The server compares the urgent REASONS whole (shared queueUrgency), so a parent resting on a question keeps
-// it through a side turn and stays quiet; a first cut here exempted anything urgent and announced it anyway.
-test("a thread resting on a question comes back from a side turn with that question and stays quiet", () => {
+// The server compares the urgent REASONS whole (shared queueUrgency), so a thread resting on a question keeps
+// it through a departure and stays quiet; a first cut here exempted anything urgent and announced it anyway.
+test("a thread resting on a question comes back from a departure with that question and stays quiet", () => {
   const place = { queuedAt: "2026-09-30T09:30:00.000Z", lastAssistantAt: "2026-09-30T09:29:00.000Z" }
   const asked = { questions: [{ id: "q_1" }] } as Partial<ThreadView>
   const read = (over: Partial<ThreadView>) => [project("beta", [thread("p", { ...place, ...asked, ...over })])]
   const first = queueArrivals(null, read({}))
-  const sideTurn = queueArrivals(first.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
-  assert.deepEqual(queueArrivals(sideTurn.next, read({})).arrivals, [], "the same question is the same card")
+  const away = queueArrivals(first.next, read({ needsYou: false, runtime: "running", queuedAt: undefined }))
+  assert.deepEqual(queueArrivals(away.next, read({})).arrivals, [], "the same question is the same card")
   // A second question it did not leave with is news.
   assert.deepEqual(
-    queueArrivals(sideTurn.next, read({ questions: [{ id: "q_1" }, { id: "q_2" }] } as Partial<ThreadView>)).arrivals.map((a) => a.thread.id),
+    queueArrivals(away.next, read({ questions: [{ id: "q_1" }, { id: "q_2" }] } as Partial<ThreadView>)).arrivals.map((a) => a.thread.id),
     ["p"],
   )
 })

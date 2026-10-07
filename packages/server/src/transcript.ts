@@ -31,7 +31,6 @@ import {
   type TranscriptToolCall,
   parseSpinoffRequest,
   parseSpinoffChildPrompt,
-  spinoffIdOfSpawnCall,
 } from "@frizz/shared"
 import { workDirOf, type Project } from "./project.ts"
 import type { Storage } from "./storage.ts"
@@ -51,7 +50,6 @@ import { hasEscapingBackgroundJob } from "../../../cc-worker/hooks/bash-backgrou
 import { frizzTempDir, isPromptAttachmentPath } from "./frizz-paths.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
 import { forkPointOf } from "./fork-point.ts"
-import { claudeSideTurnSteps, createSideTurnProjection, normalizedSideTurnSteps, type SideTurn, type SideTurnProjection } from "./spinoff-side-turn.ts"
 
 // Parse a session JSONL into a renderable conversation — mechanically, no AI. Same defensive
 // posture as the tailer: bad line → skip, unknown type → ignore, never throw. Assistant messages
@@ -254,12 +252,13 @@ function userProjection(text: string, first: boolean): { displayText?: string; s
   const session = parseCrossSessionMessage(crossSessionDeliveryWrapper(text) ?? text)
   if (session) return crossSessionProjection(session)
   const displayText = userDisplayText(text, first)
-  // A SPINOFF REQUEST is the human's (they asked for it), but its text is Frizz's brief to the worker.
-  // The chat draws the human's instructions as a spinoff card; the brief stays in `text` for the worker.
+  // A SPINOFF REQUEST an older build delivered to the parent's worker (parseSpinoffRequest). It is the
+  // human's (they asked for it), but its text was Frizz's errand for the worker, so the chat draws the
+  // human's instructions as the same spinoff card a request drawn from its row gets (withSpinoffCards).
   const spinoff = parseSpinoffRequest(displayText ?? text)
   if (spinoff) return { displayText: spinoff.instructions, spinoff }
-  // …and a SPINOFF CHILD's opening turn is the mirror image: the human's instructions with the parent
-  // worker's brief below them (spinoffChildPrompt). The brief is not the human speaking, so the chat
+  // …and a SPINOFF CHILD's opening turn is the mirror image: the human's instructions with the context
+  // below them (spinoffChildPrompt). The context is not the human speaking, so the chat
   // draws the two as the thread's spinoff header rather than one giant user bubble (maintainer
   // 2026-09-30: "this kind of context can't be included as a user message"). FIRST turn only, and read
   // below the dispatch envelope, where the composed prompt starts. `displayText` is the instructions —
@@ -317,13 +316,13 @@ function pushUserRecord(out: TranscriptMessage[], sourceId: string, text: string
 // already replied (measured p50 20.9s, max 9.6min), so a second walk from there would reach past the
 // refused fence and mark the worker's re-fence, which is the good one.
 type CorrectionSink = (text: string) => boolean
-function createCorrectionSink(out: TranscriptMessage[], sideTurns: SideTurnProjection): CorrectionSink {
+function createCorrectionSink(out: TranscriptMessage[]): CorrectionSink {
   const marked = new Set<string>()
   return (text: string) => {
     if (!isParkCorrection(text)) return false
     if (!marked.has(text)) {
       marked.add(text)
-      markFenceRefused(out, sideTurns)
+      markFenceRefused(out)
     }
     return true
   }
@@ -337,14 +336,9 @@ function createCorrectionSink(out: TranscriptMessage[], sideTurns: SideTurnProje
 //
 // A fence that does not parse as `awaiting` leaves the message untouched rather than falling through to
 // an older one. The correction is about THIS rest; if its fence cannot be read, nothing is refused.
-//
-// A HIDDEN SPINOFF SIDE TURN is stepped over whole, request included (spinoff-side-turn.ts): the rest the
-// correction answers is the one the request found, which the tailer presents again once the side turn is
-// done — so the fence to mark sits above it.
-function markFenceRefused(out: TranscriptMessage[], sideTurns: SideTurnProjection): void {
+function markFenceRefused(out: TranscriptMessage[]): void {
   for (let i = out.length - 1; i >= 0; i--) {
     const m = out[i]
-    if (sideTurns.hides(m) || sideTurns.opensHidden(m)) continue
     if (m.role === "user") return
     if (m.kind || !m.text.trim()) continue
     if (parseSignalFence(m.text)?.kind === "awaiting") m.fenceRefused = true
@@ -617,12 +611,7 @@ export interface TranscriptFold {
 
 export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold {
   const out: TranscriptMessage[] = []
-  // SPINOFF SIDE TURNS (spinoff-side-turn.ts): the reading the tailer takes of the same records, so the
-  // chat drops exactly the turns whose effects the board undoes. The worker's messages are tagged with
-  // the side turn they were written in and filtered at the projection — never spliced — because a side
-  // turn's verdict is only known when it ends, and one that turns out unclean must render as it always did.
-  const sideTurns = createSideTurnProjection()
-  const dropCorrection = createCorrectionSink(out, sideTurns)
+  const dropCorrection = createCorrectionSink(out)
   let lastAssistantId: string | null = null
   // Tool calls awaiting their tool_result, keyed by tool_use id. Claude records every result as a
   // later synthetic `user` record, so the call card starts pending and is back-filled in place with
@@ -712,14 +701,13 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // fails the merge check below, so the message's remaining blocks would land in a SECOND bubble
   // underneath it. Holding it until a record arrives that is not a continuation of `msgId` keeps one
   // divider, in the right place, under one bubble.
-  // `side` is the spinoff side turn whose end armed it, so a hidden side turn takes its divider with it.
-  let pendingRest: { sourceId: string; at?: string; msgId: string | null; side: SideTurn | undefined } | null = null
+  let pendingRest: { sourceId: string; at?: string; msgId: string | null } | null = null
   // How many times the agent has come to REST so far. It is what tells a re-notify that merely repeats a
   // completion already drawn from the one that RE-INVOKED the agent across a rest — see `consumedShells`.
   const restEpoch = { n: 0 }
   function flushRest(): void {
     if (!pendingRest) return
-    out.push(sideTurns.own(restMessage(pendingRest.sourceId, pendingRest.at), pendingRest.side))
+    out.push(restMessage(pendingRest.sourceId, pendingRest.at))
     restEpoch.n++
     pendingRest = null
     lastAssistantId = null // the divider breaks the assistant-record merge chain, like every other event
@@ -808,10 +796,6 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
     } catch {
       return
     }
-    // Every record, before any branch below can return early — the reading has to see what the tailer's
-    // does, in the same order.
-    sideTurns.step(claudeSideTurnSteps(rec))
-
     // A held-back rest divider lands HERE — ahead of whatever record follows the turn that ended, so it
     // sits between the two turns. The one record that must not flush it is another chunk of the SAME
     // assistant message (see pendingRest): that is still the resting turn's own body.
@@ -1271,12 +1255,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
           m.text = m.text ? `${m.text}\n\n${block.text}` : block.text
         } else if (block?.type === "tool_use") {
           const calls = toolCalls(block, { turnModel: msg.model, turnEffort: rec.effort })
-          // The spinoff a `spawn_thread` call fulfils: the chat draws that spinoff as its own card, so
-          // this call is not drawn a second time as a tool line (TranscriptToolCall.spinoff).
-          const spinoff = spinoffIdOfSpawnCall(String(block.name ?? ""), block.input)
           for (const call of calls) {
             call.status = "pending"
-            if (spinoff) call.spinoff = spinoff
             pushToolPart(m, call)
             m.tools.push(call)
             // An Agent dispatch is registered by its tool_use id so a later completion notification can
@@ -1314,7 +1294,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
         // thinking blocks are deliberately not rendered
       }
       const rendered = Boolean(m.text) || m.tools.length > 0
-      if (!target && rendered) out.push(sideTurns.own(m, sideTurns.current()))
+      if (!target && rendered) out.push(m)
       // Only claim the merge anchor when this record actually became — or extended — out's tail. A
       // record that rendered NOTHING (a thinking-only record, ubiquitous with extended thinking) must
       // NOT advance the anchor to its own id: out's tail is still the PREVIOUS turn, so the next
@@ -1328,7 +1308,7 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
       // reader can't see happening. `stop_sequence` and friends are deliberately NOT rest — they are the
       // usage-limit/synthetic stops (see backend/usage-limit.ts), which the board reports its own way.
       if (msg.stop_reason === "end_turn" && (target || rendered)) {
-        pendingRest = { sourceId: `${sourceId}#rest`, at: rec.timestamp, msgId: id, side: sideTurns.current() }
+        pendingRest = { sourceId: `${sourceId}#rest`, at: rec.timestamp, msgId: id }
       }
       return
     }
@@ -1405,11 +1385,8 @@ export function createTranscriptFold(identityPrefix = "claude"): TranscriptFold 
   // that matters most, since it is the CURRENT one: the agent has stopped and it is the reader's move.
   // Reading it through the accessor also keeps the incremental fold and a one-shot re-parse projecting
   // the identical array, which is exactly what verifyIncrementalParse asserts.
-  //
-  // The spinoff side-turn filter sits here for the same reason: every projection this fold hands out —
-  // the chat's window and the full one alike — drops a hidden side turn, divider included.
   function projected(): TranscriptMessage[] {
-    return sideTurns.visible(pendingRest ? [...out, sideTurns.own(restMessage(pendingRest.sourceId, pendingRest.at), pendingRest.side)] : out)
+    return pendingRest ? [...out, restMessage(pendingRest.sourceId, pendingRest.at)] : out
   }
   return {
     ingest,
@@ -2678,9 +2655,7 @@ function resolveTranscriptPath(project: Project, sessionId: string): string {
 // Same defensive posture as parseTranscript: a bad line → parseCodexLine [] → skipped, never throws.
 export function projectCodexTranscript(raw: string, identityPrefix = "codex"): TranscriptMessage[] {
   const out: TranscriptMessage[] = []
-  // Spinoff side turns, read from the same events the tailer's applyEvent folds (see the Claude fold).
-  const sideTurns = createSideTurnProjection()
-  const dropCorrection = createCorrectionSink(out, sideTurns)
+  const dropCorrection = createCorrectionSink(out)
   // The open assistant message the current turn's text/tool events append to. A user turn closes it
   // (→ null) so the next assistant content starts a fresh message.
   let cur: TranscriptMessage | null = null
@@ -2761,7 +2736,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     if (prose && cur?.text) cur = null
     if (cur) return cur
     cur = { sourceId, role: "assistant", text: "", tools: [], parts: [], at }
-    out.push(sideTurns.own(cur, sideTurns.current()))
+    out.push(cur)
     return cur
   }
 
@@ -2773,7 +2748,6 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     let eventOrdinal = 0
     for (const ev of parseCodexLine(line)) {
       const sourceId = `${identityPrefix}:${lineOffset}:${eventOrdinal++}`
-      sideTurns.step(normalizedSideTurnSteps(ev))
       switch (ev.kind) {
         case "provider-error": {
           const fingerprint = JSON.stringify({ ...ev.error, at: undefined })
@@ -2789,7 +2763,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           turnReasoning = null
           const message: TranscriptMessage = { sourceId, role: "assistant", kind: "event", text: ev.error.message, providerError: ev.error, tools: [], parts: [], at: ev.at }
           lastProviderError = { fingerprint, message }
-          out.push(sideTurns.own(message, sideTurns.current()))
+          out.push(message)
           break
         }
         case "assistant-text": {
@@ -2973,7 +2947,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
               // the case the comment above was ever describing.
             } else {
               turnReasoning = { sourceId, role: "assistant", kind: "reasoning", text, tools: [], parts: [], at: ev.at, ...(stepMs ? { durationMs: stepMs } : {}) }
-              out.push(sideTurns.own(turnReasoning, sideTurns.current()))
+              out.push(turnReasoning)
               cur = null
             }
             pendingCaption = codexReasoningCaption(text) ?? pendingCaption
@@ -3117,7 +3091,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
           // already marked (turn_aborted can follow task_complete), must not stack rules on rules.
           const prev = out.length > 0 ? out[out.length - 1] : undefined
           if (prev && prev.boundary !== "rest") {
-            out.push(sideTurns.own(restMessage(`${sourceId}#rest`, ev.at), sideTurns.current()))
+            out.push(restMessage(`${sourceId}#rest`, ev.at))
             cur = null
           }
           break
@@ -3134,7 +3108,7 @@ export function projectCodexTranscript(raw: string, identityPrefix = "codex"): T
     }
   }
 
-  return sideTurns.visible(out)
+  return out
 }
 
 export function parseCodexTranscript(raw: string, identityPrefix = "codex"): TranscriptMessage[] {
@@ -3258,10 +3232,6 @@ interface CodexToolCards {
 function codexToolCards(name: string, input: unknown, callId?: string): CodexToolCards {
   if (name === "exec" && typeof input === "string") return codexExecWrapperCards(input, callId)
   const owner = codexToolCall(name, input, callId)
-  // A spinoff's `spawn_thread` (Codex names an MCP tool `mcp__frizz__spawn_thread`, or bare) — see the
-  // Claude arm's note on TranscriptToolCall.spinoff.
-  const spinoff = spinoffIdOfSpawnCall(name, input)
-  if (spinoff) owner.spinoff = spinoff
   return { owner, cards: [owner] }
 }
 
@@ -3593,17 +3563,10 @@ function wrappedSingleCall(call: WrappedInvocation, source: string, callId?: str
 
   if (call.name === "web__run") return wrappedWebCall(call.args)
 
-  // The unified exec wrapper can call an MCP tool too (`tools.mcp__frizz__spawn_thread({…})`); its
-  // arguments are JavaScript source, so the spinoff id is read as a static string property.
-  const spinoff = spinoffIdOfSpawnCall(call.name, {
-    spinoff: jsStringProperty(call.args, "spinoff"),
-    spinOff: jsStringProperty(call.args, "spinOff"),
-  })
   return {
     name: wrappedToolLabel(call.name),
     detail: wrappedArgumentDetail(call.args),
     input: capToolInput(call.args || source.trim()),
-    ...(spinoff ? { spinoff } : {}),
   }
 }
 
@@ -4728,60 +4691,33 @@ function emptyTranscriptPage(source?: TranscriptSourceBinding): TranscriptPage {
   }
 }
 
-// A SPINOFF CHILD WHOSE PROMPT PREDATES ITS ENVELOPE. A child whose edge was recovered after the fact
-// (spinoff-edge-recovery.ts — its parent's MCP server predated the `spinoff` argument, so the dispatch
-// took the plain path) opened on the parent worker's raw brief, with none of spinoffChildPrompt's
-// framing for the projection to read back. It still IS a spinoff child, and its opening turn is still
-// not the human speaking, so it gets the same header a framed child gets: the human's instructions off
-// the spinoff row, and the whole opening turn as the context beneath them.
+// A SPINOFF'S REQUEST, IN THE PARENT'S CHAT. A spinoff sends the parent NOTHING (router.ts `spinoff`):
+// the child is a fork of its session, or a fresh thread on context Frizz assembled, and either way the
+// parent's transcript holds no trace of the request. So the card the human expects where they asked is
+// drawn from the spinoff row instead, placed at the instant the human asked, so SpinoffCard renders it
+// linked forward.
 //
-// Applied by every reader that serves a thread's transcript — both pages, the push, `read_thread`, the
-// handoff — to the projection BEFORE anything is appended to it, and only ever to the thread's OPENING
-// turn. `whole` says the array is the entire projection, so its first user message is the opening one;
-// a latest WINDOW can start at a later human turn, so there the turn must also carry the dispatch
-// envelope, which only the opening turn does. A child whose opening turn already projected its origin
-// (the framed case) is left exactly as it is. Never mutates: the projection's messages are the retained
-// fold's own objects.
-export function withSpinoffChildOrigin(
-  messages: TranscriptMessage[],
-  storage: Pick<Storage, "spinoffOfChild">,
-  slug: string,
-  whole: boolean,
-): TranscriptMessage[] {
-  const i = messages.findIndex((m) => m.role === "user" && !m.queued)
-  const opening = i === -1 ? undefined : messages[i]
-  if (!opening || opening.spinoffOrigin || opening.spinoff || opening.kind || opening.peerFrom || opening.wake) return messages
-  if (!whole && frizzDispatchDisplayText(opening.text) === undefined) return messages
-  const brief = (opening.displayText ?? opening.text).trim()
-  const instructions = storage.spinoffOfChild(slug)?.instructions.trim()
-  if (!instructions || !brief) return messages
-  const out = [...messages]
-  out[i] = { ...opening, displayText: instructions, spinoffOrigin: { instructions, brief } }
-  return out
-}
-
-// A FORKED SPINOFF'S REQUEST, IN THE PARENT'S CHAT (2026-09-30). On the brief route the request is a
-// message delivered to the parent's worker, so its card is that record's projection. A forked spinoff
-// (router.ts forkSpinoff) sends the parent NOTHING — that is the point of it — so its transcript holds no
-// trace of the request, and the card the human expects where they asked would simply be missing. It is
-// drawn from the spinoff row instead: the same `spinoff` message the brief route's record projects to,
-// placed at the instant the human asked, so SpinoffCard renders it identically (started, linked forward).
+// A request an older build DELIVERED to the parent's worker is already in its transcript as a
+// `<spinoff-request>` turn, which projects to the same card (userProjection); its row is skipped here, so
+// one request never draws twice.
 //
 // `whole` says the array is the entire projection; a latest WINDOW gets only the requests made since its
 // first message, since an earlier one belongs to a page the window does not hold. Applied by every reader
-// that serves a Claude thread's transcript, BEFORE any windowing or paging, like withSpinoffChildOrigin —
-// so a card's sourceId (`spinoff:<id>`) is the same on every page and can anchor a cursor. Never mutates.
-export function withForkedSpinoffRequests(
+// that serves a thread's transcript, BEFORE any windowing or paging, so a card's sourceId
+// (`spinoff:<id>`) is the same on every page and can anchor a cursor. Never mutates.
+export function withSpinoffCards(
   messages: TranscriptMessage[],
-  storage: Pick<Storage, "forkedSpinoffsOf">,
+  storage: Pick<Storage, "spinoffsOf">,
   slug: string,
   whole: boolean,
 ): TranscriptMessage[] {
-  const rows = storage.forkedSpinoffsOf(slug)
+  const rows = storage.spinoffsOf(slug)
   if (!rows.length) return messages
+  const delivered = new Set(messages.flatMap((m) => (m.spinoff ? [m.spinoff.id] : [])))
   const floor = whole ? undefined : messages.find((m) => m.at)?.at
   const cards: TranscriptMessage[] = []
   for (const row of rows) {
+    if (delivered.has(row.id)) continue
     const at = new Date(row.created_at).toISOString()
     if (floor !== undefined && at < floor) continue
     cards.push({
@@ -4822,7 +4758,8 @@ export function withForkedSpinoffRequests(
 function emptyLatestTranscriptPage(storage: Storage, slug: string, source?: TranscriptSourceBinding): TranscriptPage {
   const page = emptyTranscriptPage(source)
   const row = storage.getSession(slug)
-  return row ? { ...page, messages: projectDeliveryLedger([], parseDeliveryLedger(row.delivery_ledger)) } : page
+  // …and the spinoff cards: a spinoff from a thread with no transcript yet starts its child at once.
+  return row ? { ...page, messages: projectDeliveryLedger(withSpinoffCards([], storage, slug, true), parseDeliveryLedger(row.delivery_ledger)) } : page
 }
 
 export function readLatestThreadTranscriptPage(
@@ -4859,7 +4796,7 @@ export function readLatestThreadTranscriptPage(
       projected = projectSnapshot(snapshot)
     }
   }
-  projected = withForkedSpinoffRequests(withSpinoffChildOrigin(projected, storage, slug, true), storage, slug, true)
+  projected = withSpinoffCards(projected, storage, slug, true)
   const latest = latestTranscriptWindow(projected)
   // The cursor has to name the window's REAL head, not the raw MAX_MESSAGES cut: once the window reaches
   // back for the human's ask, a cursor anchored at the cut sits INSIDE what was already sent, and the
@@ -4919,7 +4856,7 @@ export function readEarlierThreadTranscriptPage(
   if (digestPrefix(snapshot.readRange(0, payload.snapshotBytes)) !== payload.prefixDigest) {
     throw new Error("transcript cursor is stale because prior transcript bytes changed")
   }
-  const projected = withForkedSpinoffRequests(withSpinoffChildOrigin(projectSnapshot(snapshot), storage, slug, true), storage, slug, true)
+  const projected = withSpinoffCards(projectSnapshot(snapshot), storage, slug, true)
   const anchor = projected.findIndex((message) => message.sourceId === payload.anchorSourceId)
   if (anchor < 0) throw new Error("transcript cursor boundary is no longer present")
   const page = pageProjectedTranscript(projected, anchor)
@@ -4964,7 +4901,7 @@ export function readThreadTranscript(
 ): TranscriptMessage[] {
   // Only an ACP read is the WHOLE projection; Claude's and Codex's are the latest window.
   const whole = storage.getSession(slug)?.backend === "acp"
-  return withForkedSpinoffRequests(withSpinoffChildOrigin(readThreadTranscriptMessages(project, storage, slug, backendFor), storage, slug, whole), storage, slug, whole)
+  return withSpinoffCards(readThreadTranscriptMessages(project, storage, slug, backendFor), storage, slug, whole)
 }
 
 function readThreadTranscriptMessages(

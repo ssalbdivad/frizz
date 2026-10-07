@@ -49,7 +49,6 @@ import { threadNameProblem } from "./thread-names.ts"
 import { readWorkflowRun, workflowAgentState as sharedWorkflowAgentState, workflowAgentViews, workflowAckRunDir, workflowAckTaskId, workflowLabel, type WorkflowAgent, type WorkflowAgentListing } from "./workflow-runs.ts"
 import { processAwakeClock, wallSpan } from "./awake-clock.ts"
 import { forkPointOf, isInheritedSessionMetadata } from "./fork-point.ts"
-import { claudeSideTurnSteps, foldSideTurn, hiddenSideTurnRest, normalizedSideTurnSteps, sideTurnRunning, type SideTurn } from "./spinoff-side-turn.ts"
 import { redactToolPayload } from "./credential-redaction.ts"
 
 // The JSONL tailer: incrementally reads each registered session's Claude Code transcript
@@ -711,11 +710,6 @@ export interface SessionTelemetry extends NormalizedTail {
   noTranscript?: boolean
   contextTokens?: number // tokens the model's last request carried (see FoldState.contextTokens)
   contextWindow?: number // the context size this session RUNS IN (see FoldState.contextWindow)
-  // The spinoff side turn in progress, or the one that ended last until the next turn closes it — the
-  // RAW reading, hidden or not (spinoff-side-turn.ts). Server-internal: the board reads it to take an
-  // archived or snoozed parent out of Done/Snoozed once its side turn stops being quietly clean
-  // (board.ts surfaceSideTurn), because the request's delivery deliberately left the row where it was.
-  sideTurn?: SideTurn
 }
 
 // One tracked live background sub-agent, keyed in TailState by its dispatch tool_use id (the
@@ -2544,13 +2538,6 @@ function clearAskOnResult(state: TailState, rec: Record): void {
 // Fold one record into the running derivation. Only assistant/user records are "substantive" (they
 // move the turn state); assistant/user/system records with a timestamp advance lastActivityAt.
 export function applyRecord(state: TailState, rec: Record): void {
-  // THE SPINOFF SIDE TURN, read before anything below moves: a request's rest is saved as the request
-  // found it, and a hidden side turn's rest is put back before the next turn's record touches it (see
-  // spinoff-side-turn.ts). A state the tail cache restored from a build that predates the reading starts
-  // it from the turn it already folded — a promoted artifact's fold digest is a constant, so such a cache
-  // is not invalidated — rather than reading its first request as mid-turn.
-  if (!state.sideTurn && state.sawRecords) state.sideTurn = { resting: state.lastKind === "assistant" && state.lastStopReason === "end_turn" }
-  foldSideTurn(state, claudeSideTurnSteps(rec))
   const type = rec.type
   // A `type:"user"` record with promptSource:"system" is a peer (SendMessage) message or a sub-agent
   // <task-notification> — NOT a human turn. It DOES re-invoke the agent (the model wakes to process
@@ -2822,12 +2809,6 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
   // is the exception: it is telemetry that always RIDES a real event which moves the clock itself, so
   // letting it move the clock would only add a way for pure bookkeeping to mask a stall.
   if ("at" in ev && typeof ev.at === "string" && ev.kind !== "context-usage") state.lastActivityAt = ev.at
-  // The spinoff side turn, ahead of the switch for applyRecord's reason (spinoff-side-turn.ts). ACP's
-  // transcript folds through here too, so all three providers read side turns one way — and an ACP row
-  // can come back from the tail cache (Codex never does), so a state folded before the reading existed
-  // starts it from the turn it already knows, as applyRecord's does.
-  if (!state.sideTurn && state.sawRecords) state.sideTurn = { resting: state.turn === "idle" && state.providerError === undefined }
-  foldSideTurn(state, normalizedSideTurnSteps(ev))
   switch (ev.kind) {
     case "provider-error":
       state.sawRecords = true
@@ -6131,9 +6112,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         }
         state.turn = nextTurn
       }
-      // Not for a spinoff side turn still gathering its brief: the working status it would start is about
-      // a request that is not this thread's work, and a hidden one ends without the rest that clears it.
-      if (nextTurn === "in-flight" && state.offset !== prevOffset && !sideTurnRunning(state)) deps.onTurnActivity?.(row)
+      if (nextTurn === "in-flight" && state.offset !== prevOffset) deps.onTurnActivity?.(row)
 
       // interactive permission prompt: no jsonl signal, so read the worker's permission marker on a
       // quiet in-flight turn. Cleared automatically once jsonl activity resumes (turn no longer quiet)
@@ -6270,12 +6249,6 @@ export function createTailer(deps: TailerDeps): Tailer {
   // in-flight → idle: the turn finished. Badge unread if this completion post-dates the last read,
   // and fire a one-shot turn-done notify (the transition itself is the dedupe).
   function onTurnDone(row: SessionRow, state: TailState): void {
-    // A HIDDEN SPINOFF SIDE TURN IS NOT A REST (spinoff-side-turn.ts). The thread is back where the request
-    // found it, and every effect of an ending turn below would say otherwise: a later `rested_at` spends
-    // the event-snooze armed on the rest it found, `unread` badges a thread whose chat gained nothing but
-    // the spinoff card the human just made, the notify announces a handoff that is not new, and the status
-    // writers would rewrite the thread's status around a request that was never its work.
-    if (hiddenSideTurnRest(state)) return
     const generation = row.runtime_generation ?? 0
     const eventAt = state.lastActivityAt ?? new Date(now()).toISOString()
     // The rest moment drives the nav's most-recently-rested-first order. A DISCRETE event (once
@@ -6348,9 +6321,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // Only a FOLDED rest counts. `sawRecords` keeps a transcript-less session — whose turn reads idle
     // by default rather than by evidence — from minting a rest it never took.
     if (state.turn !== "idle" || !state.sawRecords) return
-    // The rest a hidden spinoff side turn put back, not the side turn's own end — the edge skipped it
-    // (onTurnDone), so a restart after one must not stamp it either.
-    const eventAt = (hiddenSideTurnRest(state) ?? state).lastAssistantAt
+    const eventAt = state.lastAssistantAt
     if (!eventAt) return // at rest with no output of its own: nothing to date the rest by
     const at = Date.parse(eventAt)
     if (!Number.isFinite(at)) return
@@ -6528,17 +6499,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // reads — sees only what leaves here. Gated on the live row rather than a value stamped into the
     // state at creation so a (re)spawn that bumps `spawned_at` is read the moment it lands. A foreign
     // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
-    //
-    // AND THE REST A HIDDEN SPINOFF SIDE TURN FOUND (2026-09-30, spinoff-side-turn.ts). Once a side turn
-    // has done only what it was asked and the worker is idle again, every rest field leaves here as it
-    // stood BEFORE the request: the fence and the registered done still stand, the rest time — the key
-    // the queue, the sign-off nudge, the Goal and the park bumps read — is the old one, and nothing asks
-    // the human anything new. While the side turn runs, the raw fold shows: the thread is genuinely
-    // working, so it reads Active.
-    const rest = (s.turn === "idle" ? hiddenSideTurnRest(s) : undefined) ?? s
-    const pendingQuestion = rest.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
+    const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
     const nowMs = now()
-    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: rest.lastAssistantAt, lastAssistant: rest.lastAssistant, lastAssistantLine: rest.lastAssistantLine, liveTool: newestLiveTool(s), aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: rest.lastAssistantAllDone, lastUserAt: rest.lastUserAt, lastHumanAt: rest.lastHumanAt, lastToolCallAt: rest.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: rest.lastUserText, firstUserText: s.firstUserText, lastFence: rest.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...(s.sideTurn?.current ? { sideTurn: { ...s.sideTurn.current } } : {}), ...workingDirTelemetry(s) }
+    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, lastAssistantLine: s.lastAssistantLine, liveTool: newestLiveTool(s), aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...workingDirTelemetry(s) }
   }
 
   // ---- the provisional reading (2026-09-30) ------------------------------------------------------
