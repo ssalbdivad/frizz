@@ -1,0 +1,181 @@
+# Time limits on a prompt — at every level
+
+Status: design, not built (2026-10-06). Asked for by the maintainer: *"is there some concept of
+associating a time limit with a prompt at every level — user at the top-level, and threads could do the
+same for the sub agents. the agent would be aware of the limit and be prompted regularly and plan around
+having the best deliverable possible given the prompt at the limit rather than running indefinitely."*
+
+## What it is
+
+A thread may carry a **deadline**: an absolute instant, set by the human when they dispatch it ("2h",
+"until 15:30") or later from the drawer. Three things follow from it:
+
+1. **The worker knows.** The worker prompt states the deadline and what it means: the job is the best
+   deliverable possible *by then*, not the complete one eventually. Plan for something you can hand over
+   at any point (commit checkpoints, a write-up that is true at every stage) rather than a big reveal at
+   the end.
+2. **Frizz reminds it, and gets pushier as time runs out.** Check-ins are delivered mid-turn at fixed
+   points in the budget. Each one says how much time is left and what to do at that stage.
+3. **Sub-agents get a share of it.** A child the worker dispatches gets a deadline of its own, never later
+   than the parent's minus a reserve the parent needs to fold the result in. The child gets check-ins
+   the same way.
+
+This is the maintainer's existing habit ("go until 3:30") turned into something Frizz keeps track of.
+Today it lives in the prompt text, where nothing reminds the agent and nothing shows it on the board.
+
+## Non-goals
+
+- **No hard kill.** Running out of time never interrupts a turn and never stops a sub-agent: the agent
+  completion invariant (CLAUDE.md) forbids it, because a turn cut mid-edit leaves the tree unsound. The
+  limit is enforced by what the agent is told, and by the board showing the thread as over time. The
+  operator's existing interrupt is still there for anyone who wants a real stop.
+- **Not a token or quota budget.** Wall clock only. A cost budget is a different meter with a different
+  failure mode. It could reuse this machinery later, but it is out of scope here.
+- **Not a Goal.** A Goal keeps an effort *going*; a deadline *bounds* it. They are separate rows, and a
+  thread can have both (see Interactions).
+
+## Precedent: the background-shell budget
+
+`packages/server/src/shell-budget.ts` (scheduler SOURCE 13) already has the pattern this copies: it is
+opt-in, the party that knows sizes it, there is one warning wake that reaches the worker mid-turn, and
+there is a grace period measured from when that warning is *delivered*, not from when it was queued. A
+deadline is the same idea one level up: the subject is the thread instead of a shell, and the
+consequence is a handoff instead of a `TaskStop`.
+
+## Storage
+
+The thread row gets two columns:
+
+| column | meaning |
+| --- | --- |
+| `deadline_at` | ISO instant. Null means no limit. |
+| `deadline_set_at` | When the current deadline was set. Together with `deadline_at` this gives the budget, so check-in points are fractions of it. Moving the deadline resets this; it is the generation, the same way `recurring_armed_at` is for a Goal. |
+
+Check-in delivery ids are keyed `deadline:<deadline_set_at>:<stage>`, the way `heartbeatFenceId` keys a
+Goal's beats. So extending a deadline starts a fresh set of check-ins, and a restart never sends a stage
+twice.
+
+## Setting it
+
+- **At dispatch.** The prompt box gets a time-limit control. It parses the duration grammar used for
+  `for:` (`30m`, `2h`) plus a wall-clock form (`15:30`). The dispatch RPC (`router.ts` → `dispatcher.dispatch`)
+  takes an optional `deadline`. A typed "go until 3:30" in the prompt text is *not* parsed: the control
+  is the only input, so the board never disagrees with the prose.
+- **Later.** The drawer gets an extend/clear control, and the worker gets an MCP tool
+  `mcp__frizz__deadline` (`action: set|extend|clear|read`). A worker may *read* its deadline and may
+  set one on a thread that has none. Only the human may *extend* a deadline the human set: an agent
+  moving its own goalposts defeats the point. This is the one rule that is not a reversible implementation
+  detail.
+- **Shown** on the card and in the drawer, using the house duration grammar (`1h 12m left`, `over by 8m`).
+  Over time is a visible state on the card, not a separate board band.
+
+## Check-ins (new scheduler source)
+
+Delivered **mid-turn** at the next tool boundary, the same path a Goal heartbeat takes (`heartbeat_seconds`).
+If the thread is resting, the check-in is delivered as an ordinary wake. Stages:
+
+| stage | at | text, in substance |
+| --- | --- | --- |
+| `start` | dispatch | Rides in the worker prompt rather than as a wake: deadline, budget, and the "best deliverable by then" framing. |
+| `half` | 50% | Time left. If still exploring, commit to an approach now. |
+| `converge` | 80% | Time left. Start nothing new. Finish what is open, commit it, make the write-up true. |
+| `final` | 95%, or 5m before the deadline if that is earlier | Hand off at your next stop. Say what is done, what is not, and what you would do next. |
+| `over` | deadline | Your time is up; your next stop is the handoff. The card goes to over-time. |
+
+Fixed stages beat a steady countdown: a reminder every N minutes is noise the model learns to ignore,
+while a few stage changes each ask for a different behaviour. Each wake header (`you last spoke 3h ago`)
+also gets `· 42m left` while a deadline is set, so the agent sees the clock on every turn it starts,
+not only at check-ins.
+
+**After `over`.** The rest that follows is checked like any other. If it is a handoff (`done`, a
+question, `needs_input`), the deadline is settled. If the worker keeps going, it is not interrupted. It
+gets no further Goal deliveries (below), and its card shows `over by …`. There is no second nag: the
+board is the escalation from that point on.
+
+## Sub-agents
+
+**Plumbing, all existing:**
+
+- `cc-worker/hooks/agent-dispatch.mjs` (PreToolUse on `Agent`) already rewrites every dispatch and
+  appends an epilogue. It gets the child's deadline and adds one paragraph to the epilogue: the absolute
+  deadline, the stage behaviour, and "your final message is due by then".
+- `cc-worker/hooks/agent-inbox.mjs` already delivers to a running sub-agent through PostToolUse
+  `additionalContext` (any `agent_id`, Workflow agents included; measured on 2.1.287 in d6e6e048). Child
+  check-ins ride that path. The server, or the hook itself, which can read the clock, drops a file into
+  `frizz-inbox/<agentId>/` at each stage.
+
+**Sizing the child's deadline.** Claude's `Agent` tool has no budget parameter, so the parent declares
+one in the prompt with a single line the hook strips and parses: `Time limit: 20m`. Without that line
+the child gets the parent's remaining time minus a reserve. The reserve is the larger of 20% of the
+remaining time and 5m. A declared limit is clamped to the same ceiling, so a child can never outlive
+its parent's deadline. A thread with no deadline imposes none: then a `Time limit:` line alone sets
+the child's.
+
+**Binding the deadline to the agent id.** This is the one unknown. PreToolUse runs before the child has
+an `agent_id`; SubagentStart has one. The plan is for the dispatch hook to write the computed deadline
+keyed by the dispatching `tool_use_id`, and for SubagentStart to claim it, if its input links back to that
+id. **Measure this first.** If it does not link back, fall back to a FIFO claimed in dispatch order. That
+is safe for one dispatch at a time and racy for a fan-out in one message, so measure before choosing.
+
+**Workflow agents.** A Workflow script's `agent()` opts are not ours to extend. The parent writes the
+`Time limit:` line into the agent prompt, and SubagentStart for `workflow-subagent` claims it the same
+way. The worker contract tells parents to give each Workflow agent its share in the prompt.
+
+**Grandchildren.** Recursive by construction: a child's own `Agent` call goes through the same hook,
+with the child's deadline as the ceiling. Nesting stays default-off per the epilogue, so in practice
+this is one level.
+
+## Worker contract (`workerPrompt.ts`)
+
+A short section, present only when a deadline is set (injected, the way the FRIZZ.md block is):
+
+- The deadline and budget in absolute and relative form.
+- Plan to an anytime deliverable: commit at each coherent checkpoint, and keep the write-up true at
+  every stage.
+- Size sub-agent budgets explicitly, with `Time limit:`. Leave yourself time to integrate their results.
+- What each check-in stage asks for.
+- Waiting time counts. A park on CI or a reviewer that will outlive the deadline should be handed to
+  the human, not waited out.
+
+## Interactions
+
+- **Goal.** Goal deliveries stop at the deadline. A `stop_hook` Goal driving "keep going" past the
+  limit would undo the limit. A Goal's own `for:` is unaffected.
+- **Parks.** An `awaiting` fence's `for:` is clamped so the park wakes no later than the deadline; the
+  `over` check-in needs a live worker to read it.
+- **Subscription-limit pause.** The clock keeps running, because a deadline means wall clock. The card
+  shows both states, and the human extends if they want.
+- **Codex / ACP threads.** The deadline and the worker-prompt section apply. Check-ins go through
+  whatever mid-turn path that runtime's heartbeat uses today. Sub-agent shares are Claude-only (the
+  hooks are cc-worker's).
+- **Scheduled runs.** `mcp__frizz__schedule` could take a default limit for each run. That is a cheap
+  follow-on, not part of v1.
+
+## Build order
+
+1. Storage columns, the dispatch RPC field, the MCP `deadline` tool, and the worker-prompt section.
+2. The scheduler source for check-ins, the `left` in the wake header, the Goal cut-off and the park
+   clamp, with unit tests beside `scheduler.shell-budget.test.ts`.
+3. UI: the dispatch control, the countdown on the card and drawer, the over-time state, and extend/clear.
+   Optical pass on the countdown chip.
+4. Sub-agent shares: measure the SubagentStart binding, then the dispatch-hook budget and inbox
+   check-ins.
+
+## Verification
+
+- Steps 1–2: a `real-subsystem-harness` run on an adhoc stack (`frizz-stack`). Dispatch a real Claude
+  worker with a 4m deadline and a task that cannot finish in 4m. Assert that each stage reaches the
+  transcript mid-turn, and that the worker's last message is a handoff that names unfinished work. As a
+  negative control, run the same task with no deadline and confirm it gets no check-ins.
+- Step 4: the same harness, with a worker told to dispatch a child under `Time limit: 2m`. Assert that
+  the child's transcript contains its check-ins and that it returns before its deadline. Run it once
+  with two children dispatched in one message, to exercise the binding race.
+- Step 3: headless shots of the card in the under-time, last-5m and over-time states; `ink-gaps` on the
+  chip.
+
+## The open question that matters
+
+Whether "no hard kill" is the right posture is the maintainer's call. It is soft here because the
+completion invariant forbids interrupting a writer. If a hard stop is ever wanted, the safe version is
+to interrupt only at a rest, refusing further Goal and timer wakes after the deadline, never mid-turn.
+That is close to what this design already does, minus the interrupt.
