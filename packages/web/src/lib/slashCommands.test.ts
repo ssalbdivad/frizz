@@ -1,6 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import type { ThreadSkill } from "@frizz/shared"
+import { mergeSlashItems } from "../hooks/useUserCommands.ts"
 import { draftStart, insertSlashCommand, matchSlashItems, slashQueryAt, slashSegments } from "./slashCommands.ts"
 
 const items: ThreadSkill[] = [
@@ -8,6 +9,8 @@ const items: ThreadSkill[] = [
   { name: "frizz:gh", description: "gh playbook", source: "plugin" },
   { name: "context", description: "Show current context usage", source: "builtin", command: true },
 ]
+// The operator's own `~/.agents/commands/armstrong.md`, as the menu receives it.
+const withUserCommand = mergeSlashItems(items, [{ name: "armstrong", description: "Senator Armstrong reviews", body: "review it", source: "global", path: "/h/.agents/commands/armstrong.md" }])
 
 test("the menu opens on a `/` at any word boundary, with the caret inside its token", () => {
   assert.deepEqual(slashQueryAt("/con", 4), { start: 0, query: "con" })
@@ -47,4 +50,10 @@ test("only names the thread can run are tinted, commands only at the start", () 
 test("a run's offset decides whether its command opens the draft", () => {
   assert.deepEqual(slashSegments("/context", items, 5, 0).map((s) => s.kind), ["text"])
   assert.deepEqual(slashSegments("/context", items, 5, 5).map((s) => s.kind), ["command"])
+})
+
+test("a user command is offered and tinted mid-prompt, where Frizz expands it", () => {
+  assert.deepEqual(matchSlashItems(withUserCommand, "arm", false).map((s) => s.name), ["armstrong"])
+  const text = "only finish when sure /armstrong"
+  assert.deepEqual(slashSegments(text, withUserCommand, 0, draftStart(text)).map((s) => `${s.kind}:${s.text}`), ["text:only finish when sure ", "command:/armstrong"])
 })

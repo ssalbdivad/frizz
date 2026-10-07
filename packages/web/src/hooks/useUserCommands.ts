@@ -33,10 +33,10 @@ export function invalidateUserCommands(qc: QueryClient): Promise<void> {
 
 const MENU_SOURCE: Record<UserCommandSource, ThreadSkillSource> = { frizz: "frizz", project: "project", global: "user" }
 
-/** User commands as menu rows. Each is a COMMAND — Frizz expands it only as the draft's first token, so
- *  it is offered and tinted only there. */
+/** User commands as menu rows. Not built-in COMMANDS in the menu's sense: Frizz expands a user command at
+ *  any word boundary (expandUserCommandDraft), so like a skill it is offered and tinted anywhere. */
 export function userCommandItems(commands: readonly UserCommand[]): ThreadSkill[] {
-  return commands.map((c) => ({ name: c.name, description: c.description, source: MENU_SOURCE[c.source], command: true }))
+  return commands.map((c) => ({ name: c.name, description: c.description, source: MENU_SOURCE[c.source] }))
 }
 
 /** The harness's rows and the user commands as ONE menu. A user command shadows a harness row of the

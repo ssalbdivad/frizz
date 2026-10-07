@@ -7,7 +7,8 @@
 // One asymmetry is the harness's, not ours. Claude runs a built-in COMMAND (`/context`, `/usage`) only
 // when it OPENS the message; anywhere else it is plain text the model reads. A SKILL is invocable by
 // name anywhere. So a command is offered, and tinted, only as the draft's first token, and a skill at
-// any boundary — the tint never promises something the send will not do.
+// any boundary — the tint never promises something the send will not do. A USER command
+// (`~/.agents/commands/armstrong.md`) is Frizz's to expand, and it expands anywhere, so it rides as a skill.
 
 import type { ThreadSkill } from "@frizz/shared"
 

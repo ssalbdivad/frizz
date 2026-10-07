@@ -5764,25 +5764,50 @@ export function expandUserCommand(command: Pick<UserCommand, "name" | "body">, a
   return `<slash-command name="${escapeAttr(command.name)}"${args ? ` args="${escapeAttr(args)}"` : ""}>\n${prompt}${USER_COMMAND_CLOSE}`
 }
 
-/** A draft that INVOKES a user command — `/name` as its first token, the rest of the first line and
- *  anything after as the arguments — expanded; undefined when its first token names none. */
+// A `/name` token at a word boundary, ending before whitespace or trailing sentence punctuation — the
+// composer's tint rule (web lib/slashCommands.ts SLASH_TOKEN), so what is tinted is what expands.
+const USER_COMMAND_TOKEN = /(^|\s)\/([^\s/@]+?)(?=[.,;!?)]*(?:\s|$))/gu
+// Code the human quoted is not an invocation: fenced blocks and inline spans are blanked before the scan.
+const QUOTED_CODE = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g
+// A command referenced MID-PROMPT rides after the prose as a block of its own. The leading wrapper
+// opens the text; these never do, so a reader tells the two apart by position.
+const USER_COMMAND_REFERENCE = /\n\n<slash-command name="[^"]+">\n[\s\S]*?\n<\/slash-command>/g
+
+/** A draft that INVOKES user commands, expanded; undefined when it names none.
+ *
+ *  `/name` as the draft's FIRST token is the command with the rest of the draft as its arguments: the
+ *  draft becomes the command's prompt. `/name` ANYWHERE ELSE ("review it, then /commit") keeps the prose
+ *  as written and appends that command's prompt after it, so the agent reads what the name stands for on
+ *  every backend — a harness that knows no such command, or no commands at all, included. */
 export function expandUserCommandDraft(draft: string, commands: readonly Pick<UserCommand, "name" | "body">[]): string | undefined {
-  const m = /^\s*\/([^\s/]+)(?:[ \t]+([\s\S]*))?$/.exec(draft)
-  if (!m) return undefined
-  const command = commands.find((c) => c.name === m[1])
-  return command ? expandUserCommand(command, (m[2] ?? "").trim()) : undefined
+  const byName = new Map(commands.map((c) => [c.name, c]))
+  const lead = /^\s*\/([^\s/]+)(?:[ \t]+([\s\S]*))?$/.exec(draft)
+  const leading = lead ? byName.get(lead[1]!) : undefined
+  const scanned = draft.replace(QUOTED_CODE, (code) => " ".repeat(code.length))
+  const inline: Pick<UserCommand, "name" | "body">[] = []
+  for (const m of scanned.matchAll(USER_COMMAND_TOKEN)) {
+    const command = byName.get(m[2]!)
+    if (!command || command === leading || inline.includes(command)) continue
+    inline.push(command)
+  }
+  if (!leading && inline.length === 0) return undefined
+  const head = leading ? expandUserCommand(leading, (lead![2] ?? "").trim()) : draft
+  return head + inline.map((c) => `\n\n${expandUserCommand(c, "")}`).join("")
 }
 
-/** What a delivered user command reads as to the human: `/name args`, plus anything the send appended
- *  after the wrapper (attached context, file paths). Undefined for any other text. */
+/** What a delivered user command reads as to the human: the draft as typed, plus anything the send
+ *  appended (attached context, file paths). Undefined for any text no user command expanded into. */
 export function userCommandDisplayText(text: string): string | undefined {
   const open = USER_COMMAND_OPEN.exec(text)
-  if (!open) return undefined
+  if (!open) {
+    const typed = text.replace(USER_COMMAND_REFERENCE, "")
+    return typed === text ? undefined : typed
+  }
   const close = text.indexOf(USER_COMMAND_CLOSE, open[0].length)
   if (close < 0) return undefined
   const args = open[2] ? unescapeAttr(open[2]) : ""
   const typed = `/${unescapeAttr(open[1]!)}${args ? ` ${args}` : ""}`
-  const after = text.slice(close + USER_COMMAND_CLOSE.length)
+  const after = text.slice(close + USER_COMMAND_CLOSE.length).replace(USER_COMMAND_REFERENCE, "")
   return after.trim() ? `${typed}${after}` : typed
 }
 

@@ -11,10 +11,9 @@ test("$ARGUMENTS is replaced; without it, arguments ride on a line of their own"
   assert.equal(expandUserCommand(commit, ""), '<slash-command name="commit">\ncommit with a one-line message\n</slash-command>')
 })
 
-test("only a draft that OPENS with a known command is expanded", () => {
+test("a draft that opens with a known command becomes its prompt", () => {
   assert.ok(expandUserCommandDraft("/commit", [commit])?.includes("one-line message"))
   assert.ok(expandUserCommandDraft("  /fix the build\nand the lint", [fix])?.includes("Fix this: the build\nand the lint."))
-  assert.equal(expandUserCommandDraft("please /commit", [commit]), undefined)
   assert.equal(expandUserCommandDraft("/commitx", [commit]), undefined)
   assert.equal(expandUserCommandDraft("/tmp/commit", [commit]), undefined)
 })
@@ -28,4 +27,19 @@ test("a delivered command reads back as exactly what was typed, whatever its arg
   assert.equal(userCommandDisplayText(`${expandUserCommand(commit, "")}\n\n/home/x/shot.png`), "/commit\n\n/home/x/shot.png")
   assert.equal(userCommandDisplayText("an ordinary message"), undefined)
   assert.equal(userCommandDisplayText('<slash-command name="x">\nno close'), undefined)
+})
+
+test("a command mid-prompt keeps the prose and rides after it", () => {
+  const sent = expandUserCommandDraft("test it, then /commit.", [commit, fix])!
+  assert.equal(sent, 'test it, then /commit.\n\n<slash-command name="commit">\ncommit with a one-line message\n</slash-command>')
+  assert.equal(userCommandDisplayText(sent), "test it, then /commit.")
+  assert.equal(userCommandDisplayText(`${sent}\n\n/home/x/shot.png`), "test it, then /commit.\n\n/home/x/shot.png")
+  // Each command once, an unknown name or a path never, and the opening command not twice.
+  assert.equal(expandUserCommandDraft("/commit or /commit again", [commit])!.match(/<slash-command/g)!.length, 1)
+  const both = expandUserCommandDraft("/fix the build, then /commit and /commit", [fix, commit])!
+  assert.equal(both.match(/<slash-command name="commit">/g)!.length, 1)
+  assert.equal(userCommandDisplayText(both), "/fix the build, then /commit and /commit")
+  assert.equal(expandUserCommandDraft("see /tmp/commit and a/commit and /commits", [commit]), undefined)
+  // Quoted code is not an invocation.
+  assert.equal(expandUserCommandDraft("the file says `/commit` and\n```\n/commit\n```", [commit]), undefined)
 })
