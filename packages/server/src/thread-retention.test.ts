@@ -133,20 +133,17 @@ test("only done, unpinned threads the human has not touched past the cutoff expi
   assert.deepEqual(expiredDoneThreads(rows, 0, NOW), [], "0 days is never")
 })
 
-test("deleteDoneThreads counts on a dry run, then deletes exactly that set", async () => {
+test("the retention sweep deletes exactly the expired set, with one rebuild for the whole batch", async () => {
   const h = harness()
   try {
     // spawned_at is 60 days back for every row, so the last interaction decides.
     const ago = (days: number) => new Date(Date.now() - days * DAY_MS).toISOString()
     seed(h.storage, "old-done", { done: true, interactedAt: ago(40) })
+    seed(h.storage, "old-done-2", { done: true, interactedAt: ago(35) })
     seed(h.storage, "recent-done", { done: true, interactedAt: ago(1) })
     seed(h.storage, "old-open", { interactedAt: ago(40) })
 
-    assert.deepEqual(await h.router.deleteDoneThreads.handler({ input: { untouchedDays: 30, dryRun: true } }), { count: 1 })
-    assert.equal(h.storage.allSessions().length, 3, "a dry run deletes nothing")
-    assert.equal(h.refreshes(), 0)
-
-    assert.deepEqual(await h.router.deleteDoneThreads.handler({ input: { untouchedDays: 30 } }), { count: 1 })
+    assert.equal(await deleteExpiredDoneThreads(h.ctx, 30), 2)
     assert.deepEqual(h.storage.allSessions().map((r) => r.slug).sort(), ["old-open", "recent-done"])
     assert.equal(h.refreshes(), 1, "one rebuild for the whole batch")
   } finally { h.close() }

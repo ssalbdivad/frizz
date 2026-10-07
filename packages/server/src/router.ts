@@ -4704,25 +4704,6 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // Settings → "Delete untouched threads now": the same set the retention sweep takes
-    // (thread-retention.ts), across every OPEN project — the drawer is machine-wide, and so is the
-    // automatic setting beside it. `dryRun` is the count the confirmation shows.
-    deleteDoneThreads: mutation({
-      input: z.object({ untouchedDays: z.number().int().min(1).max(3650), dryRun: z.boolean().optional() }).strict(),
-      output: z.object({ count: z.number().int().nonnegative() }),
-      handler: async ({ input }) => {
-        const now = Date.now()
-        let count = 0
-        for (const { ctx: tenant } of ctx.activeTenants?.() ?? [{ ctx }]) {
-          if (!tenant) continue
-          count += input.dryRun
-            ? expiredDoneThreads(tenant.storage.allSessions(), input.untouchedDays, now).length
-            : await deleteExpiredDoneThreads(tenant, input.untouchedDays, now)
-        }
-        return { count }
-      },
-    }),
-
     // Copy only a provider-native resume invocation. The durable session registry is the ownership
     // boundary: board session views are derived from these exact rows, while foreign discoveries and
     // legacy docs have no row. Avoid rebuilding the full board on this latency-sensitive click path.

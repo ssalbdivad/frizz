@@ -2,13 +2,11 @@ import type { SessionRow } from "./storage.ts"
 
 // DELETING OLD THREADS (2026-09-30). Done threads used to be kept forever: every one stays a row, a
 // tailer entry and a board thread, still answers to its `@handle`, and still holds its slug — so the
-// next "Shell budgets" was dispatched as `shell-budgets-2`. Deleting one frees all of that. Three doors
-// share the one delete in router.ts (`deleteOwnedThread`): the ⋯ menu's Delete on any thread, the
-// Settings drawer's "Delete untouched threads now", and the automatic sweep below, which applies the
-// `deleteDoneThreadsUntouchedDays` setting once at boot and hourly after.
-//
-// The manual and automatic doors pick threads by this ONE predicate, so the count the drawer confirms
-// is the set the sweep would take.
+// next "Shell budgets" was dispatched as `shell-budgets-2`. Deleting one frees all of that. Two doors
+// share the one delete in router.ts (`deleteOwnedThread`): the ⋯ menu's Delete on any thread, and the
+// automatic sweep below, which applies the `deleteDoneThreadsUntouchedDays` setting once at boot and
+// hourly after. (A drawer button that ran the sweep once on demand was removed 2026-10-07 to keep the
+// drawer to few settings.)
 
 export const DAY_MS = 86_400_000
 export const RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000

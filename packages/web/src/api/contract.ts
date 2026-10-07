@@ -359,8 +359,6 @@ export interface Api {
   // Hard-delete any thread (a live worker is stopped first): its rows, its terminals, its scratch
   // directory. Frees its slug and @handle (server router.ts deleteOwnedThread).
   deleteThread(input: { slug: string }): Promise<void>
-  // Every OPEN project's done threads the human has not interacted with for `untouchedDays` days; `dryRun` only counts them.
-  deleteDoneThreads(input: { untouchedDays: number; dryRun?: boolean }): Promise<{ count: number }>
   // Server-authoritative, shell-safe provider resume command for a registered Frizz-owned session.
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
@@ -619,7 +617,6 @@ export const PROCEDURES = {
   snoozeUntilSubAgentsReturn: "mutation",
   requestParkCheckIn: "mutation",
   deleteThread: "mutation",
-  deleteDoneThreads: "mutation",
   threadTerminalCommand: "query",
   openExternal: "mutation",
   openLocalFile: "mutation",

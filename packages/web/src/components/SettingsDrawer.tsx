@@ -25,10 +25,12 @@ import { OverDrawersFocusLayer } from "./ui/Sheet.tsx"
 import { Select } from "./ui/Select.tsx"
 import { SettingsField } from "./SettingsField.tsx"
 import { OnOffToggle } from "./ui/OnOffToggle.tsx"
-import { DeleteOldThreads, RETENTION_DAYS } from "./DeleteOldThreads.tsx"
 import { embedded } from "../lib/embed.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 import { SlashCommandsField } from "./SlashCommandsField.tsx"
+
+// The periods "Delete done threads" offers, in days — the house duration grammar spells them.
+const RETENTION_DAYS = [1, 7, 30, 90] as const
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -239,10 +241,6 @@ export function SettingsDrawer() {
                 indicatorPosition="right"
                 ariaLabel="Delete done threads automatically"
               />
-            </SettingsField>
-
-            <SettingsField label="Delete untouched threads now" help={SETTINGS_HELP.deleteOldThreads}>
-              <DeleteOldThreads />
             </SettingsField>
 
             {/* Renders nothing on a page reached through the public origin: the supervisor answers it
