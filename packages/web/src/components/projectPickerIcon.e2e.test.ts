@@ -27,7 +27,7 @@ test("stepping the picker with ⌥↓ never paints a project's icon square empty
   try {
     const page = await browser.newPage()
     await page.setViewport({ width: 1440, height: 900, deviceScaleFactor: 1 })
-    await page.goto(`${baseUrl}/?all`, { waitUntil: "networkidle2" })
+    await page.goto(`${baseUrl}/all`, { waitUntil: "networkidle2" })
     await page.waitForSelector("[data-xq-project-picker] img", { timeout: 15_000 })
     const box = '[data-surface="newComposer"]'
     await page.waitForSelector(box, { visible: true, timeout: 15_000 })

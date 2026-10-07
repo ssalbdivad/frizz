@@ -74,10 +74,12 @@ test("inner and outer paths round-trip", () => {
   assert.equal(innerPath("/all/nub/thread/fix-auth"), "/thread/fix-auth")
   assert.equal(innerPath("/all/nub"), "/")
   assert.equal(outerPath("/thread/fix-auth", "/all/nub/thread/other"), "/all/nub/thread/fix-auth")
-  // Closing the last drawer goes home: the page's root is `/` whichever project the drawer named.
-  assert.equal(outerPath("/", "/all/nub/thread/other"), "/")
+  // Closing the last drawer goes home: the page's root is `/all` whichever project the drawer named.
+  assert.equal(outerPath("/", "/all/nub/thread/other"), "/all")
+  assert.equal(outerPath("/", "/all"), "/all")
   // Unprefixed, outer is a no-op — which is what keeps the launching project's /full working.
   assert.equal(outerPath("/thread/fix-auth/full", "/thread/other/full"), "/thread/fix-auth/full")
+  // `/` is its own root: a phone's projects list, which must not become All projects under it.
   assert.equal(outerPath("/", "/"), "/")
 })
 
@@ -110,11 +112,12 @@ test("the cross-project page is focused on a project", () => {
   assert.equal(innerPath(page), "/thread/fix-auth")
   assert.equal(innerPath("/all/nub"), "/")
   assert.equal(outerPath("/thread/other", page), "/all/nub/thread/other")
-  assert.equal(outerPath("/", page), "/")
+  assert.equal(outerPath("/", page), "/all")
   assert.equal(isCrossProjectPath(page), true)
   assert.equal(isProjectBoardPath(page), false)
   assert.equal(crossProjectHref("nub", page), "/all/nub")
-  assert.equal(crossProjectHref("nub", "/"), "/all/nub", "All projects' own drawers stay on All projects")
+  assert.equal(crossProjectHref("nub", "/all"), "/all/nub", "All projects' own drawers stay on All projects")
+  assert.equal(crossProjectHref("nub", "/"), "/all/nub")
   // An agent's `/thread/<slug>` link opens in place, on this page.
   assert.equal(prefixedAppRoute("/thread/other", page), "/all/nub/thread/other")
   // …and an agent's `@thread.child` mention keeps the child's address in the fragment (mentionAutolink.ts).
@@ -143,24 +146,30 @@ test("an agent's unprefixed in-app link is re-pointed at the project the page is
   assert.equal(prefixedAppRoute("/thread/other", "/thread/fix-auth/full"), null)
 })
 
-// AT `/` THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the view's project, or All
-// projects' pick — and hands it over with `setHomeFocus`, and from then on `/` answers every "which
-// project" question as a drawer's `/all/<focus>/…` would, whatever the query says.
-test("the page at / is bound to a project its path does not name", () => {
+// AT `/all` (AND A PHONE'S `/`) THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — All projects'
+// pick — and hands it over with `setHomeFocus`, and from then on the page answers every "which project"
+// question as a drawer's `/all/<focus>/…` would, whatever the query says.
+test("All projects at /all, and a phone's /, are bound to a project the path does not name", () => {
   try {
     setHomeFocus("nub")
-    assert.equal(projectSlug("/"), "nub")
-    assert.equal(apiBase("/"), "/_frizz/nub")
-    assert.equal(isCrossProjectPath("/"), true)
-    assert.equal(innerPath("/"), "/")
+    for (const home of ["/all", "/all/", "/"]) {
+      assert.equal(projectSlug(home), "nub", home)
+      assert.equal(apiBase(home), "/_frizz/nub", home)
+      assert.equal(isCrossProjectPath(home), true, home)
+      assert.equal(innerPath(home), "/", home)
+      assert.equal(outerPath("/thread/x", home), "/all/nub/thread/x", "a drawer's address names its project")
+      assert.equal(prefixedAppRoute("/thread/x", home), "/all/nub/thread/x", home)
+    }
+    // Each is its own root: closing a drawer never turns a phone's `/` into All projects.
+    assert.equal(outerPath("/", "/all"), "/all")
     assert.equal(outerPath("/", "/"), "/")
-    assert.equal(outerPath("/thread/x", "/"), "/all/nub/thread/x", "a drawer's address names its project")
-    assert.equal(prefixedAppRoute("/thread/x", "/"), "/all/nub/thread/x")
-    // Only `/` — every other machine page still names nothing.
+    // Only these — every other machine page still names nothing.
     assert.equal(projectSlug("/projects"), undefined)
   } finally {
     setHomeFocus(undefined)
   }
-  assert.equal(projectSlug("/"), undefined)
-  assert.equal(isCrossProjectPath("/"), false)
+  for (const home of ["/all", "/"]) {
+    assert.equal(projectSlug(home), undefined, home)
+    assert.equal(isCrossProjectPath(home), false, home)
+  }
 })

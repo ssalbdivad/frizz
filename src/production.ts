@@ -358,17 +358,33 @@ function ownSlug(launched = false): string | undefined {
 
 let cachedSlugPath: string | undefined;
 /**
- * Where to land: the home page, All projects (bare `/`, maintainer 2026-09-30), or the add-project dialog
- * asking about a directory (`/?add=` opens it on `/`). Focusing one project is the page's switcher's job
- * (`/project/<slug>`, web lib/pageView.ts), not the launcher's.
+ * Where to land — upstream's answer again (colinhacks/frizz 0a3b9139 src/index.ts slugPath), since a
+ * project's board became the default view on 2026-10-06:
+ *
+ *   - run in a project: THAT PROJECT'S BOARD, `/project/<slug>`;
+ *   - run outside one (`everything`, from $HOME): All projects, `/all` — upstream's grid at `/`;
+ *   - run in an unmarked directory (`offer`): the add-project dialog asking about it, `/?add=<dir>`, over
+ *     whichever view this browser was on last (web routes.tsx LastViewRedirect);
+ *   - no intent (a supervisor child, an update re-exec): `/`, the browser's own last view.
+ *
+ * From 2026-09-30 until then every launch landed on All projects at a bare `/` (maintainer: "by default
+ * frizz should open the all projects view"). `/` alone is still what the desktop app opens.
  *
  * `?add=` is a REQUEST, not a registration — nothing on disk changes until the operator confirms on
  * the page, which is the only reason an unmarked directory is safe to point the launcher at at all.
  */
 function slugPath(): string {
-  if (cachedSlugPath === undefined)
-    cachedSlugPath = launchIntent?.kind === "offer" ? `/?add=${encodeURIComponent(launchIntent.directory)}` : "/";
+  if (cachedSlugPath === undefined) cachedSlugPath = landingPath();
   return cachedSlugPath;
+}
+
+function landingPath(): string {
+  if (launchIntent?.kind === "offer") return `/?add=${encodeURIComponent(launchIntent.directory)}`;
+  if (launchIntent?.kind === "everything") return "/all";
+  if (launchIntent?.kind !== "open") return "/";
+  // The registry is an index: a launch it cannot record still opens, on the browser's own last view.
+  const slug = ownSlug();
+  return slug ? `/project/${encodeURIComponent(slug)}` : "/";
 }
 
 async function joinRunningFrizz(): Promise<{ port: number; slug: string } | undefined> {
@@ -384,10 +400,11 @@ async function joinRunningFrizz(): Promise<{ port: number; slug: string } | unde
 }
 
 /**
- * Record in the machine's registry that `frizz` was just run in THIS project, cold or joining. The page
- * lands on All projects (`/`) for every launch, so this stamp is how its prompt box still aims a new
- * thread at the repository the operator launched from when this browser has neither picked nor focused
- * a project (web lib/crossProject.ts). Only an `open` launch is from a project: an `everything` launch
+ * Record in the machine's registry that `frizz` was just run in THIS project, cold or joining. The launch
+ * itself lands on this project's board (slugPath), but the stamp outlives it: it is the board a bare `/`
+ * opens in a browser with no view on record, and the project All projects' prompt box aims a new thread at
+ * when this browser has neither picked nor focused one (web lib/crossProject.ts lastViewHref,
+ * defaultCrossProjectFocus). Only an `open` launch is from a project: an `everything` launch
  * from $HOME names none, and an `offer` launch is hosted on a project that is not where it was run.
  * Internal relaunches (a supervisor child, an update re-exec) carry no intent, so a restart never
  * re-stamps the host over a later launch elsewhere.
@@ -667,7 +684,7 @@ try {
   }
   // slugPath(), not the joined slug: that slug names the project this launch is HOSTED on, which is
   // the project to open only when the intent is `open`. An `everything`/`offer` launch rides on the most
-  // recent project and must still land on `/` rather than opening someone else's board.
+  // recent project and must still land on `/all` or `/?add=` rather than opening someone else's board.
   const joined = await joinRunningFrizz();
   if (joined) { await openOrPrint(joined.port, true, slugPath()); process.exit(0); }
   const claim = tryAcquireProjectLaunchOwner(target, "launcher");

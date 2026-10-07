@@ -1,9 +1,10 @@
-// THE PAGE — one project's list and queue, or every project's: `/` or `/project/<slug>`, showing its VIEW
-// (lib/pageView.ts).
+// THE PAGE — one project's list and queue, or every project's: `/project/<slug>` or `/all`, showing its
+// VIEW (lib/pageView.ts).
 //
-// ALL PROJECTS — the default, bare `/` — is every project's list and ONE queue across all of them. FOCUSED
-// ON A PROJECT — its board, `/project/<slug>`, from the switcher — the list on the left is that project and the
-// queue on the right is its cards, and the prompt box dispatches into it. The two are
+// FOCUSED ON A PROJECT — its board, `/project/<slug>`, the default view since 2026-10-06 — the list on the
+// left is that project and the queue on the right is its cards, and the prompt box dispatches into it. ALL
+// PROJECTS — `/all`, one click away (the switcher's first entry, the board's home crumb), and the bare `/`
+// from 2026-09-30 until then — is every project's list and ONE queue across all of them. The two are
 // the same page drawn from the same parts, not two UIs: the list's bands (ProjectList.tsx) are identical in
 // both, and focus mode is All projects with one project in it and the prompt box's picker gone.
 //
@@ -476,10 +477,11 @@ export function AllQueuesPage() {
             target={focused ? undefined : <ProjectPicker projects={projects} focus={focus} onPick={(project) => pickProject(project, dirs?.projectDir)} />}
           />
         )}
-        // Choosing from the phone's projects list replaces the list's own history entry (PhonePage.tsx
-        // useProjectsListing), so Back from the view chosen returns to the one before the list.
-        onAll={() => chooseView.all(focusProject && focused ? focusProject : undefined, { replace: true })}
-        onProject={(project) => chooseView.project(project.slug, { replace: true })}
+        // Choosing from the phone's projects list over a view replaces the list's own history entry
+        // (PhonePage.tsx useProjectsListing), so Back from the view chosen returns to the one before the
+        // list; from the list at `/`, the phone's home, it pushes, so Back returns to the list.
+        onAll={(options) => chooseView.all(focusProject && focused ? focusProject : undefined, options)}
+        onProject={(project, options) => chooseView.project(project.slug, options)}
       />
     )
   }
@@ -637,7 +639,7 @@ function Switcher({ projects, hidden, current, row = false }: { projects: Queues
 
 /**
  * CHANGE THE PAGE'S VIEW — the switcher's one verb, and the phone's projects list's (PhonePage.tsx), so the
- * two cannot drift. Choosing is a navigation (`/project/<slug>`, `/`), so Back returns to the view before.
+ * two cannot drift. Choosing is a navigation (`/project/<slug>`, `/all`), so Back returns to the view before.
  * Leaving a project for All projects carries it over as the prompt box's pick, so the box there starts
  * where the operator just was. A different set of cards is a different page to read, so it is read from
  * its top.

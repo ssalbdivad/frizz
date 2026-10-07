@@ -9,7 +9,7 @@ test("VS Code's four theme kinds fold to the page's two", () => {
 
 test("the frame's URL is this window's project's board, carrying the embed switch and the theme", () => {
   assert.equal(embedUrl("http://127.0.0.1:9393", "dark", "frizz"), "http://127.0.0.1:9393/project/frizz?embed=vscode&theme=dark")
-  assert.equal(embedUrl("http://127.0.0.1:9393", "light", undefined), "http://127.0.0.1:9393/?embed=vscode&theme=light", "All projects when no folder maps to one")
+  assert.equal(embedUrl("http://127.0.0.1:9393", "light", undefined), "http://127.0.0.1:9393/all?embed=vscode&theme=light", "All projects when no folder maps to one")
   const odd = new URL(embedUrl("http://127.0.0.1:9393", "dark", "a b&theme=light#x"))
   assert.equal(odd.pathname, "/project/a%20b%26theme%3Dlight%23x", "a slug is one path segment")
   assert.equal(odd.searchParams.getAll("theme").join(), "dark", "a slug cannot add or override a param")

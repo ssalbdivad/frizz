@@ -2426,7 +2426,9 @@ test("launch intent: $HOME is never a project, marker or not", () => {
 test("boardAddress: a bare origin gains a slash, `/` or an offer does not", () => {
   assert.equal(boardAddress("http://127.0.0.1:9494"), "http://127.0.0.1:9494/");
   assert.equal(boardAddress("http://127.0.0.1:9494/project/frizz"), "http://127.0.0.1:9494/project/frizz/");
-  // Everything is already `/`, and `//` reads as a typo in the one line the operator clicks.
+  // `/all`, All projects (an `everything` launch since 2026-10-06), reads as the board does.
+  assert.equal(boardAddress("http://127.0.0.1:9494/all"), "http://127.0.0.1:9494/all/");
+  // `/` is already `/`, and `//` reads as a typo in the one line the operator clicks.
   assert.equal(boardAddress("http://127.0.0.1:9494/"), "http://127.0.0.1:9494/");
   // A slash here lands INSIDE the query, changing the directory the page is asked about.
   assert.equal(boardAddress("http://127.0.0.1:9494/?add=%2Ftmp%2Fx"), "http://127.0.0.1:9494/?add=%2Ftmp%2Fx");

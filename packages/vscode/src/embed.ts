@@ -28,17 +28,25 @@ export function embedTheme(kind: number): EmbedTheme {
 }
 
 /**
- * `<origin>/project/<slug>?embed=vscode&theme=dark` — this window's project's board — or `<origin>/?embed=…`
- * (All projects) when no folder maps to one. The page reads the query once at boot; the PATH names its view
+ * `<origin>/project/<slug>?embed=vscode&theme=dark` — this window's project's board — or
+ * `<origin>/all?embed=…` (All projects) when no folder maps to one. The page reads the query once at boot; the PATH names its view
  * (web lib/pageView.ts). It was `/?…&project=<slug>` until 2026-10-06, while a board was a query on `/`; a
  * Frizz that new still redirects that shape to the path, so an older extension lands on the board too.
  */
 export function embedUrl(origin: string, theme: EmbedTheme, projectSlug: string | undefined): string {
-  const url = new URL(projectSlug ? projectPath(projectSlug) : "/", origin)
+  const url = new URL(projectSlug ? projectPath(projectSlug) : ALL_PROJECTS_PATH, origin)
   url.searchParams.set(EMBED_PARAM, EMBED_VSCODE)
   url.searchParams.set(EMBED_THEME_PARAM, theme)
   return url.toString()
 }
+
+/**
+ * All projects on the page, for a window whose folders map to no project. It was the bare `/` until
+ * 2026-10-06, when a project's board became the page's default view and `/` a redirect to the last view
+ * the BROWSER showed; a sidebar asks for its view by name (web lib/pageView.ts, whose legacy redirect still
+ * sends an older extension's `/?embed=vscode` here).
+ */
+export const ALL_PROJECTS_PATH = "/all"
 
 /** A project's board on the page — `/project/<slug>`, the slug one encoded segment whatever it holds. */
 export function projectPath(projectSlug: string): string {

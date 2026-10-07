@@ -860,7 +860,7 @@ export function homeOf(projects: readonly { path: string }[] | undefined): strin
 const MARK_PX = 76
 
 /**
- * `/` with no project to land on — the one time the home page has nothing to show, so it says what a
+ * `/` (or `/all`) with no project to land on — the one time the page has nothing to show, so it says what a
  * project is and offers the one thing to do. The add button is dashed and never filled: an affordance,
  * not a project.
  *

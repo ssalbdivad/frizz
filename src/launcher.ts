@@ -310,10 +310,11 @@ export function parseCliArgs(argv: string[]): CliOptions {
 /**
  * The board address as it should READ in the terminal.
  *
- * A bare origin gets its trailing slash, because `http://127.0.0.1:9494` alone looks truncated. The
- * two cases that slash is wrong for are the ones a launch outside a project produces: Everything is
- * already `/` and would print `//`, and an `?add=<dir>` offer would grow a slash INSIDE the query,
- * changing the directory the page is being asked about.
+ * A bare origin gets its trailing slash, because `http://127.0.0.1:9494` alone looks truncated, and a
+ * board (`/project/<slug>`) or All projects (`/all`) gets one too, as upstream printed it; the page takes
+ * either spelling. The two cases that slash is wrong for: `/` (a launch with no intent) would print `//`,
+ * and an `?add=<dir>` offer would grow a slash INSIDE the query, changing the directory the page is being
+ * asked about.
  */
 export function boardAddress(url: string): string {
   return url.includes("?") || url.endsWith("/") ? url : `${url}/`;

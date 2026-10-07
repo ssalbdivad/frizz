@@ -68,7 +68,8 @@ test("the row has no door and names nothing — not the page, not a project", ()
   assert.doesNotMatch(html, /colinhacks|github\.com|data-project-identity-state/, "and not the board the store happens to hold")
 })
 
-// ON A PROJECT'S BOARD (2026-10-06) the row is upstream's again at its left end: the door home, a divider
+// ON A PROJECT'S BOARD (2026-10-06) the row is upstream's again at its left end: the door home to All
+// projects at `/all` (not `/`, which goes back to the last view — from a board, the board), a divider
 // (home LEAVES the board; the rest act on what you are in), then the page's title and the board's identity
 // beside it — its repo and menu (ProjectBoard.tsx BoardIdentity). All projects passes neither, above.
 test("on a board the row leads with the door home, then a divider, then the title and the board's identity", () => {
@@ -90,7 +91,7 @@ test("on a board the row leads with the door home, then a divider, then the titl
   const identity = html.indexOf("data-identity")
   const settings = html.indexOf('aria-label="Settings"')
   assert.ok(home >= 0 && home < divider && divider < title && title < identity && identity < settings, JSON.stringify({ home, divider, title, identity, settings }))
-  assert.match(html, /<a data-status-home="true" title="All projects" aria-label="All projects" class="-mx-1\.5 inline-flex[^"]*-ml-px" href="\/"/)
+  assert.match(html, /<a data-status-home="true" title="All projects" aria-label="All projects" class="-mx-1\.5 inline-flex[^"]*-ml-px" href="\/all"/, "the door home goes to All projects, at /all (2026-10-06)")
 })
 
 test("ONE divider, between the buttons and the readouts", () => {

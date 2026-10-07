@@ -2,6 +2,7 @@ import type { ReactNode } from "react"
 import { House, Settings as SettingsIcon } from "lucide-react"
 import { Link } from "react-router"
 import { store } from "../store.ts"
+import { ALL_PROJECTS_HREF } from "../lib/pageView.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { QuotaChips, useQuotaChipsVisible } from "./QuotaBar.tsx"
 import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
@@ -35,11 +36,14 @@ import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 // border, no shadow, no z-index. Its two ends land on the composer's own border, which is what makes a
 // borderless strip read as belonging to the box below it.
 //
-// THE DOOR HOME, ON A BOARD ONLY (`crumb`). All projects is home, so it has no door: there is nowhere for
-// one to go (maintainer 2026-09-28: "there should no longer be an everything or an infinity button on the
-// threads view on the left"). A project's board is one level in, and upstream led its row with ⌂, the way
-// out to `/` (colinhacks/frizz 0a3b9139 StatusRow.tsx) — a router Link, so leaving keeps the socket and
-// the query cache. A divider follows it: home LEAVES the board, the rest act on what you are in. The
+// THE DOOR HOME, ON A BOARD ONLY (`crumb`). It goes to All projects, at `/all`: the board is the default
+// view, but All projects is the level above it, the one that holds every board (2026-10-06; it was the
+// bare `/` until then, and `/` now only goes back to the last view, which from a board is the board). All
+// projects has no door: there is nowhere above it to go (maintainer 2026-09-28: "there should no longer be
+// an everything or an infinity button on the threads view on the left"). Upstream led its board's row
+// with ⌂, the way out to its projects page at `/` (colinhacks/frizz 0a3b9139 StatusRow.tsx) — a router
+// Link, so leaving keeps the socket and the query cache. A divider follows it: home LEAVES the board, the
+// rest act on what you are in. The
 // board's `identity` (ProjectBoard.tsx BoardIdentity) rides beside the switcher: the project's owner/repo
 // linking to it on GitHub (upstream maintainer 2026-08-28: "Perhaps it should actually be showing
 // owner/repo if a repo is detected"), and its ⋯ menu, which in All projects is on the project's row. The
@@ -73,7 +77,7 @@ export function StatusRow({ title, identity, crumb = false, settings = true, sho
   title?: ReactNode
   /** Beside the title, in its slack: a board's repo and menu (ProjectBoard.tsx BoardIdentity). */
   identity?: ReactNode
-  /** Lead with the door home, `/` — a project's board, one level in. */
+  /** Lead with the door home to All projects, `/all` — a project's board, one level in. */
   crumb?: boolean
   settings?: boolean
   shortcuts?: boolean
@@ -100,7 +104,7 @@ export function StatusRow({ title, identity, crumb = false, settings = true, sho
         <>
           {/* `-ml-px` is the ink trim upstream measured: the square's own `-mx-1.5` left the house's ink 1px
               outside the prompt box's border, and the left edge is where a pixel of overhang shows. */}
-          <Link to="/" data-status-home title="All projects" aria-label="All projects" className={`${STATUS_ROW_ACTION} -ml-px`}>
+          <Link to={ALL_PROJECTS_HREF} data-status-home title="All projects" aria-label="All projects" className={`${STATUS_ROW_ACTION} -ml-px`}>
             <House size={STATUS_ROW_ICON} aria-hidden="true" />
           </Link>
           <Divider />

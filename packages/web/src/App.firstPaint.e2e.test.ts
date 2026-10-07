@@ -64,7 +64,7 @@ test("a reload paints the font and the workpane in their final state on the firs
     })
     const samples = () => page.evaluate(() => (window as unknown as { __samples: Sample[] }).__samples)
     const load = async () => {
-      await page.goto(`${baseUrl}/`, { waitUntil: "networkidle2" })
+      await page.goto(`${baseUrl}/all`, { waitUntil: "networkidle2" })
       await page.waitForSelector("#workpane", { timeout: 20_000 })
       await page.waitForSelector("[data-xq-project-row]", { timeout: 20_000 })
       await new Promise((r) => setTimeout(r, 500))

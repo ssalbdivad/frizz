@@ -57,7 +57,8 @@ import { shortPath } from "./ProjectActions.tsx"
 // and queue draw them (lib/allQueues.ts), the tabs band them with the list's own `loudBands`
 // (lib/phonePage.ts), and every row reading comes from the rail's helpers — `sessionIndicatorKind` for
 // the mark, the queue clock for the age. The VIEW is the page's too: focused on one project
-// (`/project/<slug>`) or All projects (`/`), switched by navigating, so Back works and a reload keeps it.
+// (`/project/<slug>`) or All projects (`/all`), switched by navigating, so Back works and a reload keeps
+// it. A phone's bare `/` is neither: it is the projects list (PhonePage below), upstream's phone home.
 //
 // WHAT IS UPSTREAM'S, each the maintainer's call from its mockup reviews (2026-08-17, 2026-09-30):
 //
@@ -455,30 +456,36 @@ export interface PhonePageProps {
    *  `autoFocus` is false when the sheet was opened to show a chip without taking the caret
    *  (lib/editorBridge.ts composeInto). */
   composer: (onDispatched: () => void, autoFocus: boolean) => ReactNode
-  /** Show All projects. */
-  onAll: () => void
-  /** Focus a project. */
-  onProject: (project: QueuesProject) => void
+  /** Show All projects; `replace` swaps out the list's own history entry rather than adding one. */
+  onAll: (options: { replace: boolean }) => void
+  /** Focus a project, the same way. */
+  onProject: (project: QueuesProject, options: { replace: boolean }) => void
 }
 
 export function PhonePage(props: PhonePageProps) {
-  const { listing, openListing, closeListing } = useProjectsListing()
-  if (listing) return <PhoneProjects {...props} onChoose={closeListing} />
+  const { listing, home, openListing, closeListing } = useProjectsListing()
+  if (listing) return <PhoneProjects {...props} home={home} onChoose={closeListing} />
   return <PhoneThreads {...props} onProjects={openListing} />
 }
 
 /**
- * THE PROJECTS LIST IS A HISTORY ENTRY, so a phone's Back — the edge swipe, Android's back button — puts
- * it away again. Opening it pushes the page's own address with a state flag (nothing in the URL: the
- * view is the query's, and a list is not a view); choosing replaces that entry with the view chosen, so
- * Back from there returns to the view before the list, as the desktop switcher's Back does.
+ * THE PROJECTS LIST — the phone's HOME at `/` (upstream's phone home, kept when the desktop's `/` became a
+ * redirect to the last view, 2026-10-06), and over a view a HISTORY ENTRY, so a phone's Back — the edge
+ * swipe, Android's back button — puts it away again.
+ *
+ * At `/` it is the page: choosing a view pushes it, so Back returns to the list. Over a view, the header's
+ * Projects button pushes the page's own address with a state flag (nothing in the URL: the view is the
+ * path's, and a list is not a view); choosing replaces that entry with the view chosen, so Back from there
+ * returns to the view before the list, as the desktop switcher's Back does.
  */
 function useProjectsListing() {
   const location = useLocation()
   const navigate = useNavigate()
-  const listing = (location.state as { phoneProjects?: boolean } | null)?.phoneProjects === true
+  const home = location.pathname === "/"
+  const listing = home || (location.state as { phoneProjects?: boolean } | null)?.phoneProjects === true
   return {
     listing,
+    home,
     openListing: () => navigate(`${location.pathname}${location.search}`, { state: { phoneProjects: true } }),
     /** Back off the list, when the choice is the view it was opened from. */
     closeListing: () => navigate(-1),
@@ -792,19 +799,23 @@ function PhoneNewThread({ onClose, children }: { onClose: () => void; children: 
  * in muted; Home last. The view showing now wears a check.
  *
  * Choosing NAVIGATES, as the switcher does, replacing the list's history entry; choosing the view it was
- * opened from goes Back. No add, rename or remove here: they stay on the desktop.
+ * opened from goes Back. At `/` (`home`) the list is the page and was opened over no view, so nothing
+ * wears the check and every choice pushes. No add, rename or remove here: they stay on the desktop.
  */
-function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProject, onChoose }: PhonePageProps & { onChoose: () => void }) {
+function PhoneProjects({ projects, focusedSlug: viewSlug, hidden, homeDir, onAll, onProject, onChoose, home }: PhonePageProps & { onChoose: () => void; home: boolean }) {
   // The threads view's own overlay, so a reply just sent takes its ask off this count as it takes it off
   // that header — the two read the same rows.
   const list = phoneProjects(projects, hidden, useJustActed().overlayFor)
   const total = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.asks, 0)
   const allWorking = [...list.projects, ...(list.home ? [list.home] : [])].reduce((sum, entry) => sum + entry.working, 0)
+  // At `/` the binding is All projects', but the list is not showing it.
+  const focusedSlug = home ? null : viewSlug
   const isAll = focusedSlug === undefined
+  const replace = !home
   useEffect(() => {
     window.scrollTo(0, 0)
   }, [])
-  const choose = (project: QueuesProject) => (project.slug === focusedSlug ? onChoose() : onProject(project))
+  const choose = (project: QueuesProject) => (project.slug === focusedSlug ? onChoose() : onProject(project, { replace }))
   const row = (entry: PhoneProjectEntry) => {
     const { project } = entry
     const card = squareCard(project)
@@ -848,7 +859,7 @@ function PhoneProjects({ projects, focusedSlug, hidden, homeDir, onAll, onProjec
             type="button"
             data-mobile-project-row="*"
             aria-current={isAll ? "page" : undefined}
-            onClick={() => (isAll ? onChoose() : onAll())}
+            onClick={() => (isAll ? onChoose() : onAll({ replace }))}
             className="flex min-h-[62px] w-full items-center gap-3 border-b border-border/70 px-[18px] py-2 text-left active:bg-hover"
           >
             <AllProjectsSquare size={PROJECT_SQUARE} />

@@ -59,11 +59,11 @@ export function useCrossProjectPick(): string | null {
   return useSyncExternalStore(subscribeCrossProjectFocus, rememberedCrossProjectFocus, () => null)
 }
 
-// THE PROJECT LAST FOCUSED, in this browser — written whenever the page shows one project at `/`
-// (routes.tsx). It aimed a bare `/` itself until 2026-09-30, when All projects became home and the launcher
-// stopped naming a project (97fb6c42 removed it as having no reader left); it is kept for the prompt box,
-// as the next-best answer after an explicit pick to "which project is this person working in". By ID, not
-// slug: a rename changes the slug.
+// THE PROJECT LAST FOCUSED, in this browser — written whenever the page shows a project's board
+// (routes.tsx). It aimed a bare `/` until 2026-09-30, when All projects became home; it is the prompt box's
+// next-best answer after an explicit pick to "which project is this person working in", and the board a
+// bare `/` opens for a browser that has a board to go back to but no view on record (lastViewHref). By ID,
+// not slug: a rename changes the slug.
 const LAST_FOCUSED_KEY = "frizz.lastFocusedProject"
 
 export function lastFocusedProject(): string | null {
@@ -80,6 +80,68 @@ export function rememberLastFocusedProject(projectId: string): void {
   } catch {
     // Storage disabled: the box falls through to the project Frizz was launched from.
   }
+}
+
+// THE LAST VIEW THIS BROWSER SHOWED — a project's board or All projects — which is where a bare `/` goes
+// (routes.tsx LastViewRedirect). Decided 2026-10-06, when David asked for Colin's per-project default: a
+// project's board is the default view, All projects one click away, and `/` names neither, so it goes back
+// to whichever this browser had. Navigation memory, not a setting: it is written whenever the page shows a
+// view, and nothing offers to change it. Per BROWSER (localStorage), like the pick above and unlike the
+// view itself, which is each tab's path. A board is remembered by ID, so a rename still finds it. An
+// editor's sidebar does not write it (routes.tsx): it is a frame in another app, and its view is the
+// editor window's, not this browser's.
+const LAST_VIEW_KEY = "frizz.lastView"
+const ALL_VIEW = "all"
+const PROJECT_VIEW_PREFIX = "project:"
+
+/** What this browser showed last: `all`, `project:<id>`, or null for a browser that never chose. */
+export function lastView(): string | null {
+  try {
+    return localStorage.getItem(LAST_VIEW_KEY)
+  } catch {
+    return null
+  }
+}
+
+/** Record the view the page shows: All projects, or the board of the project with this id. */
+export function rememberLastView(view: { kind: "all" } | { kind: "project"; id: string }): void {
+  const value = view.kind === "all" ? ALL_VIEW : `${PROJECT_VIEW_PREFIX}${view.id}`
+  try {
+    if (localStorage.getItem(LAST_VIEW_KEY) !== value) localStorage.setItem(LAST_VIEW_KEY, value)
+  } catch {
+    // Storage disabled: a bare `/` falls through to the default board (lastViewHref step 2).
+  }
+}
+
+/**
+ * Where a bare `/` goes: `/all` or `/project/<slug>`, or undefined when there is no project to show (the
+ * welcome, which adds one). In order:
+ *
+ *   1. the view this browser showed LAST (`remembered`, lastView above) — All projects, or a board whose
+ *      project is still registered and its directory still there;
+ *   2. else a board, never All projects: the project this browser last focused, else the one `frizz` was
+ *      most recently RUN in, else the one opened most recently, else the first in the machine's order
+ *      (defaultCrossProjectFocus — the same order All projects' prompt box falls back through).
+ *
+ * A browser that never chose lands on a board because a board is the default; All projects is where it
+ * goes once someone has gone there.
+ */
+export function lastViewHref(
+  cards: readonly Pick<ProjectCard, "id" | "slug" | "stale" | "lastOpenedAt" | "lastLaunchedAt" | "home">[],
+  remembered: string | null,
+  openIds?: ReadonlySet<string>,
+  lastFocusedId: string | null = null,
+): string | undefined {
+  const present = cards.filter((card) => !card.stale)
+  // All projects with nothing in it but the Home workspace is the welcome; so is `/`, by step 2.
+  if (remembered === ALL_VIEW && present.some((card) => !card.home)) return "/all"
+  if (remembered?.startsWith(PROJECT_VIEW_PREFIX)) {
+    const id = remembered.slice(PROJECT_VIEW_PREFIX.length)
+    const card = present.find((candidate) => candidate.id === id)
+    if (card) return `/project/${encodeURIComponent(card.slug)}`
+  }
+  const slug = defaultCrossProjectFocus(cards, null, openIds, lastFocusedId)
+  return slug === undefined ? undefined : `/project/${encodeURIComponent(slug)}`
 }
 
 /**
@@ -116,8 +178,9 @@ export function stepPick<P extends { slug: string; open: boolean; stale: boolean
  * Each step takes only a project that is still registered and whose directory still exists; else none (no
  * usable project — the page then shows the welcome, where one is added).
  *
- * Step 3 exists because every launch lands on All projects at a bare `/` (97fb6c42), so the address no
- * longer says where `frizz` was run. Without it a browser with no pick fell to step 4, and `lastOpenedAt`
+ * Step 3 exists because from 2026-09-30 every launch landed on All projects at a bare `/` (97fb6c42), so
+ * the address did not say where `frizz` was run; since 2026-10-06 a launch lands on its project's board
+ * again, but All projects reached any other way still has only this to go on. Without it a browser with no pick fell to step 4, and `lastOpenedAt`
  * is bumped by any registration — adding a project from the page, a stack registering its tenants after
  * boot — so a launch from `storefront` aimed the box at `billing-api` and a task landed in the wrong repo.
  *

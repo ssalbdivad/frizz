@@ -5,9 +5,11 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 // One Frizz per machine serves every project from one origin, and ONE PAGE shows them. Its PATH names its
 // view (lib/pageView.ts), and with it the project the page is bound to:
 //
-//   /                              All projects, the home — bound to the prompt box's pick (below)
+//   /                              where this browser was last (a redirect), or a phone's projects list —
+//                                  bound to the prompt box's pick (below)
+//   /all                           All projects — bound to the prompt box's pick (below)
 //   /all/<slug>/thread/<t>         All projects with that thread's drawer open — bound to its project
-//   /project/<slug>                that project's board (Colin's scheme, restored 2026-10-06)
+//   /project/<slug>                that project's board, the default (Colin's scheme, restored 2026-10-06)
 //   /project/<slug>/thread/<t>     the board with that thread open (its card, or its drawer)
 //   /project/<slug>/status/<s>     the board's status list (StatusListView.tsx)
 //
@@ -27,9 +29,9 @@ import { FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 // base, the same live feed, the same cache scope), which is what lets the whole drawer stack and composer
 // work for any project on the one page.
 //
-// AT `/` THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the pick (lib/crossProject.ts) — and
-// hands it here with `setHomeFocus`, so `/` answers as `/all/<slug>` does. A drawer's URL still names its
-// thread's project, because that is the thread's address.
+// AT `/all` (AND `/`) THE PAGE PROJECT IS NOT IN THE PATH. The route resolves it — the pick
+// (lib/crossProject.ts) — and hands it here with `setHomeFocus`, so `/all` answers as `/all/<slug>` does. A
+// drawer's URL still names its thread's project, because that is the thread's address.
 
 /**
  * The SPA's own top-level route names — the in-app links an agent writes unprefixed, and the ones a page
@@ -58,9 +60,9 @@ export function isRetiredAppPath(path: string): boolean {
 
 /**
  * Machine-level pages: they are in-app, but they name no project and are never re-pointed under one.
- * `/` itself is one too (All projects); `/all` is its other name, and `queues` and `projects` are old
- * addresses of it (the page before it was the home, and the project grid it absorbed), which the route
- * tree sends home.
+ * `/all` is All projects (it was the bare `/` from 2026-09-30 to 2026-10-06), and `queues` and `projects`
+ * are old addresses of it (the page before it was the home, and the project grid it absorbed), which the
+ * route tree sends there. `/` itself is one too.
  */
 export const MACHINE_ROUTE_SEGMENTS = new Set(["all", "projects", "queues"])
 
@@ -113,15 +115,16 @@ export function isProjectBoardPath(pathname?: string): boolean {
 let homeFocus: string | undefined
 
 /**
- * The project All projects at `/` is bound to — set by its route (routes.tsx CrossProjectPage) during
- * render, before anything below it asks, and cleared when `/` has none to show.
+ * The project All projects (`/all`, and a phone's `/`) is bound to — set by its route (routes.tsx
+ * CrossProjectPage) during render, before anything below it asks, and cleared when it has none to show.
  */
 export function setHomeFocus(slug: string | undefined): void {
   homeFocus = slug
 }
 
+/** A page whose path names no project: All projects at `/all`, and `/`. */
 function isHome(path: string): boolean {
-  return path === "/" || path === ""
+  return path === "/" || path === "" || path === CROSS_PROJECT_PREFIX || path === `${CROSS_PROJECT_PREFIX}/`
 }
 
 /** The slug this page is showing, or `undefined` for the unprefixed launching project. */
@@ -135,8 +138,8 @@ export function projectSlug(pathname?: string): string | undefined {
 }
 
 /**
- * Is this the one page (`/` with a focus, `/all/<slug>…`, or a project's board `/project/<slug>…`) — rather
- * than a page with no project in it: the welcome, or the launching project's unprefixed fullscreen page?
+ * Is this the one page (`/all` or `/` with a focus, `/all/<slug>…`, or a project's board `/project/<slug>…`)
+ * — rather than a page with no project in it: the welcome, or the launching project's unprefixed /full?
  */
 export function isCrossProjectPath(pathname?: string): boolean {
   const path = here(pathname)
@@ -169,6 +172,8 @@ export function basePath(pathname?: string): string {
 /** The path with the project prefix removed — what the router reasons about. */
 export function innerPath(pathname?: string): string {
   const path = here(pathname)
+  // A page that names no project is its own root, with or without a binding (`/all` before its pick).
+  if (isHome(path)) return "/"
   const base = basePath(path)
   if (!base) return path || "/"
   return path.slice(base.length).replace(/^\/$/u, "") || "/"
@@ -176,13 +181,14 @@ export function innerPath(pathname?: string): string {
 
 /**
  * An inner path put back in terms the address bar uses. A board's own root is the board,
- * `/project/<slug>`. All projects' root is `/` whichever project a drawer had it bound to: closing the last
- * drawer goes home, where the binding is the pick again.
+ * `/project/<slug>`. All projects' root is `/all` whichever project a drawer had it bound to: closing the
+ * last drawer goes home, where the binding is the pick again. `/` is its own root (a phone's projects list).
  */
 export function outerPath(inner: string, pathname?: string): string {
   const path = here(pathname)
   if (inner !== "/") return `${basePath(path)}${inner}`
-  return isProjectBoardPath(path) ? basePath(path) : "/"
+  if (isProjectBoardPath(path)) return basePath(path)
+  return path === "/" || path === "" ? "/" : CROSS_PROJECT_PREFIX
 }
 
 /**

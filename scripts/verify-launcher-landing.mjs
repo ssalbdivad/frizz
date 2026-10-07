@@ -1,13 +1,16 @@
 #!/usr/bin/env node
-// The launcher's REAL launch path, end to end, and where it lands: the home page, All projects (bare `/`,
-// 2026-09-30; the page focused on the launch's project, `/?project=<slug>`, from 2026-09-29), for a cold
-// start and for a second launch that JOINS the running server from another repository.
+// The launcher's REAL launch path, end to end, and where it lands: THE LAUNCH'S OWN PROJECT'S BOARD,
+// `/project/<slug>` (2026-10-06, upstream's landing again: a project's board is the default view; All
+// projects at a bare `/` from 2026-09-30, `/?project=<slug>` from 2026-09-29), for a cold start and for a
+// second launch that JOINS the running server from another repository.
 //
 // Nothing is stood in except the browser. The source launcher (`src/index.ts`, what `frizz-dev` runs)
 // selects or builds its immutable artifact, starts the server, waits for health and "opens the default
 // browser" — on Linux by exec'ing `xdg-open <url>`, which a stub first on PATH records instead. That
-// recorded URL is then loaded in a headless Chrome and must show All projects: the address kept bare, the
-// switcher reading "All projects", the list holding every project launched so far, the prompt-box picker.
+// recorded URL is then loaded in a headless Chrome and must show that board: the address kept, the
+// switcher naming the project, the board drawn for it, no prompt-box picker. Then a FRESH browser profile
+// opens a bare `/`, which with no view on record must land on the board of the project `frizz` was run in
+// LAST — the second launch's — never on All projects (web lib/crossProject.ts lastViewHref).
 //
 // Everything runs under a throwaway HOME (so it never reaches ~/.frizz or a live board) with every
 // FRIZZ_* variable dropped, on its own port — asked of BOTH launches, since a launch joins only a server
@@ -76,14 +79,14 @@ const launches = []
 let browser
 try {
   browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox"] })
-  const landing = async (url, slug) => {
-    const page = await browser.newPage()
+  const landing = async (url, slug, context = browser) => {
+    const page = await context.newPage()
     const errors = []
     page.on("pageerror", (error) => errors.push(String(error)))
     try {
       await page.setViewport({ width: 1440, height: 900 })
       await page.goto(url, { waitUntil: "networkidle2", timeout: 90_000 })
-      await page.waitForFunction(() => document.querySelector("[data-xq-switcher-label]")?.textContent?.trim() === "All projects", { timeout: 30_000 }).catch(() => {})
+      await page.waitForFunction(() => document.querySelector("[data-xq-board]"), { timeout: 30_000 }).catch(() => {})
       await sleep(1000)
       await page.screenshot({ path: join(root, `landing-${slug}.png`) })
       const seen = await page.evaluate(async () => {
@@ -93,6 +96,7 @@ try {
           address: location.pathname + location.search,
           switcher: document.querySelector("[data-xq-switcher-label]")?.textContent?.trim(),
           listed: [...document.querySelectorAll("[data-xq-rail-project]")].map((g) => slugOf(g.getAttribute("data-xq-rail-project"))),
+          board: [...document.querySelectorAll("[data-xq-board]")].map((g) => slugOf(g.getAttribute("data-xq-board"))),
           picker: Boolean(document.querySelector("[data-xq-project-picker]")),
         }
       })
@@ -101,21 +105,32 @@ try {
       await page.close()
     }
   }
-  const expectHome = (what, url, seen, slugs) => {
-    check(`${what} opens /`, url === `http://127.0.0.1:${port}/`, url)
-    check(`…which lands on All projects, listing ${slugs.join(", ")}`, seen.address === "/" && seen.switcher === "All projects" && slugs.every((slug) => seen.listed.includes(slug)) && seen.picker && seen.errors.length === 0, JSON.stringify(seen))
+  const onBoard = (seen, slug) =>
+    seen.address === `/project/${slug}` && seen.switcher === slug && seen.board.length === 1 && seen.board[0] === slug && !seen.picker && seen.errors.length === 0
+  const expectBoard = (what, url, seen, slug) => {
+    check(`${what} opens /project/${slug}`, url === `http://127.0.0.1:${port}/project/${slug}`, url)
+    check(`…which lands on ${slug}'s board`, onBoard(seen, slug), JSON.stringify(seen))
   }
 
   const first = launch(projects[0])
   launches.push(first)
   const url1 = await waitForOpen(1, first, 600_000)
-  expectHome("a cold launch", url1, await landing(url1, projects[0]), [projects[0]])
+  expectBoard("a cold launch", url1, await landing(url1, projects[0]), projects[0])
 
   const second = launch(projects[1])
   launches.push(second)
   const url2 = await waitForOpen(2, second, 180_000)
   check("the second launch joins the running server", /already running on port/.test(second.log()), second.log().split("\n").find((l) => l.includes("server")) ?? "")
-  expectHome("the joining launch", url2, await landing(url2, projects[1]), [projects[0], projects[1]])
+  expectBoard("the joining launch", url2, await landing(url2, projects[1]), projects[1])
+
+  // A browser that never showed a view, at a bare `/`: the board of the project last launched.
+  const fresh = await browser.createBrowserContext()
+  try {
+    const seen = await landing(`http://127.0.0.1:${port}/`, "fresh", fresh)
+    check(`a fresh browser at / lands on the last launch's board, ${projects[1]}`, onBoard(seen, projects[1]), JSON.stringify(seen))
+  } finally {
+    await fresh.close()
+  }
 } finally {
   await browser?.close()
   for (const project of projects) {
