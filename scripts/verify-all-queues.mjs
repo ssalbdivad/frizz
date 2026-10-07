@@ -108,10 +108,23 @@ try {
   const pageWrites = () => page.evaluate(() => window.__frizzWrites ?? [])
   const writesSoFar = async () => [...new Set([...writes, ...(await pageWrites())])]
   const wrote = async (project, procedure) => (await writesSoFar()).includes(`/_frizz/${ids[project]}/rpc/${procedure}`)
+  // A button by what it SAYS to a person: its text, or its accessible name when it is a glyph. The card's
+  // lifecycle verbs became glyphs in its header on 2026-10-05 (ThreadLifecycle.tsx, upstream's move out of
+  // the footer): Mark as done is a ✓ whose words live in `aria-label` now, and a text-only search found
+  // no button at all.
   const buttonIn = async (scope, text) => {
-    const handle = await page.evaluateHandle((scope, text) => [...document.querySelectorAll(`${scope} button`)].find((b) => b.textContent?.trim().includes(text)) ?? null, scope, text)
+    const handle = await page.evaluateHandle((scope, text) => [...document.querySelectorAll(`${scope} button`)].find((b) => b.textContent?.trim().includes(text) || b.getAttribute("aria-label") === text) ?? null, scope, text)
     const element = handle.asElement()
     if (!element) throw new Error(`no button "${text}" in ${scope}`)
+    return element
+  }
+  // A thread's row in its project's group on the rail, by SLUG. A row shows the thread's name as its
+  // `@` handle (web groups.ts displayTitle, since 2026-09-29: "Fix the flaky login test" reads
+  // `fix-the-flaky-login-test`), and a title past five words shows as written, so the words a row shows
+  // are not a stable handle on it; the slug is.
+  const railRow = async (project, slug) => {
+    const element = await page.$(`[data-xq-rail-project="${ids[project]}"] [data-sidebar-item="${slug}"] > button`)
+    if (!element) throw new Error(`no row ${slug} in ${project}'s group`)
     return element
   }
 
@@ -155,6 +168,29 @@ try {
       selector,
     ).catch(() => { throw new Error(`${selector} never settled on screen`) })
     await handle.asElement().click()
+  }
+  // The same, for a target that may be off screen: brought to the middle of the viewport first. A bare
+  // `page.click` scrolls it in and clicks where it WAS, and the queue moves under that — the viewport lock
+  // re-seats the card being read, a card arriving or leaving above shifts the rest — so on 2026-10-06 a
+  // card title clicked from below the fold missed its link and opened nothing, on main and this branch
+  // alike.
+  const clickOnScreen = async (selector) => {
+    await page.$eval(selector, (el) => el.scrollIntoView({ block: "center" }))
+    await clickSettled(selector)
+  }
+  // Put the keyboard in a text box, and PROVE it is there before a single key is typed. A key that misses
+  // the box is a SHORTCUT on this page (lib/keybindings.ts: `s` snoozes the card being read, `e` opens its
+  // folder, `o` its drawer, `c` is New thread), so a click that landed beside a box mid-layout once turned
+  // "Please also check…" into a snooze of the card being replied to, a 500 from opening its folder on a
+  // stack with no file manager, and the rest of the sentence typed into the NEW-thread box, which then
+  // failed every ⌥↓ check after it (2026-10-06, 17 of 27 checks red on main and this branch alike).
+  const focusBox = async (selector) => {
+    for (let attempt = 0; attempt < 3; attempt++) {
+      await clickOnScreen(selector)
+      if (await page.$eval(selector, (el) => document.activeElement === el)) return
+      await sleep(300)
+    }
+    throw new Error(`${selector} never took the keyboard`)
   }
   // All projects, reached the way a person reaches it: the project's board, `/project/<slug>` (the
   // launcher's own landing was `/?project=<slug>` from 2026-09-29, and is `/` since 2026-09-30) — then the
@@ -220,7 +256,7 @@ try {
 
   await step("a queue row in the rail brings its card up and rings it", async () => {
     await page.evaluate(() => window.scrollTo(0, 0))
-    const row = await buttonIn(`[data-xq-rail-project="${ids["marketing-site"]}"]`, "Fix the flaky login test")
+    const row = await railRow("marketing-site", "fix-flaky-login-test")
     // The ring lasts 1100ms, so it is WATCHED for rather than sampled: at a load average of 30+ the read
     // below landed past it once, on a ring that had been set 5ms after the click.
     await page.$eval(`${card("marketing-site", "fix-flaky-login-test")} [data-xq-card-root]`, (root) => {
@@ -275,18 +311,21 @@ try {
   })
 
   // The seed opened a real terminal on a thread in billing-worker (at an OTP prompt) and in the launcher
-  // (finished). A terminal rides its thread: a line in the thread's strip, a mark on its rail row.
+  // (finished). A terminal rides its thread: a line in the thread's strip, and a terminal of yours at a
+  // prompt QUEUES the thread, so its rail row is a Queue row. It also drew its own mark after the row's
+  // title until 79465725 (2026-09-30) dropped it as a repeat of exactly that: what the rail says about a
+  // waiting prompt is now the row's band and its rest time, which is what this checks.
   const terminalOf = async (project, slug) => (await threadOf(project, slug))?.terminals?.[0]
 
-  await step("a tenant's terminal at a prompt shows its own screen on its thread's card, and marks its row", async () => {
+  await step("a tenant's terminal at a prompt shows its own screen on its thread's card, and queues its row", async () => {
     const scope = card("billing-worker", "publish-billing-client")
     await page.$eval(scope, (el) => el.scrollIntoView({ block: "center" }))
     // The screen is the pty's replay over `/term/<id>` — which, addressed through the page, would ask the
     // launcher's terminal server for an id it never minted.
     const screen = await waitFor("the terminal's screen", () => page.$eval(scope, (el) => el.querySelector("[data-terminal-prompt-pane] .xterm-rows")?.textContent?.includes("Enter one-time password") ?? false), 8_000).catch(() => false)
     const line = await page.$eval(scope, (el) => el.querySelector("[data-terminal-row]")?.textContent ?? "")
-    const mark = await page.$(`[data-xq-rail-project="${ids["billing-worker"]}"] [data-thread-terminal-mark="prompt"]`)
-    check("a tenant's terminal at a prompt shows its own screen on its thread's card, and marks its row", screen && line.includes("waiting for input") && Boolean(mark), `screen ${screen ? "replayed" : "blank"}, line "${line}", rail mark ${mark ? "present" : "missing"}`)
+    const row = await page.$eval(`[data-xq-rail-project="${ids["billing-worker"]}"] [data-sidebar-item="publish-billing-client"]`, (el) => ({ band: el.getAttribute("data-xq-band"), age: el.querySelector("[data-rail-rested-age]")?.textContent?.trim() ?? null })).catch(() => null)
+    check("a tenant's terminal at a prompt shows its own screen on its thread's card, and queues its row", screen && line.includes("waiting for input") && row?.band === "ready" && Boolean(row.age), `screen ${screen ? "replayed" : "blank"}, line "${line}", rail row ${row ? `in ${row.band}${row.age ? `, rested ${row.age}` : ", no rest time"}` : "missing"}`)
     await page.screenshot({ path: join(shots, "aq-verify-terminal.png") })
   })
 
@@ -336,7 +375,7 @@ try {
 
   await step("a reply on a tenant's card goes to ITS thread", async () => {
     const scope = card("marketing-site", "pricing-page-tiers")
-    await page.click(`${scope} textarea[data-surface="queueComposer"]`)
+    await focusBox(`${scope} textarea[data-surface="queueComposer"]`)
     await page.keyboard.type("Please also check the 1024px breakpoint.")
     await page.keyboard.press("Enter")
     await sleep(3000)
@@ -346,16 +385,17 @@ try {
     check("a reply on a tenant's card goes to ITS thread", (await wrote("marketing-site", "followUp")) && !(await wrote("acme-api", "followUp")), present ? `card back with ${alert ? `error "${alert.slice(0, 80)}"` : "no error"}, draft ${draft ? "restored" : "empty"}` : "card left the queue")
   })
 
-  // A card has no door off the page any more — no ↗ to its project's board and no ⤢ to /full (both went
-  // with the project view on 2026-09-28). /full is an option of the thread's DRAWER, so its way out
-  // leads back to that drawer, and closing the drawer back to the page.
+  // /full is reached from the thread's DRAWER here (a card carries the same ⤢ since 2026-09-29, and
+  // goes back to the page): its way out leads back to that drawer, and closing the drawer back to the
+  // page.
   await step("fullscreen's way out leads back to the drawer it came from, and the drawer's to the page", async () => {
     const scope = card("acme-api", "upgrade-postgres-driver")
-    await page.click(`${scope} h3 a`)
+    await clickOnScreen(`${scope} h3 a`)
     const drawer = "/all/acme-api/thread/upgrade-postgres-driver"
     await page.waitForFunction((drawer) => location.pathname === drawer, { timeout: 8000 }, drawer)
-    await clickSettled("[data-drawer-layer] [data-thread-menu]")
-    await clickSettled('[role="menuitem"][data-value="fullscreen"]')
+    // The drawer header's ⤢ (ExpandThreadLink). /full was the first item of its ⋯ menu until 749bdb40
+    // (2026-09-29) gave the door back to the icon beside it, which `f` presses as well.
+    await clickSettled(`[data-drawer-layer] [data-expand-thread="upgrade-postgres-driver"]`)
     await page.waitForFunction((drawer) => location.pathname === `${drawer}/full`, { timeout: 8000 }, drawer)
     await page.waitForSelector("[data-standalone-return]", { timeout: 8000 })
     await sleep(600)
@@ -380,9 +420,9 @@ try {
     const scope = card("acme-api", "upgrade-postgres-driver")
     // A marketing-site thread, by its card's title if one is still queued, else by its rail row: the seed's
     // in-flight rows rest on their own, so which of the two is on the page depends on how long this took.
-    const title = await page.$(`[data-xq-card^="${ids["marketing-site"]}/"] h3 a`)
-    if (title) await title.click()
-    else await (await buttonIn(`[data-xq-rail-project="${ids["marketing-site"]}"]`, "Generate OG images at build time")).click()
+    const queued = await page.$eval(`[data-xq-card^="${ids["marketing-site"]}/"]`, (el) => el.getAttribute("data-xq-card")).catch(() => null)
+    if (queued) await clickOnScreen(`[data-xq-card="${queued}"] h3 a`)
+    else await clickOnScreen(`[data-xq-rail-project="${ids["marketing-site"]}"] [data-sidebar-item="og-image-generator"] > button`)
     await page.waitForFunction(() => location.pathname.startsWith("/all/marketing-site/thread/"), { timeout: 8000 })
     await page.waitForSelector("[role=dialog]", { timeout: 8000 })
     await sleep(1500)
@@ -409,13 +449,17 @@ try {
     const sleeping = await threadOf("marketing-site", "fix-flaky-login-test")
     if (sleeping?.snoozedUntil) await api("marketing-site").mutate("setThreadSnooze", { slug: "fix-flaky-login-test", sessionId: sleeping.sessionId, until: null })
     const title = `${card("marketing-site", "fix-flaky-login-test")} h3 a`
-    await page.waitForSelector(title, { timeout: 10_000 })
-    await page.click(title)
+    await page.waitForSelector(title, { timeout: 10_000 }).catch(async () => {
+      const now = await threadOf("marketing-site", "fix-flaky-login-test")
+      const cards = await page.$$eval("[data-xq-card]", (els) => els.map((el) => el.getAttribute("data-xq-card")?.split("/")[1]))
+      throw new Error(`its card never came back: thread ${JSON.stringify({ state: now?.state, needsYou: now?.needsYou, snoozedUntil: now?.snoozedUntil, queuedAt: now?.queuedAt, settling: now?.queueSettling })}, cards ${cards.join(" ")}, at ${await page.evaluate(() => location.pathname)}`)
+    })
+    await clickOnScreen(title)
     await page.waitForFunction(() => location.pathname === "/all/marketing-site/thread/fix-flaky-login-test", { timeout: 8000 })
     await page.waitForSelector('[role=dialog] textarea[data-surface="chatComposer"]', { timeout: 10_000 })
     await sleep(800)
     const before = writes.length
-    await page.click('[role=dialog] textarea[data-surface="chatComposer"]')
+    await focusBox('[role=dialog] textarea[data-surface="chatComposer"]')
     await page.keyboard.type("Is the flake the same on CI?")
     await page.keyboard.press("Enter")
     await waitFor("the follow-up to go out", async () => writes.slice(before).some((w) => w.endsWith("/rpc/followUp")) || null, 8000)
@@ -463,7 +507,7 @@ try {
     const at = order.indexOf("acme-api")
     const after = (n) => order[(at + n) % order.length]
     const draft = "Draft that follows the key"
-    await page.click('[data-surface="newComposer"]')
+    await focusBox('[data-surface="newComposer"]')
     await page.keyboard.type(draft)
     await page.evaluate(() => document.querySelector('[data-surface="newComposer"]').setSelectionRange(5, 5))
     // Counts every time the stand-in mounts from here on — a switch that blanks the box shows up as one.
@@ -516,11 +560,18 @@ try {
       `picker "${await picker()}", stand-in mounted ${pending}x, draft filed under ${filed.join(", ") || "nothing"}`,
     )
 
-    // Anywhere but the box the keys are the browser's.
+    // Anywhere on the page that is not a text field the keys step the project TOO, and leave the keyboard
+    // where it was, so `j` / `k` and the card keys go on working after a step (c160eb6a, 2026-10-01; on
+    // All projects that re-aims the box, AllQueues.tsx's window listener). This checked the opposite —
+    // the keys left alone outside the box — until then.
     await page.evaluate(() => (document.activeElement instanceof HTMLElement ? document.activeElement.blur() : undefined))
     await nextProject()
-    await sleep(600)
-    check("⌥↓ outside the box leaves the project alone", (await picker()) === "acme-api", `picker "${await picker()}"`)
+    const stepped = await pickerSays(after(1))
+    await sleep(400)
+    const keyboard = await page.evaluate(() => document.activeElement?.getAttribute("data-surface") ?? document.activeElement?.tagName ?? null)
+    check("⌥↓ outside the box re-aims it too, leaving the keyboard where it was", stepped && keyboard === "BODY", `picker "${await picker()}" (expected "${after(1)}"), keyboard on ${keyboard}`)
+    await previousProject()
+    await pickerSays("acme-api")
 
     // A choice from the menu hands the keyboard to the re-aimed box as well, the caret after the draft.
     await page.click("[data-xq-project-picker]")
@@ -532,7 +583,7 @@ try {
     check("a choice from the picker's menu hands the keyboard to the re-aimed box", picked?.focused === true && picked.start === picked.value.length, JSON.stringify(picked))
 
     // Clear the draft, and put the box back on the launcher for the steps after this one.
-    await page.click('[data-surface="newComposer"]')
+    await focusBox('[data-surface="newComposer"]')
     await page.keyboard.down("Control")
     await page.keyboard.press("a")
     await page.keyboard.up("Control")
