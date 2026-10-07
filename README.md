@@ -25,7 +25,7 @@ Frizz is for you if you have any of these opinions:
 
 <h2 align="center">Getting started</h2>
 
-**Requirements.** Node 22.13+, and a [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) subscription you are signed in to — Frizz drives the subscription you already pay for. Frizz brings its own pinned copy of each CLI (downloaded once, on first start), so the version on your PATH is yours to manage and never changes what a thread runs.
+**Requirements.** Node 22.13+, and a [Claude Code](https://claude.com/claude-code) or [Codex](https://developers.openai.com/codex) subscription you are signed in to — Frizz drives the subscription you already pay for. Frizz brings its own pinned copy of each CLI (downloaded once, on first start), so the version on your PATH is yours to manage and never changes what a thread runs. Any other agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) — OpenCode, Gemini CLI, GitHub Copilot CLI, Cursor's agent, goose, Qwen Code and more — runs too, from your PATH.
 
 Then run it in any directory — a repo, a jj checkout, or a folder of scripts. Frizz has no opinion about version control and does not require Git.
 
@@ -35,14 +35,14 @@ $ npx frizz
 
   FRIZZ v0.4.0  ready in 4.0s
 
-  ➜  Local:    http://127.0.0.1:9393/?project=acme
+  ➜  Local:    http://127.0.0.1:9393/
   ➜  Project:  acme — path/to/acme
   ➜  Logs:     ~/Library/Application Support/Frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
 
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens at `http://127.0.0.1:9393/`, with its prompt box aimed at `acme`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine on one page. Each directory you run it in becomes a **project** on that page, so running `npx frizz` in a second repo registers that project and adds it to the server already running rather than starting another. Runs on macOS, Linux, and Windows.
+A browser tab opens at `http://127.0.0.1:9393/`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine on one page. A directory you run it in becomes a **project** on that page — at once for a repository or anything with a `package.json`, `Cargo.toml` and the like, and after a confirmation for a plain folder — so running `npx frizz` in a second repo adds that project to the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
 Prefer a window of its own to a browser tab? The desktop app is on [GitHub releases](https://github.com/colinhacks/frizz/releases?q=desktop) for all three — unsigned builds, so the first launch asks once. It needs the same Node, and starts or joins the same server.
 
@@ -61,17 +61,22 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 - 🗂️ **A task queue, not a sidebar.** Every agent that comes to rest needing you becomes a card. Work the queue top to bottom instead of polling ten terminals.
 - 📁 **Projects.** Every directory you run it in becomes a project, all on one server and one page: every project down the left with its threads, and every card waiting on you beside them.
 - 🔌 **Headless.** Every thread's agent runs in its own detached background process. Close the tab, quit the browser, ctrl-c the server, reboot — your threads are all still there when you come back, and Frizz reconnects to the ones still running rather than replaying them from disk.
-- 🤖 **Claude Code *and* Codex.** Pick the backend per thread and run both against the same repo at once. Frizz supports Claude Code and Codex subscriptions — your sign-in, your settings, your skills, driven by a copy of each CLI that Frizz pins and provisions itself.
+- 🤖 **Claude Code, Codex, and any ACP agent.** Pick the agent per thread and run several against the same repo at once. Frizz supports Claude Code and Codex subscriptions — your sign-in, your settings, your skills, driven by a copy of each CLI that Frizz pins and provisions itself — and any agent that speaks the Agent Client Protocol.
+- ⏰ **Schedules.** Type "every weekday at 9am triage new issues" into the prompt box and Frizz reads the schedule out of the words as you type. Each run starts a fresh thread that lands in the queue like any other.
+- ⏱️ **Time limits.** Give a thread "2h" or "until 15:30". The agent plans for the best result it can deliver by then, gets reminders as time runs out, and passes a share of the time to its sub-agents. The card counts down.
 - 😴 **Snooze.** Not everything needs an answer now. Park a card for an hour, until tomorrow morning, or until a date you pick — optionally with a follow-up prompt attached, so the thread wakes up already working on what you told it to do next.
-- 🎯 **Goals.** Give a thread a standing goal that Frizz re-sends as a prompt — every time it comes to rest, on a clock you set in minutes, or both. Good for "keep going until CI is green" without you re-asking. A scheduled one reaches the agent even mid-turn, so it can nudge a thread that never stops. Switch it off whenever, or let the agent say it's finished.
+- 🎯 **Goals.** Give a thread a standing goal that Frizz re-sends as a prompt — every time it comes to rest, on a clock you set in minutes, or both. Good for "keep going until CI is green" without you re-asking. A scheduled one reaches the agent even mid-turn, so it can nudge a thread that never stops. Cap it by runs or by time, switch it off whenever, or let the agent say it's finished.
+- 🔗 **Threads that talk.** Every thread has an `@handle`. Mention one in a prompt, and agents read and message each other's threads by handle. `#project` names a project. Spin a new thread off any card, carrying its context with it.
 - 🐙 **GitHub integration.** Browse your repo's issues and pull requests without leaving the composer, and turn a selection of them into threads. Workers can read issues, diffs, and CI on their own.
-- 👀 **Built-in CI and PR watchers.** A worker waiting on a build or a review doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green or a review lands.
-- 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no worktrees, no branches, no dev server, no build integration, no workflow engine to fight with.
+- 👀 **Built-in CI, PR and issue watchers.** A worker waiting on a build, a review or a reporter's reply doesn't hand the thread back to you to be told "keep going." It watches, and picks the work back up when the run goes green, a review lands, or someone comments.
+- 📱 **On your phone.** The page has a phone layout: the queue, snoozed and done threads and schedules in tabs, questions answered with a tap.
+- 🧑‍💻 **Your editor.** [The VS Code extension](packages/vscode/README.md) puts Frizz in a sidebar, sends your selection with a message, lets agents read what you have open, and shows a thread's changes as a multi-file diff.
+- 📝 **No magic.** A thread behaves like a Claude Code session you started yourself. Frizz adds no branches, no dev server, no build integration, no workflow engine to fight with.
 - 🔒 **Local only.** No cloud, no account, no telemetry. The server binds `127.0.0.1` by default and its state lives in your user directory, never in your checkout. To reach it from a phone, press R in its terminal — see [Remote access](docs/remote-access.md).
 
 ### Projects
 
-Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Frizz is one page, at `http://127.0.0.1:9393/`: your projects down the left with the threads in flight under each, and every card waiting on you beside them. There is no separate page per project. A project's snoozed and done threads show as small counts on its row; click the row to list them in place. To work through one project's cards, filter the queue with the **All projects** pill above it, or with **Filter the queue to this project** in the project's ⋯ menu. The filter changes only which cards the queue shows, and the ✕ on the pill clears it. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
+Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Frizz is one page, at `http://127.0.0.1:9393/`: your projects down the left with the threads in flight under each, and every card waiting on you beside them. A project's snoozed and done threads show as small counts on its row; click the row to list them in place, and drag rows to reorder them. The page's title, top-left above the prompt box, switches between **All projects** and a single project. Focused on one, the list, the queue and new threads are all that project's. ⌥↑/⌥↓ step between projects. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
 
 <p align="center">
   <img src="assets/projects.png" alt="Frizz's one page: a prompt box above a list of projects — marketing-site, acme-api, billing-worker — each with its threads beneath it, and beside the list every project's ready cards in one column, the first asking a question with lettered options." width="100%">
@@ -95,11 +100,17 @@ The queue is strict about what earns a card, which is what keeps it a real todo 
 
 Options are lettered and answered in one click, and a worker marks its own recommendation when it has one — so the common case is a single keystroke. There is always a row for writing something else instead.
 
+A question you leave alone doesn't stall the thread: ten minutes after the agent comes to rest on it, Frizz answers with the recommended option. A countdown under the card shows when, and its × turns it off. An option that acts outside your machine — posting, merging, publishing — is never picked for you.
+
 When the answer isn't one thing, the same card takes several: check any combination and add a note.
 
 <p align="center">
   <img src="assets/question-multi.png" alt="A question card titled Select multiple: 'Which of these findings should I fix in this pass?' with three checkbox options, the first two ticked, and a field for adding a note." width="100%">
 </p>
+
+When the agent needs you to *do* something it can't — sign in, approve a prompt, press a button — the card lists the steps and a **Done** button that tells it you finished.
+
+Not ready to start something? Press ⌘/Ctrl-Shift-Enter in the new-thread box, or the button beside Send, to save the prompt as a todo instead. It waits in the queue with no agent behind it until you send it.
 
 ### GitHub
 
@@ -127,6 +138,39 @@ Give a thread a standing goal. Frizz sends it as a prompt every time the agent c
   <img src="assets/goal.png" alt="The goal panel open above a queue card's prompt box: a goal saying to keep going until the test suite is green, sent at every rest and every 30 minutes." width="100%">
 </p>
 
+A goal can stop itself after a number of sends or a span of time, so "check back every 20 minutes for the next two hours" ends on its own.
+
+### Schedules
+
+Write a recurring prompt the way you'd say it — "every Monday at 9am triage new issues", "first weekday of the month bump deps". When the prompt box sees a schedule word, it reads the schedule as you type and shows the rule it understood and when it next runs, before you press Enter. Press × if you didn't mean a schedule. Each run starts a fresh thread in that project. The next one waits in Snoozed, where you can skip it, move it or run it now. Find every schedule from ⌘K.
+
+### Time limits
+
+The stopwatch beside the model in the prompt box gives a thread a limit: `2h`, or a clock time like `15:30`. The agent is told, plans for the best result it can hand over by then, and gets reminders as the limit approaches. A sub-agent it starts gets a share of the time that's left. The card counts down, turns amber near the end and red once over. Its chip extends or removes the limit. Running out never interrupts a turn; you still can.
+
+### Threads and handles
+
+Every thread has a short `@handle`, and a sub-agent is addressed under its thread (`@port-the-parser.cache-keys`). Type `@` in a prompt to mention one, and agents link the threads they name. Agents can read another thread or message it by handle, and wait for its answer. `#slug` names a project the same way.
+
+Spinoff (→ on a card) starts a new thread from the one you're reading. On a Claude thread it forks the parent's session, so the new thread starts out knowing everything the parent did.
+
+### Terminals
+
+Press `t` on a thread, or start a prompt with `$` (`$ npm test`), to open a terminal in the folder its agent works in. The terminal belongs to that thread: it shows on the thread's card and stops when you mark the thread done.
+
+### And more
+
+- **Keyboard first.** `j`/`k` walk the queue, `r` replies, `d` marks done, `s` snoozes, `c` starts a thread, ⌘K jumps anywhere. Press `?` to see every shortcut and rebind any of them.
+- **Pictures, video and files open in Frizz.** An agent can show you screenshots and recordings in a gallery, and file links open in a reader — or in your editor, at the line they name.
+- **Slash commands.** `/` offers Claude Code's own commands and skills, plus prompts of your own, saved under **Settings**, in `~/.agents/commands` or in a project's `.agents/commands`. Your own commands work on every agent.
+- **Project instructions.** Edit a project's `FRIZZ.md` from the agent settings beside the model picker.
+- **Thread info.** A thread's ⋯ menu shows its tokens, turns, requests and cost.
+- **Pin** a thread to keep it at the top of the list. **Delete** threads you no longer need, or let Frizz delete done threads you haven't touched in a while.
+- **Usage.** The quota chip shows how much of your plan is left, and warns when it's nearly out while threads on it are still running. Optionally, new Claude threads switch to Fable when the rest of your usage is nearly gone.
+- **Effort on auto.** By default a quick model reads each prompt and picks the effort for it.
+- **Stays awake.** While an agent is working, or while remote access is on and the machine is plugged in, Frizz keeps it from idle-sleeping. Closing the lid or pressing sleep still works.
+- **Light and dark.** Follows your system, or pick one in **Settings**.
+
 <br/>
 
 <h2 align="center">CLI</h2>
@@ -150,6 +194,10 @@ Options:
                          own port, deleted when this terminal closes; credentials (gh,
                          cloudflared, Claude, Codex, the machine's frizz.sh key) are shared
   --link                 print a fresh single-use access link for the running board
+  --sessions             list the devices signed in to the running board
+  --sign-out <id|all>    sign one device out, or every one of them
+  --status               report the board running for this project: address, pid, version
+  --stop                 stop the board running for this project (running agents keep going)
   --debug                stream the full event feed to the terminal instead of the compact readout
   -h, --help             show this help
 
@@ -196,7 +244,7 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 <details>
 <summary><b>Do I have to use worktrees?</b></summary>
 
-> No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back. Tell your agents what you want in `FRIZZ.md`. If you do run Frizz inside a linked worktree, it isolates that worktree's state from its siblings automatically.
+> No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back. Tell your agents what you want in `FRIZZ.md`. When an agent does make a worktree, Frizz keeps it in one folder (`.frizz/worktrees` by default, set under **Settings**) and refuses any other path. When you mark the thread done, Frizz removes the worktrees that thread made, unless one still holds uncommitted or unmerged work. If you run Frizz inside a linked worktree yourself, it keeps that worktree's state separate from its siblings automatically.
 
 </details>
 
@@ -251,13 +299,18 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 | --- | --- |
 | **Project** | A directory you ran Frizz in. One server holds all of them, and one page shows them all; a thread's address names its project, `/all/<name>/thread/<thread>`. |
 | **Thread** | One effort, start to finish. Not a chat tab and not a branch. The session *is* the thread — there's no sidecar document to keep in sync, and dispatching doesn't write a file into your repo. |
-| **Worker** | The agent driving a thread: a real Claude Code or Codex process, running as *you*, with your credentials and your CLI config. |
-| **Sub-agent** | A helper a worker dispatches for an independent prong of its own task. Frizz binds each one back to its parent, so the fan-out is visible under the parent's card. |
+| **Worker** | The agent driving a thread: a real Claude Code, Codex or ACP agent process, running as *you*, with your credentials and your CLI config. |
+| **Handle** | A thread's short name, `@port-the-parser`. You and the agents use it to mention, read and message a thread. |
+| **Sub-agent** | A helper a worker dispatches for an independent prong of its own task. Frizz binds each one back to its parent, so the fan-out is visible under the parent's card, addressed as `@parent.child`. |
 | **Rested** | An agent that has ended its turn and is waiting on a human. A rested thread isn't idle, it's *your move*. |
 | **The queue** | The single list of threads that need you. A thread only earns a card when it genuinely wants a human. |
 | **Snooze** | Hide a card until later — an hour, tomorrow morning, or a date you pick — optionally with a follow-up prompt attached. |
-| **Goal** | A standing prompt a thread receives on its own — every time it rests, on a clock, or both — until you switch it off or the agent says it's done. |
-| **Scratchpad** | A thread's durable working memory, readable under its **Doc** tab. Where a worker keeps what a summary would otherwise lose: the approach, the alternatives it rejected, the decisions you made and reversed. |
+| **Goal** | A standing prompt a thread receives on its own — every time it rests, on a clock, or both — until you switch it off, it reaches its limit, or the agent says it's done. |
+| **Schedule** | A prompt plus a recurrence, in plain words. Each run starts a fresh thread. |
+| **Time limit** | A deadline on a thread that the agent plans around and the card counts down to. It never cuts a turn off. |
+| **Todo** | A prompt saved as a thread with no agent behind it yet. Sending it starts one. |
+| **Spinoff** | A new thread started from another, carrying its context. |
+| **Scratch directory** | A thread's own folder, `.frizz/threads/<id>/`, where its agent can keep notes and files. Empty unless the agent writes something. |
 | **`FRIZZ.md`** | An optional file at your repo root whose contents are injected into every thread, for when you want agents to follow your repo's own norms. |
 
 <br/>
@@ -266,6 +319,8 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 - [`ARCHITECTURE.md`](ARCHITECTURE.md) — the invariants, layout, and design decisions. Read it before changing anything.
 - [`FRIZZ.md`](FRIZZ.md) — this repo's own worker norms, as a worked example of the optional per-repo prompt.
+- [Remote access](docs/remote-access.md) — reaching Frizz from a phone or another machine.
+- [The VS Code extension](packages/vscode/README.md) and [the desktop app](packages/desktop/README.md).
 
 <br/>
 
