@@ -54,9 +54,11 @@ test("the open-questions note names each question by text and id, and comes back
     { id: "qst_bbbbbbbbbbbb", question: "x".repeat(140) },
   ])!
   assert.doesNotMatch(note, /\n/, "one line, so the stripper can anchor on it")
-  assert.match(note, /^❓ Frizz: 2 questions you registered are now set aside by this message: “Should the settings store use SQLite or a JSON file\?” \(qst_aaaaaaaaaaaa\), “x{99}…” \(qst_bbbbbbbbbbbb\)\./)
-  assert.match(note, /frizz WITHDRAWS every one still set aside when you next come to rest\. `keep` one only if it is directly relevant/)
-  assert.match(openQuestionsNote([{ id: "qst_1", question: "Merge it?" }])!, /^❓ Frizz: 1 question you registered is now set aside by this message: “Merge it\?” \(qst_1\)\./)
+  assert.match(note, /^❓ Frizz: 2 questions you registered are still open: “Should the settings store use SQLite or a JSON file\?” \(qst_aaaaaaaaaaaa\), “x{99}…” \(qst_bbbbbbbbbbbb\)\./)
+  // A typed message leaves them open, and the next rest names each one still needed or withdraws it.
+  assert.match(note, /The message above leaves them open\. When you next rest, name each one you still need under `questions:` in your ```awaiting fence, and withdraw the rest with `unask`\.$/)
+  assert.doesNotMatch(note, /set aside|`keep`/)
+  assert.match(openQuestionsNote([{ id: "qst_1", question: "Merge it?" }])!, /^❓ Frizz: 1 question you registered is still open: “Merge it\?” \(qst_1\)\./)
 
   // ROUND TRIP, as the router appends it — after the gap note, so "the message above" stays the human's.
   const gap = humanGapNote(Date.parse("2026-09-29T15:00:00.000Z"), "2026-09-29T11:00:00.000Z")!
@@ -69,18 +71,21 @@ test("the open-questions note names each question by text and id, and comes back
   // A transcript written under the 2026-09-29 wording keeps coming back off the bubble too.
   const older = "❓ Frizz: 1 question you registered is still open: “Merge it?” (qst_1). If the message above made any of them moot, `unask` exactly those and say so; leave the rest open — they are still the human's to answer, and still your sign-off."
   assert.equal(stripOpenQuestionsNote(`ship it\n\n${older}`), "ship it")
-  // …and the 2026-09-30 one, when a set-aside card stayed answerable indefinitely.
+  // …and the two set-aside wordings: 2026-10-02 (withdrawn at the next rest unless kept)…
+  const oct02 = "❓ Frizz: 1 question you registered is now set aside by this message: “Merge it?” (qst_1). They no longer hold this thread, and frizz WITHDRAWS every one still set aside when you next come to rest. `keep` one only if it is directly relevant to the message above — reworded with `question` if the direction changed — and it rides to the bottom of your next handoff; let the rest go. If the work later needs one of them, ask a new question then."
+  assert.equal(stripOpenQuestionsNote(`ship it\n\n${oct02}`), "ship it")
+  // …and 2026-09-30, when a set-aside card stayed answerable indefinitely.
   const sept30 = "❓ Frizz: 1 question you registered is now set aside by this message: “Merge it?” (qst_1). Their cards stay answerable where they were asked, but no longer hold this thread. If the message above did not move past one, `keep` it — reworded with `question` if the direction changed — and it rides to the bottom of your next handoff; otherwise leave it."
   assert.equal(stripOpenQuestionsNote(`ship it\n\n${sept30}`), "ship it")
 })
 
 // THE DEFAULT (2026-10-05): one deadline reading, shared by the scheduler that acts on it and the board
 // that counts down to it.
-test("questionDefaultAtMs: starts at the later of ask, keep and rest; engagement extends it; the x and a working thread clear it", () => {
-  const q = { asked_at: 1_000, kept_at: null, engaged_at: null, default_off: 0 }
+test("questionDefaultAtMs: starts at the later of ask and rest; engagement extends it; the x and a working thread clear it", () => {
+  const q = { asked_at: 1_000, engaged_at: null, default_off: 0 }
   assert.equal(questionDefaultAtMs(q, undefined), undefined, "no countdown while the thread works")
   assert.equal(questionDefaultAtMs(q, 5_000), 5_000 + QUESTION_DEFAULT_AFTER_MS)
-  assert.equal(questionDefaultAtMs({ ...q, kept_at: 9_000 }, 5_000), 9_000 + QUESTION_DEFAULT_AFTER_MS)
+  assert.equal(questionDefaultAtMs({ ...q, asked_at: 9_000 }, 5_000), 9_000 + QUESTION_DEFAULT_AFTER_MS, "asked after the rest: from the ask")
   const late = 5_000 + QUESTION_DEFAULT_AFTER_MS - 1
   assert.equal(questionDefaultAtMs({ ...q, engaged_at: late }, 5_000), late + QUESTION_DEFAULT_ENGAGED_GRACE_MS)
   assert.equal(questionDefaultAtMs({ ...q, engaged_at: 2_000 }, 5_000), 5_000 + QUESTION_DEFAULT_AFTER_MS, "an early touch never shortens it")

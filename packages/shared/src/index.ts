@@ -3183,16 +3183,6 @@ export const RegisteredQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
-  /** When the worker last KEPT this question current (`keep`), re-anchoring it to its newest handoff —
-   *  optionally with new wording. Absent on a question never kept. */
-  keptAt: z.string().optional(),
-  /** SET ASIDE: the human has TYPED to the worker since this was asked (or last kept), without answering
-   *  it (questionRepliedPast). A set-aside question is still OPEN for the turn that message started — its
-   *  card stays answerable where it was — but it no longer holds the thread: it does not block `done`,
-   *  refuse a park, sign off a rest or queue the thread, and its card stops riding to the newest handoff.
-   *  The worker opts one back in with `keep`; at its next rest, frizz withdraws every one it did not
-   *  (scheduler evalSetAsideQuestions). Absent means it is current. */
-  repliedPast: z.literal(true).optional(),
   /** When Frizz will take the recommended option for the human (questionDefaultAtMs). Absent when it
    *  will not: the thread is still working, the question has nothing to take, it was typed past, or the
    *  human turned the default off with the countdown's ×. The card counts down to it. */
@@ -3204,45 +3194,18 @@ export const RegisteredQuestionView = z.object({
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
-/** HAS THE HUMAN TYPED TO THE WORKER SINCE THIS WAS ASKED — OR, IF THE WORKER KEPT IT, SINCE IT WAS LAST
- *  KEPT? True when their newest TYPED turn landed after that (`lastHumanAt` is the tailer's clock for
- *  exactly that; frizz's own wakes never move it, and neither does a delivery of answers). An unknown
- *  clock reads as "no". True SETS THE QUESTION ASIDE (see RegisteredQuestionView.repliedPast).
+/** HAS THE HUMAN TYPED TO THE WORKER SINCE THIS WAS ASKED? True when their newest TYPED turn landed
+ *  after the ask (`lastHumanAt` is the tailer's clock for exactly that; frizz's own wakes never move it,
+ *  and neither does a delivery of answers). An unknown clock reads as "no".
  *
- *  OPT-IN SINCE 2026-09-30, after two reversals. 2026-09-28 released a typed-past question AND dropped it
- *  from the queue card, so a side question lost seven the human still meant to answer. 2026-09-29 made
- *  every open question stay owed and ride to the newest handoff until the worker `unask`ed it — and the
- *  card then sat under handoffs about something else, asking a question the conversation had moved past
- *  (David 2026-09-30: "it often leads to weird scenarios like this where the questions feel out of
- *  date"). Since then the card stays where it was asked, and the worker opts a question back in — `keep`,
- *  with new wording when the direction changed — when it is directly relevant to the message
- *  (openQuestionsNote tells it which are open). One it does not keep is WITHDRAWN at the worker's next
- *  rest (2026-10-02, scheduler evalSetAsideQuestions: "currently questions are far too persistent").
- *
- *  A DANGER QUESTION NEVER READS AS WRITTEN PAST: `danger` is the irreversible call that must stay the
- *  human's, and nothing about the human typing makes it less so. */
-export function questionRepliedPast(q: { asked_at: number; kept_at?: number | null; spec: string }, lastHumanAt: string | undefined): boolean {
+ *  It changes nothing about the question's lifecycle: a question stays open, and owed, until the human
+ *  answers or dismisses it or the worker withdraws it with `unask`. The one reader is Frizz's default
+ *  answer (scheduler evalQuestionDefaults, and the board's countdown), which never takes an option on a
+ *  question the human has typed past: that one waits for the human, or for the worker's `unask`. */
+export function questionRepliedPast(q: { asked_at: number }, lastHumanAt: string | undefined): boolean {
   if (!lastHumanAt) return false
   const human = Date.parse(lastHumanAt)
-  const current = Math.max(q.asked_at, q.kept_at ?? -Infinity)
-  if (!(Number.isFinite(human) && Number.isFinite(current) && human > current)) return false
-  return !questionSpecIsDanger(q.spec)
-}
-
-/** The stored spec's top-level `danger`, read without validating the rest — a spec that does not parse
- *  is not a danger question, the same answer the card gives it. */
-function questionSpecIsDanger(spec: string): boolean {
-  try {
-    return (JSON.parse(spec) as { danger?: unknown } | null)?.danger === true
-  } catch {
-    return false
-  }
-}
-
-/** The open questions still HOLDING their thread: every open one the human has not typed past (see
- *  questionRepliedPast). The one name every "is this thread asking?" reading goes through. */
-export function questionsOwed<Q extends { repliedPast?: true }>(questions: readonly Q[] | undefined): Q[] {
-  return questions ? questions.filter((q) => !q.repliedPast) : []
+  return Number.isFinite(human) && Number.isFinite(q.asked_at) && human > q.asked_at
 }
 
 /** HOW LONG A RESTED THREAD WAITS ON AN UNANSWERED QUESTION BEFORE FRIZZ TAKES THE WORKER'S RECOMMENDED
@@ -3250,7 +3213,7 @@ export function questionsOwed<Q extends { repliedPast?: true }>(questions: reado
  *  wave-Z design thread sat for hours on a "narrow the error rule?" card whose recommended option the
  *  maintainer then picked anyway (maintainer: "it should have a timeout after which it selects
  *  recommended ... Maybe 10 minutes?"). The clock starts when the card can first be seen — the later of
- *  the ask, a `keep`, and the rest that put it in the queue — so a question asked mid-turn does not
+ *  the ask and the rest that put it in the queue — so a question asked mid-turn does not
  *  expire before the thread has rested. Only questions with something to take qualify; see
  *  `recommendedDefaultAnswer`. */
 export const QUESTION_DEFAULT_AFTER_MS = 10 * 60_000
@@ -3266,11 +3229,11 @@ export const QUESTION_DEFAULT_ENGAGED_GRACE_MS = 2 * 60_000
  *  a question the human turned the default off on. Callers check `recommendedDefaultAnswer` and
  *  `questionRepliedPast` themselves. */
 export function questionDefaultAtMs(
-  q: { asked_at: number; kept_at?: number | null; engaged_at?: number | null; default_off?: number | null },
+  q: { asked_at: number; engaged_at?: number | null; default_off?: number | null },
   restedMs: number | undefined,
 ): number | undefined {
   if (q.default_off || restedMs === undefined || !Number.isFinite(restedMs)) return undefined
-  const base = Math.max(q.asked_at, q.kept_at ?? 0, restedMs) + QUESTION_DEFAULT_AFTER_MS
+  const base = Math.max(q.asked_at, restedMs) + QUESTION_DEFAULT_AFTER_MS
   return q.engaged_at != null ? Math.max(base, q.engaged_at + QUESTION_DEFAULT_ENGAGED_GRACE_MS) : base
 }
 
@@ -3333,21 +3296,6 @@ export function recommendedDefaultAnswer(questionId: string, spec: AskedQuestion
   }
   return build(spec, true)
 }
-
-export const KeepQuestionInput = z.object({
-  slug: ThreadSlug,
-  id: z.string().min(1).max(64),
-  /** New wording for the question, replacing the stored one — for when the conversation moved and the
-   *  ask should move with it. Omitted keeps the question as asked. */
-  question: AskedQuestionSchema.optional(),
-}).strict()
-export type KeepQuestionInput = z.infer<typeof KeepQuestionInput>
-
-export const KeepQuestionResult = z.object({
-  kept: z.boolean(),
-  open: z.array(RegisteredQuestionView),
-}).strict()
-export type KeepQuestionResult = z.infer<typeof KeepQuestionResult>
 
 export const AskResult = z.object({
   registered: z.array(RegisteredQuestionView),
@@ -3440,9 +3388,6 @@ export const SettledQuestionView = z.object({
   id: z.string(),
   spec: AskedQuestionSchema,
   askedAt: z.string(),
-  /** When the worker last `keep`-ed it — a kept card stood at the rest that kept it, not the one that asked
-   *  it, so the answered card stays there too. */
-  keptAt: z.string().optional(),
   /** When the human sent the answer — what decides which rest the card stood at when it was answered. */
   settledAt: z.string(),
   answer: QuestionAnswerSchema,
@@ -4621,9 +4566,8 @@ export function needsAction(t: ThreadView): boolean {
   // channel — the server queues it once at rest (deriveNeedsYou's openQuestions), and this predicate
   // must agree so the mobile asks-first ordering and the attention sort count it. Same rest-gate as the
   // fence net above: the worker keeps working after registering, and the card lands at its rest. Every
-  // open one: since 2026-09-29 a typed message past a question no longer sets it aside — the worker
-  // `unask`s what the message made moot — so a question stays the human's until it is settled.
-  if (questionsOwed(t.questions).length > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
+  // open one: a question stays the human's until it is answered, dismissed or withdrawn.
+  if ((t.questions?.length ?? 0) > 0 && t.runtime !== "running" && t.runtime !== "spawning") return true
   // CRASH / STALL net (replaces the old `unread`-gated clause — `unread` no longer drives anything).
   // A thread whose status still claims WORK IN FLIGHT (active or planning) but whose backing agent
   // PROCESS is gone — `exited` (session row present, worker process dead) or `none` (registry lost the row)
@@ -5999,18 +5943,17 @@ export function stripHumanGapNote(text: string): string {
   return text.replace(HUMAN_GAP_NOTE_TAIL, "")
 }
 
-/** A TYPED MESSAGE REACHING A WORKER THAT HAS QUESTIONS OPEN, with frizz's note on what just happened to
- *  them — appended to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
+/** A TYPED MESSAGE REACHING A WORKER THAT HAS QUESTIONS OPEN, with frizz's note naming them — appended
+ *  to the copy handed to the worker, exactly as humanGapNote is, and to that copy ONLY.
  *
- *  THE MESSAGE SETS THEM ASIDE, AND THE WORKER OPTS BACK IN (2026-09-30, see questionRepliedPast). The
- *  cards stay answerable only until the worker's next rest, when frizz withdraws every one it did not
- *  `keep` (scheduler evalSetAsideQuestions, 2026-10-02); the worker reading the message keeps exactly
- *  those directly relevant to it — reworded if the message changed the options. Frizz cannot tell a
- *  pivot from a side question; the worker can.
+ *  THE MESSAGE CHANGES NOTHING ABOUT THEM: each stays open until the human answers or dismisses it or the
+ *  worker withdraws it. Frizz cannot tell a pivot from a side question; the worker can, so the note tells
+ *  it that its next rest names each one it still needs under `questions:` in its awaiting fence and
+ *  `unask`s the rest — the rule the park-integrity check and the carried-questions nudge then hold it to.
  *
- *  Each question is named by its text AND its id, because `keep` takes the id and the worker never
- *  chose one. Folded to one line and clipped, so the note stays ONE line and its stripper can anchor on
- *  it. Undefined with nothing current. */
+ *  Each question is named by its text AND its id, because `questions:` and `unask` take the id and the
+ *  worker never chose one. Folded to one line and clipped, so the note stays ONE line and its stripper
+ *  can anchor on it. Undefined with nothing open. */
 export function openQuestionsNote(open: readonly { id: string; question: string }[]): string | undefined {
   if (open.length === 0) return undefined
   const named = open.map((q) => {
@@ -6018,17 +5961,22 @@ export function openQuestionsNote(open: readonly { id: string; question: string 
     return `“${text.length > 100 ? `${text.slice(0, 99)}…` : text}” (${q.id})`
   })
   const count = open.length === 1 ? "1 question you registered is" : `${open.length} questions you registered are`
-  return `❓ Frizz: ${count} now set aside by this message: ${named.join(", ")}.${OPEN_QUESTIONS_NOTE_TAIL}`
+  return `❓ Frizz: ${count} still open: ${named.join(", ")}.${OPEN_QUESTIONS_NOTE_TAIL}`
 }
 
 const OPEN_QUESTIONS_NOTE_TAIL =
+  " The message above leaves them open. When you next rest, name each one you still need under " +
+  "`questions:` in your ```awaiting fence, and withdraw the rest with `unask`."
+
+// The note's earlier tails, when a typed message set questions aside and the worker opted one back in
+// with `keep` (2026-10-02, then 2026-09-30). Still stripped, so a transcript written then does not start
+// showing it in the human's bubble.
+const OPEN_QUESTIONS_NOTE_TAIL_2026_10_02 =
   " They no longer hold this thread, and frizz WITHDRAWS every one still set aside when you next come to " +
   "rest. `keep` one only if it is directly relevant to the message above — reworded with `question` if " +
   "the direction changed — and it rides to the bottom of your next handoff; let the rest go. If the work " +
   "later needs one of them, ask a new question then."
 
-// The note's tail from 2026-09-30, when a set-aside card stayed answerable in the history indefinitely.
-// Still stripped, so a transcript written then does not start showing it in the human's bubble.
 const OPEN_QUESTIONS_NOTE_TAIL_2026_09_30 =
   " Their cards stay answerable where they were asked, but no longer hold this thread. If the message " +
   "above did not move past one, `keep` it — reworded with `question` if the direction changed — and it " +
@@ -6045,7 +5993,7 @@ const OPEN_QUESTIONS_NOTE_TAIL_2026_09_29 =
 // its own and to the note's fixed opening AND closing words, so a message that quotes one keeps it.
 const escapeRegExp = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
 const OPEN_QUESTIONS_NOTE_LINE = new RegExp(
-  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) (?:still open|now set aside by this message): [^\\n]*(?:${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_30)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_29)})[ \\t]*$`,
+  `\\n+❓ Frizz: (?:1 question you registered is|\\d+ questions you registered are) (?:still open|now set aside by this message): [^\\n]*(?:${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_10_02)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_30)}|${escapeRegExp(OPEN_QUESTIONS_NOTE_TAIL_2026_09_29)})[ \\t]*$`,
 )
 
 /** Display projection: the human's message without the open-questions note frizz appended for the

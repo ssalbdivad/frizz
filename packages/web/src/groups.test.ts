@@ -75,15 +75,11 @@ test("needsAction: a REGISTERED question at rest cards; mid-turn it does not (th
   assert.equal(needsAction(thread({ questions: regQuestion, runtime: "running" })), false)
 })
 
-// A typed message past a question SETS IT ASIDE (shared questionRepliedPast, 2026-09-30): the card stays
-// answerable in the thread's history, but it no longer asks — neither the queue rule nor the rail mark
-// counts it, unless the worker `keep`s it.
-test("needsAction / sessionIndicatorKind: a question the human typed past no longer asks", () => {
-  const passed = regQuestion.map((q) => ({ ...q, repliedPast: true as const }))
-  assert.equal(needsAction(thread({ questions: passed, runtime: "turn-idle" })), false)
-  assert.notEqual(sessionIndicatorKind(thread({ questions: passed, runtime: "turn-idle" })), "needs-input")
-  // Negative control: the same question, current, asks.
+// A typed message past a question changes nothing about it: every open question asks, in the queue rule
+// and the rail mark alike, until it is answered, dismissed or withdrawn.
+test("needsAction / sessionIndicatorKind: every open question asks", () => {
   assert.equal(needsAction(thread({ questions: regQuestion, runtime: "turn-idle" })), true)
+  assert.equal(sessionIndicatorKind(thread({ questions: regQuestion, runtime: "turn-idle" })), "needs-input")
 })
 
 test("needsAction: `unread` no longer drives carding (unread is dead)", () => {

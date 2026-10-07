@@ -676,8 +676,6 @@ export interface ThreadQuestionRow {
   delivery_id: string | null
   asked_at: number
   settled_at: number | null
-  /** When the worker last `keep`-ed it current; null if never. See questionRepliedPast. */
-  kept_at: number | null
   /** When the human last picked, toggled or typed on its card — holds its default off for a grace
    *  (questionDefaultAtMs). Null if never; absent on a row read before 2026-10-05. */
   engaged_at?: number | null
@@ -1012,9 +1010,6 @@ export interface Storage extends ScheduleStore {
   markSettlementDelivered(id: string): boolean
   /** The worker's own `unask`, thread-scoped so one thread can never withdraw another's question. */
   withdrawThreadQuestion(slug: string, id: string, atMs: number): boolean
-  /** The worker KEEPS an open question current: stamps `kept_at`, and replaces its spec when given one.
-   *  Slug-scoped like the withdrawal, so one thread can never touch another's question. */
-  keepThreadQuestion(slug: string, id: string, spec: string | undefined, atMs: number): boolean
   /** The human's x. Distinct from `withdrawn` on purpose: the two states answer different questions
    *  about what happened, and the worker is told which. */
   dismissThreadQuestion(id: string, atMs: number): boolean
@@ -1570,9 +1565,6 @@ export const STORAGE_SCHEMA = `
       delivery_id TEXT,
       asked_at    INTEGER NOT NULL,
       settled_at  INTEGER,
-      -- When the worker last KEPT the question current (keep) after the human typed past it — what
-      -- questionRepliedPast measures the human's newest message against, instead of asked_at.
-      kept_at     INTEGER,
       -- When the human last touched its card, and whether they turned its default off (2026-10-05) —
       -- see questionDefaultAtMs.
       engaged_at  INTEGER,
@@ -1805,9 +1797,6 @@ export function ensureStorageSchema(db: Database): void {
     ["thread_spinoff", "child_project_id TEXT"],
     // `thread_spinoff.forked` (2026-09-30): the child is a fork of the parent's session (ThreadSpinoffRow).
     ["thread_spinoff", "forked INTEGER NOT NULL DEFAULT 0"],
-    // `thread_question.kept_at` (2026-09-30): a typed message sets open questions aside, and the worker
-    // opts one back in with `keep`, which stamps this.
-    ["thread_question", "kept_at INTEGER"],
     // `thread_question.engaged_at` / `default_off` (2026-10-05): an unanswered question takes its
     // recommended option after a while at rest, held off while the human works on its card and turned
     // off by the countdown's ×.
@@ -1847,6 +1836,9 @@ export function ensureStorageSchema(db: Database): void {
   mergeLeftoverCommandThreads(db)
   db.exec("UPDATE thread_terminal SET state = 'archived' WHERE parent_slug IS NULL AND state <> 'archived'")
   dropColumnIfPresent(db, "thread_terminal", "queued_at")
+  // `thread_question.kept_at` was the worker's `keep` stamp, for a question a typed message had set aside;
+  // a typed message leaves a question open now, so nothing writes or reads it.
+  dropColumnIfPresent(db, "thread_question", "kept_at")
   // THE 2026-09-30 SPINOFF-CHILD SWEEP. Until then forgetting a thread left the spinoff edge naming it as
   // a CHILD (forgetOwnedRow now drops it), and that edge would be inherited by the next thread dispatched
   // under the freed slug. Drop any such edge a forget already left behind: a stamped child with no
@@ -2686,10 +2678,6 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const withdrawThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'withdrawn', settled_at = ?
     WHERE project_id = @project_id AND id = ? AND thread_slug = ? AND state = 'open'
-  `)
-  const keepThreadQuestionStmt = scope.prepare(`
-    UPDATE thread_question SET kept_at = @atMs, spec = COALESCE(@spec, spec)
-    WHERE project_id = @project_id AND id = @id AND thread_slug = @slug AND state = 'open'
   `)
   const dismissThreadQuestionStmt = scope.prepare(`
     UPDATE thread_question SET state = 'dismissed', settled_at = ?
@@ -3539,7 +3527,6 @@ export function createStorage(source: string | Database, projectId: string): Sto
     markSettlementsDeliveredBy: (deliveryId) => Number(markSettlementsDeliveredByStmt.run(deliveryId).changes),
     markSettlementDelivered: (id) => markSettlementDeliveredStmt.run(id).changes === 1,
     withdrawThreadQuestion: (slug, id, atMs) => withdrawThreadQuestionStmt.run(atMs, id, slug).changes === 1,
-    keepThreadQuestion: (slug, id, spec, atMs) => keepThreadQuestionStmt.run({ slug, id, spec: spec ?? null, atMs }).changes === 1,
     dismissThreadQuestion: (id, atMs) => dismissThreadQuestionStmt.run(atMs, id).changes === 1,
     holdQuestionDefault: (slug, id, action, atMs) =>
       (action === "cancel" ? cancelQuestionDefaultStmt.run(slug, id) : engageThreadQuestionStmt.run(atMs, slug, id)).changes === 1,

@@ -135,8 +135,6 @@ import {
   AskResult,
   UnaskInput,
   UnaskResult,
-  KeepQuestionInput,
-  KeepQuestionResult,
   AnswerQuestionsInput,
   AnswerQuestionsResult,
   DismissQuestionsInput,
@@ -252,7 +250,7 @@ import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces, reorderWorkspaces
 import { expandHomeFolder, homeFolderProblem } from "./home-folder.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { questionRepliedPast, ProjectCard, ProjectQueue, ProjectRailCounts, activeBandThread, boardAskThread, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread, backgroundSummariesOn } from "@frizz/shared"
+import { ProjectCard, ProjectQueue, ProjectRailCounts, activeBandThread, boardAskThread, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread, backgroundSummariesOn } from "@frizz/shared"
 import { EditorComposeInputSchema, EditorReviewTargetSchema, EditorSnapshotSchema, type EditorKind, type EditorReviewTarget, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
@@ -1763,33 +1761,20 @@ export function createRouter(ctx: AppContext) {
   }
 
   // This thread's OPEN questions, in the shape the worker's read-back, the board and the card all use.
-  // Each carries `repliedPast` exactly as the board's does: the human has typed past it, so it is set
-  // aside — still answerable where it was asked, holding nothing — until the worker `keep`s it, or its
-  // next rest withdraws it (shared questionRepliedPast, scheduler evalSetAsideQuestions).
   function openQuestionViews(slug: string): RegisteredQuestionView[] {
     const out: RegisteredQuestionView[] = []
-    const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
       const spec = parseQuestionSpec(q.spec)
       if (!spec) continue
-      out.push({
-        id: q.id,
-        spec,
-        askedAt: new Date(q.asked_at).toISOString(),
-        ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
-        ...(questionRepliedPast(q, lastHumanAt) ? { repliedPast: true as const } : {}),
-      })
+      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
     }
     return out
   }
 
-  /** The open questions still HOLDING this thread — the ones the human has not typed past since they
-   *  were asked or kept (shared questionRepliedPast). What `done` refuses on and what a typed message
-   *  sets aside. */
+  /** The open questions HOLDING this thread — every open one, until the human answers or dismisses it or
+   *  the worker withdraws it. What `done` refuses on and what the note on a typed message names. */
   function heldQuestions(slug: string): { id: string; question: string }[] {
-    const lastHumanAt = ctx.tailer.get(slug)?.lastHumanAt
     return ctx.storage.listThreadQuestions(slug, { openOnly: true }).flatMap((q) => {
-      if (questionRepliedPast(q, lastHumanAt)) return []
       const spec = parseQuestionSpec(q.spec)
       return spec ? [{ id: q.id, question: spec.question }] : []
     })
@@ -1797,12 +1782,11 @@ export function createRouter(ctx: AppContext) {
 
   /** The question on this thread that `q` would re-ask after a PIVOT, if any, matched on its question
    *  text with case, punctuation and spacing folded away. Two pivots count, and both are somebody's
-   *  explicit act — never a timestamp (a typed reply alone releases nothing since 2026-09-29, see shared
-   *  questionRepliedPast):
+   *  explicit act — never a timestamp (a typed reply alone releases nothing):
    *
    *    · the HUMAN DISMISSED it — the × says "decide it yourself", and the answer row says "do not re-ask";
    *    · the WORKER WITHDREW it after the human's newest TYPED turn — the pivot the worker itself declared
-   *      on reading that message (openQuestionsNote asks it to). A withdrawal from before that turn was
+   *      on reading that message (openQuestionsNote tells it to `unask` what it no longer needs). A withdrawal from before that turn was
    *      the worker's own call about its own work, and the human has spoken since, so it may ask again.
    *
    *  That second one is what stops the failure d76c845d refused in the first place: a worker `unask`ing
@@ -2437,7 +2421,6 @@ export function createRouter(ctx: AppContext) {
             id: q.id,
             spec,
             askedAt: new Date(q.asked_at).toISOString(),
-            ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
             settledAt: new Date(q.settled_at).toISOString(),
             answer,
           })
@@ -2965,13 +2948,12 @@ export function createRouter(ctx: AppContext) {
         // carries the note, and the note names frizz as its author because the message it rides on is
         // not frizz's.
         const gapNote = humanGapNote(Date.now(), ctx.tailer.get(input.slug)?.lastAssistantAt)
-        // …AND THE QUESTIONS THIS MESSAGE SETS ASIDE, the same way and for the same reader. A typed
-        // message sets every current question aside (shared questionRepliedPast, 2026-09-30): its card
-        // stays answerable until the worker's next rest withdraws it (2026-10-02), and the worker — which
-        // reads the message, as frizz cannot — opts back in with `keep` the ones directly relevant to it. So it is told, here, which
-        // ones and by what id. Read BEFORE the message moves `lastHumanAt`, so this names the questions
-        // that were current up to now, not ones an earlier message already set aside. Appended AFTER the
-        // gap note, so that note's "the message above" still means the human's words.
+        // …AND THE QUESTIONS STILL OPEN, the same way and for the same reader. A typed message changes
+        // nothing about them: each stays open until it is answered, dismissed or withdrawn. The worker —
+        // which reads the message, as frizz cannot — decides which it still needs, so it is told, here,
+        // which are open and by what id, and that its next rest names the ones it needs under
+        // `questions:` and `unask`s the rest. Appended AFTER the gap note, so that note's "the message
+        // above" still means the human's words.
         const questionsNote = openQuestionsNote(heldQuestions(input.slug))
         const riders = [gapNote, questionsNote].filter((note): note is string => note !== undefined)
         const messageForWorker = riders.length > 0 ? `${input.message}\n\n${riders.join("\n\n")}` : input.message
@@ -4426,10 +4408,10 @@ export function createRouter(ctx: AppContext) {
         // free-text box, silently).
         const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
         if (faults.length > 0) throw new Error(faults.join("\n"))
-        // A PIVOT STICKS: a question set aside is never asked again (David 2026-09-28, after a worker
+        // A PIVOT STICKS: a question dropped is never asked again (David 2026-09-28, after a worker
         // `unask`ed both of its stale cards and re-registered them word for word under the human's
-        // unrelated next request). "Set aside" is an act since 2026-09-29 — the human's ×, or the worker's
-        // own `unask` after the human's newest typed message — never a timestamp (see pivotTwin).
+        // unrelated next request). Dropping is an act — the human's ×, or the worker's own `unask` after
+        // the human's newest typed message — never a timestamp (see pivotTwin).
         const reasked = input.questions.flatMap((q) => {
           const prior = pivotTwin(input.slug, q)
           if (!prior) return []
@@ -4442,18 +4424,6 @@ export function createRouter(ctx: AppContext) {
             "decide it yourself — do what the human's newest message asks — and say which way you went in " +
             "your write-up.",
           )
-        }
-        // A QUESTION THE HUMAN TYPED PAST IS STILL OPEN, so asking it again would put two cards up for one
-        // decision. `keep` is the verb that brings it forward (and rewords it).
-        const lastHumanAt = ctx.tailer.get(input.slug)?.lastHumanAt
-        const fold = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, " ").trim()
-        const setAside = ctx.storage.listThreadQuestions(input.slug, { openOnly: true }).filter((row) => questionRepliedPast(row, lastHumanAt))
-        const duplicates = input.questions.flatMap((q) => {
-          const twin = setAside.find((row) => fold(parseQuestionSpec(row.spec)?.question ?? "") === fold(q.question))
-          return twin ? [`"${q.question.slice(0, 120)}" is still open as ${twin.id}, set aside by the human's newest message.`] : []
-        })
-        if (duplicates.length > 0) {
-          throw new Error(`${duplicates.join("\n")}\n\nTo bring it forward, \`keep\` it by id — with \`question\` to reword it.`)
         }
         // NO CAP ON THE OPEN SET. Twelve was refused here until 2026-09-03 ("a worker holding more than
         // this is refusing to decide"); the maintainer had it removed with the tool's other count caps.
@@ -4478,27 +4448,6 @@ export function createRouter(ctx: AppContext) {
         const withdrawn = ctx.storage.withdrawThreadQuestion(input.slug, input.id, Date.now())
         if (withdrawn) ctx.board.refresh()
         return { withdrawn, open: openQuestionViews(input.slug) }
-      },
-    }),
-
-    // THE WORKER OPTS A QUESTION BACK IN. A typed message sets every open question aside (shared
-    // questionRepliedPast); `keep` stamps `kept_at`, so the human's message no longer postdates it, and
-    // the card rides to the bottom of the worker's next handoff again — reworded when `question` is given.
-    keepQuestion: mutation({
-      input: KeepQuestionInput,
-      output: KeepQuestionResult,
-      handler: async ({ input }) => {
-        if (input.question) {
-          const faults = askedQuestionFaults(input.question)
-          if (faults.length > 0) throw new Error(faults.join("\n"))
-        }
-        const kept = ctx.storage.keepThreadQuestion(input.slug, input.id, input.question ? JSON.stringify(input.question) : undefined, Date.now())
-        if (kept) {
-          // A question trumps a done — see `ask`.
-          ctx.storage.clearThreadDone(input.slug)
-          ctx.board.refresh()
-        }
-        return { kept, open: openQuestionViews(input.slug) }
       },
     }),
 
@@ -4585,9 +4534,6 @@ export function createRouter(ctx: AppContext) {
         // registered does not block this: frizz cannot tell a build from a dev server, only the worker
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
-        //
-        // A QUESTION THE HUMAN TYPED PAST DOES NOT BLOCK (2026-09-30, shared questionRepliedPast): it is
-        // set aside, and withdrawn at the worker's next rest, unless the worker `keep`s it.
         const blockingQuestions = heldQuestions(input.slug)
         const blockingWatches = [
           ...armedOwnWatchViews(input.slug).map((w) => ({

@@ -95,11 +95,8 @@ export function questionClaims(messages: readonly AnchorMessage[]): Map<string, 
  *  gathers them into one group at its own rest the same way.
  *
  *  `claims: false` reads the ASKING rest alone, ignoring any later fence — the reading lib/questionShadow's
- *  fold needs, because a fence restating a question must fold from the rest that asked it onward.
- *
- *  A KEPT question (`keptAt`, the worker's `keep` tool in this fork) counts as asked at the rest that kept
- *  it — the same move a `questions:` claim makes, made by a tool call instead of a fence line. */
-export function questionsByAnchor<Q extends { askedAt: string; keptAt?: string; id?: string }>(
+ *  fold needs, because a fence restating a question must fold from the rest that asked it onward. */
+export function questionsByAnchor<Q extends { askedAt: string; id?: string }>(
   messages: readonly AnchorMessage[],
   questions: readonly Q[],
   opts: { claims?: boolean } = {},
@@ -107,7 +104,7 @@ export function questionsByAnchor<Q extends { askedAt: string; keptAt?: string; 
   const byAnchor = new Map<number, Q[]>()
   const claims = opts.claims === false || questions.length === 0 ? undefined : questionClaims(messages)
   for (const q of questions) {
-    let anchor = questionAnchorIndex(messages, q.keptAt && Date.parse(q.keptAt) > Date.parse(q.askedAt) ? q.keptAt : q.askedAt)
+    let anchor = questionAnchorIndex(messages, q.askedAt)
     const claimedAt = q.id ? claims?.get(q.id.toLowerCase()) : undefined
     if (claimedAt !== undefined && claimedAt > anchor) anchor = restEnd(messages, claimedAt)
     const group = byAnchor.get(anchor)

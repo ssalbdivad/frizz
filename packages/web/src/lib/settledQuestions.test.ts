@@ -45,23 +45,6 @@ test("a question a later fence claimed and the human then answered stays at the 
   assert.deepEqual([...anchored.keys()], [3])
 })
 
-test("a question the worker KEPT after the human typed past it stays at the rest that kept it", () => {
-  // The worker's `keep` re-asks it at its next rest — the open card moved there, so the answered card
-  // must not snap back above the human's message (David 2026-10-06: "these responses are appearing
-  // out of order- I typed before I answered the question").
-  const messages = [
-    msg("user", "2026-09-25T10:00:00Z"),
-    msg("assistant", "2026-09-25T10:02:00Z"), // asked here
-    msg("user", "2026-09-25T10:03:00Z"), // typed past it
-    msg("assistant", "2026-09-25T10:04:00Z"), // kept mid-turn
-    msg("assistant", "2026-09-25T10:05:00Z"), // the handoff the card is drawn under
-    msg("user", "2026-09-25T10:09:00Z"), // the answer
-  ]
-  const kept = { ...settled("qst_a", "2026-09-25T10:01:30Z", "2026-09-25T10:08:00Z"), keptAt: "2026-09-25T10:04:30Z" }
-  const { anchored } = settledQuestionPositions(messages, [kept])
-  assert.deepEqual([...anchored.keys()], [4])
-})
-
 test("a marker in the answered rest places the settled card inside that message", () => {
   const messages = [
     msg("user", "2026-09-25T10:00:00Z"),

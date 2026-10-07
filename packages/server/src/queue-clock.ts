@@ -1,4 +1,4 @@
-import { questionsOwed, type ThreadView } from "@frizz/shared"
+import type { ThreadView } from "@frizz/shared"
 
 // THE QUEUE CLOCK — when each thread ENTERED the queue, which is what the queue is ordered by.
 //
@@ -157,9 +157,9 @@ function withhold(t: ThreadView): void {
   t.queueSettling = true
 }
 
-// The registered questions holding a thread — open, and not set aside by a typed message.
+// The registered questions a thread has open.
 function openQuestions(t: ThreadView): Set<string> {
-  return new Set(questionsOwed(t.questions).map((q) => q.id))
+  return new Set((t.questions ?? []).map((q) => q.id))
 }
 
 function allStillOpen(ids: ReadonlySet<string>, open: ReadonlySet<string>): boolean {

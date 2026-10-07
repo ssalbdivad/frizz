@@ -83,12 +83,8 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep", "editor", "schedule", "deadline"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "editor", "schedule", "deadline"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
-    // `keep` takes the id, and optionally a whole reworded question in `ask`'s own tree shape.
-    const keepTool = list.result.tools.find((t: { name: string }) => t.name === "keep")
-    assert.deepEqual(keepTool.inputSchema.required, ["id"])
-    assert.deepEqual(keepTool.inputSchema.properties.question.required, ["question", "kind"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
       assert.ok(list.result.tools[0].inputSchema.required.includes(required))
@@ -182,10 +178,10 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 21)
+    assert.equal(list.result.tools.length, 20)
     // `deadline` — the thread's time limit. `action` alone is required and there is NO thread parameter:
     // the slug comes from the env, so a worker reads and sets only its own.
-    const deadlineTool = list.result.tools[20]
+    const deadlineTool = list.result.tools[19]
     assert.equal(deadlineTool.name, "deadline")
     assert.deepEqual(deadlineTool.inputSchema.required, ["action"])
     assert.deepEqual(deadlineTool.inputSchema.properties.action.enum, ["read", "set", "extend", "clear"])
@@ -194,7 +190,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `schedule` — `action` alone is required, like its action-switch siblings, and NO thread parameter:
     // the caller (who proposed, who skipped) comes from the env. The echo instruction is the point of
     // the description: the human catches a mistranslated time only if the worker relays it.
-    const scheduleTool = list.result.tools[19]
+    const scheduleTool = list.result.tools[18]
     assert.equal(scheduleTool.name, "schedule")
     assert.deepEqual(scheduleTool.inputSchema.required, ["action"])
     assert.deepEqual(scheduleTool.inputSchema.properties.action.enum, ["create", "dry_run", "update", "list", "pause", "skip_next", "move_next"])
@@ -268,7 +264,7 @@ test("`editor` is listed only while an editor has the project open, and the list
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const first = names(await rpc.next(2))
     assert.ok(!first.includes("editor"), "no editor has the project open, so the tool is not listed")
-    assert.equal(first.length, 20)
+    assert.equal(first.length, 19)
     // Asked of OUR project, naming the calling thread (a window on its own checkout counts).
     assert.deepEqual(asked[0], { url: "/_frizz/proj/rpc/workerCapabilities", body: { slug: "caller" } })
 
@@ -317,7 +313,7 @@ test("a server that cannot report capabilities keeps every tool listed", async (
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
     assert.ok(list.result.tools.some((t: { name: string }) => t.name === "editor"))
-    assert.equal(list.result.tools.length, 21)
+    assert.equal(list.result.tools.length, 20)
     await new Promise((r) => setTimeout(r, 400))
     assert.deepEqual(rpc.notifications, [], "an unreadable report never changes the list")
   } finally {
@@ -1456,7 +1452,6 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
   const replies: any[] = [
     { registered: [{ id: "qst_aaa111", spec, askedAt: "2026-08-27T00:00:00.000Z" }], open: [{ id: "qst_aaa111", spec, askedAt: "2026-08-27T00:00:00.000Z" }] },
     { withdrawn: true, open: [] },
-    { kept: true, open: [{ id: "qst_bbb222", spec: { question: "Merge #12, or fold in the second fix first?", kind: "question" }, askedAt: "2026-08-27T00:00:00.000Z", keptAt: "2026-08-27T01:00:00.000Z" }] },
   ]
   const http = createServer((req, res) => {
     let body = ""
@@ -1496,13 +1491,6 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
     assert.deepEqual(seen[1], { url: "/_frizz/rpc/unask", body: { slug: "asking-thread", id: "qst_aaa111" } })
     assert.match(withdrawn.result.content[0].text, /Question qst_aaa111 withdrawn/)
     assert.match(withdrawn.result.content[0].text, /Nothing else is open on this thread/)
-
-    // `keep` carries the id and, when given, the whole reworded question to the RPC.
-    const reworded = { question: "Merge #12, or fold in the second fix first?", kind: "question" }
-    rpc.send({ jsonrpc: "2.0", id: 6, method: "tools/call", params: { name: "keep", arguments: { id: "qst_bbb222", question: reworded } } })
-    const kept = await rpc.next(6)
-    assert.deepEqual(seen[2], { url: "/_frizz/rpc/keepQuestion", body: { slug: "asking-thread", id: "qst_bbb222", question: reworded } })
-    assert.match(kept.result.content[0].text, /Question qst_bbb222 kept, reworded/)
 
     // The refusals live in the HANDLER, not only in the schema.
     const before = seen.length
@@ -2099,7 +2087,7 @@ test("`activity` reads the open questions back, with the ids `unask` takes and a
       questions: [
         { id: "qst_ab12cd34ef56", spec: { question: "Should the settings store use SQLite or a JSON file?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
         { id: "qst_0011223344ff", spec: { question: "Which dist-tag should 4.5.0 publish under?", kind: "question" }, askedAt: "2026-08-28T09:05:00.000Z" },
-        { id: "qst_99887766aabb", spec: { question: "Rename the package first?", kind: "question" }, askedAt: "2026-08-28T08:00:00.000Z", repliedPast: true },
+        { id: "qst_99887766aabb", spec: { question: "Rename the package first?", kind: "question" }, askedAt: "2026-08-28T08:00:00.000Z" },
       ],
     } }))
   })
@@ -2113,19 +2101,16 @@ test("`activity` reads the open questions back, with the ids `unask` takes and a
     await rpc.next(1)
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
     const text = (await rpc.next(2)).result.content[0].text
-    // One the human has written past is SET ASIDE (2026-09-30): listed apart from the owed ones, with
-    // `keep` named as the way back in.
-    assert.match(text, /2 questions still owed an answer:\n\n {2}question: qst_ab12cd34ef56\n.*\n {2}question: qst_0011223344ff\n/)
-    assert.match(text, /1 question set aside — the human wrote to you since, without answering:\n\n {2}question: qst_99887766aabb\n/)
-    assert.match(text, /frizz withdraws each one when you next come to rest\. `keep` only one directly relevant/)
+    // Every open question is owed, the one asked before the human's last message too: a typed message
+    // leaves each one open.
+    assert.match(text, /3 questions still owed an answer:\n\n {2}question: qst_ab12cd34ef56\n.*\n {2}question: qst_0011223344ff\n.*\n {2}question: qst_99887766aabb\n/)
+    assert.doesNotMatch(text, /set aside|`keep`/)
     assert.match(text, /Should the settings store use SQLite or a JSON file\?/)
-    // The ready fence names the shell AND every OWED question under `questions:` (2026-10-05): a fence
-    // beside open questions must name each one the worker still needs, or frizz refuses the park. A
-    // set-aside one is left out — it holds nothing, and the next rest withdraws it.
+    // The ready fence names the shell AND every open question under `questions:` (2026-10-05): a fence
+    // beside open questions must name each one the worker still needs, or frizz refuses the park.
     const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
     assert.match(fence, /shells: \[bzvtnt3ig\]/)
-    assert.match(fence, /questions: \[qst_ab12cd34ef56, qst_0011223344ff\]/)
-    assert.doesNotMatch(fence, /qst_99887766aabb/, "the set-aside question is not named")
+    assert.match(fence, /questions: \[qst_ab12cd34ef56, qst_0011223344ff, qst_99887766aabb\]/)
     assert.match(fence, /status: needs_input/, "a fence on questions always needs the human")
   } finally {
     rpc.kill()

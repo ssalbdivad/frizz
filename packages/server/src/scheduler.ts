@@ -14,7 +14,7 @@ import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from
 import { isReplyWait } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
-import { answersInFlight, carriedQuestionRows, childJustReturned, owedQuestionRows, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
+import { answersInFlight, carriedQuestionRows, childJustReturned, openQuestionRows, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { liveShellBudget, SHELL_BUDGET_GRACE_MS, shellBudgetWarningMessage, type ShellStopReason } from "./shell-budget.ts"
 import { deadlineCheckInMessage, deadlineStageToSend, rowDeadline } from "./deadline.ts"
@@ -1400,7 +1400,7 @@ export interface SchedulerDeps {
     stop(slug: string, shellId: string, reason: ShellStopReason, opts: { notify: boolean }): Promise<{ stopped: boolean; note: string | null } | undefined>
   }
   // Re-project the board after a pass changed what it shows without a tailer event to trigger it — today
-  // only evalSetAsideQuestions' withdrawals. Absent ⇒ the board's own reconcile picks the change up.
+  // only evalQuestionDefaults' answers. Absent ⇒ the board's own reconcile picks the change up.
   refreshBoard?: () => void
   // Deterministic hard-crash fault injection. Throwing here escapes tick without compensating writes,
   // exactly like process death at the named durability boundary. Never configured in production.
@@ -2284,9 +2284,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // AN OPEN QUESTION IS A SIGN-OFF ONLY AT THE REST THAT ASKED IT (upstream 2026-10-05). A question
       // CARRIED from an earlier rest is not this rest's sign-off: its card stays where it was asked, so the
       // worker names it under `questions:` in an awaiting fence (evalParkIntegrity) or withdraws it, and is
-      // told so below (carriedQuestionsNudgeMessage). One the human typed past is set aside and holds
-      // nothing — it is withdrawn at this rest unless the worker `keep`s it, and a keep counts as asking
-      // it again (board.carriedQuestionRows, shared questionRepliedPast).
+      // told so below (carriedQuestionsNudgeMessage). A typed message changes nothing about that: a
+      // question the human typed past is still open, still owed, and carried (board.carriedQuestionRows).
         // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
         // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
         // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
@@ -2386,61 +2385,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     deps.storage.countSignoffNudge(item.slug, item.fenceId)
   }
 
-  // ---- SOURCE 14: BACKGROUND SHELLS LEFT RUNNING BEHIND A QUESTION ------------------------------
-  // See `strayShellsMessage` for the case that produced it. Scoped to a rest on a QUESTION because that
-  // is the one rest whose card hides live shells: a bare rest already lists them in SOURCE 9's nudge, an
-  // awaiting park draws them in its own table, and a done card's "Mark as done" ends the session, and
-  // every shell with it, the moment the human archives it.
-  //
-  // A shell under an armed `watch` is kept on purpose and is not listed. Nothing is killed here — a dev
-  // server the human is about to open looks exactly like a forgotten poller from outside, so the worker,
-  // which knows which one it is, decides.
-  // ---- A QUESTION THE HUMAN WROTE PAST IS WITHDRAWN AT THE WORKER'S NEXT REST ---------------------
-  //
-  // A typed message sets every open question aside (shared questionRepliedPast). Until 2026-10-02 a
-  // set-aside card then stayed open and answerable in the thread's history indefinitely, which the
-  // maintainer found far too persistent: "questions shouldn't hang around if I progress the
-  // conversation … unless the agent determines the question is directly relevant to what I said, it
-  // should be withdrawn and a new question can be asked if needed."
-  //
-  // So the set-aside state now lasts exactly ONE TURN — the one the message started. While it runs the
-  // card stays answerable (the human may still be mid-answer), and the worker, which reads the message as
-  // frizz cannot, `keep`s whatever is directly relevant to it. At the first rest after the message, every
-  // question still set aside is withdrawn. A danger question never reads as set aside, so it is never
-  // withdrawn here.
-  //
-  // THE REST GUARDS ARE THE SIGN-OFF NUDGE'S: idle, and the agent spoke after the human's message AND
-  // after the last user record — so a message delivered but not yet read, or a wake landing on top of the
-  // rest, waits for the rest that follows it. A failed turn is not a rest.
-  //
-  // `settled_at` is stamped with the MESSAGE's instant, not now: the message is what withdrew it. That
-  // also keeps the row out of router.pivotTwin, which refuses re-asking a question withdrawn AFTER the
-  // human's newest message — the worker's own unask on reading it. An expiry is nobody's decision, so a
-  // later turn that genuinely needs the answer may ask again.
-  function evalSetAsideQuestions(): void {
-    let withdrew = 0
-    for (const row of deps.storage.allSessions()) {
-      if (row.state === "archived" || row.archived === 1) continue
-      const tele = deps.tailer.get(row.slug)
-      if (!tele || tele.turn !== "idle" || !tele.lastHumanAt || !tele.lastAssistantAt) continue
-      if (tele.authFault || tele.apiFault) continue
-      const humanMs = Date.parse(tele.lastHumanAt)
-      const spokeMs = Date.parse(tele.lastAssistantAt)
-      if (!(spokeMs > humanMs)) continue
-      if (tele.lastUserAt && Date.parse(tele.lastUserAt) >= spokeMs) continue
-      for (const q of deps.storage.listThreadQuestions(row.slug, { openOnly: true })) {
-        if (!questionRepliedPast(q, tele.lastHumanAt)) continue
-        if (deps.storage.withdrawThreadQuestion(row.slug, q.id, humanMs)) withdrew++
-      }
-    }
-    if (withdrew > 0) {
-      log(`waker: withdrew ${withdrew} question(s) the human wrote past`)
-      deps.refreshBoard?.()
-    }
-  }
-
   // AN UNANSWERED QUESTION TAKES ITS RECOMMENDED OPTION once its card has sat in the queue for
-  // QUESTION_DEFAULT_AFTER_MS (2026-10-05). The clock starts at the later of the ask, a `keep`, and the
+  // QUESTION_DEFAULT_AFTER_MS (2026-10-05). The clock starts at the later of the ask and the
   // REST — a question asked mid-turn is not in front of anybody until the thread stops, and a thread
   // that wakes again (a sub-agent returning) puts it back in the Active band, where nobody is prompted.
   // The human working on the card holds it off, and the countdown's × turns it off (questionDefaultAtMs).
@@ -2449,7 +2395,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // files, posts, merges or publishes) is never taken: the first option that stays on this machine is,
   // and with none the question waits. A question with nothing to take — free
   // text, `multi`, no recommendation, `danger` — waits for the human as before, and so does one they
-  // typed past, which evalSetAsideQuestions withdraws instead.
+  // typed past: it waits for them, or for the worker's `unask` (shared questionRepliedPast).
   function evalQuestionDefaults(nowMs: number): void {
     let answered = 0
     for (const row of deps.storage.allSessions()) {
@@ -2473,6 +2419,15 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- SOURCE 14: BACKGROUND SHELLS LEFT RUNNING BEHIND A QUESTION ------------------------------
+  // See `strayShellsMessage` for the case that produced it. Scoped to a rest on a QUESTION because that
+  // is the one rest whose card hides live shells: a bare rest already lists them in SOURCE 9's nudge, an
+  // awaiting park draws them in its own table, and a done card's "Mark as done" ends the session, and
+  // every shell with it, the moment the human archives it.
+  //
+  // A shell under an armed `watch` is kept on purpose and is not listed. Nothing is killed here — a dev
+  // server the human is about to open looks exactly like a forgotten poller from outside, so the worker,
+  // which knows which one it is, decides.
   function evalStrayShellNudges(nowMs: number): void {
     for (const row of deps.storage.allSessions()) {
       if (row.state === "archived" || row.archived === 1) continue
@@ -2490,7 +2445,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // …and only a rest the question SIGNS OFF: one carried from an earlier rest draws SOURCE 9's carried
       // reminder instead (board.carriedQuestionRows), which lists the live shells itself.
       const questionRows = deps.storage.listThreadQuestions(row.slug)
-      const onQuestion = Boolean(tele.pendingQuestion) || (owedQuestionRows(questionRows, tele).length > 0 && carriedQuestionRows(questionRows, tele).length === 0)
+      const onQuestion = Boolean(tele.pendingQuestion) || (openQuestionRows(questionRows).length > 0 && carriedQuestionRows(questionRows, tele).length === 0)
       if (!onQuestion) continue
       const watched = deps.storage.listThreadWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "shell").map((w) => w.target)
       const stray = (tele.bgShells ?? []).filter((sh) => sh.state === "running" && ![sh.id, sh.taskId, sh.label].some((h) => h !== undefined && watched.includes(h)))
@@ -2601,9 +2556,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // so one fence draws one bump, and checked BEFORE the honoured-park reset below on purpose.
       const park = readAwaitingPark(tele.lastFence.hints)
       const questionRows = deps.storage.listThreadQuestions(row.slug)
-      // Every open question the human has not typed past — one they have is set aside, holds nothing, and
-      // is withdrawn at the next rest unless the worker `keep`s it (board.owedQuestionRows, 2026-09-30).
-      const openQuestions = owedQuestionRows(questionRows, tele)
+      // Every open question — a typed message leaves each one open and owed (board.openQuestionRows).
+      const openQuestions = openQuestionRows(questionRows)
       const named = new Set(park.questions)
       const unnamed = openQuestions.filter((q) => !named.has(q.id.toLowerCase()))
       const spokeMs = Date.parse(spokeAt)
@@ -3883,7 +3837,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (tele.turn !== "idle") return false
     if (threadSaidDone(deps.storage, slug, tele)) return true
     if (tele.pendingQuestion) return true
-    if (owedQuestionRows(deps.storage.listThreadQuestions(slug, { openOnly: true }), tele).length > 0) return true
+    if (deps.storage.listThreadQuestions(slug, { openOnly: true }).length > 0) return true
     const fence = tele.lastFence
     if (fence?.kind === "awaiting") {
       if (awaitingStatus(fence.hints) === "needs_input") return true
@@ -4915,12 +4869,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: recurring-prompt schedule pass failed: ${err instanceof Error ? err.message : String(err)}`)
-    }
-    try {
-      evalSetAsideQuestions()
-    } catch (err) {
-      if (err instanceof InjectedSchedulerCrash) throw err
-      log(`waker: set-aside question pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     // THE REMINDER MINTS BEFORE THE GOAL'S REST PASS (2026-08-28): SOURCE 5 stands down on a rest the
     // reminder took, and it reads that off the outbox — so the reminder has to be there first. Before

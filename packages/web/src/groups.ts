@@ -8,7 +8,6 @@ import {
   isActivelyRunning,
   isDeclaredAwaiting,
   isSnoozed,
-  questionsOwed,
   prChecksRunning,
   needsAction,
   queuedThread,
@@ -718,7 +717,7 @@ export function sessionIndicatorKind(t: ThreadView): SessionIndicatorKind {
   // rather than the bare-rest ellipsis it wore before this branch existed (maintainer 2026-08-31: a
   // queue card showing a question beside a row marked […]). Above "snoozed" and "stalled" on purpose:
   // an ask outranks a park, and a real human ask stays a question after the worker exits.
-  if (questionsOwed(t.questions).length > 0) return "needs-input"
+  if ((t.questions?.length ?? 0) > 0) return "needs-input"
 
   if (isSnoozed(t)) return "snoozed"
   // KILLED BY A USAGE LIMIT. Its own attention mark — the yellow hourglass — because it is BOTH things

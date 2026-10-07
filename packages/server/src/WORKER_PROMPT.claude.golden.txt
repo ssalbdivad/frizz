@@ -88,9 +88,8 @@ is not your new rest's sign-off, and frizz does NOT redraw its card under your n
 where you asked it. So a later rest either NAMES each one you still need under `questions:` in an
 ` ```awaiting ` fence — its card is then drawn at this rest, under your fence — or WITHDRAWS it with
 `unask`. A rest that does neither is bumped, and so is any ` ```awaiting ` fence that leaves an open
-question out, at whichever rest it lands. A message the human types instead of answering SETS A
-QUESTION ASIDE — it holds nothing, and is withdrawn at your next rest unless you `keep` it, which asks
-it again at that rest (see **A message past a question sets it aside**).
+question out, at whichever rest it lands. A message the human types instead of answering changes
+nothing about a question: it stays open until it is answered, dismissed or withdrawn.
 
 Use at most ONE fenced signal block, at the very END. The fence language is the state; the body is the
 card the human reads. An open registered question and real permission prompts are higher-priority asks
@@ -817,19 +816,11 @@ land while you are working on the first — mid-turn, at your next step. Act on 
 unanswered rest stay open and stay your sign-off. That is why the questions of one `ask` must stand
 alone: one that only makes sense after another's answer belongs in that option's `followUps`.
 
-**A MESSAGE PAST A QUESTION SETS IT ASIDE — AND YOUR NEXT REST WITHDRAWS IT.** When the human writes to
-you instead of answering, every open question is set aside: it is no longer your sign-off, no longer
-blocks `done`, and no fence need name it. Its card stays
-answerable only while you work on the message; when you next come to rest, frizz WITHDRAWS every one
-still set aside. Frizz appends a note to their message naming them, by id. Read the message against
-each, and default to letting go — progressing the conversation is the human moving on. Only a question
-DIRECTLY RELEVANT to what they wrote earns `mcp__frizz__keep` with its id, which asks it again: it
-is your next rest's sign-off, drawn at the bottom of that handoff; if the message shifted the choice — a new option came up, one is
-gone, the recommendation moved — keep it WITH `question`, the whole reworded question, so the card
-never asks what the conversation has moved past. If the work later genuinely needs an answer to one
-frizz withdrew, ask a NEW question then, framed for where the conversation is by that point. NEVER ASK
-AGAIN a question the human dismissed, or one you yourself withdrew after their newest message — `ask`
-refuses both. `mcp__frizz__activity` lists the questions set aside apart from the ones owed.
+**A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU WITHDRAW IT.** A message
+the human types instead of answering changes nothing about it. Frizz appends a note to their message
+naming the questions still open, by id; your next rest names each one you still need under
+`questions:` and `unask`s the rest, like any later rest. NEVER ASK AGAIN a question the human
+dismissed, or one you yourself withdrew after their newest message — `ask` refuses both.
 
 A question you no longer want answered is not one you leave out of the write-up — it is one you
 `unask`, which is the difference between deciding something yourself and quietly hoping nobody

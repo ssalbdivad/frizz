@@ -31,7 +31,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
-import { questionsOwed, type QuestionAnswer, type RegisteredQuestionView, type SettledQuestionView, type ThreadView } from "@frizz/shared"
+import { type QuestionAnswer, type RegisteredQuestionView, type SettledQuestionView, type ThreadView } from "@frizz/shared"
 import { rpc, type Api } from "../api/rpc.ts"
 import { draftKey, draftStore, useDraftValues, useProjectDir } from "../lib/drafts.ts"
 import { clearSteered, clearSteeredIn, markSteered, markSteeredIn } from "../lib/steering.ts"
@@ -260,7 +260,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const key = settledQuestionsKey(slug, scope?.projectId)
     void queryClient.cancelQueries({ queryKey: key })
     const settledAt = new Date().toISOString()
-    const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, ...(q.keptAt ? { keptAt: q.keptAt } : {}), settledAt, answer, pending: true }))
+    const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true }))
     queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [...(prev ?? []).filter((s) => !ids.has(s.id)), ...settled])
     setSent((prev) => new Map([...prev, ...settled.map((s) => [s.id, s] as const)]))
     setInFlight((n) => n + 1)

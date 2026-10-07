@@ -34,7 +34,7 @@ function harness() {
     start: async () => {},
     stop: async () => {},
   }
-  // The human's own clock, settable per test — the one reading `questionRepliedPast` keys on.
+  // The human's own clock, settable per test — the one reading `pivotTwin` keys on.
   let lastHumanAt: string | undefined
   const tailer: Tailer = {
     get: () => (lastHumanAt ? ({ lastHumanAt } as ReturnType<Tailer["get"]>) : undefined), foreignIds: () => [], subAgent: () => undefined,
@@ -564,90 +564,25 @@ test("questions asked in ONE call keep their order — the tiebreak is insertion
   } finally { h.close() }
 })
 
-// A MESSAGE PAST A QUESTION SETS IT ASIDE, AND `keep` OPTS IT BACK IN (2026-09-30). 2026-09-29 held every
-// open question owed until the worker `unask`ed it, and cards rode under handoffs the conversation had
-// moved past ("the questions feel out of date"). Now a typed message sets it aside — still open, still
-// answerable where it was asked, holding nothing — and the worker keeps what the conversation still needs.
-test("a question the human typed past is set aside — open, but not blocking done — until the worker keeps it", async () => {
+// A TYPED MESSAGE LEAVES A QUESTION OPEN AND OWED. The human wrote to the worker instead of answering: the
+// question still blocks `done` and still reads back as open, until the human answers or dismisses it or the
+// worker withdraws it. Frizz never withdraws it on the worker's behalf.
+test("a question the human typed past stays open and owed — it blocks done until the worker unasks it", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("t"))
     const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    // Negative control first: the human's last turn PREDATES the ask, so it is current and blocks.
-    h.humanSpokeAt(new Date(Date.parse(passed.askedAt) - 60_000).toISOString())
-    assert.equal((await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })).questions[0].repliedPast, undefined)
-    assert.equal((await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })).done, false)
-
     h.humanSpokeAt(new Date(Date.parse(passed.askedAt) + 1).toISOString())
     const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
-    assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[passed.id, true]], "still open, set aside")
-    // Asking it again word for word would put two cards up for one decision: `keep` is the verb.
-    await assert.rejects(
-      h.router.ask.handler({ input: { slug: "t", questions: [simple()] } }),
-      new RegExp(`is still open as ${passed.id}, set aside by the human's newest message\\.\\n\\nTo bring it forward, \`keep\` it`),
-    )
-
-    // Kept, and reworded: current again — it blocks done, and reads back with its new words.
-    const reworded = simple("SQLite, a JSON file, or the existing sessions table?")
-    const kept = await h.router.keepQuestion.handler({ input: { slug: "t", id: passed.id, question: reworded } })
-    assert.equal(kept.kept, true)
-    assert.deepEqual(kept.open.map((q) => [q.id, q.repliedPast, q.spec.question]), [[passed.id, undefined, reworded.question]])
-    assert.ok(kept.open[0].keptAt, "the view carries when it was kept, which is what its card anchors on")
+    assert.deepEqual(read.questions.map((q) => q.id), [passed.id], "still open")
     const blocked = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
-    assert.deepEqual(blocked.blockingQuestions.map((q) => q.id), [passed.id])
+    assert.equal(blocked.done, false)
+    assert.deepEqual(blocked.blockingQuestions.map((q) => q.id), [passed.id], "still owed")
 
-    // A LATER message sets it aside again; done then goes through with it still open and answerable.
-    await new Promise((resolve) => setTimeout(resolve, 5))
-    h.humanSpokeAt(new Date().toISOString())
+    // The worker's own act clears it.
+    assert.equal((await h.router.unask.handler({ input: { slug: "t", id: passed.id } })).withdrawn, true)
     const done = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
     assert.equal(done.done, true)
-    assert.equal(h.storage.getThreadQuestion(passed.id)?.state, "open", "done does not close a set-aside question")
-  } finally { h.close() }
-})
-
-// …AND ONE THE WORKER DID NOT KEEP IS WITHDRAWN AT ITS NEXT REST (2026-10-02, scheduler
-// evalSetAsideQuestions), stamped with the MESSAGE's instant. That expiry is nobody's pivot, so a later
-// turn that genuinely needs the answer may ask it again — the refusal is for the worker's own `unask`
-// and the human's ×, never for frizz's clean-up.
-test("a set-aside question frizz withdrew at the message's instant may be asked again", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const [passed] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    const humanAt = Date.parse(passed.askedAt) + 1
-    h.humanSpokeAt(new Date(humanAt).toISOString())
-    assert.equal(h.storage.withdrawThreadQuestion("t", passed.id, humanAt), true)
-    const [again] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    assert.notEqual(again.id, passed.id)
-  } finally { h.close() }
-})
-
-test("keep refuses another thread's question, a settled one, and a malformed rewording", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    h.storage.upsertSession(row("u"))
-    const [mine] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    assert.equal((await h.router.keepQuestion.handler({ input: { slug: "u", id: mine.id } })).kept, false)
-    await assert.rejects(h.router.keepQuestion.handler({ input: { slug: "t", id: mine.id, question: { question: "Pick some", kind: "multi" } } }), /needs options/)
-    await h.router.unask.handler({ input: { slug: "t", id: mine.id } })
-    assert.equal((await h.router.keepQuestion.handler({ input: { slug: "t", id: mine.id } })).kept, false)
-  } finally { h.close() }
-})
-
-// A danger question never reads as written past — the irreversible call stays the human's.
-test("a DANGER question the human typed past is never set aside, and still blocks done", async () => {
-  const h = harness()
-  try {
-    h.storage.upsertSession(row("t"))
-    const [risky] = (await h.router.ask.handler({ input: { slug: "t", questions: [{ ...simple("Force-push the rewritten history to main?"), danger: true }] } })).registered
-    const [plain] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple()] } })).registered
-    h.humanSpokeAt(new Date(Date.parse(plain.askedAt) + 1).toISOString())
-    const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "t" } })
-    // The negative control rides along: the ordinary question beside it IS set aside by the same message.
-    assert.deepEqual(read.questions.map((q) => [q.id, q.repliedPast]), [[risky.id, undefined], [plain.id, true]])
-    const done = await h.router.markOwnDone.handler({ input: { slug: "t", body: "done" } })
-    assert.deepEqual(done.blockingQuestions.map((q) => q.id), [risky.id], "only the danger question holds the thread")
   } finally { h.close() }
 })
 

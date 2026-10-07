@@ -10,8 +10,8 @@
 // (RestedCard), which a bare rest is owed (22084580).
 //
 // The position is the DRAWER'S, computed by the same readers ChatView uses — questionAnchor's
-// questionsByAnchor (the rest that asked it, or a later one whose fence claims it under `questions:`, or
-// the rest that kept it), questionShadow's placeQuestions (a placement marker) and placedFrom (a marker in a
+// questionsByAnchor (the rest that asked it, or a later one whose fence claims it under `questions:`),
+// questionShadow's placeQuestions (a placement marker) and placedFrom (a marker in a
 // message the surface does not draw gives the card back to its anchor), and settledQuestions for an
 // answered one — over the transcript the card reads for exactly this. This module only maps those message
 // positions onto the three places a handoff has room for, the way upstream's card flushes its groups
@@ -19,8 +19,7 @@
 //
 //   • ABOVE — a rest older than the human's last turn. Upstream flushes these first, above the window, and
 //     so does the card: above the human's bubble, since everything after that bubble is newer. It is the
-//     common place for a question the human typed past, which the card does not draw at all (see the
-//     caller: a set-aside question holds nothing, and is answerable where it was asked).
+//     common place for a question the human typed past and the worker has not named since.
 //   • BETWEEN — a rest after the human's turn that is not the newest: the rest the `answer` prose is the
 //     reply of, or one the handoff skips (a wake's reply). It draws under the answer prose, over the newest.
 //   • TAIL — the newest rest: under the handoff, where the card's stack has always been.
@@ -56,16 +55,15 @@ type Message = AnchorMessage & HumanTurnLike
 
 /**
  * Sort the thread's open and answered questions into the handoff's three places, by the rest each belongs
- * to. `open` is what the card draws as answerable; `here` is computed over `hereOf`, the drawer's whole open
- * set, so the rested card agrees with the drawer's (ChatView questionsHere).
+ * to. `here` is computed over the same open set the drawer reads, so the rested card agrees with the
+ * drawer's (ChatView questionsHere).
  */
-export function handoffQuestionSlots<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string; keptAt?: string }, S extends SettledPositionable>(
+export function handoffQuestionSlots<Q extends Pick<RegisteredQuestionView, "id"> & { askedAt: string }, S extends SettledPositionable>(
   messages: readonly Message[],
   open: readonly Q[],
   settled: readonly S[],
-  hereOf: readonly Q[] = open,
 ): HandoffQuestionSlots<Q, S> {
-  const slots: HandoffQuestionSlots<Q, S> = { above: [], between: [], tail: [], settledBetween: [], settledTail: [], here: questionsAtCurrentRest(messages, hereOf) }
+  const slots: HandoffQuestionSlots<Q, S> = { above: [], between: [], tail: [], settledBetween: [], settledTail: [], here: questionsAtCurrentRest(messages, open) }
   if (messages.length === 0) {
     // No transcript to place them in: the newest rest, where the card drew them before (and never lost one).
     slots.tail.push(...open)

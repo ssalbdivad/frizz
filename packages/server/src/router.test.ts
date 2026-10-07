@@ -764,10 +764,10 @@ test("followUp wakes a snoozed thread and disarms the bump it owed", async () =>
   assert.equal(h.storage.getSession(slug)?.snooze_prompt, null, "and so is the bump it owed at that deadline")
   h.storage.close()
 })
-// A TYPED MESSAGE SETS THE OPEN QUESTIONS ASIDE (2026-09-30), and the message reaches the worker with
-// frizz's note naming each, by the id `keep` takes, so it can opt back in to the ones still relevant. The
-// bubble keeps the human's bare words; only the worker's copy carries the note.
-test("a typed follow-up to a thread with questions open names the ones it sets aside, by id, and how to keep them", async () => {
+// A TYPED MESSAGE LEAVES THE OPEN QUESTIONS OPEN, and reaches the worker with frizz's note naming each, by
+// the id `questions:` and `unask` take, so its next rest names the ones it still needs and withdraws the
+// rest. The bubble keeps the human's bare words; only the worker's copy carries the note.
+test("a typed follow-up to a thread with questions open names them, by id, and says the next rest names or withdraws each", async () => {
   const h = harness()
   const slug = "asking-followup"
   h.storage.upsertSession(row(slug))
@@ -790,10 +790,13 @@ test("a typed follow-up to a thread with questions open names the ones it sets a
   await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "should we use this thread or the other one?" } })
   const [, noted] = sent
   assert.equal(noted, `should we use this thread or the other one?\n\n${openQuestionsNote([{ id: "qst_open0000001", question: "SQLite or a JSON file?" }])}`)
-  assert.match(noted, /now set aside by this message: .*`keep` one only if/)
+  assert.match(noted, /still open: .*name each one you still need under `questions:`.*withdraw the rest with `unask`/)
   assert.doesNotMatch(noted, /qst_answered001/, "an answered question is not open")
   // The human's own bubble, once the transcript reads it back, is their words and nothing else.
   assert.equal(stripFollowUpRiders(noted), "should we use this thread or the other one?")
+  // A SECOND message still names it: the first one changed nothing about the question.
+  await h.router.followUp.handler({ input: { slug, sessionId: `sid-${slug}`, message: "and the docs too" } })
+  assert.match(sent[2], /qst_open0000001/)
   h.storage.close()
 })
 

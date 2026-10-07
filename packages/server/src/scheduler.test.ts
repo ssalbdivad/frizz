@@ -321,47 +321,22 @@ function askQ(h: Harness, slug: string, id: string, question: string) {
   return id
 }
 
-// A QUESTION THE HUMAN WROTE PAST LASTS ONE TURN (2026-10-02): the worker's first rest after the message
-// withdraws every question still set aside — not a danger one, not one it kept, and not before it has
-// actually read the message and rested.
-test("question: the first rest after a typed message withdraws the questions it set aside", async () => {
+// A TYPED MESSAGE WITHDRAWS NOTHING. The question stays open at the worker's next rest, and a bare rest
+// carrying it gets the carried-questions nudge: name it under `questions:` or withdraw it with `unask`.
+test("question: the first rest after a typed message withdraws nothing, and a bare one is nudged to name or withdraw it", async () => {
   const h = harness()
   h.storage.upsertSession(row("t"))
   const t0 = h.clock.ms
   askQ(h, "t", "qst_plain", "SQLite or a JSON file?")
-  h.storage.askThreadQuestion({ id: "qst_danger", slug: "t", spec: JSON.stringify({ question: "Force-push main?", kind: "question", danger: true, options: [{ label: "A" }] }), askedAtMs: t0 })
-  askQ(h, "t", "qst_kept", "Which dist-tag?")
   const humanAt = t0 + 1_000
-  let refreshes = 0
-  const s = h.make({ refreshBoard: () => void refreshes++ })
-  const open = () => h.storage.listThreadQuestions("t").filter((q) => q.state === "open").map((q) => q.id).sort()
-
-  // Negative controls: the message is delivered but the turn it started is still running…
-  h.tele.set("t", { ...tele(undefined, "in-flight"), lastHumanAt: iso(humanAt), lastUserAt: iso(humanAt), lastAssistantAt: iso(t0) })
-  await s.tick()
-  // …and an idle reading whose last word PREDATES the message (not yet read) is no rest after it.
-  h.tele.set("t", { ...tele(), lastHumanAt: iso(humanAt), lastUserAt: iso(humanAt), lastAssistantAt: iso(t0) })
-  await s.tick()
-  assert.deepEqual(open(), ["qst_danger", "qst_kept", "qst_plain"], "nothing withdrawn before the rest")
-  assert.equal(refreshes, 0)
-
-  // The worker keeps one mid-turn, then rests.
-  h.storage.keepThreadQuestion("t", "qst_kept", undefined, humanAt + 500)
+  const s = h.make()
   h.tele.set("t", { ...tele(), lastHumanAt: iso(humanAt), lastUserAt: iso(humanAt), lastAssistantAt: iso(humanAt + 2_000) })
   await s.tick()
-  assert.deepEqual(open(), ["qst_danger", "qst_kept"])
-  const gone = h.storage.getThreadQuestion("qst_plain")
-  assert.equal(gone?.state, "withdrawn")
-  assert.equal(gone?.settled_at, humanAt, "stamped with the message's instant, so a later turn may re-ask it")
-  assert.equal(refreshes, 1)
-  // The withdrawal itself wakes nobody. What may wake the worker is the DANGER question, which a typed
-  // message never sets aside: it was asked at an EARLIER rest, so under the carried-question rule
-  // (upstream 2026-10-05) this rest is bumped to name it under `questions:` or withdraw it. The kept one
-  // is not carried — a keep asks it again at this rest — and the withdrawn one is never mentioned.
-  for (const r of h.resumes) {
-    assert.match(r.message, /qst_danger/, "the only wake is the carried danger question's reminder")
-    assert.doesNotMatch(r.message, /qst_plain|qst_kept/)
-  }
+  assert.equal(h.storage.getThreadQuestion("qst_plain")?.state, "open", "Frizz never withdraws it")
+  assert.equal(h.resumes.length, 1)
+  assert.match(h.resumes[0].message, /qst_plain/)
+  assert.match(h.resumes[0].message, /questions:/)
+  assert.match(h.resumes[0].message, /unask/)
   h.storage.close()
 })
 
@@ -500,13 +475,18 @@ test("question: a question the human typed past is never defaulted", async () =>
   h.storage.upsertSession(row("t"))
   const t0 = h.clock.ms
   h.storage.askThreadQuestion({ id: "qst_1", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }] }), askedAtMs: t0 })
-  // The human typed while the turn ran; the worker has not rested since, so it is not yet withdrawn.
+  // The human typed while the turn ran. The question stays open and waits for them or for the worker's
+  // `unask` — before the worker rests on the message and after.
   h.tele.set("t", { ...tele(), lastHumanAt: iso(t0 + 1_000), lastUserAt: iso(t0 + 1_000), lastAssistantAt: iso(t0) })
   const s = h.make()
   h.clock.ms = t0 + 2 * QUESTION_DEFAULT_AFTER_MS
   await s.tick()
   assert.equal(h.storage.getThreadQuestion("qst_1")?.state, "open")
   assert.equal(h.resumes.length, 0)
+  h.tele.set("t", { ...tele(), lastHumanAt: iso(t0 + 1_000), lastUserAt: iso(t0 + 1_000), lastAssistantAt: iso(t0 + 2_000) })
+  h.clock.ms = t0 + 4 * QUESTION_DEFAULT_AFTER_MS
+  await s.tick()
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.state, "open", "rested on the message: still neither withdrawn nor defaulted")
   h.storage.close()
 })
 

@@ -1148,20 +1148,21 @@ test("a batch of answers is delivered in ASKED order, not shuffled by id", () =>
   }
 })
 
-test("keep stamps kept_at and optionally rewords, on its own thread's open question only", () => {
-  const s = store()
+// `thread_question.kept_at` was the retired `keep` tool's stamp. A file a build with `keep` wrote loses the
+// column on its next open, and the question it was stamped on is untouched.
+test("thread_question: a file carrying the retired kept_at column loses it, and its questions survive", () => {
+  const path = join(mkdtempSync(join(tmpdir(), "frizz-storage-kept-")), "ui.db")
+  const at = 1_700_000_000_000
+  let s = createStorage(path, "p")
+  s.askThreadQuestion({ id: "q_k", slug: "t", spec: '{"question":"old"}', askedAtMs: at })
+  s.close()
+  const old = new Database(path)
+  old.exec(`ALTER TABLE thread_question ADD COLUMN kept_at INTEGER; UPDATE thread_question SET kept_at = ${at + 5}`)
+  old.close()
+  s = createStorage(path, "p")
   try {
-    const at = 1_700_000_000_000
-    s.askThreadQuestion({ id: "q_k", slug: "t", spec: '{"question":"old"}', askedAtMs: at })
-    assert.equal(s.getThreadQuestion("q_k")?.kept_at, null)
-    assert.equal(s.keepThreadQuestion("other", "q_k", undefined, at + 1), false, "thread-scoped")
-    assert.equal(s.keepThreadQuestion("t", "q_k", undefined, at + 2), true)
-    assert.equal(s.getThreadQuestion("q_k")?.kept_at, at + 2)
-    assert.equal(s.getThreadQuestion("q_k")?.spec, '{"question":"old"}', "no spec keeps the wording")
-    assert.equal(s.keepThreadQuestion("t", "q_k", '{"question":"new"}', at + 3), true)
-    assert.equal(s.getThreadQuestion("q_k")?.spec, '{"question":"new"}')
-    s.withdrawThreadQuestion("t", "q_k", at + 4)
-    assert.equal(s.keepThreadQuestion("t", "q_k", undefined, at + 5), false, "a settled question cannot be kept")
+    assert.equal(columnNames(s.db, "thread_question").includes("kept_at"), false, "the dead stamp is gone")
+    assert.deepEqual([s.getThreadQuestion("q_k")?.state, s.getThreadQuestion("q_k")?.asked_at], ["open", at])
   } finally {
     s.close()
   }

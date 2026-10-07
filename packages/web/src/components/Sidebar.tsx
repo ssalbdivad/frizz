@@ -1,7 +1,7 @@
 import { Fragment, memo, useCallback, useState } from "react"
 import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, Repeat, RotateCcw } from "lucide-react"
-import { questionsOwed, type ThreadView } from "@frizz/shared"
+import type { ThreadView } from "@frizz/shared"
 import { pushSubAgentDrawer, showToast } from "../store.ts"
 import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents, restIsWorking } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
@@ -1213,7 +1213,7 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       // queue server-side, so its card — the only surface that renders a question — is gone until the
       // wake. The mark can no longer say [?] (it would advertise a card nobody can open), so the tooltip
       // is where the unanswered ask stays legible until then.
-      const asking = questionsOwed(t.questions).length > 0 || t.pendingQuestion === true || Boolean(t.pendingAsk)
+      const asking = (t.questions?.length ?? 0) > 0 || t.pendingQuestion === true || Boolean(t.pendingAsk)
       return { node: parkMark, tip: popover(t, asking ? `${parked}\nA question is unanswered behind this park` : parked) }
     }
     // A usage-limit park is NOT in this family any more (2026-08-31): a limit kill queues as a failed

@@ -9,7 +9,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadScheduleRef, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingStatus, awaitingSteps, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsOwed, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingStatus, awaitingSteps, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
@@ -713,10 +713,9 @@ export function signoffNudgeVerdict(
     tele.lastFence ||
     tele.pendingQuestion ||
     registeredDoneFence(facts.done(), tele.lastUserAt, tele.lastToolCallAt, tele) !== undefined ||
-    // AN OPEN QUESTION IS A SIGN-OFF ONLY AT THE REST THAT ASKED IT (upstream 2026-10-05) — or kept it:
-    // `keep` re-asks a set-aside question at the rest that keeps it. One CARRIED from an earlier rest is
-    // the worker's to name under `questions:` or withdraw, so a rest beside one is nudged (the carried
-    // variant, scheduler SOURCE 9). A set-aside one holds nothing at all (questionRepliedPast).
+    // AN OPEN QUESTION IS A SIGN-OFF ONLY AT THE REST THAT ASKED IT (upstream 2026-10-05). One CARRIED
+    // from an earlier rest is the worker's to name under `questions:` or withdraw, so a rest beside one
+    // is nudged (the carried variant, scheduler SOURCE 9).
     openQuestionsSignOff(facts.questionRows(), tele) ||
     answersInFlight(facts.questionRows(), tele.lastUserAt, row.recurring_on_rest === 1 && Boolean(row.recurring_prompt?.trim())) !== undefined ||
     // EXCEPT A WATCH, UNDER THE `needs_input:` CONTRACT (2026-10-01). A registration says WHEN the worker
@@ -764,25 +763,24 @@ export function signoffNudgeVerdict(
   return "nudge"
 }
 
-/** The open questions that still hold the thread — every open row the human has not typed past (one they
- *  have is set aside, holds nothing, and is withdrawn at the next rest: questionRepliedPast). */
-export function owedQuestionRows(rows: readonly ThreadQuestionRow[], tele: Pick<SessionTelemetry, "lastHumanAt"> | undefined): ThreadQuestionRow[] {
-  return rows.filter((q) => q.state === "open" && !questionRepliedPast(q, tele?.lastHumanAt))
+/** The open questions holding the thread — every open row, until it is answered, dismissed or withdrawn.
+ *  A typed message changes nothing about one. */
+export function openQuestionRows(rows: readonly ThreadQuestionRow[]): ThreadQuestionRow[] {
+  return rows.filter((q) => q.state === "open")
 }
 
-/** The owed questions CARRIED into this rest from an earlier one: asked (or last kept) no later than the
- *  newest user record, which a wake is too. Upstream's 2026-10-05 rule: such a question is not this
- *  rest's sign-off and its card is not redrawn under the new handoff, so the worker names it under
- *  `questions:` in an awaiting fence or withdraws it. A `keep` counts as asking again, because the fork's
- *  keep exists exactly to make a set-aside question owed at the rest that follows. */
-export function carriedQuestionRows(rows: readonly ThreadQuestionRow[], tele: Pick<SessionTelemetry, "lastHumanAt" | "lastUserAt"> | undefined): ThreadQuestionRow[] {
+/** The open questions CARRIED into this rest from an earlier one: asked no later than the newest user
+ *  record, which a typed message and a wake both are. Upstream's 2026-10-05 rule: such a question is not
+ *  this rest's sign-off and its card is not redrawn under the new handoff, so the worker names it under
+ *  `questions:` in an awaiting fence or withdraws it. */
+export function carriedQuestionRows(rows: readonly ThreadQuestionRow[], tele: Pick<SessionTelemetry, "lastUserAt"> | undefined): ThreadQuestionRow[] {
   const restFrom = tele?.lastUserAt ? Date.parse(tele.lastUserAt) : Number.NEGATIVE_INFINITY
-  return owedQuestionRows(rows, tele).filter((q) => Math.max(q.asked_at, q.kept_at ?? Number.NEGATIVE_INFINITY) <= restFrom)
+  return openQuestionRows(rows).filter((q) => q.asked_at <= restFrom)
 }
 
 /** Do this rest's open questions sign it off? Only when there are some and none was carried in. */
-function openQuestionsSignOff(rows: readonly ThreadQuestionRow[], tele: Pick<SessionTelemetry, "lastHumanAt" | "lastUserAt">): boolean {
-  return owedQuestionRows(rows, tele).length > 0 && carriedQuestionRows(rows, tele).length === 0
+function openQuestionsSignOff(rows: readonly ThreadQuestionRow[], tele: Pick<SessionTelemetry, "lastUserAt">): boolean {
+  return openQuestionRows(rows).length > 0 && carriedQuestionRows(rows, tele).length === 0
 }
 
 /** Does this row carry a Goal armed to fire at rest? The same reading answersInFlight is handed above,
@@ -2223,8 +2221,9 @@ function sessionThreadView(
     if (q.state !== "open") continue
     const spec = safeQuestionSpec(q.spec)
     if (spec) {
-      const repliedPast = questionRepliedPast(q, rawTele?.lastHumanAt)
-      const defaultAnswer = repliedPast ? undefined : recommendedDefaultAnswer(q.id, spec)
+      // The human typed past it: it stays open and owed, but Frizz takes no option for them on it.
+      const typedPast = questionRepliedPast(q, rawTele?.lastHumanAt)
+      const defaultAnswer = typedPast ? undefined : recommendedDefaultAnswer(q.id, spec)
       const defaultsAtMs = defaultAnswer ? questionDefaultAtMs(q, restedMs) : undefined
       const recommendedLabel = spec.options?.find((o) => o.recommended)?.label
       const defaultsTo = defaultAnswer?.chosen[0] !== recommendedLabel ? defaultAnswer?.chosen[0] : undefined
@@ -2232,17 +2231,13 @@ function sessionThreadView(
         id: q.id,
         spec,
         askedAt: new Date(q.asked_at).toISOString(),
-        ...(q.kept_at != null ? { keptAt: new Date(q.kept_at).toISOString() } : {}),
-        ...(repliedPast ? { repliedPast: true as const } : {}),
         ...(defaultsAtMs !== undefined ? { defaultsAt: new Date(defaultsAtMs).toISOString() } : {}),
         ...(defaultsAtMs !== undefined && defaultsTo ? { defaultsTo } : {}),
       })
     }
   }
-  // The ones HOLDING the thread: every open one the human has not typed past. A set-aside question stays
-  // on the view — its card is still answerable where it was asked — but it no longer queues the thread,
-  // supersedes a done or signs off a rest, until the worker `keep`s it (see questionRepliedPast).
-  const currentQuestionCount = questionsOwed(questions).length
+  // The ones HOLDING the thread — every open one, until it is answered, dismissed or withdrawn.
+  const currentQuestionCount = questions.length
   // The dismissal-only case counts as in flight EXACTLY when a cancellation wake is coming — an armed
   // rest Goal with text, the same gate the scheduler's evalQuestionAnswers wakes on. Anything looser
   // would also cover the human's own ×, which deliberately wakes nobody and has no arrival to bridge to.

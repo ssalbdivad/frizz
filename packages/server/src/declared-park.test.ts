@@ -1029,27 +1029,38 @@ test("an ANSWERED question no longer refuses the park", async () => {
   } finally { h.close() }
 })
 
-// …and neither does one the human TYPED PAST (2026-09-30): their message set it aside — its card stays
-// answerable in the history, but it holds nothing — so the park beside it takes. Until the worker `keep`s
-// it, when it stands again and refuses the park exactly like any open question.
-test("a question the human typed past no longer refuses the park, until the worker keeps it", async () => {
-  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() })
+// A TYPED MESSAGE LEAVES A QUESTION OPEN AND OWED. The human wrote past it, the worker rested again with a
+// fence that leaves it out: refused, exactly like any open question. Naming it takes the park, and so does
+// withdrawing it — the worker's own act, never Frizz's.
+test("a question the human typed past still refuses a later fence that leaves it out", async () => {
+  const typedPast = { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() }
+  const askedAtMs = Date.now() - 90 * 60_000
+  const spec = JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" })
+  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], typedPast)
   try {
-    h.storage.askThreadQuestion({ id: "qst_repliedpast1", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
+    h.storage.askThreadQuestion({ id: "qst_typedpast01", slug: "parked", askedAtMs, spec })
     await h.s.tick()
-    assert.deepEqual(h.queued().filter((r) => isParkCorrection(r.message)), [], "set aside: the park takes")
-  } finally { h.close() }
-})
-
-test("a question KEPT after the human typed past it refuses the park again", async () => {
-  const h = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], { shells: [LIVE_SHELL], lastHumanAt: new Date(Date.now() - 30 * 60_000).toISOString() })
-  try {
-    h.storage.askThreadQuestion({ id: "qst_keptagain01", slug: "parked", askedAtMs: Date.now() - 90 * 60_000, spec: JSON.stringify({ question: "Which store — SQLite or a JSON file?", kind: "question" }) })
-    h.storage.keepThreadQuestion("parked", "qst_keptagain01", undefined, Date.now() - 10 * 60_000)
-    await h.s.tick()
-    assert.equal(h.queued().length, 1, "refused: the kept question stands")
+    assert.equal(h.queued().length, 1, "refused: the question is still open")
     assert.equal(isParkCorrection(h.queued()[0].message), true)
+    assert.match(h.queued()[0].message, /qst_typedpast01/)
   } finally { h.close() }
+
+  // Negative controls: the same rest naming it under `questions:` takes…
+  const named = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "question", value: "qst_typedpast02" }, { kind: "for", value: "1h" }], typedPast)
+  try {
+    named.storage.askThreadQuestion({ id: "qst_typedpast02", slug: "parked", askedAtMs, spec })
+    await named.s.tick()
+    assert.deepEqual(named.queued().filter((r) => isParkCorrection(r.message)), [], "named: the park takes")
+  } finally { named.close() }
+
+  // …and so does the fence that leaves it out once the worker has `unask`ed it.
+  const withdrawn = parkHarness([{ kind: "shell", value: "bzvtnt3ig" }, { kind: "for", value: "1h" }], typedPast)
+  try {
+    withdrawn.storage.askThreadQuestion({ id: "qst_typedpast03", slug: "parked", askedAtMs, spec })
+    assert.equal(withdrawn.storage.withdrawThreadQuestion("parked", "qst_typedpast03", Date.now() - 20 * 60_000), true)
+    await withdrawn.s.tick()
+    assert.deepEqual(withdrawn.queued().filter((r) => isParkCorrection(r.message)), [], "withdrawn: nothing left to name")
+  } finally { withdrawn.close() }
 })
 
 // ---- `issues:` (2026-09-14) ---------------------------------------------------------------------------

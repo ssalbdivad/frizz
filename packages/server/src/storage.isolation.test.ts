@@ -192,7 +192,6 @@ test("every mutating method touches only its own project", () => {
     ["dismissThreadQuestion", () => a.dismissThreadQuestion("project-a-q", 5)],
     ["markSettlementDelivered", () => a.markSettlementDelivered("project-a-q")],
     ["withdrawThreadQuestion", () => a.withdrawThreadQuestion("alpha-thread", "project-b-q", 5)],
-    ["keepThreadQuestion", () => a.keepThreadQuestion("alpha-thread", "project-b-q", "{}", 5)],
     ["clearThreadDone", () => a.clearThreadDone("alpha-thread")],
     ["markThreadDone", () => a.markThreadDone("beta-thread", "b", 2)],
     ["recordSubAgentSteer", () => a.recordSubAgentSteer({ slug: "beta-thread", subAgentId: "child", deliveryId: "project-a-steer-2", message: "new", sentAtMs: 2 })],

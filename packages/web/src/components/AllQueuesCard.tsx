@@ -22,7 +22,7 @@ import { memo, useCallback, useContext, useEffect, useLayoutEffect, useMemo, use
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { Check, CheckCheck, ChevronRight, ChevronsDownUp, ChevronsUpDown, RotateCcw } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
-import { parseParkWake, parseScheduledRunPrompt, questionsOwed, type AccountBackend, type AwaitingHint, type ThreadView } from "@frizz/shared"
+import { parseParkWake, parseScheduledRunPrompt, type AccountBackend, type AwaitingHint, type ThreadView } from "@frizz/shared"
 import { projectApiBase, projectRpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
 import { prefetchProjectTranscript } from "../hooks.ts"
@@ -386,17 +386,14 @@ function CardArticle({
   const settledScope = useMemo(() => ({ api, projectId: project.id }), [api, project.id])
   // ANSWERED questions keep their rest too (the drawer's SettledQuestionStack, which only ChatView drew).
   const settledQuestions = useSettledQuestions(thread, { scope: settledScope, enabled: needsTranscript })
-  // The drawer's open set (openQuestionsOf: minus any already drawn settled) decides whether a question is
-  // the newest rest's ending; the card DRAWS only the owed ones. One the human typed past is set aside —
-  // answerable where it was asked, in the drawer, until the worker's next rest withdraws it unless the
-  // worker `keep`s it (which re-asks it at that rest, and it is owed again) — so it holds nothing here.
+  // The drawer's open set (openQuestionsOf: minus any already drawn settled), so the card and the drawer
+  // agree on which rest each question belongs to.
   const openQuestions = useMemo(() => openQuestionsOf(thread, settledQuestions), [thread, settledQuestions])
-  const owedQuestions = useMemo(() => questionsOwed(openQuestions), [openQuestions])
   const slots = useMemo(() => {
-    if (messages) return handoffQuestionSlots(messages, owedQuestions, settledQuestions, openQuestions)
+    if (messages) return handoffQuestionSlots(messages, openQuestions, settledQuestions)
     if (needsTranscript && !transcript.isError) return null
-    return handoffQuestionSlots([], owedQuestions, [])
-  }, [messages, needsTranscript, transcript.isError, owedQuestions, settledQuestions, openQuestions])
+    return handoffQuestionSlots([], openQuestions, [])
+  }, [messages, needsTranscript, transcript.isError, settledQuestions, openQuestions])
   // Keyed on the rest: an answered card keeps its slot while the card holds for the worker's turn, and a
   // NEW handoff — which says what became of it — starts every stack over.
   const restKey = handoff.data?.at ?? ""
@@ -1311,7 +1308,7 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={answering?.staged ? "Add a note to your answers…" : questionsOwed(thread.questions).length > 0 ? "Or reply…" : "Reply to the agent…"}
+        placeholder={answering?.staged ? "Add a note to your answers…" : (thread.questions?.length ?? 0) > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         mentionCandidates={mentions}
         ownMention={ownMention}

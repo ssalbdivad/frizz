@@ -718,15 +718,11 @@ const ASK = {
     "`external` instead, and you must not then do the external act anyway. A `danger`, `multi` or " +
     "free-text question, one with no recommendation, or one whose every option is `external`, waits " +
     "for the human.\n\n" +
-    "WHEN THE HUMAN WRITES INSTEAD OF ANSWERING, THE MESSAGE SETS YOUR OPEN QUESTIONS ASIDE, AND YOUR " +
-    "NEXT REST WITHDRAWS THEM. A set-aside question no longer holds your thread: it is not your sign-off, " +
-    "does not block `done`, and does not follow you to your next handoff; its card stays answerable only " +
-    "while you work on the message. The message comes with a note naming them. Only one DIRECTLY " +
-    "RELEVANT to what the human wrote earns `keep` — reworded if the direction changed, above all to name " +
-    "an option the conversation has since raised — and a keep asks it again: it is that next rest's " +
-    "sign-off, its card drawn at the bottom of that handoff. " +
-    "Let the rest go; if the work later needs one, ask a new question then. Never ask again a question the " +
-    "human dismissed, or one you yourself withdrew after their newest message — `ask` refuses both.\n\n" +
+    "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU `unask` IT. A message " +
+    "the human types instead of answering changes nothing about it; the message comes with a note naming " +
+    "the questions still open, and your next rest names each one you still need under `questions:` or " +
+    "withdraws it, like any later rest. Never ask again a question the human dismissed, or one you " +
+    "yourself withdrew after their newest message — `ask` refuses both.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL — register them together, so they render as one stack. Each must stand " +
     "alone (a question that only makes sense after another's answer is that option's `followUps`), " +
     "because ANSWERS ARRIVE ONE AT A TIME: each card is sent the moment the human completes it, so you " +
@@ -775,30 +771,6 @@ const UNASK = {
     type: "object",
     properties: {
       id: { type: "string", description: "The question id `ask` returned, or that `activity` lists. Only your own thread's." },
-    },
-    required: ["id"],
-  },
-}
-
-const KEEP = {
-  name: "keep",
-  description:
-    "KEEP A QUESTION CURRENT after the human wrote to you without answering it. Their message set it " +
-    "aside: it no longer holds your thread or follows you to your next handoff, and frizz WITHDRAWS it " +
-    "when you next come to rest. `keep` opts it back in — it is your sign-off again, blocks `done` again, " +
-    "and its card rides to the bottom of your next handoff.\n\n" +
-    "Keep only a question DIRECTLY RELEVANT to what the human just wrote. Writing past a question is " +
-    "usually the human moving on, so the default is to let it go; if the work later needs the answer, " +
-    "ask a new question then. If the direction shifted the " +
-    "choice — a new option came up, one is gone, the recommendation changed — pass `question` with the " +
-    "full reworded question, which replaces the card's wording. A card still reading as it did before " +
-    "the human's message is the stale ask this exists to avoid.\n\n" +
-    "Also rewords a question that is still current, if the work moved under it.",
-  inputSchema: {
-    type: "object",
-    properties: {
-      id: { type: "string", description: "The question id `ask` returned, or that `activity` lists. Only your own thread's." },
-      question: { ...questionSchema(1), description: "The question's new wording, whole — it replaces the old one. Omit to keep it as asked." },
     },
     required: ["id"],
   },
@@ -1116,9 +1088,9 @@ const DEADLINE = {
 
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
-// EXTEND_SHELL is appended after it for the same reason (2026-09-29), EDITOR after KEEP (2026-10-02), and
+// EXTEND_SHELL is appended after it for the same reason (2026-09-29), EDITOR after MESSAGE_THREAD (2026-10-02), and
 // SCHEDULE after EDITOR (2026-10-05), DEADLINE after SCHEDULE (2026-10-06).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR, SCHEDULE, DEADLINE]
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, EDITOR, SCHEDULE, DEADLINE]
 
 // A TOOL IS LISTED ONLY WHILE ITS CAPABILITY EXISTS (2026-10-06, plans/upstream-superset.md §5). Every
 // listed tool is paid for on every turn, and a tool whose feature is absent can only answer "there is
@@ -1126,7 +1098,7 @@ const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, 
 // an opinion" (cc-worker/DECISIONS.md). Tool name → the capability the server reports for it (router
 // `workerCapabilities`, the same predicate that gates the contract's sections, dispatch.ts). Of the
 // fork's tools only `editor` has a feature that can be absent: it reads the human's editor, and most
-// humans never run the extension. Schedules, thread messaging, `keep` and shell budgets are always on.
+// humans never run the extension. Schedules, thread messaging and shell budgets are always on.
 //
 // LIVE, NOT ONCE. Claude Code (2.1.287, the SDK's headless path included) re-lists a server that
 // declares `tools.listChanged` when it sends `notifications/tools/list_changed`, and a worker's frizz
@@ -1231,7 +1203,6 @@ const HANDLERS = {
   [WATCH.name]: watch,
   [ASK.name]: ask,
   [UNASK.name]: unask,
-  [KEEP.name]: keep,
   [DONE.name]: done,
   [TITLE.name]: title,
   [UNWATCH.name]: unwatch,
@@ -1416,37 +1387,22 @@ async function activity() {
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
   // THE QUESTIONS GET THEIR OWN SECTION, because they are not running work: a question waits on a
   // person. Since 2026-10-05 a fence names the ones still needed under `questions:` (and must name every
-  // open one), so the ready-to-paste fence below carries the OWED ones too.
-  //
-  // OWED vs SET ASIDE (2026-09-30). A typed message sets every open question aside: it holds nothing
-  // until the worker `keep`s it, and the worker's next rest withdraws it (2026-10-02). The readout lists
-  // the two apart so the worker knows which ones are still its sign-off.
+  // open one), so the ready-to-paste fence below carries every open one too.
   const questionLine = (q) =>
     `  question: ${q.id}\n` +
     `    ${String(q?.spec?.question ?? "").replace(/\s+/g, " ").slice(0, 160)}`
-  const owed = questions.filter((q) => !q?.repliedPast)
-  const passed = questions.filter((q) => q?.repliedPast)
-  const owedBlock = owed.length === 0 ? "" : (
-    `\n\n${owed.length} question${owed.length === 1 ? "" : "s"} still owed an answer:\n\n` +
-    owed.map(questionLine).join("\n") +
+  const askedBlock = questions.length === 0 ? "" : (
+    `\n\n${questions.length} question${questions.length === 1 ? "" : "s"} still owed an answer:\n\n` +
+    questions.map(questionLine).join("\n") +
     "\n\nEach one blocks `done` until it is answered, dismissed or withdrawn, and draws its own card at the " +
     "BOTTOM of the handoff of the rest that asked it — never write it into a handoff, and put the " +
     "explanation above it. Answers arrive one question at a time; act on each as it lands. `unask` the " +
-    "ones since decided. Any ```awaiting fence names EVERY owed one under `questions:` or is refused, and " +
+    "ones since decided. Any ```awaiting fence names EVERY open one under `questions:` or is refused, and " +
     "at a rest after the one that asked, a question you neither name nor withdraw gets you bumped. In a " +
-    "fence: `questions: [" + owed.map((q) => q.id).join(", ") + "]`"
+    "fence: `questions: [" + questions.map((q) => q.id).join(", ") + "]`"
   )
-  const passedBlock = passed.length === 0 ? "" : (
-    `\n\n${passed.length} question${passed.length === 1 ? "" : "s"} set aside — the human wrote to you since, without answering:\n\n` +
-    passed.map(questionLine).join("\n") +
-    "\n\nThey hold nothing — not your sign-off, not a block on `done` — and frizz withdraws each one " +
-    "when you next come to rest. `keep` only one directly relevant to the human's message — reworded with " +
-    "`question` if the direction changed — and it is owed again. One you withdraw yourself after their " +
-    "message, or one they dismiss, cannot be asked again."
-  )
-  const askedBlock = owedBlock + passedBlock
   if (!items.length) {
-    if (owed.length > 0) {
+    if (questions.length > 0) {
       return selfLine + (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. An ```awaiting fence can still wait on your open questions alone — " +
@@ -1481,12 +1437,12 @@ async function activity() {
   const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
-  // Every OWED question rides the fence too: a fence that leaves one out is refused, and a fence on
-  // questions always queues, so its `status:` answer is `needs_input` whatever else it names. A set-aside
-  // one is left out — it holds nothing, and the next rest withdraws it. Otherwise the template guesses
+  // Every open question rides the fence too: a fence that leaves one out is refused, and a fence on
+  // questions always queues, so its `status:` answer is `needs_input` whatever else it names. Otherwise
+  // the template guesses
   // from the kinds — a shell or a sub-agent is usually work that finishes by itself, a PR, an issue or a
   // timer a watch — and the prose tells the worker to correct it.
-  const questionIds = owed.map((q) => q.id).filter(Boolean)
+  const questionIds = questions.map((q) => q.id).filter(Boolean)
   if (questionIds.length > 0) block.push(`  questions: [${questionIds.join(", ")}]`)
   const status = questionIds.length > 0 ? "needs_input" : byKind.shell.length + byKind.agent.length > 0 ? "working" : "watching"
   return selfLine + (
@@ -2475,7 +2431,7 @@ async function unwatch(args) {
 function openQuestionList(result) {
   const open = Array.isArray(result?.open) ? result.open : []
   if (!open.length) return "Nothing else is open on this thread — the human owes you no answer."
-  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}${q.repliedPast ? "  (set aside — withdrawn at your next rest unless you `keep` it)" : ""}`)
+  const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
   return `Open on this thread now:\n${lines.join("\n")}`
 }
 
@@ -2522,20 +2478,6 @@ async function unask(args) {
   const head = result?.withdrawn
     ? `Question ${id} withdrawn. Its card is gone and the human will not be asked.`
     : `No OPEN question ${id} on this thread — it was already answered or dismissed, or the id is not one of yours.`
-  return `${head}\n\n${openQuestionList(result)}`
-}
-
-/** The `keep` handler: opt a set-aside question back in, optionally reworded.
- * @param {Record<string, unknown>} args @returns {Promise<string>} */
-async function keep(args) {
-  const slug = threadSlug()
-  const id = typeof args.id === "string" ? args.id.trim() : ""
-  if (!id) throw new Error("`id` is required — take it from `ask` or `activity`")
-  const question = args.question && typeof args.question === "object" ? args.question : undefined
-  const result = (await callRpc("keepQuestion", { slug, id, ...(question ? { question } : {}) }))?.result
-  const head = result?.kept
-    ? `Question ${id} kept${question ? ", reworded" : ""}. It holds your thread again, and its card renders at the bottom of your next handoff.`
-    : `No OPEN question ${id} on this thread — it was already answered, dismissed or withdrawn, or the id is not one of yours.`
   return `${head}\n\n${openQuestionList(result)}`
 }
 

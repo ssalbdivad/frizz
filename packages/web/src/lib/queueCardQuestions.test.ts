@@ -13,7 +13,7 @@ const worker = (min: number, text = "Here is where it stands.") => ({ role: "ass
 // A frizz wake — a CI result, a timer — is a TURN to the anchor readers (it closes a rest) but not the
 // human's: the card's bubble stays on the human's own message.
 const wake = (min: number) => ({ role: "user", text: "CI finished: all checks passed.", wake: true, at: at(min) })
-const question = (id: string, askedMin: number, extra: { keptAt?: string } = {}) => ({ id, askedAt: at(askedMin), ...extra })
+const question = (id: string, askedMin: number) => ({ id, askedAt: at(askedMin) })
 
 const names = (qs: readonly { id: string }[]) => qs.map((q) => q.id)
 
@@ -41,14 +41,8 @@ test("a later fence that names the question under `questions:` brings it to that
   assert.equal(slots.here, true)
 })
 
-test("a question kept at the newest rest counts as asked there", () => {
-  const messages = [human(0), worker(1), wake(2), worker(3)]
-  const slots = handoffQuestionSlots(messages, [question("qst_kept", 1, { keptAt: at(3) })], [])
-  assert.deepEqual(names(slots.tail), ["qst_kept"])
-})
-
 test("a question from before the human's last turn flushes above the bubble, as upstream's window flushes it", () => {
-  // Asked, then the human typed past it (a danger question stays owed), then the worker rested again.
+  // Asked, then the human typed past it (it stays open and owed), then the worker rested again.
   const messages = [human(0), worker(1), human(2, "Do the other thing first."), worker(3)]
   const slots = handoffQuestionSlots(messages, [question("qst_before", 1)], [])
   assert.deepEqual(names(slots.above), ["qst_before"])
@@ -95,12 +89,4 @@ test("an answered question stays at its rest, and is never hoisted above the bub
 test("with no transcript to read, every question stays under the newest rest, as the card drew it before", () => {
   const slots = handoffQuestionSlots([], [question("qst_a", 1), question("qst_b", 2)], [])
   assert.deepEqual(names(slots.tail), ["qst_a", "qst_b"])
-})
-
-test("`here` reads the drawer's whole open set, so a set-aside question the card leaves out still counts", () => {
-  const messages = [human(0), worker(1), wake(2), worker(3)]
-  const current = question("qst_current", 3)
-  const slots = handoffQuestionSlots(messages, [], [], [current])
-  assert.equal(slots.here, true)
-  assert.deepEqual(names(slots.tail), [])
 })
