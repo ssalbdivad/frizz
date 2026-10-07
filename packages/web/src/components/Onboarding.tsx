@@ -101,8 +101,8 @@ interface Callout {
 interface TourStepSpec {
   title: string
   body: string
-  /** What the card points at, and the spotlight's hole. */
-  target: () => Element | null
+  /** What the card points at, and the spotlight's hole. None for the closing card, which points at nothing. */
+  target?: () => Element | null
   /** A second hole in the spotlight, with no arrow of its own. */
   also?: () => Element | null
   /** Labelled arrows, for a step that names several parts at once. The card then draws none. */
@@ -113,7 +113,7 @@ const select = (selector: string) => () => document.querySelector(selector)
 
 // The steps, in order. Every target is on both a board and All projects, so the tour runs on either. The
 // first holds the switcher's menu open (lib/tour.ts SWITCHER_STEP), so its arrows have its rows to point at;
-// it must stay first.
+// it must stay first. The last points at nothing: it is the closing card, and says how little there was.
 const STEPS: TourStepSpec[] = [
   {
     title: "Switch projects",
@@ -141,7 +141,14 @@ const STEPS: TourStepSpec[] = [
     body: "Every thread, grouped by where it stands: waiting on you, running, snoozed or done.",
     target: select("[data-xq-rail]"),
   },
+  {
+    title: "That's it!",
+    body: "Describe a task, then answer what lands in your queue. That's the whole thing.",
+  },
 ]
+
+/** The steps that point at something, which the card counts: the closing card is not one of them. */
+const POINTED = STEPS.filter((spec) => spec.target).length
 
 interface Box {
   left: number
@@ -180,7 +187,7 @@ function useStepBoxes(spec: TourStepSpec | undefined): { target: Box | null; als
     let frame = 0
     let last: (Box | null)[] = []
     const read = () => {
-      const next = [boxOf(spec.target()), boxOf(spec.also?.() ?? null), ...(spec.callouts ?? []).map((callout) => boxOf(callout.target()))]
+      const next = [boxOf(spec.target?.() ?? null), boxOf(spec.also?.() ?? null), ...(spec.callouts ?? []).map((callout) => boxOf(callout.target()))]
       if (!sameBoxes(next, last)) {
         last = next
         setBoxes(next)
@@ -211,7 +218,7 @@ export function Tour() {
   // page is wide again.
   const direction = useRef(1)
   useEffect(() => {
-    if (step === null || !spec || boxes?.target) return
+    if (step === null || !spec?.target || boxes?.target) return
     const timer = window.setTimeout(() => go(step + direction.current), 1200)
     return () => window.clearTimeout(timer)
   }, [step, spec, boxes?.target])
@@ -223,7 +230,7 @@ export function Tour() {
     else setTourStep(next)
   }
 
-  const showing = step !== null && boxes?.target != null
+  const showing = step !== null && spec !== undefined && (!spec.target || boxes?.target != null)
   useEffect(() => {
     if (step === null || !showing) return
     // Window CAPTURE, ahead of everything — the switcher's menu takes Enter and Escape from a document
@@ -241,7 +248,9 @@ export function Tour() {
     return () => window.removeEventListener("keydown", onKey, true)
   })
 
-  if (step === null || !spec || !boxes?.target) return null
+  if (step === null || !spec || !showing) return null
+  if (!spec.target) return createPortal(<Finale spec={spec} onGo={go} step={step} />, document.body)
+  if (!boxes?.target) return null
   const viewport = { width: window.innerWidth, height: window.innerHeight }
   // The callouts' parts sit inside the target, so only the target and `also` cut the scrim.
   const holes = [boxes.target, boxes.also].filter((box): box is Box => box !== null)
@@ -256,7 +265,7 @@ export function Tour() {
       data-tour-overlay
       role="dialog"
       aria-modal="true"
-      aria-label={`Tour, step ${step + 1} of ${STEPS.length}: ${spec.title}`}
+      aria-label={`Tour, step ${step + 1} of ${POINTED}: ${spec.title}`}
       className="fixed inset-0 z-[400] cursor-pointer select-none"
       onPointerDown={(event) => event.preventDefault()}
       onClick={() => go(step + 1)}
@@ -308,7 +317,7 @@ function TourCard({ step, spec, left, top, onGo }: { step: number; spec: TourSte
       style={{ left, top, width: CARD_W }}
     >
       <div className="text-[11px] font-medium tabular-nums text-muted-55">
-        {step + 1} of {STEPS.length}
+        {step + 1} of {POINTED}
       </div>
       <h2 className="mt-1 text-[15px] font-semibold text-fg">{spec.title}</h2>
       <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{spec.body}</p>
@@ -334,6 +343,66 @@ function TourCard({ step, spec, left, top, onGo }: { step: number; spec: TourSte
       <p className="mt-3 text-[11px] text-muted-55">
         <Key>→</Key> or <Key>Enter</Key> for next, <Key>Esc</Key> to skip
       </p>
+    </div>
+  )
+}
+
+/**
+ * THE CLOSING CARD — no arrow and no hole: the page is the point by now. The mark in the middle of a burst of
+ * strokes drawn in the arrows' hand, then the line that says how little there was to learn. Enter, → or a
+ * click closes it; ← goes back to the last step.
+ */
+function Finale({ spec, step, onGo }: { spec: TourStepSpec; step: number; onGo: (next: number) => void }) {
+  // Eight strokes around a 56px mark, each from 40px out to 54px, drawn in one after another.
+  const rays = Array.from({ length: 8 }, (_, i) => {
+    const angle = (i / 8) * Math.PI * 2 - Math.PI / 2
+    const from = 42
+    const to = i % 2 === 0 ? 56 : 51
+    return { x1: 64 + Math.cos(angle) * from, y1: 64 + Math.sin(angle) * from, x2: 64 + Math.cos(angle) * to, y2: 64 + Math.sin(angle) * to }
+  })
+  return (
+    <div
+      data-tour-overlay
+      role="dialog"
+      aria-modal="true"
+      aria-label={`Tour: ${spec.title}`}
+      className="tour-fade-in fixed inset-0 z-[400] flex cursor-pointer select-none items-center justify-center bg-scrim-55"
+      onPointerDown={(event) => event.preventDefault()}
+      onClick={() => onGo(step + 1)}
+    >
+      <div
+        data-tour-card
+        data-tour-finale
+        onClick={(event) => event.stopPropagation()}
+        className="flex w-[340px] cursor-default flex-col items-center rounded-xl bg-panel px-6 pb-5 pt-4 text-center shadow-2xl ring-1 ring-border"
+      >
+        <div className="relative h-[128px] w-[128px]">
+          <svg className="absolute inset-0" width={128} height={128} aria-hidden>
+            <g className="stroke-accent" strokeWidth={2.25} strokeLinecap="round">
+              {rays.map((ray, i) => (
+                <line key={i} {...ray} pathLength={1} className="tour-draw" style={{ animationDelay: `${120 + i * 45}ms` }} />
+              ))}
+            </g>
+          </svg>
+          <img src="/favicon.svg" width={56} height={56} alt="" className="absolute left-[36px] top-[36px] rounded-[13px]" />
+        </div>
+        <h2 className="text-[19px] font-semibold tracking-[-0.01em] text-fg">{spec.title}</h2>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-muted">{spec.body}</p>
+        <div className="mt-5 flex w-full items-center gap-2">
+          <button type="button" onClick={() => onGo(step - 1)} className="rounded-md px-2.5 py-1 text-[12px] text-muted outline-none transition-colors hover:bg-hover hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60">
+            Back
+          </button>
+          <span className="flex-1" />
+          <button
+            type="button"
+            data-tour-next
+            onClick={() => onGo(step + 1)}
+            className="rounded-md bg-accent-fill px-3 py-1 text-[12px] font-semibold text-on-accent outline-none transition-opacity hover:opacity-90 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+          >
+            Get started
+          </button>
+        </div>
+      </div>
     </div>
   )
 }
