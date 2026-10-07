@@ -1,7 +1,6 @@
 import { useState } from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
-import { Snail } from "lucide-react"
 import { Composer } from "./components/Composer.tsx"
 import { GithubTrigger, useGithubTriggerVisible } from "./components/GithubTrigger.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
@@ -20,9 +19,6 @@ import "./styles.css"
 const params = new URLSearchParams(location.search)
 const authed = !params.has("unauthed")
 const heals = params.has("heals")
-// `?alt` passes `submitAlt` as the new-thread box binds a Frizz plugin's: the alternate-submit glyph (a snail,
-// the one its rail offset was measured with, iconRhythm.ts) joins the rail beside send.
-const alt = params.has("alt")
 // `?send=schedule` draws Send as it reads when Enter will create a schedule (the repeat glyph in place of the
 // arrow, ScheduleComposer.tsx), and `?send=pending` as it reads while Enter is held for a schedule check.
 const send = params.get("send")
@@ -51,7 +47,6 @@ function Fixture() {
           value={value}
           onChange={setValue}
           onSubmit={() => {}}
-          {...(alt ? { submitAlt: { id: "alt", label: "Add for later", title: "Add for later, without starting an agent", icon: <Snail size={15} strokeWidth={2} />, onSubmit: () => {} } } : {})}
           {...(send === "schedule" ? { sendGlyph: "schedule" as const } : {})}
           {...(send === "pending" ? { sendPending: true } : {})}
           placeholder="Describe the task…"

@@ -53,7 +53,7 @@ test("the migration holds every legacy unstarted row, leaves its note where it w
     const before = columns(file, true)
     assert.equal(before.length, 6)
     // `lazy` is legacy data: the holder id the migration gives a plain unstarted row, from lazy threads
-    // (removed 2026-10-07). No plugin answers to it now, so those rows wait unstarted until a message.
+    // (removed 2026-10-07). Nothing answers to it now, so those rows wait unstarted until a message.
     const expected = [
       { slug: "a-note", lazy_prompt: "Look into the flaky resume test", held_by: "lazy", schedule_id: null },
       { slug: "b-empty-note", lazy_prompt: "", held_by: "lazy", schedule_id: null },
@@ -81,8 +81,8 @@ test("a held row an OLDER server started after a rollback reads as started on th
   try {
     const file = join(dir, "ui.db")
     const storage = createStorage(file, "p")
-    storage.upsertSession(row("note", { lazy_prompt: "draft", held_by: "a-plugin" }))
-    storage.upsertSession(row("still-held", { lazy_prompt: "draft two", held_by: "a-plugin" }))
+    storage.upsertSession(row("note", { lazy_prompt: "draft", held_by: "lazy" }))
+    storage.upsertSession(row("still-held", { lazy_prompt: "draft two", held_by: "lazy" }))
     storage.close()
     // The older build's dispatch upsert names only the column it knows: it clears lazy_prompt and never
     // touches held_by, which it has never heard of.
@@ -92,7 +92,7 @@ test("a held row an OLDER server started after a rollback reads as started on th
     const reopened = createStorage(file, "p")
     assert.equal(reopened.getSession("note")?.held_by, null, "started, so no longer held")
     assert.equal(isHeldRow(reopened.getSession("note")), false)
-    assert.equal(reopened.getSession("still-held")?.held_by, "a-plugin", "an untouched held row stays held")
+    assert.equal(reopened.getSession("still-held")?.held_by, "lazy", "an untouched held row stays held")
     assert.equal(reopened.getSession("still-held")?.lazy_prompt, "draft two")
     reopened.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
@@ -102,7 +102,7 @@ test("setHeldPrompt rewrites only a held row's prompt", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-held-prompt-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   try {
-    storage.upsertSession(row("held", { lazy_prompt: "first", held_by: "a-plugin" }))
+    storage.upsertSession(row("held", { lazy_prompt: "first", held_by: "lazy" }))
     storage.upsertSession(row("live"))
     assert.equal(storage.setHeldPrompt("held", "sid-held", "second"), true)
     assert.equal(storage.getSession("held")?.lazy_prompt, "second")
@@ -119,8 +119,8 @@ test("base never queues a held thread whose holder has not said so", () => {
     unread: false, archived: false, subAgents: [], bgShells: [], watches: [], pendingQuestion: false, questions: [],
     needsYou: false, awaitingBackground: false, crashed: true, kind: "session",
   } as unknown as ThreadView
-  const view = heldThreadView(base, row("orphan", { lazy_prompt: "", held_by: "some-removed-plugin" }))
-  assert.equal(view.held, "some-removed-plugin")
+  const view = heldThreadView(base, row("orphan", { lazy_prompt: "", held_by: "some-removed-holder" }))
+  assert.equal(view.held, "some-removed-holder")
   assert.equal(view.needsYou, false)
   assert.equal(view.runtime, "turn-idle", "never reads as a dispatch still spinning up")
   assert.equal(view.crashed, false, "never reads as a worker that died")

@@ -549,7 +549,7 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
             ) : running ? (
               <span className="flex items-center gap-2"><Dots /> Session starting…</span>
             ) : thread?.held !== undefined ? (
-              // A held thread (a plugin's, a schedule's next run): no agent has run, so there is nothing to read.
+              // A held thread (a schedule's next run): no agent has run, so there is nothing to read.
               // What it will start with is the prompt box below.
               "Not started yet."
             ) : canAdoptThread(thread) ? (

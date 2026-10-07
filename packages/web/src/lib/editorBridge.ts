@@ -334,7 +334,7 @@ export async function composeInto(item: EditorComposeInput, request: ComposeRequ
     projects: projects ?? [],
   })
   if (target.kind === "refused") return { ok: false, reason: target.reason }
-  // A HELD THREAD's box (HeldThreadBox.tsx) is kept by its holder, with no draft and no chips: a chip
+  // A HELD THREAD's box (HeldThreadBox.tsx) is kept on the server, with no draft and no chips: a chip
   // written to its follow-up draft was answered "added", never appeared, and turned up in the reply box
   // once the thread had started (sweep 2026-10-01). So it is refused, saying what to do instead.
   // (Putting the chip into the note itself needs staged context that survives the thread's start.)

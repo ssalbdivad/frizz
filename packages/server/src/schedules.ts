@@ -1093,8 +1093,8 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     own,
     async startHeldRow(row, prompt, profile) {
       const sch = row.schedule_id ? storage.getSchedule(row.schedule_id) : undefined
-      // Only the schedule's PENDING next run is a scheduled run; any other held row (a plugin's, or one left
-      // behind by a deleted schedule) starts plainly on its prompt.
+      // Only the schedule's PENDING next run is a scheduled run; any other held row (a leftover lazy thread,
+      // or one left behind by a deleted schedule) starts plainly on its prompt.
       if (!sch || sch.next_slug !== row.slug || !isHeldRow(row)) return starter.start(row, prompt, profile)
       return humanStart(sch, row, prompt, profile)
     },

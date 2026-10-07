@@ -26,10 +26,8 @@ export type ComposerKeyboardEvent = {
 // Enter and the forced chord — a question card exists while the worker waits, so there is nothing to
 // interrupt and "send now" and "send" are the same act.
 //
-// A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter is its ALTERNATE SUBMIT — a Frizz plugin's,
-// which takes the prompt instead of starting it — shouldSubmitAltComposerEnter. There is no schedule chord:
-// the new-thread box reads its words for a schedule, and Enter creates it when there is one
-// (ARCHITECTURE.md § Scheduled threads).
+// There is no schedule chord: the new-thread box reads its words for a schedule, and Enter creates it when
+// there is one (ARCHITECTURE.md § Scheduled threads).
 function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
     && !event.altKey
@@ -55,16 +53,6 @@ export function shouldSubmitComposerEnter(event: ComposerKeyboardEvent, canSubmi
  */
 export function shouldInterruptSubmitComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
   return canSubmit && isEnter(event) && (event.metaKey || event.ctrlKey)
-}
-
-/**
- * THE ALTERNATE SUBMIT — ⌘/Ctrl-Shift-Enter in the new-thread box, where a Frizz plugin offers one
- * (`newThread.submitAlt`, which takes the prompt instead of dispatching it). Disjoint from the other three,
- * every one of which refuses Shift (isEnter). Same `canSubmit` gate and the same IME guard as every send.
- */
-export function shouldSubmitAltComposerEnter(event: ComposerKeyboardEvent, canSubmit: boolean): boolean {
-  return canSubmit && event.key === "Enter" && event.shiftKey && (event.metaKey || event.ctrlKey) && !event.altKey
-    && !event.isComposing && event.keyCode !== 229
 }
 
 /**

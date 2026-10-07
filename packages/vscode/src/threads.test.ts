@@ -30,9 +30,9 @@ const TITLE_ROWS: PickerThread[] = [
   row("b3", { title: "", titleAuto: undefined }),
   row("b4", { title: "some-generated-slug", titleAuto: true, titleNamed: true }),
   row("b5", { title: "Café élan", titleAuto: false }),
-  // A HELD thread (a plugin's, a schedule's next run, an orphan) written down seconds ago: no placeholder.
-  row("b6", { title: "Audit the flaky resume test…", titleAuto: true, titleNamed: false, held: "a-plugin", spawnedAt: justNow() }),
-  row("b7", { title: "b7", titleAuto: true, backend: "codex", held: "gone-plugin", spawnedAt: justNow() }),
+  // A HELD thread (a schedule's next run, an orphan) written down seconds ago: no placeholder.
+  row("b6", { title: "Audit the flaky resume test…", titleAuto: true, titleNamed: false, held: "schedules", spawnedAt: justNow() }),
+  row("b7", { title: "b7", titleAuto: true, backend: "codex", held: "lazy", spawnedAt: justNow() }),
 ]
 
 test("thread names and @handles match the page's displayTitle / threadHandleOf on every provenance branch", () => {

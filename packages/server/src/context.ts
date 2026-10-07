@@ -91,8 +91,6 @@ import {
 import { log as frizzLog } from "./logging.ts"
 import { RETENTION_FIRST_SWEEP_MS, RETENTION_SWEEP_INTERVAL_MS } from "./thread-retention.ts"
 import { projectScopedEnvironment } from "./project-launch.ts"
-import type { PluginRegistry } from "./plugins/loader.ts"
-import { createProjectPlugins, type ProjectPlugins } from "./plugins/project.ts"
 import { homedir } from "node:os"
 
 export const CONTEXT_STARTUP_CLEANUP_TIMEOUT_MS = 4_000
@@ -272,13 +270,6 @@ export interface AppContext {
    * Supplied by the server, which owns it; absent under a test context, where every opener spawns.
    */
   editors?: EditorBridge
-  /**
-   * The machine's FRIZZ PLUGINS (plugins/loader.ts) — one registry for the process, loaded before any
-   * project opened. Supplied by the server; absent under a test context, which then has none.
-   */
-  pluginRegistry?: PluginRegistry
-  /** This project's view of them (plugins/project.ts): its procedures, hooks and events. Absent ⇒ none. */
-  plugins?: ProjectPlugins
   // GitHub detection (installed/inRepo/nameWithOwner) resolved ONCE at boot via initGithub() — stable
   // for the process lifetime. `authed` is NOT cached here; the githubStatus query re-checks it live so
   // a mid-session `gh auth login` reflects immediately. Undefined until initGithub() resolves (the
@@ -299,8 +290,7 @@ export interface AppContext {
   schedules?: ScheduleService
   // The one-shot model call that reads a schedule out of plain words (schedule-interpreter.ts).
   scheduleInterpreter?: ScheduleInterpreter
-  // Start a held thread, whoever asks — the router's send / followUp, a plugin's `threads.start` and the
-  // scheduler alike (held-start.ts). A schedule's pending next run gets its run header and its history
+  // Start a held thread, whoever asks — the router's send / followUp and the scheduler alike (held-start.ts). A schedule's pending next run gets its run header and its history
   // line on this path. Absent (a hand-built test context) ⇒ the router starts held rows itself.
   startHeldThread?: (row: SessionRow, prompt: string, profile?: HeldStartProfile) => Promise<{ slug: string; sessionId: string }>
   // Exact only for Frizz's provisioned runtime. An explicit/PATH override is unknown and leaves the
@@ -352,8 +342,6 @@ export interface ContextOptions {
   reopenHomeWorkspace?: AppContext["reopenHomeWorkspace"]
   /** See AppContext.editors — supplied by the server, which owns the one bridge. */
   editors?: EditorBridge
-  /** See AppContext.pluginRegistry — supplied by the server, which loads it once for every project. */
-  plugins?: PluginRegistry
   /** Internal deterministic construction/rollback seam. */
   startup?: {
     afterPhase?: (phase: ContextStartupPhase) => void
@@ -527,8 +515,6 @@ export function deliverClaudeBrokerWake(deps: {
   freshProcess?: boolean
   /** What the worker can reach if this wake cold-resumes it (dispatch.ts workerCapabilities). */
   capabilities?: WorkerCapabilities
-  /** What the project's Frizz plugins add to the system prompt (plugins/project.ts), re-applied on a cold resume. */
-  pluginSystemPrompt?: string
 }): Promise<void> {
   const { bridge, slug, cwd, row, settings, deliveryMessage, freshProcess } = deps
   const board = { dir: deps.boardDir ?? cwd, workDir: cwd }
@@ -537,7 +523,6 @@ export function deliverClaudeBrokerWake(deps: {
     scratchpadOrientation(row.session_id, "claude", workerScratchPath(board, row.session_id)),
     frizzConfigBlock(board.dir),
     deadlineSection(row),
-    deps.pluginSystemPrompt,
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({
     threadSlug: slug,
@@ -893,8 +878,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         // fork (project-mcp-servers.ts): under `--strict-mcp-config` nothing mounts that frizz did not hand over.
         workerEnv: {
           pluginDir: workerPluginDir(),
-          // Each running Frizz plugin's `claude/` directory, read at every fork (plugins/loader.ts).
-          extraPluginDirs: () => opts.plugins?.claudeDirs() ?? [],
           ...claudeMcpConfig(resolveFrizzMcp(frizzMcpTarget)),
           permDir: permRequestDir(project),
           // Only where the board is NOT the worker's cwd (the Home workspace): the cc-worker hooks write
@@ -1077,12 +1060,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
       }
     },
   })
-  // Late-bound: the schedule service and the plugins need the dispatcher, which needs the board.
+  // Late-bound: the schedule service needs the dispatcher, which needs the board.
   let schedules: ScheduleService | undefined
-  let plugins: ProjectPlugins | undefined
   board = createBoard(project, storage, bus, tailer, bootId, {
     scheduleRef: (row) => schedules?.threadRef(row),
-    plugins: () => plugins,
     threadTerminals: () => terminalRunner.byThread(),
     codexTurnLiveness: (slug, sessionId) => codexAppServer?.turnLiveness(slug, sessionId),
     // Headless-stall signal for a broker row: the ownerless daemon's record. Absent bridge ⇒ default
@@ -1137,11 +1118,10 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
         ? Promise.resolve(readCodexAuthState())
         : readClaudePreflightAuth({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }),
     preflightCodexBinary: () => readCodexBinaryState(opts.codexBin ?? "codex"),
-    pluginSystemPrompt: (kind) => plugins?.systemPrompt(kind) ?? "",
   })
 
   // SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads). One held-thread starter per project, shared by the
-  // router, the plugins and the scheduler so its one-launch-at-a-time guard sees every launch.
+  // router and the scheduler so its one-launch-at-a-time guard sees every launch.
   const heldStarter = createHeldThreadStarter({ dispatcher, board })
   schedules = createScheduleService({
     project,
@@ -1171,18 +1151,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     get nameFor() { return threadNamer.available ? (source: string, exceptSlug?: string) => threadNamer.name(source, exceptSlug) : undefined },
   })
   const scheduleService = schedules
-  // FRIZZ PLUGINS (plugins/project.ts): the machine's registry, scoped to this project. A held thread a
-  // plugin starts goes through the same start as everyone's, so it shares the one-launch-at-a-time guard.
-  if (opts.plugins && opts.plugins.records().length > 0) {
-    plugins = createProjectPlugins({
-      registry: opts.plugins,
-      project,
-      storage,
-      dispatcher,
-      startHeld: (row, prompt, profile) => scheduleService.startHeldRow(row, prompt, profile),
-      refresh: () => void board.refresh(),
-    })
-  }
   // Its own completer, so reading a schedule never queues behind a fleet's name mints. Same switch as the
   // namer: Background summaries off (or FRIZZ_THREAD_NAMER=0) leaves it no model, and the box reads every
   // prompt as having no schedule in it. The prompt box reads as the human
@@ -1275,7 +1243,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
           row,
           settings: getSettings(storage, home),
           deliveryMessage,
-          pluginSystemPrompt: plugins?.systemPrompt("claude"),
           // Recomputed here rather than carried on the delivery: the outbox stores a message, not a
           // runtime decision, and the tail is the live answer to "is this thread still behind a wall
           // its own process is enforcing".
@@ -1383,8 +1350,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     reopenHomeWorkspace: opts.reopenHomeWorkspace,
     launchProjectId: opts.launchProjectId,
     editors: opts.editors,
-    pluginRegistry: opts.plugins,
-    plugins,
     claudeBin: opts.claudeBin,
     codexBin: opts.codexBin,
     terminalRunner,
@@ -1394,9 +1359,6 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     codexVersion: opts.codexVersion,
   }
   startThreadRetention(appContext, contextUnsubscribers)
-  // Each plugin's `project()` hook — its moment to reconcile its own records with this project's rows —
-  // once the context is whole, and before the first board build reads its threadView.
-  plugins?.opened()
   return appContext
 }
 

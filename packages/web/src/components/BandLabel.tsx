@@ -88,7 +88,7 @@ export function ThreadBandStamp({ thread }: { thread: ThreadView }) {
   const archivingAt = useArchivingAt()
   const band = bandOf(optimisticallyArchived(optimisticallySteered(thread, steeredAt[thread.id]), archivingAt[thread.id]))
   if (!band) return null
-  // A held thread no holder queues (its Frizz plugin removed or failed) sits in Active, but nothing is working
+  // A held thread that is not a schedule's pending run sits in Active, but nothing is working
   // on it: no stamp rather than "Working". Its facts say when it was added, and its box says it is not started.
   if (band === "working" && thread.held !== undefined) return null
   return <BandLabel band={band} className="shrink-0" data-thread-band={band} />

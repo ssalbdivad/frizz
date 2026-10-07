@@ -73,7 +73,7 @@ export interface LiveScheduleInput {
    *  `composerExcludeRuns`). */
   exclude: readonly Span[]
   /** The prompt a schedule would save for a CUT prose — chips serialized, user commands expanded, attachments
-   *  rejoined — exactly as the alternate submit writes it. "" when nothing is left. */
+   *  rejoined, and never the editor block. "" when nothing is left. */
   promptOf: (cutProse: string) => string
   /** The model/effort the box would dispatch on. Undefined while the profile is loading. */
   profile: { model: string; backend: CreateScheduleInput["backend"]; effort: CreateScheduleInput["effort"] } | undefined
@@ -116,8 +116,6 @@ export interface LiveSchedule {
   sendTitle: string | undefined
   /** A create is in flight: the button spins, the text stays live. */
   sendPending: boolean
-  /** A schedule is being created from the draft's words: nothing else may take them (the alternate submit). */
-  creating: boolean
   /** Enter, the send button, the phone's send. */
   submit: () => void
   /** Esc in the box: takes the strip away ("not a schedule"). False when it did nothing. */
@@ -485,7 +483,6 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     sendGlyph: schedules ? "schedule" : "send",
     sendTitle: creating ? "Creating the schedule…" : schedules ? (phone ? "Create schedule" : "Create schedule (Enter)") : undefined,
     sendPending: creating,
-    creating,
     submit,
     onEscape,
     onInputEvent: (e) => {

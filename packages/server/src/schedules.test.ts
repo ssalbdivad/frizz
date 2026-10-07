@@ -110,8 +110,8 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
   } as unknown as AppContext
   return {
     storage, service, router: createRouter(ctx), spawned, readings,
-    // A thread written down unstarted, as a Frizz plugin's `threads.create` writes one.
-    writeDown: async (input: { prompt: string; title?: string }) => dispatcher.createHeldThread(input, { holder: "a-plugin" }),
+    // A thread written down unstarted by a holder other than `schedules` (a leftover lazy thread's).
+    writeDown: async (input: { prompt: string; title?: string }) => dispatcher.createHeldThread(input, { holder: "lazy" }),
     at: (ms: number) => { clock = ms },
     now: () => clock,
     tick: async () => { service.evalDue(clock); await service.drain() },
@@ -472,7 +472,7 @@ test("a quiet done files a scheduled run under Done with its summary; on any oth
     assert.equal(got.history[0]!.summary, "Nothing new — no issues since Oct 5.")
     assert.equal(got.history[0]!.label, "Nothing new — no issues since Oct 5.")
     assert.equal(got.schedule.counts.unreviewed, 0)
-    // An ordinary thread: one written down unstarted (as a plugin might), then started.
+    // An ordinary thread: one written down unstarted by another holder, then started.
     const plain = await h.writeDown({ prompt: "plain work", title: "Plain work" })
     await h.router.startHeldThread.handler({ input: { slug: plain.slug, sessionId: plain.sessionId, prompt: "plain work" } })
     await assert.rejects(

@@ -122,7 +122,7 @@ const item = { path: "/repo/src/a.ts", app: "Visual Studio Code", text: "export 
 // and surfaced in the reply box once the thread had started (sweep 2026-10-01).
 test("an editor's insert refuses a held thread in front, and writes no draft", async () => {
   resetProjectState()
-  store.board = { projectDir: "/repo", projectSlug: "acme", threads: [{ id: "later", sessionId: "s9", held: "a-plugin", heldPrompt: "Refactor the limiter" }] } as unknown as BoardSnapshot
+  store.board = { projectDir: "/repo", projectSlug: "acme", threads: [{ id: "later", sessionId: "s9", held: "lazy", heldPrompt: "Refactor the limiter" }] } as unknown as BoardSnapshot
   store.drawers = [{ id: 1, kind: "thread", slug: "later" }] as typeof store.drawers
   const key = draftKey.followUp("/repo", "later", "s9")
   try {

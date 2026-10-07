@@ -99,15 +99,6 @@ async function call(base: string, name: string, type: ProcType, input?: unknown,
   return result
 }
 
-/**
- * One procedure by NAME on an explicit API base — for the Frizz plugins' procedures (`plugin.<id>.<name>`,
- * plugins/loader.ts), which the server mounts at runtime and no static contract can declare. Same
- * transport, envelope and restart guard as every typed call.
- */
-export function callProcedure(base: string, name: string, type: ProcType, input?: unknown): Promise<unknown> {
-  return call(base, name, type, input)
-}
-
 /** A typed client whose every call goes to `base()`, read at CALL time. */
 function createRpc(base: () => string): Api {
   return new Proxy({} as Api, {

@@ -70,7 +70,6 @@ import { runExternalOpen } from "../lib/externalOpen.ts"
 import { PROJECT_STEP_CHORDS, detectPlatform, formatChord, parseChord } from "../lib/keybindings.ts"
 import { AllQueuesCard } from "./AllQueuesCard.tsx"
 import { QuotaAlerts } from "./QuotaAlert.tsx"
-import { QueueHeadSlots } from "../plugins/loader.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { isLimitPaused } from "../lib/limitPause.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
@@ -565,8 +564,6 @@ export function AllQueuesPage() {
             {/* Quota is account-global, so the alert counts every project's running threads even
                 when the page is focused on one. */}
             <QuotaAlerts threads={runningThreads} />
-            {/* Frizz plugins' `queue.head` slots (plugins/loader.tsx), each fenced by its own boundary. */}
-            <QueueHeadSlots />
             {queue.length > 0 ? (
               queue.map((slot, index) => (
                 <Fragment key={slot.key}>

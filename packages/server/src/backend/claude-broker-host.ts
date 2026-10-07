@@ -292,8 +292,6 @@ export interface ForkBrokerOptions {
   forkFrom?: string
   /** The frizz worker environment (plugin + MCP + per-thread frizz vars) — see ClaudeBrokerConfig. */
   pluginDir?: string
-  /** Frizz plugins' Claude Code plugin directories, loaded beside `pluginDir` (ClaudeBrokerConfig). */
-  extraPluginDirs?: readonly string[]
   mcpServers?: WorkerMcpServers
   allowedTools?: string[]
   workerEnv?: Record<string, string>
@@ -318,7 +316,6 @@ export function forkBroker(options: ForkBrokerOptions): Promise<BrokerRecord> {
     resume: options.resume,
     ...(options.forkFrom ? { forkFrom: options.forkFrom } : {}),
     pluginDir: options.pluginDir, mcpServers: options.mcpServers, allowedTools: options.allowedTools,
-    ...(options.extraPluginDirs?.length ? { extraPluginDirs: [...options.extraPluginDirs] } : {}),
     workerEnv: options.workerEnv,
   }
   const entry = options.daemonEntry ?? resolveDetachedDaemonEntry(import.meta.url, "claude-agent-broker")

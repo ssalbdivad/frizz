@@ -284,13 +284,6 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 </details>
 
 <details>
-<summary><b>Can I add features of my own?</b></summary>
-
-> Yes, as **Frizz plugins**: a folder in Frizz's data directory, `<data>/user-plugins/<id>/`, whose `package.json` carries a `frizzPlugin` manifest. Plugins are your own code with no sandbox, so **Settings → Frizz plugins** lists every one and what it adds, and `FRIZZ_PLUGINS_OFF=1` starts Frizz with none. None ships with Frizz: you put the folder there yourself, and Frizz loads it at the next restart. A plugin's `.ts` server half needs Node 22.18 or newer.
-
-</details>
-
-<details>
 <summary><b>What platforms does it run on?</b></summary>
 
 > macOS, Linux, and Windows. Windows support landed once the last dependency that had no native Windows build was removed.

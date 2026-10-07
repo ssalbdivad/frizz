@@ -103,7 +103,7 @@ test("the dispatch upsert that starts a schedule's held run never clears schedul
 test("snooze expiry leaves a schedule's pending next run alone, and clears every other promptless snooze", () => {
   const storage = tmpStorage()
   storage.upsertSession(heldRow("triage-issues"))
-  storage.upsertSession(heldRow("plain-note", { schedule_id: null, held_by: "a-plugin" }))
+  storage.upsertSession(heldRow("plain-note", { schedule_id: null, held_by: "lazy" }))
   storage.upsertSession(heldRow("started-run", { lazy_prompt: null, held_by: null }))
   storage.clearExpiredSnoozes("2026-10-06T00:00:00.000Z")
   assert.equal(storage.getSession("triage-issues")!.snoozed_until, "2026-10-05T09:00:00.000Z")

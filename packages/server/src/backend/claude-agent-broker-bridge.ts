@@ -81,10 +81,6 @@ export interface ClaudeBrokerBridgeDeps {
      *  cwd — the Home workspace (home-workspace.ts). Reaches the hooks as FRIZZ_BOARD_ROOT, so the
      *  scratch directory and session state land on the board instead of in `<cwd>/.frizz`. */
     boardRoot?: string
-    /** The Claude Code plugin directories the machine's running FRIZZ PLUGINS ship (plugins/loader.ts
-     *  claudeDirs), loaded beside `pluginDir`. Read at every fork, like getSettings: a daemon already
-     *  running keeps what it was forked with. */
-    extraPluginDirs?: () => readonly string[]
   }
   /** The live Settings, read at every fork so the auto-compact window (Settings.autoCompactWindow →
    *  CLAUDE_CODE_AUTO_COMPACT_WINDOW) follows the drawer without a restart. Only the fork reads it: a
@@ -607,7 +603,7 @@ export function createClaudeAgentBrokerBridge(deps: ClaudeBrokerBridgeDeps): Cla
     const lostGeneration = sessions.get(slug)?.generation ?? lastKnownBrokerDaemon(deps.stateDir, sessionId)?.generation ?? ""
     const { record, reattached } = await adoptOrForkBroker({
       stateDir: deps.stateDir, cwd, sessionId, executablePath, permissionMode, env: deps.env,
-      pluginDir: we?.pluginDir, extraPluginDirs: we?.extraPluginDirs?.(), mcpServers, allowedTools: we?.allowedTools, workerEnv,
+      pluginDir: we?.pluginDir, mcpServers, allowedTools: we?.allowedTools, workerEnv,
       ...fork,
     })
     // A RESUME that had to cold-start is the moment frizz discovers a daemon died while nobody was

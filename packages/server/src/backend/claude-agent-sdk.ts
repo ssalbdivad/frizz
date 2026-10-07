@@ -123,9 +123,6 @@ export interface ClaudeQueryStartOptions {
   // (agents + hooks); `mcpServers` mounts the stdio MCP servers; `allowedTools` pre-approves them so a
   // headless worker never blocks on a tool it has nobody to approve.
   pluginDir?: string
-  // A Frizz plugin's Claude Code plugin directories (plugins/loader.ts claudeDirs), appended after the
-  // cc-worker plugin in the SDK's `plugins`.
-  extraPluginDirs?: string[]
   mcpServers?: WorkerMcpServers
   allowedTools?: string[]
   // Hand the CLI ONLY `mcpServers` (plus whatever the loaded plugin declares): it discovers no `.mcp.json`
@@ -897,15 +894,6 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   }
 }
 
-/**
- * The SDK's `plugins`: the cc-worker plugin first, then each Frizz plugin's Claude Code directory, never one
- * path twice. Empty when there are none — the option is then left out rather than passed as `[]`.
- */
-export function sdkPlugins(options: Pick<ClaudeQueryStartOptions, "pluginDir" | "extraPluginDirs">): { type: "local"; path: string }[] {
-  const paths = [...(options.pluginDir ? [options.pluginDir] : []), ...(options.extraPluginDirs ?? [])]
-  return [...new Set(paths)].map((path) => ({ type: "local" as const, path }))
-}
-
 function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptions): ClaudeQueryHandle {
   const cwd = validateAbsolutePath(options.cwd, "cwd")
   const sessionId = validateSessionId(options.session.sessionId)
@@ -1036,7 +1024,7 @@ function startClaudeQuery(executablePath: string, options: ClaudeQueryStartOptio
       // They reach the CLI as a FILE (`extraArgs`), never through the SDK's own `mcpServers` option: the
       // SDK renders that one as inline `--mcp-config <json>` on the CLI's argv, and the config carries the
       // operator's credentials — so every worker published its bearer tokens to `ps` (writeMcpConfigFile).
-      ...(sdkPlugins(options).length ? { plugins: sdkPlugins(options) } : {}),
+      ...(options.pluginDir ? { plugins: [{ type: "local" as const, path: options.pluginDir }] } : {}),
       ...(mcpConfigFile ? { extraArgs: { "mcp-config": mcpConfigFile } } : {}),
       ...(options.strictMcpConfig ? { strictMcpConfig: true } : {}),
       ...(options.allowedTools?.length ? { allowedTools: options.allowedTools } : {}),

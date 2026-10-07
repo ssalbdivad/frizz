@@ -247,8 +247,8 @@ export function ThreadComposerBox({
     deliver()
   }
 
-  // A HELD THREAD has no agent to steer yet: its box is what it will start with, and sending it starts one —
-  // its holder's box (a Frizz plugin's `thread.composer`), or base's (HeldThreadBox.tsx).
+  // A HELD THREAD has no agent to steer yet: its box is what it will start with, and sending it starts one
+  // (HeldThreadBox.tsx).
   if (thread?.held !== undefined) {
     return (
       <div {...(surface === "chatComposer" ? { "data-thread-action-bar": "" } : {})} className={className}>

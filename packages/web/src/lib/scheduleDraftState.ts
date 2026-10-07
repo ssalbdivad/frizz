@@ -90,7 +90,7 @@ export function dispatchDraftKeys(projectDir: string | undefined, { keepPick = f
 
 /**
  * Clear a new thread's draft — the prompt, its schedule dismissal and its profile pick — in ONE synchronous
- * commit with ONE notify. Every path that consumes the draft (a dispatch, the alternate submit, a created schedule)
+ * commit with ONE notify. Every path that consumes the draft (a dispatch, a created schedule)
  * goes through here, so a dismissal never outlives the text it was said about.
  *
  * `keepPick`: the `/login` / `/logout` alias consumes the TEXT as an account action, not the draft's

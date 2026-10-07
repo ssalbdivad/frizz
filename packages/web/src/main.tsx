@@ -24,7 +24,6 @@ import { PENDING_SEND_REPLAY_DELAY_MS, replayPendingSends } from "./lib/eagerCom
 import { innerPath } from "./lib/base-path.ts"
 import { projectScopedQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
-import { initPlugins } from "./plugins/loader.tsx"
 
 // DEV ONLY: React 19.2's development build logs its Components/Scheduler performance tracks through
 // `performance.measure`, each entry carrying a `detail` object (a props diff for a re-render), and
@@ -88,9 +87,6 @@ if (!settingsFixture) {
   // read the switcher draws from, kept current as it is invalidated by an add, rename or removal.
   new QueryObserver(queryClient, { queryKey: ["projectsList"], queryFn: () => rpc.projectsList() }).subscribe((result) => setProjectMentions(result.data))
   installViewTransitionRejectionFilter()
-  // FRIZZ PLUGINS' web halves (plugins/loader.tsx): machine-wide, once per page. Their slots appear as each
-  // one loads; nothing waits on them, and one that fails is listed in Settings → Frizz plugins.
-  void initPlugins()
   // A reply still on the wire when the last page in this tab went away — see lib/pendingSends.ts.
   setTimeout(() => void replayPendingSends(), PENDING_SEND_REPLAY_DELAY_MS)
 }

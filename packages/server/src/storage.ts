@@ -291,20 +291,17 @@ export interface SessionRow {
   //     human may edit for this run alone (ARCHITECTURE.md § Scheduled threads);
   //   · the DOWNGRADE path. Every held row carries a non-NULL value here (`""` at least), because an OLDER
   //     server generation — which the stable-artifact model keeps and can roll back to — knows only this
-  //     column, and reads it as a lazy thread rather than as a started thread with no transcript. A held
-  //     row a plugin wrote keeps its creation-time note here for that reason alone; the plugin's own
-  //     database is the truth for it (plugins/api.ts `legacyNote` is the one-time import).
+  //     column, and reads it as a lazy thread rather than as a started thread with no transcript.
   // Every dispatch upsert writes NULL here and to held_by together: the write that records the live session
   // is the one that ends the held state. Never dropped or emptied by a migration.
   lazy_prompt?: string | null
   // A HELD THREAD: a thread written down with no agent behind it yet, held by whoever wrote it — base's
-  // `schedules` (a schedule's next run) or a Frizz plugin's id. Non-NULL means UNSTARTED. The row is
+  // `schedules` (a schedule's next run), or `lazy` on a row left from lazy threads. Non-NULL means UNSTARTED. The row is
   // otherwise an ordinary thread — it snoozes, is marked done, renamed, pinned and linked like any other —
   // but its session id names a session no provider has ever heard of, so nothing may tail, resume, nudge or
-  // wake it (isHeldRow). Base never QUEUES a held row: whether it does is its holder's call (a plugin's
-  // `threadView`), which is upstream's rule — "with no agent it makes no sense for a thread to ever show up
-  // inside the queue" — kept by default. A message sent to it goes to its holder (`onSend`), and with no
-  // live holder starts it on that message, so removing a plugin never strands one. Starting it dispatches on
+  // wake it (isHeldRow). Base never QUEUES a held row, which is upstream's rule — "with no agent it makes no
+  // sense for a thread to ever show up inside the queue". A message sent to it starts it on that message,
+  // so no holder can strand one. Starting it dispatches on
   // this same slug and session id (dispatch.ts `onto`), and that dispatch's upsert writes NULL here.
   held_by?: string | null
   // The SCHEDULE this thread is a run of (ARCHITECTURE.md § Scheduled threads): set on the held row a schedule
@@ -315,7 +312,7 @@ export interface SessionRow {
   schedule_id?: string | null
 }
 
-/** Base's own holder: a schedule's next run (schedules.ts). A plugin may not take the id (BASE_HOLDERS). */
+/** Base's own holder: a schedule's next run (schedules.ts). */
 export const SCHEDULES_HOLDER = "schedules"
 
 /** A schedule's pending next run: an unstarted thread a schedule materialized and holds (SessionRow.held_by). */

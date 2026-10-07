@@ -1,10 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ReactElement } from "react"
+import { useEffect, useRef, useState, type ReactElement } from "react"
 import { useMutation } from "@tanstack/react-query"
 import type { ThreadView } from "@frizz/shared"
 import { showToast } from "../store.ts"
-import { useThreadApi, useThreadApiBase } from "../api/threadApi.tsx"
-import { PluginBoundary, pluginCaller, usePluginSlots } from "../plugins/loader.tsx"
-import type { HeldThreadBoxProps } from "../plugins/api.ts"
+import { useThreadApi } from "../api/threadApi.tsx"
 import { Composer } from "./Composer.tsx"
 
 // A HELD THREAD's prompt box (ThreadView.held): a thread written down with no agent behind it. Its text IS
@@ -17,17 +15,18 @@ import { Composer } from "./Composer.tsx"
 // turn, `$ cmd` opens a terminal in the agent's folder — and a held thread has none of those yet. The
 // profile it starts on is the one the prompt box had when it was written down.
 //
-// The draft store is not used either: the holder keeps the text, so the box reads it from the board and
-// writes it back. `saved` is the last text this box knows the holder has, which is how a board push of our
-// own save is told apart from an edit made somewhere else (the other surface, another tab).
-//
-// WHO DRAWS IT (HeldThreadComposer below): the HOLDER's `thread.composer` slot when its Frizz plugin is
-// loaded — a plugin may bind this same box to its own record, through host.ui — and base's binding
-// otherwise: a schedule's next run (base holds it), or a thread whose plugin is gone, whose box starts it on
-// what base kept (ThreadView.heldPrompt).
+// The draft store is not used either: the server keeps the text (ThreadView.heldPrompt), so the box reads it
+// from the board and writes it back through updateHeldPrompt. `saved` is the last text this box knows the
+// server has, which is how a board push of our own save is told apart from an edit made somewhere else (the
+// other surface, another tab).
 const SAVE_DELAY_MS = 500
 
-export function HeldThreadBox({ thread, surface, className, id, note, save, start, placeholder, footer }: HeldThreadBoxProps): ReactElement {
+type HeldComposerProps = { thread: ThreadView; surface: "queueComposer" | "chatComposer"; className?: string; id?: string }
+
+export function HeldThreadComposer({ thread, surface, className, id }: HeldComposerProps): ReactElement {
+  const api = useThreadApi()
+  const sessionId = thread.sessionId ?? ""
+  const note = thread.heldPrompt ?? ""
   const [text, setText] = useState(note)
   const saved = useRef(note)
 
@@ -38,13 +37,14 @@ export function HeldThreadBox({ thread, surface, className, id, note, save, star
     saved.current = note
   }, [note])
 
+  const save = (prompt: string) => api.updateHeldPrompt({ slug: thread.id, sessionId, prompt })
   const saveRef = useRef(save)
   saveRef.current = save
   useEffect(() => {
-    if (text === saved.current || !saveRef.current) return
+    if (text === saved.current) return
     const timer = setTimeout(() => {
       const sending = text
-      saveRef.current?.(sending).then(
+      saveRef.current(sending).then(
         () => { saved.current = sending },
         // Started meanwhile (another tab sent it): the text is now the thread's first message, so there is
         // nothing left to save it into.
@@ -55,13 +55,13 @@ export function HeldThreadBox({ thread, surface, className, id, note, save, star
   }, [text, thread.id])
 
   const launch = useMutation({
-    mutationFn: (prompt: string) => start(prompt),
+    mutationFn: (prompt: string) => api.startHeldThread({ slug: thread.id, sessionId, prompt }),
     onError: (cause) => showToast(`Could not start the agent: ${(cause instanceof Error ? cause.message : String(cause)).slice(0, 80)}`),
   })
 
   const submit = () => {
     const prompt = text.trim()
-    if (!prompt || !thread.sessionId || launch.isPending) return
+    if (!prompt || !sessionId || launch.isPending) return
     launch.mutate(prompt)
   }
 
@@ -73,48 +73,10 @@ export function HeldThreadBox({ thread, surface, className, id, note, save, star
         value={text}
         onChange={setText}
         onSubmit={submit}
-        placeholder={placeholder ?? "Describe the task…"}
+        placeholder="Describe the task…"
         busy={launch.isPending}
-        footer={<span className="pl-1 text-[11px] text-muted-70">{footer ?? "Send to start an agent"}</span>}
+        footer={<span className="pl-1 text-[11px] text-muted-70">Send to start an agent</span>}
       />
     </div>
-  )
-}
-
-type HeldComposerProps = { thread: ThreadView; surface: "queueComposer" | "chatComposer"; className?: string; id?: string }
-
-/** Base's binding: the text base keeps (ThreadView.heldPrompt), saved and started through base's own verbs. */
-function BaseHeldThreadBox({ thread, surface, className, id }: HeldComposerProps): ReactElement {
-  const api = useThreadApi()
-  const sessionId = thread.sessionId ?? ""
-  return (
-    <HeldThreadBox
-      thread={thread}
-      surface={surface}
-      className={className}
-      id={id}
-      note={thread.heldPrompt ?? ""}
-      save={(prompt) => api.updateHeldPrompt({ slug: thread.id, sessionId, prompt })}
-      start={(prompt) => api.startHeldThread({ slug: thread.id, sessionId, prompt })}
-    />
-  )
-}
-
-/**
- * The prompt box of a held thread: its holder's `thread.composer` slot, fenced, or base's box. A slot that
- * throws falls back to base's box — which still starts the thread — and is listed in Settings → Frizz plugins.
- */
-export function HeldThreadComposer(props: HeldComposerProps): ReactElement {
-  const slots = usePluginSlots("thread.composer")
-  const base = useThreadApiBase()
-  const holder = slots.find(({ plugin }) => plugin.id === props.thread.held)
-  const summary = holder?.plugin.summary
-  const call = useMemo(() => (summary ? pluginCaller(summary, () => base) : undefined), [summary, base])
-  if (!holder || !call) return <BaseHeldThreadBox {...props} />
-  const Slot = holder.slot
-  return (
-    <PluginBoundary id={holder.plugin.id} slot="thread.composer" fallback={<BaseHeldThreadBox {...props} />}>
-      <Slot {...props} call={call} />
-    </PluginBoundary>
   )
 }

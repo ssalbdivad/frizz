@@ -55,8 +55,6 @@ import { HOME_WORKSPACE_ID, findWorkspaceById, findWorkspaceBySegment, homeWorks
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
-import { emptyPluginRegistry, loadPlugins, type LoadPluginsOptions, type PluginRegistry } from "./plugins/loader.ts"
-import { homedir } from "node:os"
 
 export const SERVER_SHUTDOWN_TIMEOUT_MS = 4_000
 export const SERVER_FORCE_EXIT_MS = 5_000
@@ -110,9 +108,6 @@ export interface StartServerRuntime {
   openDatabase(options: OpenFrizzDatabaseOptions): FrizzDatabase
   /** The pinned Claude Code and Codex (runtimes.ts); a fixture substitutes stand-ins without a download. */
   resolveRuntimes(options: ResolveRuntimesOptions): Promise<ResolvedRuntimes>
-  /** Frizz plugins (plugins/loader.ts); a fixture substitutes an empty registry, so no test loads the
-   *  machine's real `<data>/user-plugins` or opens a plugin's real database. */
-  loadPlugins(options: LoadPluginsOptions): Promise<PluginRegistry>
   createContext(options: ContextOptions): AppContext | Promise<AppContext>| Promise<AppContext>
   initGithub(ctx: AppContext): Promise<void>
   createApp(ctx: AppContext, options: AppOptions): ReturnType<typeof createApp>
@@ -143,7 +138,6 @@ export interface StartServerRuntime {
 const defaultStartServerRuntime: StartServerRuntime = {
   openDatabase: openFrizzDatabase,
   resolveRuntimes,
-  loadPlugins,
   createContext,
   initGithub,
   createApp,
@@ -602,9 +596,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   // The resolved Claude Code and Codex executables (the "runtimes" phase); read lazily by the tenant
   // map's contextOptions, which is built before the phase runs.
   let runtimes: ResolvedRuntimes | undefined
-  // Frizz plugins, loaded once before the launching project's context and handed to every project's —
-  // read lazily for the same reason as `runtimes`. Empty until then, and for good under safe mode.
-  let pluginRegistry: PluginRegistry = emptyPluginRegistry()
   // Named, incremental boot progress for whatever launcher is waiting on /health (boot-progress.ts).
   const bootProgress = createBootProgressPublisher(project.stateDir)
   let ctx: AppContext | undefined
@@ -710,7 +701,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       get claudeBin() { return runtimes?.claude.bin ?? opts.claudeBin },
       get codexBin() { return runtimes?.codex.bin ?? opts.codexBin },
       get codexVersion() { return runtimes?.codex.version === "unknown" ? undefined : runtimes?.codex.version },
-      get plugins() { return pluginRegistry },
       serverLockPath: serverLockPathFor(project),
       activeTenants,
       openProject,
@@ -1034,15 +1024,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     // Committed through the ledger callback, like the context below: an injected failure right after
     // this phase throws before the assignment would run, and the rollback must still find the handle.
     frizzDb = await phase("database", () => runtime.openDatabase({ stateDir: project.stateDir }), (value) => { frizzDb = value })
-    // FRIZZ PLUGINS (plugins/loader.ts), machine-wide and before any project opens: every project's router,
-    // board and dispatcher take what the running ones contribute. Not a boot phase on purpose — nothing
-    // about a plugin may fail a boot, and its setup() is bounded at 5s, run for every plugin at once.
-    // A plugin's timers are unref'd and its database closes with the process, so there is nothing for a
-    // rollback or a shutdown phase to drain.
-    pluginRegistry = await runtime.loadPlugins({ home: homedir() }).catch((error) => {
-      frizzLog.error("plugins", `could not load Frizz plugins: ${error instanceof Error ? error.stack ?? error.message : error}`)
-      return emptyPluginRegistry()
-    })
     ctx = await phase(
       "context",
       () => runtime.createContext({
@@ -1050,7 +1031,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         codexBin: runtimes!.codex.bin,
         codexVersion: runtimes!.codex.version === "unknown" ? undefined : runtimes!.codex.version,
         project,
-        plugins: pluginRegistry,
         database: frizzDb!.db,
         serverLockPath: serverLockPathFor(project),
         activeTenants,

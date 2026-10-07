@@ -1023,9 +1023,9 @@ test("titleIsProvisional / displayTitle: a HELD thread never reads as spinning u
   const guessed = { titleAuto: true, titleNamed: false, title: "Audit the flaky resume test…", spawnedAt: fresh }
   // The control: the same row unheld IS a fresh dispatch, and reads as one.
   assert.equal(displayTitle(thread(guessed)), SPINNING_UP_TITLE)
-  // A plugin's, a schedule's next run, and an ORPHAN whose holder is gone: `held` names who, and which one
-  // does not matter — none of them is starting.
-  for (const held of ["a-plugin", "schedules", "a-plugin-that-is-not-installed"]) {
+  // A schedule's next run and an ORPHAN whose holder is gone (a leftover lazy thread): `held` names who, and
+  // which one does not matter — neither is starting.
+  for (const held of ["schedules", "lazy"]) {
     const row = thread({ ...guessed, held, heldPrompt: "Audit the flaky resume test and list every place it can race" })
     assert.equal(titleIsProvisional(row), false, held)
     // From its first render it reads as it does after the minute: its prompt's guess, as plain text.
@@ -1033,7 +1033,7 @@ test("titleIsProvisional / displayTitle: a HELD thread never reads as spinning u
     assert.equal(displayTitle(row), displayTitle(thread({ ...guessed, held, spawnedAt: "2026-07-08T00:00:00.000Z" })), held)
   }
   // A held codex row skips its title-signal grace too (no signal is coming): the neutral fallback at once.
-  assert.equal(displayTitle(thread({ backend: "codex", titleAuto: true, title: "raw prompt", spawnedAt: fresh, held: "a-plugin" })), UNTITLED_THREAD_TITLE)
+  assert.equal(displayTitle(thread({ backend: "codex", titleAuto: true, title: "raw prompt", spawnedAt: fresh, held: "lazy" })), UNTITLED_THREAD_TITLE)
 })
 
 test("displayTitle: an EXTERNAL row shows the name the server resolved, whichever harness wrote the transcript", () => {

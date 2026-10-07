@@ -5,9 +5,7 @@ import { expandUserCommandDraft, type AccountBackend, type CreateScheduleInput, 
 import { rpc } from "../api/rpc.ts"
 import { useSnapshot } from "valtio"
 import { showToast, store } from "../store.ts"
-import { Composer, composerExcludeRuns, type ComposerSubmitAlt } from "./Composer.tsx"
-import { PluginBoundary, usePluginSlots } from "../plugins/loader.tsx"
-import type { NewThreadDraft } from "../plugins/api.ts"
+import { Composer, composerExcludeRuns } from "./Composer.tsx"
 import { EditorContextBar } from "./EditorContextBar.tsx"
 import { EditorLine } from "./EditorLine.tsx"
 import { embedFileMentions } from "../lib/editorReach.ts"
@@ -208,74 +206,6 @@ function PromptForm({
     },
   })
 
-  // THE ALTERNATE SUBMIT (a Frizz plugin's `newThread.submitAlt`; the first in id order): the same prompt,
-  // handed to the plugin instead of starting an agent. No auth gate: base starts nothing, so no provider is
-  // contacted; the sign-in, if one is needed, comes when the thread is launched. The draft clears like a
-  // dispatch's and comes back on failure the same way.
-  const altSlot = usePluginSlots("newThread.submitAlt")[0]
-  const submitAltSlot = useMutation({
-    mutationFn: (input: NewThreadDraft) => {
-      if (!altSlot) return Promise.reject(new Error("Its plugin is no longer loaded"))
-      const project = projectSlug()
-      return altSlot.slot.submit(input).then((res) => ({ ...res, project }))
-    },
-    onSuccess: (res) => {
-      onDispatched?.()
-      showToast(altSlot?.slot.done ?? "Added", { link: { label: "Open", slug: res.slug, project: res.project } })
-    },
-    onError: (e, input) => {
-      restoreSubmitted(submittedDraftRef.current || input.prompt)
-      restoreContextItems(promptKey, submittedContextRef.current)
-      submittedContextRef.current = []
-      if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
-      restoreLimit()
-      showToast(`Could not add the thread: ${(e as Error).message.slice(0, 80)}`)
-    },
-  })
-
-  function submitAlt() {
-    // A schedule being created from these words owns them until they leave the box: handing them to the
-    // alternate submit too would make the same words two things.
-    if (schedule.creating) return
-    if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
-    const input: NewThreadDraft = {
-      // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
-      // A thread the plugin writes down is for later. The block says what the editor showed "when they sent
-      // this"; baked into the note it would be read hours later as the moment of launch, and it sat in an
-      // editable note the human never typed. Attached at launch instead, it would describe whatever the
-      // editor happens to show then — unrelated to a note written earlier, more often than not — from a box
-      // (HeldThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
-      // If the note means the editor ("fix this"), the agent reads it then through its editor tool.
-      prompt: outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim(),
-      // The pick rides along: it is what the thread starts on when it is launched, unless changed then.
-      model: resolved.model,
-      backend: resolved.backend,
-      effort: (resolved.effort || undefined) as NewThreadDraft["effort"],
-    }
-    submittedDraftRef.current = prompt
-    submittedPickRef.current = pick
-    submittedScheduleRef.current = draftStore.get(scheduleKey)
-    // The alternate submit takes no limit — nothing runs until it is launched — but the limit leaves with the
-    // draft it was typed for, and a failed save puts it back.
-    submittedLimitRef.current = draftStore.get(limitKey)
-    submittedContextRef.current = takeContextItems(promptKey)
-    clearDispatchDraft(projectDir)
-    submitAltSlot.mutate(input)
-  }
-  const composerAlt: ComposerSubmitAlt | undefined = altSlot
-    ? {
-        id: altSlot.plugin.id,
-        label: altSlot.slot.label,
-        title: altSlot.slot.title,
-        icon: (
-          <PluginBoundary id={altSlot.plugin.id} slot="newThread.submitAlt">
-            <altSlot.slot.Icon size={15} strokeWidth={2} />
-          </PluginBoundary>
-        ),
-        onSubmit: submitAlt,
-      }
-    : undefined
-
   // Fire the dispatch and do the one-shot UI bookkeeping (optimistic toast + prompt clear). Called both
   // on a clean submit and after the sign-in gate is cleared, so the prompt is only cleared once the
   // thread is actually being started — a gated submit leaves the draft intact.
@@ -297,8 +227,8 @@ function PromptForm({
   // and no mode. A prompt with a schedule word in it is read by the model as it is typed; when the words ask for
   // the work to repeat, a strip under the box says what will run when, the send wears ↻, and Enter creates the
   // schedule instead of starting the thread. It reads the PROSE the box shows (what every span indexes), never
-  // the code, chips, mentions or commands in it; what it would save is the prompt as the alternate submit writes
-  // it — the chips, never the editor block — because a schedule's prompt is sent hours or weeks later.
+  // the code, chips, mentions or commands in it; what it would save is the prompt with its chips
+  // but never the editor block, because a schedule's prompt is sent hours or weeks later.
   const rootRef = useRef<HTMLDivElement>(null)
   const { prose: promptProse, attachments: promptAttachments } = useMemo(() => splitComposerValue(prompt), [prompt])
   const scheduleExclude = useMemo(() => composerExcludeRuns(promptProse, contextTokens), [promptProse, contextTokens])
@@ -581,7 +511,6 @@ function PromptForm({
         value={prompt}
         onChange={setPrompt}
         onSubmit={submit}
-        submitAlt={composerAlt}
         marks={schedule.marks}
         onInputEvent={schedule.onInputEvent}
         onEscape={schedule.onEscape}
@@ -599,7 +528,7 @@ function PromptForm({
         slashSuggestVersion={userCommandsQuery.dataUpdatedAt}
         minHeight={96}
         maxHeight={340}
-        busy={dispatch.isPending || submitAltSlot.isPending || savingSettings}
+        busy={dispatch.isPending || savingSettings}
         onUploadingChange={setUploading}
         footer={footer}
         leftAction={githubTriggerVisible ? <GithubTrigger /> : undefined}

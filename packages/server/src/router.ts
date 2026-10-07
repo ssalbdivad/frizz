@@ -56,10 +56,6 @@ import {
   GithubBatchInput,
   GithubBatchResult,
   Settings,
-  PluginsReport,
-  PLUGIN_API,
-  PluginSettingsInput,
-  SetPluginSettingsInput,
   StartHeldThreadInput,
   UpdateHeldPromptInput,
   TranscriptMessage,
@@ -753,7 +749,7 @@ export async function stopAndForgetRegisteredRuntime(
  * not to Frizz. The caller refreshes the board, so a bulk delete rebuilds it once.
  */
 export async function deleteOwnedThread(
-  ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge" | "plugins">,
+  ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge">,
   slug: string,
 ): Promise<boolean> {
   const row = ctx.storage.getSession(slug)
@@ -774,15 +770,13 @@ export async function deleteOwnedThread(
       // A scratch directory that will not go is litter, not a failed delete.
     }
   }
-  // A plugin keeping records about the thread drops them.
-  ctx.plugins?.threadDeleted(row)
   return true
 }
 
 /** Delete every done thread in one project nobody has interacted with for more than `days` days (thread-retention.ts picks
  *  them). Per-thread and forgiving: one that will not stop must not strand the rest. Returns how many went. */
 export async function deleteExpiredDoneThreads(
-  ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge" | "board" | "plugins">,
+  ctx: Pick<AppContext, "storage" | "tailer" | "terminalRunner" | "project" | "codexAppServer" | "claudeBroker" | "acpBridge" | "board">,
   days: number,
   now = Date.now(),
 ): Promise<number> {
@@ -1593,7 +1587,7 @@ export function createRouter(ctx: AppContext) {
   }
 
   // Starting a HELD thread goes through the project's ONE starter (held-start.ts), shared with the
-  // scheduler and the plugins so its one-launch-at-a-time guard sees every launch — and through the
+  // scheduler so its one-launch-at-a-time guard sees every launch — and through the
   // schedule service, so a schedule's pending next run that the human sends early still opens with its run
   // header and still lands in the schedule's history (schedules.ts startHeldRow). A hand-built test context
   // carries neither and gets a starter of its own.
@@ -2850,10 +2844,10 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // HELD THREADS (SessionRow.held_by) — base's two verbs on a thread written down with no agent, whoever holds
-    // it. Creating one is the holder's (a schedule, a Frizz plugin's `threads.create`).
+    // it. Creating one is the holder's (a schedule).
     //
     // Rewrite a held thread's opening prompt — a schedule's next run's, edited for that run alone, or the text
-    // base would start an orphaned plugin thread on. Refused once it has started: it was the first message.
+    // base would start a thread whose holder is gone on. Refused once it has started: it was the first message.
     updateHeldPrompt: mutation({
       input: UpdateHeldPromptInput,
       handler: async ({ input }) => {
@@ -2923,12 +2917,7 @@ export function createRouter(ctx: AppContext) {
         // path (startHeldThreadRow). Every sender lands here — the drawer's prompt box, a snooze carrying a
         // prompt, another thread's message — so each of them starts the held thread rather than resuming a
         // session no provider has heard of.
-        //
-        // A HOLDER may want the message first (plugins/project.ts `send`): it may start the thread on it and
-        // drop whatever it kept. With no holder by that id — the plugin removed, turned off or failed — or one
-        // whose onSend throws, base starts the thread on the message itself, so no held thread is stranded.
         if (isHeldRow(row)) {
-          if (await ctx.plugins?.send(row, input.message)) return
           await startHeldThreadRow(row, input.message)
           return
         }
@@ -3100,7 +3089,6 @@ export function createRouter(ctx: AppContext) {
             scratchpadOrientation(row.session_id, "claude", workerScratchPath(ctx.project, row.session_id)),
             frizzConfigBlock(ctx.project.dir),
             deadlineSection(row),
-            ctx.plugins?.systemPrompt("claude"),
           ].filter(Boolean).join("\n\n")
           // Is this thread MID-TURN right now? Sampled BEFORE the bridge call on purpose: a cold resume
           // takes seconds, and by the time it returns the turn this very message started reads as
@@ -3428,7 +3416,6 @@ export function createRouter(ctx: AppContext) {
           scratchpadOrientation(row.session_id, "claude"),
           frizzConfigBlock(ctx.project.dir),
           deadlineSection(row),
-          ctx.plugins?.systemPrompt("claude"),
         ].filter(Boolean).join("\n\n")
         await bridge.followUp({
           threadSlug: input.slug,
@@ -5972,32 +5959,6 @@ export function createRouter(ctx: AppContext) {
       handler: async () => ctx.getSettings(),
     }),
 
-    // FRIZZ PLUGINS (plugins/loader.ts): the machine's plugins and where each stands — Settings → Frizz
-    // plugins draws it as the read-only audit of what runs in the control plane (its procedures, the MCP
-    // tools and Claude Code directories it hands every worker, every failure), and the page's loader
-    // reads each running plugin's web half from it. Machine-wide: every project answers the same.
-    plugins: query({
-      output: PluginsReport,
-      handler: async () => ctx.pluginRegistry?.report() ?? { api: PLUGIN_API, off: false, root: "", plugins: [] },
-    }),
-
-    // A plugin's settings record (`plugin:<id>` in the machine config), read through the plugin's own schema
-    // or its defaults — what its `settings.section` slot draws. Machine-wide like the list above.
-    pluginSettings: query({
-      input: PluginSettingsInput,
-      output: z.unknown(),
-      handler: async ({ input }) => ctx.pluginRegistry?.readSettings(input.id) ?? null,
-    }),
-
-    // Write it. The plugin's schema validates it; a value that fails is refused with the schema's reading.
-    setPluginSettings: mutation({
-      input: SetPluginSettingsInput,
-      handler: async ({ input }) => {
-        if (!ctx.pluginRegistry) throw new Error(`The ${input.id} plugin keeps no settings`)
-        ctx.pluginRegistry.writeSettings(input.id, input.value)
-      },
-    }),
-
     settingsSet: mutation({
       input: Settings,
       output: Settings,
@@ -6139,29 +6100,16 @@ export function createRouter(ctx: AppContext) {
     // `schedule` tool — schedule-router.ts.
     ...scheduleProcedures(ctx),
   }
-  // FRIZZ PLUGINS' procedures (plugins/project.ts), `plugin.<id>.<name>`, mounted beside base's under the
-  // same `/_frizz/rpc` prefix and behind the same gates. Runtime-only — what a plugin answers is not part
-  // of AppRouter's type, and the web contract's drift gate (rpc-contract.ts) never sees them. A name base
-  // already has is never overwritten (the dotted prefix makes that impossible, and this makes it certain).
-  const pluginProcedures = ctx.plugins?.procedures() ?? {}
-  for (const [name, proc] of Object.entries(pluginProcedures)) {
-    if (!(name in router)) (router as Record<string, unknown>)[name] = proc
-  }
   // Every verb the HUMAN performs on a thread stamps `interacted_at` before it runs — what deleting old
   // threads counts from (thread-retention.ts). One wrapper over a named list rather than a line in each
   // handler, so a new human verb is one word here; worker verbs (`*Own*`, ask, markOwnDone,
-  // messageThread) are left off, because an agent keeping itself busy is not the human touching it. A
-  // plugin's procedure marked `human` joins the list, and every one of them is a plugin's `humanAct`.
-  for (const name of [...HUMAN_THREAD_ACTS, ...(ctx.plugins?.humanProcedures() ?? [])]) {
-    const proc = (router as Record<string, unknown>)[name] as { handler: (args: { input: unknown }) => Promise<unknown> } | undefined
-    if (!proc) continue
+  // messageThread) are left off, because an agent keeping itself busy is not the human touching it.
+  for (const name of HUMAN_THREAD_ACTS) {
+    const proc = router[name] as { handler: (args: { input: unknown }) => Promise<unknown> }
     const inner = proc.handler
     proc.handler = (args) => {
       const slug = (args.input as { slug?: unknown } | null)?.slug
-      if (typeof slug === "string" && ctx.storage.getSession(slug)) {
-        ctx.storage.setInteractedAt(slug, new Date().toISOString())
-        ctx.plugins?.humanAct(slug, name)
-      }
+      if (typeof slug === "string" && ctx.storage.getSession(slug)) ctx.storage.setInteractedAt(slug, new Date().toISOString())
       return inner(args)
     }
   }

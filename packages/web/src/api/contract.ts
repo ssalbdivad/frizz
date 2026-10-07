@@ -52,9 +52,6 @@ import type {
   DropOwnLinkResult,
   BoardSnapshot,
   Settings,
-  PluginsReport,
-  PluginSettingsInput,
-  SetPluginSettingsInput,
   DispatchInput,
   AdoptThreadInput,
   AdoptThreadResult,
@@ -245,8 +242,8 @@ export interface Api {
   // lib/eagerComposerSubmission.ts DELIVERY_SEND_TIMEOUT_MS for what that costs without one.
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
   spinoff(input: SpinoffInput): Promise<SpinoffResult>
-  // Held threads (ThreadView.held): a thread written down without an agent — a schedule's next run, a Frizz plugin's
-  // — its opening prompt edited, and its agent started. A plugin's own verbs are the plugin's.
+  // Held threads (ThreadView.held): a thread written down without an agent — a schedule's next run —
+  // its opening prompt edited, and its agent started.
   updateHeldPrompt(input: UpdateHeldPromptInput): Promise<void>
   startHeldThread(input: StartHeldThreadInput): Promise<{ slug: string; sessionId: string }>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>
@@ -511,9 +508,6 @@ export interface Api {
   // checkbox only when the folder is already named after the project, and leaves it off.
   projectRename(input: { id: string; name: string; renameDirectory?: boolean }): Promise<ProjectCard>
   settingsGet(): Promise<Settings>
-  plugins(): Promise<PluginsReport>
-  pluginSettings(input: PluginSettingsInput): Promise<unknown>
-  setPluginSettings(input: SetPluginSettingsInput): Promise<void>
   settingsSet(input: Settings): Promise<Settings>
   // Takes an empty object, not nothing: the router declares `input: z.object({})` (a mutation always
   // has an input schema), and the transport posts `{}` for it.
@@ -695,9 +689,6 @@ export const PROCEDURES = {
   projectIconClear: "mutation",
   projectRename: "mutation",
   settingsGet: "query",
-  plugins: "query",
-  pluginSettings: "query",
-  setPluginSettings: "mutation",
   settingsSet: "mutation",
   settingsReset: "mutation",
   dispatchPreferencesGet: "query",

@@ -4000,16 +4000,13 @@ export const ThreadView = z.object({
   // own until 2026-09-29; a terminal now belongs to a session thread (`terminals` below).
   kind: z.enum(["session", "legacy"]).optional(),
   // A HELD thread (server SessionRow.held_by): present ⇒ no agent has ever run for it, and it names who holds
-  // it — `schedules` for a schedule's next run, or a Frizz plugin's id. A message sent to it goes to that
-  // holder, and starts it when the holder is gone. Base never queues one; its holder may.
+  // it — `schedules` for a schedule's next run, or `lazy` on a row left from lazy threads. A message sent
+  // to it starts it. Base never queues one.
   held: z.string().optional(),
   // A held thread's OPENING PROMPT as base keeps it (server SessionRow.lazy_prompt): a schedule's next run's
-  // prompt, which the human may edit for that run alone, and for a plugin's thread the text base would start
-  // it on if the plugin were gone. Present exactly when `held` is. A plugin's own note is under `plugins`.
+  // prompt, which the human may edit for that run alone, and for any other held thread the text it starts on.
+  // Present exactly when `held` is.
   heldPrompt: z.string().optional(),
-  // What each FRIZZ PLUGIN wrote for this thread (its `threadView`), keyed by plugin id — read only by that
-  // plugin's own web half. Absent when no plugin wrote anything.
-  plugins: z.record(z.string(), z.unknown()).optional(),
   // The SCHEDULE this thread is a run of (ARCHITECTURE.md § Scheduled threads) — what draws the repeat glyph and
   // its tooltip. `pending` marks the schedule's next run: a held row that sits in Snoozed with its wake
   // time until the scheduler starts it, even once that time has passed (isSnoozed). Absent on every other
@@ -5078,7 +5075,7 @@ export const DispatchInput = z.object({
 export type DispatchInput = z.infer<typeof DispatchInput>
 
 // A HELD THREAD (SessionRow.held_by on the server): a thread created WITHOUT starting an agent, held by whoever
-// wrote it down — a schedule's next run, or a Frizz plugin's. `prompt` is what it will start with, and what
+// wrote it down — a schedule's next run. `prompt` is what it will start with, and what
 // its name is minted from unless a `title` is typed. The profile is the prompt box's pick at the moment it
 // was written down, and is what the agent starts on unless changed then.
 export const CreateHeldThreadInput = z.object({
@@ -6832,7 +6829,6 @@ export * from "./editor-protocol.ts"
 export * from "./file-position.ts"
 export * from "./embed-protocol.ts"
 export * from "./interactions.ts"
-export * from "./plugins.ts"
 export * from "./receipt-bus.ts"
 export * from "./relay-protocol.ts"
 export * from "./schedule-rule.ts"
