@@ -216,6 +216,29 @@ A short section, present only when a deadline is set (injected, the way the FRIZ
 - Step 3: headless shots of the card in the under-time, last-5m and over-time states; `ink-gaps` on the
   chip.
 
+### Results (2026-10-06, real Claude workers on adhoc stacks)
+
+The evidence and harness live in the implementing thread's scratch directory (`verify-steps12.md`,
+`verify-step4.md`).
+
+- **Steps 1–2, first run (`1a8123d9`): failed.** Only half-time arrived; the quiet window held the other
+  three (see Check-ins). This is the run that forced the quiet-window exemption.
+- **Steps 1–2, rerun (`9b0223b5`, 4m deadline): passed.** The four stages were queued at +127s, +197s,
+  +217s and +247s against due times of 120s, 192s, 210s and 240s; the lag is the scheduler's 10s tick.
+  Each was absorbed mid-turn with a running Bash call's result, and its clock line read `2m`, `43s`,
+  `23s` and `over by 8s`. The worker's `extend` was refused, as the human-only rule requires. Its
+  handoff named the steps it had not run. The no-deadline control got no check-in and no queued wake.
+- **Step 4: passed.** A child under `Time limit: 2m` had the line stripped and a marker 120.0s out. Its
+  check-ins arrived after its tool calls, and it returned 18.6s before its deadline. Two children
+  dispatched in one message (2m and 3m) each got their own marker, check-ins and state file, with none
+  crossed. The parent had 10m, because with 6m left the reserve caps a child at about 2m 45s.
+- **Changed by these runs:**
+  - Worker-facing countdowns are now exact and rounded down under 10m. The rounded-up `2m left` reached
+    a child that had 80s left.
+  - The human's notice now carries a clock line.
+  - Half-time now says it is not a signal to wrap up. Sonnet handed off early right after it twice; that
+    is n=2 on one model, so this is a nudge, not a finding.
+
 ## The open question that matters
 
 Whether "no hard kill" is the right posture is the maintainer's call. It is soft here because the
