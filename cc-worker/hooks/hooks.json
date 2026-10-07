@@ -18,6 +18,12 @@
         "hooks": [
           { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/deny-ask.mjs\"" }
         ]
+      },
+      {
+        "matcher": "SendMessage",
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-inbox.mjs\"" }
+        ]
       }
     ],
     "PostToolUse": [
@@ -30,7 +36,22 @@
       },
       {
         "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=nudge --event=PostToolUse" }
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/scratchpad.mjs\" --mode=nudge --event=PostToolUse" },
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-inbox.mjs\"" }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-inbox.mjs\"" }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/agent-inbox.mjs\"" }
         ]
       }
     ],

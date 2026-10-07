@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
@@ -305,6 +305,51 @@ test("subAgentSteer refuses while the PARENT's own turn is in flight — the CLI
     assert.deepEqual(h.steers, [])
   } finally {
     h.cleanup()
+  }
+})
+
+// A WORKFLOW AGENT's steer is a file in its mailbox, which the worker plugin's hook hands over after its
+// next tool call (agent-inbox.ts; the hook's own side is agent-inbox-hook.test.ts). The CLI is never
+// involved, so nothing can be absorbed into the parent's turn and the in-flight gate does not apply.
+function workflowAgent(state: "running" | "done" = "running") {
+  const sessionDir = mkdtempSync(join(tmpdir(), "frizz-wf-session-"))
+  const info: SubAgentInfo = { state, direct: false, workflowAgent: { runDir: join(sessionDir, "subagents", "workflows", "wf_1") } }
+  return { sessionDir, info }
+}
+
+test("subAgentSteer posts a Workflow agent's steer to its mailbox, even mid-turn", async () => {
+  const wf = workflowAgent()
+  const h = harness(() => wf.info, { turn: "in-flight" })
+  try {
+    seed(h.storage, "t")
+    const result = await h.router.subAgentSteer.handler({ input: { slug: "t", id: "ad5015db0606ea02e", message: "use the new helper", deliveryId: "d1" } })
+    assert.deepEqual(result, { delivered: true })
+    assert.deepEqual(h.steers, [], "the broker's addressed frame cannot reach a Workflow agent")
+    const box = join(wf.sessionDir, "frizz-inbox", "ad5015db0606ea02e")
+    const files = readdirSync(box)
+    assert.equal(files.length, 1)
+    assert.deepEqual({ ...JSON.parse(readFileSync(join(box, files[0]), "utf8")), at: 0 }, { from: "operator", text: "use the new helper", at: 0 })
+    assert.equal(h.storage.listSubAgentSteers("t", "ad5015db0606ea02e")[0].message, "use the new helper", "journaled for the drawer")
+
+    const transcript = await h.router.subAgentTranscript.handler({ input: { slug: "t", id: "ad5015db0606ea02e" } })
+    assert.equal(transcript.steerable, true)
+    assert.equal(transcript.steerNote, null)
+  } finally {
+    h.cleanup()
+    rmSync(wf.sessionDir, { recursive: true, force: true })
+  }
+})
+
+test("subAgentSteer refuses a Workflow agent that has finished — it makes no more tool calls to read mail", async () => {
+  const wf = workflowAgent("done")
+  const h = harness(() => wf.info)
+  try {
+    seed(h.storage, "t")
+    await assert.rejects(() => h.router.subAgentSteer.handler({ input: { slug: "t", id: "ad5015db0606ea02e", message: "hello" } }), /no longer running/)
+    assert.equal(existsSync(join(wf.sessionDir, "frizz-inbox")), false)
+  } finally {
+    h.cleanup()
+    rmSync(wf.sessionDir, { recursive: true, force: true })
   }
 })
 

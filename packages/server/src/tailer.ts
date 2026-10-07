@@ -2931,7 +2931,8 @@ export interface SubAgentLookup {
   // says whether the run itself is still tracked as running — the only thing that makes a journalled
   // "started" agent trustworthy as running.
   workflow?: { runDir?: string; live: boolean }
-  workflowAgent?: true // the id names one AGENT of a workflow run, resolved through its run's journal
+  // Set when the id names one AGENT of a workflow run, resolved through the journal in `runDir`.
+  workflowAgent?: { runDir: string }
 }
 
 /** One row of a thread's sub-agent directory — the shared entry minus its address. */
@@ -4397,8 +4398,9 @@ export function createTailer(deps: TailerDeps): Tailer {
     // never invents one.
     const descendant = descendantSidecar(state, id)
     if (!descendant) {
-      // A WORKFLOW AGENT, named by its agent id. Readable, never steerable (it is not this session's
-      // dispatch), and not offered a stop: the run owns its agents, and stopping the RUN is the control.
+      // A WORKFLOW AGENT, named by its agent id. Readable, steerable only through its mailbox (it is not
+      // this session's dispatch — agent-inbox.ts), and not offered a stop: the run owns its agents, and
+      // stopping the RUN is the control.
       const found = workflowRunOfAgent(state, id)
       if (!found) return undefined
       const agentState = workflowAgentState(found.agent, found.runLive, now())
@@ -4406,7 +4408,7 @@ export function createTailer(deps: TailerDeps): Tailer {
         outputFile: found.agent.transcript,
         state: agentState === "failed" ? "done" : agentState,
         direct: false,
-        workflowAgent: true,
+        workflowAgent: { runDir: found.runDir },
         ...(found.agent.startedAtMs === undefined ? {} : { startedAt: new Date(found.agent.startedAtMs).toISOString() }),
         ...(agentState === "failed" ? { outcome: "failed" as const } : {}),
       }

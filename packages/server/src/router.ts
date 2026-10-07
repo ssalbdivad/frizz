@@ -237,6 +237,7 @@ import { createLazyThreadStarter, type LazyStartProfile } from "./lazy-start.ts"
 import { scheduleProcedures } from "./schedule-router.ts"
 import { SUBAGENT_STALE_MS, unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
 import { workflowAgentViews } from "./workflow-runs.ts"
+import { postToAgentInbox, workflowSessionDir } from "./agent-inbox.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
@@ -1950,12 +1951,20 @@ export function createRouter(ctx: AppContext) {
   // next to the code that knows the actual reason — rather than re-derived from a boolean by a client
   // that would have to guess. Null note = nothing worth saying (a settled child's transcript already
   // reads as finished; a banner there would be noise).
-  function subAgentSteerable(slug: string, id: string): { sessionId: string } | { sessionId: null; note: string | null } {
+  //
+  // A WORKFLOW AGENT takes none of that path. The CLI cannot address it at all, so its steer is a file
+  // in its mailbox that the worker plugin's hook hands over after its next tool call (agent-inbox.ts).
+  // Nothing there can be absorbed into the parent's turn, so neither the direct-child nor the idle-turn
+  // gate applies — only that it is still running, since a finished agent makes no more tool calls.
+  function subAgentSteerable(
+    slug: string,
+    id: string,
+  ): { sessionId: string; inbox?: undefined } | { sessionId: null; inbox: string } | { sessionId: null; inbox?: undefined; note: string | null } {
     const blocked = (note: string | null) => ({ sessionId: null, note })
     const info = ctx.tailer.subAgent(slug, id)
     if (!info) return blocked(null)
     if (info.state !== "running") return blocked(null)
-    if (info.workflowAgent) return blocked("Workflow agents are run by their workflow and can't be steered.")
+    if (info.workflowAgent) return { sessionId: null, inbox: workflowSessionDir(info.workflowAgent.runDir) }
     if (!info.direct) return blocked("Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.")
     const row = ctx.storage.getSession(slug)
     if (!row) return blocked(null)
@@ -2562,8 +2571,8 @@ export function createRouter(ctx: AppContext) {
         return {
           messages,
           state: info.state,
-          steerable: steer.sessionId !== null,
-          steerNote: steer.sessionId === null ? steer.note : null,
+          steerable: steer.sessionId !== null || steer.inbox !== undefined,
+          steerNote: "note" in steer ? steer.note : null,
           stoppable: stop.sessionId !== null,
           stopNote: stop.sessionId === null ? stop.note : null,
         }
@@ -2582,25 +2591,31 @@ export function createRouter(ctx: AppContext) {
     // the parent's own turn is IN FLIGHT misdelivers the same way (absorbed into that turn — see the
     // predicate). So an ungated steer is not a no-op, it is a misdelivery. `subAgentSteerable` is the
     // single predicate that decides, and the drawer's prompt box is rendered off the same answer.
+    // A WORKFLOW agent is the exception to the channel: the CLI cannot address it, so its steer goes
+    // to its mailbox instead (agent-inbox.ts).
     subAgentSteer: mutation({
       input: z.object({ slug: ThreadSlug, id: z.string(), message: z.string().min(1), deliveryId: z.string().min(1).max(200).optional() }).strict(),
       output: z.object({ delivered: z.boolean() }),
       handler: async ({ input }) => {
         const target = subAgentSteerable(input.slug, input.id)
-        if (target.sessionId === null) {
-          throw new Error(target.note ?? "This sub-agent is no longer running, so it can't be steered")
-        }
-        const bridge = ctx.claudeBroker
-        if (!bridge) throw new Error("Claude session broker is unavailable; cannot steer this sub-agent")
         const deliveryId = input.deliveryId ?? randomUUID()
         const sentAtMs = Date.now()
-        await bridge.steerSubAgent({
-          threadSlug: input.slug,
-          sessionId: target.sessionId,
-          subAgentId: input.id,
-          text: input.message,
-          deliveryId,
-        })
+        if (target.inbox !== undefined) {
+          postToAgentInbox(target.inbox, input.id, { from: "operator", text: input.message })
+        } else {
+          if (target.sessionId === null) {
+            throw new Error(("note" in target ? target.note : null) ?? "This sub-agent is no longer running, so it can't be steered")
+          }
+          const bridge = ctx.claudeBroker
+          if (!bridge) throw new Error("Claude session broker is unavailable; cannot steer this sub-agent")
+          await bridge.steerSubAgent({
+            threadSlug: input.slug,
+            sessionId: target.sessionId,
+            subAgentId: input.id,
+            text: input.message,
+            deliveryId,
+          })
+        }
         // The provider deliberately does not write addressed input into the child's transcript. Frizz
         // has the plaintext here, so journal it only after delivery succeeds and merge it into future
         // drawer reads. INSERT OR IGNORE makes a retried transport id one visible message.

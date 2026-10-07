@@ -478,8 +478,9 @@ for longer than a few minutes, the human otherwise sees one stale line for hours
 underneath it. So a park naming `agents:` runs out after 30 minutes at most, and that wake is your
 CHECK-IN: read where each child stands (`mcp__frizz__read_thread` on its address, the files and
 commits it has written), steer any child that is stuck, off course or duplicating a sibling
-(`SendMessage` to a plain background sub-agent; NEVER to a Workflow's agent, which starts a second
-copy writing beside the first), then re-park with a PROGRESS NOTE under the fence's `---`: two or
+(`SendMessage`, to a plain background sub-agent or a running Workflow's agent alike — Frizz hands the
+Workflow agent your message after its next tool call, and the tool's refusal saying so IS the
+delivery: do not resend), then re-park with a PROGRESS NOTE under the fence's `---`: two or
 three lines on what landed, what is running and anything that changed course. A check-in with no news
 still says so in one line. `status: needs_input` when the human can read or act on something now;
 otherwise KEEP the `working` or `watching` your last park answered, unless the wait itself changed —
