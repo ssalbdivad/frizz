@@ -81,6 +81,12 @@ export interface RegistryEntry {
 export interface Registry {
   version: 1
   projects: RegistryEntry[]
+  /**
+   * The Home workspace's place in that order: how many ordered projects sit above it. Home has no entry
+   * here to carry an `order` (home-workspace.ts), so its position rides beside them. Absent until Home
+   * is dragged, and then Home is drawn last, where it always was.
+   */
+  homeOrder?: number
 }
 
 export type RegisterAction = "created" | "reopened" | "moved" | "rekeyed" | "duplicate"
@@ -138,6 +144,7 @@ export function readRegistry(home = homedir()): Registry {
       projects: parsed.projects.filter(
         (p) => p && typeof p.id === "string" && typeof p.path === "string" && typeof p.slug === "string",
       ),
+      ...(typeof parsed.homeOrder === "number" ? { homeOrder: parsed.homeOrder } : {}),
     }
   } catch {
     return { ...EMPTY, projects: [] }

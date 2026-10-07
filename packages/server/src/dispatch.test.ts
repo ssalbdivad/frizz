@@ -700,6 +700,11 @@ test("showing pictures: both contracts say tool output is collapsed and the ligh
     // Where it may and may not go: never after or inside a signal fence (the parser is END-anchored).
     assert.match(c, /above any closing signal fence, never inside one/)
     assert.match(c, /gallery in the body of `mcp__frizz__done`/)
+    // Maintainer 2026-10-06: a UI concept is a linked HTML page, never screenshots of one — the old
+    // text offered "the screens a design would ship" for a question option, and workers took it.
+    assert.match(c, /A UI CONCEPT IS NOT A PICTURE — IT IS A PAGE, AND YOU LINK IT/)
+    assert.match(c, /`\[name\]\(file:\/\/\/abs\/path\.html\)`/)
+    assert.doesNotMatch(c, /the screens a design would ship/)
     // The retired ways are not taught: no second syntax to choose between, no tool a worker lacks.
     assert.doesNotMatch(c, /!\[descriptive alt\]/)
     assert.doesNotMatch(c, /SendUserFile/)

@@ -259,9 +259,9 @@ function justDragged(): boolean {
   return Date.now() - lastDragEndedAt < 250
 }
 
-/** A project that can hold a place in the order: a registered one. Home has no registry entry to hold one. */
+/** A project that can hold a place in the order: one the server has a card for, Home included. */
 function orderable(project: QueuesProject): boolean {
-  return project.card !== undefined && !project.card.home
+  return project.card !== undefined
 }
 
 /**

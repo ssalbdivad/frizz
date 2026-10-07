@@ -14,6 +14,7 @@ import {
   homeWorkspaceSlug,
   listWorkspaces,
   projectForEntry,
+  reorderWorkspaces,
 } from "./home-workspace.ts"
 import { writeMachineConfig } from "./machine-config.ts"
 import { cwdSlug, workDirOf } from "./project.ts"
@@ -117,6 +118,37 @@ test("listWorkspaces: registered projects first, Home last, stale when its folde
     const gone = listWorkspaces(home).at(-1)
     assert.equal(gone?.stale, true)
     assert.equal(gone?.path, join(home, "work"))
+    assertNoHomeBoard(home)
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test("reorderWorkspaces: Home holds the place it is dragged to, and later arrivals land below it", () => {
+  const home = sandbox()
+  const C = "2b3c4d5e-6f7a-4b8c-9d0e-1f2a3b4c5d6e"
+  try {
+    project(home, "code/alpha", A)
+    project(home, "code/beta", B)
+    const ids = () => listWorkspaces(home).map((entry) => entry.id)
+
+    reorderWorkspaces([B, HOME_WORKSPACE_ID, A], home)
+    assert.deepEqual(ids(), [B, HOME_WORKSPACE_ID, A])
+    reorderWorkspaces([HOME_WORKSPACE_ID, A, B], home)
+    assert.deepEqual(ids(), [HOME_WORKSPACE_ID, A, B])
+
+    // A list that does not name Home leaves it where it was.
+    reorderWorkspaces([B, A], home)
+    assert.deepEqual(ids(), [HOME_WORKSPACE_ID, B, A])
+
+    // A project registered after the arrangement has no order: it goes to the end, below Home.
+    reorderWorkspaces([B, HOME_WORKSPACE_ID, A], home)
+    project(home, "code/gamma", C)
+    assert.deepEqual(ids(), [B, HOME_WORKSPACE_ID, A, C])
+
+    // Dragged back to the bottom, Home stays below every project then known.
+    reorderWorkspaces([B, A, C, HOME_WORKSPACE_ID], home)
+    assert.deepEqual(ids(), [B, A, C, HOME_WORKSPACE_ID])
     assertNoHomeBoard(home)
   } finally {
     rmSync(home, { recursive: true, force: true })

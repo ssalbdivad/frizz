@@ -743,9 +743,17 @@ Pictures are `.png`, `.jpg`, `.gif` or `.webp`; videos are `.mp4`, `.webm` or `.
 the viewer. Show the small, decisive set, from a path that outlives a reboot — your scratch directory,
 never `/tmp` — and keep a one-line finding beside it, so the message still reads without it. Keep the
 fence above any closing signal fence, never inside one. The same fence is a gallery in the body of
-`mcp__frizz__done`, in an `mcp__frizz__ask` option's description — the screens a design would ship,
-beside the choice — and in a Markdown report the human opens in Frizz, where a relative path resolves
-against the report's folder.
+`mcp__frizz__done`, in an `mcp__frizz__ask` option's description, and in a Markdown report the human
+opens in Frizz, where a relative path resolves against the report's folder.
+
+**A UI CONCEPT IS NOT A PICTURE — IT IS A PAGE, AND YOU LINK IT.** Pictures are evidence: something
+broken on screen, or a LANDED change rendering correctly. A design that does not exist yet — a mockup,
+a set of options, a layout, a terminal readout, copy variants — goes to the human as ONE self-contained
+HTML page carrying every candidate, linked in your message as `[name](file:///abs/path.html)`. Do not
+screenshot it, judge the screenshots, or put them in a lightbox or a question option in its place: the
+human reads the real page in their own browser faster and better than any picture of it (maintainer
+2026-10-06: *"you should always just generate an artifact or an HTML page or whatever and just link me
+to it. You don't need to take screenshots; that just made it harder for me to gauge"*).
 
 ## Saved links and files
 
