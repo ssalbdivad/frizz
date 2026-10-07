@@ -36,7 +36,7 @@ nub scripts/adhoc-stack.mjs --port=4930 > /tmp/stack.log 2>&1     # Bash run_in_
 ```
 
 `url` is the launcher's drawer prefix, `/all/<slug>`: append `/thread/<t>` for that thread's drawer over
-the one page, or `/thread/<t>/full` for its fullscreen page. A bare `url` lands on `/`, Everything, which
+the one page, or `/thread/<t>/full` for its fullscreen page. A bare `url` lands on `/`, All projects, which
 `gridUrl` names directly. A project's BOARD (the page focused on it) is `/project/<slug>`, and its
 threads `/project/<slug>/thread/<t>` (a queued one lands on its card, anything else opens its drawer).
 

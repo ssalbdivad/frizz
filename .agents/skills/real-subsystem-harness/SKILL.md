@@ -36,7 +36,7 @@ harness itself can fail: a suite that has never gone red is not evidence. When a
 what you expected, get suspicious rather than relieved — check that you varied exactly one thing, that the
 command actually ran, and that you are not testing a stale build.
 
-**Replicate production faithfully.** `verify-legacy-wake.mjs` caught a trailing-quote boundary bug in a
+**Replicate production faithfully.** A legacy-wake verifier (since deleted) caught a trailing-quote boundary bug in a
 matcher on its first run *because* it used the production argv form instead of a hand-quoted string. A
 hand-driven proxy — invoking a CLI yourself with the flags the server *would* have passed — proves the
 parts, not the whole. If a feature spawns, injects, or renders something, drive the REAL spawned thing.
