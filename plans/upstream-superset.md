@@ -491,6 +491,26 @@ Each line names the step it amends.
   overrides. It applies without a restart. The phone's settings page, which holds only phone-relevant rows, does
   not list it.
 
+**David 2026-10-06 evening: the project board becomes the default** (supersedes §2's "All projects stays the default
+home at `/`"). Colin's standup needs, read from the 09-30..10-06 notes: projects stay separate (like Claude, ChatGPT
+and T3); progressive focus ("hide what the user does not need so they can focus on one chat or one workspace"); a
+unified sidebar loses the five rails and does not scale to his 17 projects and ~70 threads; he prefers persistent
+workspace navigation, "the project sidebar that looks like Discord", to one sidebar holding everything; always-on
+status lines may be too dense in the sidebar. David had told him a unified sidebar is fine "especially if it is not
+the default". So:
+- `/` opens the view this browser showed last (`frizz.lastView`, a board or All projects); a browser that never chose
+  lands on a project board (last launched, else the machine order's first). No projects: Welcome. On a phone `/`
+  stays the projects list, upstream's phone home.
+- All projects lives at `/all` (drawers `/all/<slug>/thread/<t>`); `/?all` and the old aliases redirect there.
+- The launcher opens `/project/<own slug>`, as upstream's does; VS Code opens `/project/<slug>?embed=vscode`.
+- Picking a view: the switcher (All projects first, then each project with its counts), the board's home crumb (to
+  `/all`, standing in for upstream's grid), ⌥↑/⌥↓, ⌘K, and upstream's Discord-style project rail restored as Colin
+  ships it: the `projectRail` setting, off by default, with upstream's help text and its light `projectsRailCounts`
+  poll. Its top button is the All projects glyph rather than upstream's House, which in this fork is the Home
+  workspace.
+- On the board, a working row's status line moves into the row's hover (Colin 10-01); All projects keeps it inline.
+- Capacity is unchanged, with the rail off and on: All projects 23/30, the board 22/29.
+
 **Step 9 (plugins)**
 - User-visible copy says "Frizz plugins", apart from Claude Code plugins ("Reload plugins"). The final name is
   Colin's call (§8).
