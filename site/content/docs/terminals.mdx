@@ -1,0 +1,16 @@
+---
+title: Terminals
+description: A shell in the folder a thread's agent works in.
+---
+
+Press <kbd>t</kbd> on a thread, or choose **Open terminal** from its <kbd>⋯</kbd> menu, and Frizz opens a shell in the folder that thread's agent is working in — its worktree, if it made one.
+
+To run one command, start a prompt with `$`:
+
+```text
+$ npm test
+```
+
+The terminal belongs to that thread. It shows on the thread's card and in its drawer beside the agent's own background shells, a finished command can take the next one, and the terminal stops when you mark the thread done. A thread with many terminals folds the older ones away.
+
+<kbd>y</kbd> copies the command that resumes the thread's session in a terminal of your own instead.

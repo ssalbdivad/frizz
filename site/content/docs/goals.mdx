@@ -1,0 +1,26 @@
+---
+title: Goals
+description: A standing prompt a thread receives on its own.
+---
+
+Give a thread a **goal** and Frizz sends it as a prompt for you: every time the agent comes to rest, on a clock you set in minutes, or both. Good for "keep going until the test suite is green" without re-asking.
+
+<Shot src="/img/goal.png" width={1600} height={1170} alt="The goal panel above a queue card's prompt box: keep going until the test suite is green, sent at every rest and every 30 minutes." />
+
+A goal on a clock reaches the agent even mid-turn, at its next step, without cutting off what it is doing — so it can nudge a thread that never stops.
+
+## Bounded
+
+A goal can stop itself after a number of sends, after a span of time, or whichever comes first: "check back every 20 minutes for the next two hours" ends on its own.
+
+## Turning it off
+
+Switch it off from the thread's Goal control whenever you like. The agent can also say it is finished, which ends the goal.
+
+## Goals, schedules and snoozes
+
+| | Runs in | Fires |
+| --- | --- | --- |
+| **Goal** | the same thread | at every rest, on a clock, or both |
+| **Snooze** | the same thread, once | at a time you pick |
+| **[Schedule](/docs/schedules)** | a fresh thread each time | on a calendar |

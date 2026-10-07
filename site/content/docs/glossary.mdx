@@ -1,0 +1,24 @@
+---
+title: Glossary
+description: Frizz's small vocabulary, which doubles as an index of its opinions.
+---
+
+| Term | What it means |
+| --- | --- |
+| **[Project](/docs/projects)** | A directory you ran Frizz in. One server holds all of them, and one page shows them all. |
+| **[Thread](/docs/threads)** | One effort, start to finish. The agent's session *is* the thread. |
+| **[Worker](/docs/threads#workers)** | The agent driving a thread: a real Claude Code, Codex or ACP agent process, running as you. |
+| **[Sub-agent](/docs/threads#sub-agents)** | A helper a worker dispatches for one prong of its task, shown under its parent's card. |
+| **[Handle](/docs/handles)** | A thread's short name, `@port-the-parser`, used to mention, read and message it. A sub-agent's is `@parent.child`. |
+| **[The queue](/docs/queue)** | The list of threads at rest that need you. A thread earns a card only when it wants a human. |
+| **Rested** | An agent that ended its turn and is waiting on you. A rested thread isn't idle; it's your move. |
+| **[Question](/docs/questions)** | An answerable choice an agent hands back, with lettered options and a recommendation. |
+| **[Steps](/docs/questions#steps)** | Things an agent needs you to do that it can't, with a Done button. |
+| **[Todo](/docs/queue#todos)** | A prompt saved as a thread with no agent behind it yet. Sending it starts one. |
+| **[Snooze](/docs/snooze)** | Hide a card until later, optionally with a follow-up prompt. |
+| **[Goal](/docs/goals)** | A standing prompt a thread receives on its own, at every rest, on a clock, or both. |
+| **[Schedule](/docs/schedules)** | A prompt plus a recurrence, in plain words. Each run starts a fresh thread. |
+| **[Time limit](/docs/time-limits)** | A deadline on a thread that its agent plans around and the card counts down to. |
+| **[Spinoff](/docs/handles#spinoff)** | A new thread started from another, carrying its context. |
+| **[Scratch directory](/docs/threads#scratch-directory)** | A thread's own folder, `.frizz/threads/<id>/`, for its agent's notes and files. |
+| **[`FRIZZ.md`](/docs/frizz-md)** | An optional file at your repo root, injected into every thread. |

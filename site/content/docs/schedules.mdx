@@ -1,0 +1,37 @@
+---
+title: Schedules
+description: A recurring prompt, written the way you'd say it.
+---
+
+A **schedule** is a prompt plus a recurrence. On each run, Frizz starts a fresh thread in the schedule's project with that prompt, and the result lands in the queue like any other thread. There is no date picker: you write the schedule in words.
+
+<Shot src="/img/schedule.png" width={1600} height={1000} alt="A schedule in Frizz." />
+
+## Writing one
+
+Type it into the prompt box like any task:
+
+```text
+every weekday at 9am triage new issues
+first weekday of the month bump dependencies
+```
+
+When the box sees a schedule word — *every*, *daily*, *weekday*, *Monday* and the like — it reads the schedule as you type and shows the rule it understood and when it next runs, before you press <kbd>Enter</kbd>. The phrase it read is marked in your text, and the send button turns into a repeat sign.
+
+Didn't mean a schedule? Press <kbd>×</kbd> or <kbd>Esc</kbd> and <kbd>Enter</kbd> starts an ordinary thread. "Fix the bug from this morning" never turns into one.
+
+Frizz turns the words into a calendar rule and computes every run itself, so what it shows you is exactly what it will run.
+
+## Each run
+
+The next run waits in **Snoozed**, where the things you already do to a card work on it: mark it done to skip that run, snooze it to move it, or send it to run it now. A run opens with a header saying which schedule started it.
+
+If a run is still going when the next one is due, the next is skipped rather than piling up.
+
+## Finding them
+
+Every schedule is listed under ⌘K, and each project's row counts its own. On a phone they have their own tab. From there you can change when one runs, pause it, or delete it.
+
+## Asked for by an agent
+
+An agent can propose a schedule too ("triage new issues every Monday"). It doesn't run until you turn it on.

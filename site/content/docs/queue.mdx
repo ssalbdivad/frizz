@@ -1,0 +1,37 @@
+---
+title: The queue
+description: One list of the threads that need you, worked top to bottom.
+---
+
+A sidebar of sessions makes every agent something you have to remember to check on. Frizz gives you one queue instead.
+
+When an agent comes to rest needing you, its thread becomes a card. You read what it did since your last message, then answer its question, steer it, [snooze](/docs/snooze) it, or mark it done. Every action item is in one place, in the order it arrived.
+
+<Shot src="/img/question.png" width={1600} height={590} alt="A queue card asking whether the settings store should use SQLite or a JSON file, with lettered options and the first marked recommended." />
+
+## Only what needs you
+
+The queue is strict about what earns a card, which keeps it a real to-do list. A thread resting only because its own sub-agents are still working, or because it is waiting on CI, a review or a timer, isn't waiting on you. It stays out of the queue until something changes. Nothing shows up just to be dismissed.
+
+## The bands
+
+Threads sit in four bands down the page:
+
+| Band | What is in it |
+| --- | --- |
+| **Queue** | Threads at rest that need you. Each card shows how long it has waited. |
+| **Running** | Threads whose agents are working right now. |
+| **Snoozed** | Threads you parked, and threads waiting on something outside — a PR, an issue, a timer, the next run of a [schedule](/docs/schedules). |
+| **Done** | Threads you marked done. Reply to one to pick it back up. |
+
+## Order
+
+The queue runs oldest first by default, so you cycle through everything; **Settings** can flip it to newest first. A card you are reading never moves under you: new arrivals join the bottom while the page is open.
+
+## Working it
+
+<kbd>j</kbd> and <kbd>k</kbd> walk the cards, <kbd>r</kbd> replies, <kbd>d</kbd> marks done and opens the next, and <kbd>s</kbd> snoozes. See [keyboard shortcuts](/docs/keyboard) for the rest.
+
+## Todos
+
+Not ready to start something? Press <kbd>⌘</kbd><kbd>Shift</kbd><kbd>Enter</kbd> in the new-thread box, or the button beside Send, to save the prompt as a todo. It waits in the queue with no agent behind it until you send it, on the model you picked when you wrote it.

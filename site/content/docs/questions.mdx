@@ -1,0 +1,28 @@
+---
+title: Questions
+description: Agents hand back an answerable choice, not a wall of text.
+---
+
+When a worker reaches something only you can settle, it asks a question with lettered options. Each option says what choosing it means, and the worker marks the one it would take as **recommended** — so the common case is a single keystroke.
+
+<Shot src="/img/question.png" width={1600} height={590} alt="A question card: should the settings store use SQLite or a JSON file, with option A marked recommended and a row for typing something else." />
+
+There is always a row for writing something else instead. A typed reply sets the open questions aside, and the agent decides whether they still matter.
+
+## Several at once
+
+When the answer isn't one thing, a card can take several: check any combination and add a note. A question can also carry follow-ups that appear only for the option you pick, so nobody is asked "and which one?" after saying no.
+
+## Nothing stalls on you
+
+A question you leave alone doesn't hold the thread forever. Ten minutes after the agent comes to rest on it, Frizz answers with the recommended option. A countdown under the card shows when, and its <kbd>×</kbd> turns it off for that question.
+
+An option that acts outside your machine — posting a comment, merging, publishing, spending — is never picked for you. If every option does, the question waits.
+
+## Steps
+
+Sometimes the agent needs you to *do* something it can't: sign in, approve a prompt, press a button it isn't allowed to press. Then the card lists numbered steps and a **Done** button, which tells the agent you finished. Reply instead if a step didn't work.
+
+## On a phone
+
+Simple questions answer with one tap on the card. Larger ones open in a sheet, one step at a time. See [phone](/docs/phone).

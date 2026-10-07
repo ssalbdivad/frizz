@@ -1,0 +1,74 @@
+---
+title: Quick start
+description: From npx frizz to your first answered question.
+---
+
+## Requirements
+
+- **Node 22.13 or later.**
+- **A Claude Code or Codex subscription you are signed in to.** Frizz drives the subscription you already pay for. It brings its own pinned copy of each CLI, downloaded once on first start, so the version on your PATH never changes what a thread runs.
+- Optionally, any [ACP agent](/docs/agents#acp-agents) on your PATH: OpenCode, Gemini CLI, GitHub Copilot CLI, Cursor's agent, goose, Qwen Code and more.
+
+Frizz runs on macOS, Linux and Windows. It has no opinion about version control and does not need Git.
+
+<Steps>
+
+<Step>
+
+### Run it in a project
+
+```bash
+cd path/to/acme
+npx frizz
+```
+
+```text
+  FRIZZ v0.4.0  ready in 4.0s
+
+  ➜  Local:    http://127.0.0.1:9393/
+  ➜  Project:  acme — path/to/acme
+
+  press ctrl-c to stop · run with --debug for the full event feed
+```
+
+A browser tab opens on the board. Frizz listens on port 9393 (19393 if something else holds it). A repository, or anything with a `package.json`, `Cargo.toml` and the like, becomes a [project](/docs/projects) at once; a plain folder is added after you confirm.
+
+</Step>
+
+<Step>
+
+### Start a thread
+
+Type a task in the prompt box and press <kbd>Enter</kbd>. Pick the agent, model and effort beside the box, or leave effort on **auto** and a quick model picks it for each prompt.
+
+</Step>
+
+<Step>
+
+### Answer when it asks
+
+The agent works on its own until it reaches something only you can settle. Then its thread becomes a card in the queue, usually with a [question](/docs/questions) to answer in one keystroke. Reply, [snooze](/docs/snooze) it, or mark it done with <kbd>d</kbd>.
+
+</Step>
+
+<Step>
+
+### Add another project
+
+Run `npx frizz` in a second repo. It joins the server already running, and the new project appears on the same page.
+
+</Step>
+
+</Steps>
+
+## Prefer a window?
+
+The [desktop app](/docs/editor#desktop-app) gives Frizz a window of its own, and the [VS Code extension](/docs/editor) puts it beside your code.
+
+## Try it without touching your setup
+
+```bash
+npx frizz --sandbox
+```
+
+A disposable Frizz: a throwaway home and project on its own port, deleted when the terminal closes. Your credentials come along, so it sees what your real board sees.

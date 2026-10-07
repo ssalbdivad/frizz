@@ -1,0 +1,34 @@
+---
+title: Threads
+description: One effort, start to finish, driven by a real agent process.
+---
+
+A **thread** is one effort, start to finish. It is not a chat tab and not a branch. The agent's session *is* the thread: there is no sidecar document to keep in sync, and starting one writes nothing into your repo.
+
+## Workers
+
+The agent driving a thread is its **worker**: a real Claude Code, Codex or ACP agent process, running as you, with your credentials and your CLI configuration. Your skills, settings and `CLAUDE.md` or `AGENTS.md` apply as they would in a session you started yourself.
+
+A worker keeps going until it reaches something only you can settle — a product call, a fork where guessing wrong is expensive, an irreversible action — and then hands back an answerable [question](/docs/questions) rather than a wall of text.
+
+## They run without the tab
+
+Every worker runs in its own detached background process, independent of the browser and of Frizz itself. Close the tab, quit the browser, stop the server, reboot: your threads are all still there when you come back, and Frizz reconnects to the ones still running rather than replaying them from disk.
+
+While an agent is working, Frizz keeps the machine from idle-sleeping, so an overnight run doesn't stall when the laptop decides nobody is there. Closing the lid or pressing sleep still works.
+
+## Sub-agents
+
+A worker can dispatch **sub-agents** for independent prongs of its task. Frizz binds each one back to its parent, so the fan-out shows under the parent's card, and a queued parent can be snoozed until all of them return.
+
+## Scratch directory
+
+Each thread gets a folder of its own, `.frizz/threads/<id>/` in the project, where its agent can keep notes and files. It stays empty unless the agent writes something.
+
+## Thread info
+
+A thread's <kbd>⋯</kbd> menu has **Thread info**: its tokens, turns, model requests, tool calls and cost. The menu also opens the thread [in your editor](/docs/editor), in a [terminal](/docs/terminals), fullscreen, or deletes it.
+
+## Pinning and deleting
+
+Pin a thread to keep it at the very top of the list. Delete a thread you no longer need from its menu, or have Frizz delete done threads you have not touched in a while, under **Settings**. Pinned threads are never deleted.

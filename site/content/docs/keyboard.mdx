@@ -1,0 +1,52 @@
+---
+title: Keyboard shortcuts
+description: Work the queue without the mouse, and rebind any key.
+---
+
+Press <kbd>?</kbd> anywhere to see every shortcut, and click one to rebind it. A single key never fires while you are typing in a box.
+
+## The queue
+
+| Key | Action |
+| --- | --- |
+| <kbd>j</kbd> / <kbd>k</kbd> | Next / previous card, with the caret in its reply box |
+| <kbd>r</kbd> | Reply |
+| <kbd>d</kbd> | Mark as done |
+| <kbd>s</kbd> | Snooze |
+| <kbd>o</kbd> | Open in a drawer |
+| <kbd>f</kbd> | Fullscreen |
+| <kbd>t</kbd> | Open a [terminal](/docs/terminals) where the agent works |
+| <kbd>e</kbd> | Open in editor |
+| <kbd>y</kbd> | Copy the command that resumes the session in your own terminal |
+| <kbd>m</kbd> | More actions |
+| <kbd>→</kbd> | [Spinoff](/docs/handles#spinoff) |
+
+## Anywhere
+
+| Key | Action |
+| --- | --- |
+| <kbd>c</kbd> | New thread |
+| <kbd>n</kbd> | New project |
+| <kbd>⌘</kbd><kbd>K</kbd> | Jump to a thread, project or schedule |
+| <kbd>⌘</kbd><kbd>I</kbd> | Thread details |
+| <kbd>⌘</kbd><kbd>,</kbd> | Settings |
+| <kbd>⌥</kbd><kbd>↑</kbd> / <kbd>⌥</kbd><kbd>↓</kbd> | Previous / next project |
+| <kbd>?</kbd> | Keyboard shortcuts |
+
+## In a prompt box
+
+| Key | Action |
+| --- | --- |
+| <kbd>Enter</kbd> | Send |
+| <kbd>Shift</kbd><kbd>Enter</kbd> | New line |
+| <kbd>⌘</kbd><kbd>Enter</kbd> | Send now, interrupting the agent; in an empty box, send the queued message |
+| <kbd>⌘</kbd><kbd>Shift</kbd><kbd>Enter</kbd> | Save as a todo |
+| <kbd>@</kbd> / <kbd>#</kbd> / <kbd>/</kbd> | Mention a thread / a project / run a slash command |
+| <kbd>$</kbd> first | Run the line in a terminal on the thread |
+| <kbd>Esc</kbd> | Leave the box, or close the top drawer |
+
+On Windows and Linux, <kbd>⌘</kbd> is <kbd>Ctrl</kbd> and <kbd>⌥</kbd> is <kbd>Alt</kbd>.
+
+## Slash commands
+
+<kbd>/</kbd> offers Claude Code's own commands and skills, plus prompts of your own: saved under **Settings**, in `~/.agents/commands`, or in a project's `.agents/commands`. Type `/name` and Frizz sends the prompt instead; text after the name fills in `$ARGUMENTS`. Your own commands work on every agent.

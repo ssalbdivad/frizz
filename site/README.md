@@ -1,15 +1,30 @@
 # frizz.sh
 
-The one-page site at [frizz.sh](https://frizz.sh). Static: no framework, no build step.
+The site at [frizz.sh](https://frizz.sh): a landing page and the docs, built with [Fumadocs](https://fumadocs.dev) on
+Next.js — the same stack and shape as [zod.dev](https://zod.dev) and the `yes` docs.
+
+It is its own app, not a member of the repo's pnpm workspace, so it installs and builds on its own:
+
+```sh
+cd site
+pnpm install --ignore-workspace
+pnpm dev        # http://localhost:4100
+pnpm build
+```
 
 | Path | What it is |
 | --- | --- |
-| `index.html` | The page. The cursive `fff` mark is inlined from `assets/logo-concepts/final/fff.svg` so the stroke can draw itself on load. |
-| `site.css` | The board's own tokens from `packages/web/src/styles.css`, JetBrains Mono for display and code, the system sans for body text. |
-| `img/` | Screenshots captured from a sandboxed `scripts/adhoc-stack.mjs` instance (seeded threads, no real data), downscaled to ~2x. The picker shot lists `colinhacks/zod` because this repo had one open issue at capture time. |
-| `og.html` | Source for `img/og.png`, the 1200×630 social card. Not deployed (`.vercelignore`). |
-| `fonts/` | JetBrains Mono 2.304 woff2, under the OFL in `fonts/OFL.txt`. |
-| `docs/` | The remote-access guides, at `/docs`. They mirror [`docs/remote-access.md`](../docs/remote-access.md), which `src/cloud.ts` names in its error messages — change one and change the other. One file per route, sharing `site.css` and the same `.doc` column as the homepage. |
+| `app/(home)/page.tsx` | The landing page. |
+| `content/docs/` | The docs, one MDX file per page. `meta.json` orders the sidebar and names its sections. |
+| `app/docs/` | The docs layout and page route. |
+| `app/global.css` | The board's palette (`packages/web/src/styles.css`) as Fumadocs tokens, dark by default, and a warm light theme. |
+| `components/mark.tsx` | The cursive `fff` mark, drawn as one stroke on load. Its path is `components/mark-path.ts`, from `assets/logo-concepts/final/fff.svg`. |
+| `public/img/` | Screenshots captured from a sandboxed `scripts/adhoc-stack.mjs` instance (seeded threads, no real data). The `README.md` at the repo root uses copies in `assets/`; re-shoot both together. |
+| `og/` | Source for `public/img/og.png`, the 1200×630 social card. Not deployed. |
+
+The remote-access guides (`content/docs/remote-access.mdx`, `frizz-sh.mdx`, `cloudflare-tunnel.mdx`, `tailscale.mdx`,
+`ssh.mdx`, `reverse-proxy.mdx`) mirror [`docs/remote-access.md`](../docs/remote-access.md). Change one and change the
+other.
 
 ## Why `/docs` and not `docs.frizz.sh`
 
@@ -26,9 +41,12 @@ The Vercel project is `frizz` under the `colinhacks-projects` scope, deployed fr
 vercel --cwd site --prod
 ```
 
+Vercel builds it as a Next.js app: `vercel.json` sets the framework, which was "Other" while the site was static
+HTML.
+
 ## Regenerating the social card
 
 ```sh
 python3 -m http.server 8765 --directory site   # in one shell
-node scripts/shot.mjs http://127.0.0.1:8765/og.html site/img/og.png "" --w=1200 --h=630 --dsf=1 --wait=1500
+nub scripts/shot.mjs http://127.0.0.1:8765/og/og.html site/public/img/og.png "" --w=1200 --h=630 --dsf=1 --wait=1500
 ```

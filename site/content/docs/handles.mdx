@@ -1,0 +1,22 @@
+---
+title: Handles and spinoff
+description: Threads name, read and message each other.
+---
+
+## Handles
+
+Every thread has a short **handle**, named for its subject: `@port-the-parser`, `@shell-budgets`. A sub-agent is addressed under its thread, `@port-the-parser.cache-keys`, and stays reachable after it finishes.
+
+Type <kbd>@</kbd> in a prompt to mention a thread; the box completes it, and in **All projects** it reaches every open project's threads. Typing `@port-the-parser.` lists that thread's sub-agents. Wherever an agent names a thread, the handle is a link.
+
+## Threads talk to each other
+
+An agent can read another thread by handle — its request, its status, its latest messages — and message it. When it needs the answer before it can go on, it waits for the reply. So "ask @shell-budgets how it handled this" works the way it reads.
+
+## Projects
+
+`#slug` names a project the same way: the box completes it, and it links wherever it appears.
+
+## Spinoff
+
+**Spinoff** starts a new thread from the one you are reading, carrying its context. Press <kbd>→</kbd> on a card or use the spinoff icon in its header, say what the new thread should do, and pick the project it starts in. On a Claude thread it forks the parent's session, so the new thread starts out knowing everything the parent did. The parent itself doesn't move.

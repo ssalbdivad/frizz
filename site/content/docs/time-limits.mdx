@@ -1,0 +1,26 @@
+---
+title: Time limits
+description: Bound a thread by the clock, and get the best result by then.
+---
+
+"Go until 3:30" is a habit worth keeping. A **time limit** turns it into something Frizz keeps track of: the agent knows the deadline, plans for it, and the board shows how much time is left.
+
+<Shot src="/img/time-limit.png" width={1600} height={1000} alt="A thread with a time limit in Frizz." />
+
+## Setting one
+
+The stopwatch beside the model in the prompt box takes a duration or a clock time — `2h`, `45m`, `15:30`. A duration starts counting when you press <kbd>Enter</kbd>. To add one to a thread that is already running, use **Time limit…** in its <kbd>⋯</kbd> menu.
+
+## What the agent does with it
+
+The agent is told the deadline and what it means: the job is the best deliverable possible by then, not the complete one eventually. It plans for something it can hand over at any point, and Frizz reminds it as time runs down, more firmly near the end.
+
+A sub-agent it starts gets a share of the time that's left, ending before its parent's so the parent can fold the result in.
+
+## On the board
+
+The card and the thread's row count down — `42m left` — quietly while there is plenty of time, amber once 80% of it is gone, red once over. Click the countdown to extend it by 15 minutes, 30 minutes or an hour, set a new limit, or remove it.
+
+## Running out
+
+Running out never interrupts a turn: stopping an agent mid-edit would leave your tree half-changed. The limit is enforced by what the agent is told and by the board showing it over time. You can still stop it yourself.

@@ -1,0 +1,43 @@
+---
+title: Agents
+description: Claude Code, Codex and ACP agents, on your own sign-in.
+---
+
+Frizz brings no model of its own. Each thread is driven by an agent CLI you already use, under the account you are signed in to: your subscription, your rate limits, your settings. Pick the agent per thread, and run several against the same repo at once.
+
+## Claude Code and Codex
+
+Frizz runs its own pinned copy of each CLI — the exact build it was tested against — rather than whichever version is on your PATH. It downloads them once, on first start. Set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another build.
+
+If you are not signed in, Frizz shows the command to run in your own terminal (`claude auth login` or `codex login`) and picks the credential up once you have.
+
+## ACP agents
+
+Any agent that speaks the [Agent Client Protocol](https://agentclientprotocol.com) runs as a thread too, from your PATH:
+
+| Agent | Command |
+| --- | --- |
+| OpenCode | `opencode acp` |
+| Cursor agent | `cursor-agent acp` |
+| Gemini CLI | `gemini --acp` |
+| GitHub Copilot CLI | `copilot --acp` |
+| Kilo | `kilo acp` |
+| Qwen Code | `qwen --acp` |
+| goose | `goose acp` |
+| Kimi CLI | `kimi acp` |
+| Grok Build | `grok agent stdio` |
+| pi | `pi-acp` |
+
+An ACP agent's models show in the model picker beside it, grouped by provider.
+
+## Model and effort
+
+The picker beside the prompt box sets the model and effort for the next thread; **Make default** keeps it. Effort defaults to **auto**: a quick model reads each prompt and picks the level it needs, from low up to max. A running thread's model can be changed from its own prompt box.
+
+## Permissions
+
+New Claude Code threads launch in **Auto** permission mode: safe actions run, and risky ones ask you to approve them in the thread. **Bypass** never asks, so nothing waits on you and nothing is checked either. Set it under **Settings**, or per thread beside its model.
+
+## Usage
+
+The quota chip shows how much of your plan is left, and warns when it is nearly out while threads on it are still running. With **Fable fallback** on, new Claude threads start on Fable when the rest of your usage is nearly gone, and a thread paused by a usage limit restarts on Fable instead of waiting for the reset. A thread paused by a limit can be resumed once the limit resets, all of them at once if you like.

@@ -1,0 +1,60 @@
+---
+title: Introduction
+description: An opinionated agent console for extreme productivity.
+---
+
+Frizz runs your coding agents — Claude Code, Codex, and any agent that speaks the Agent Client Protocol — from one browser tab. Every agent that comes to rest needing you becomes a card in one queue, so you work through a list instead of checking on ten terminals.
+
+```bash
+npx frizz
+```
+
+It brings no model of its own and no workflow of its own. It drives the CLIs you already pay for, under your sign-in, and keeps every opinion it has in a text file you can edit.
+
+<Shot src="/img/board.png" width={1760} height={1100} alt="The Frizz board: projects and their threads on the left, the prompt box, and a queue card where an agent asks a question with lettered options." />
+
+## Frizz is for you if
+
+- Terminal UIs feel dated and get in the way of good user experience.
+- Orchestrator apps like Conductor feel overly complex.
+- Switching between sessions to check on agents is tedious.
+
+## What it does
+
+<Cards>
+  <Card title="One queue" href="/docs/queue">
+    An agent that needs you becomes a card. Answer it, steer it, snooze it, or mark it done.
+  </Card>
+  <Card title="Answerable questions" href="/docs/questions">
+    Agents ask with lettered options and a recommendation. One keystroke answers.
+  </Card>
+  <Card title="Every project, one page" href="/docs/projects">
+    One server serves every repo on your machine. Run it in a second repo and it joins.
+  </Card>
+  <Card title="Headless" href="/docs/threads">
+    Each agent runs in its own background process. Close the tab or stop Frizz, and it keeps working.
+  </Card>
+  <Card title="Schedules and time limits" href="/docs/schedules">
+    "Every weekday at 9am" starts a fresh thread each time. "2h" bounds one.
+  </Card>
+  <Card title="From anywhere" href="/docs/remote-access">
+    Reach the board from your phone with a private frizz.sh name, a tunnel, or Tailscale.
+  </Card>
+</Cards>
+
+## What it is not
+
+- **Not a model.** Frizz drives the CLIs you already have signed in, on your subscription.
+- **Not a cloud.** No account, no telemetry. The server binds `127.0.0.1`, and its state lives in your user directory, never in your checkout.
+- **Not a workflow.** No worktrees, branches, or build steps behind your back. A thread behaves like a session you started yourself.
+
+## Where next
+
+<Cards>
+  <Card title="Quick start" href="/docs/quick-start">
+    From `npx frizz` to your first answered question.
+  </Card>
+  <Card title="FAQ" href="/docs/faq">
+    What leaves your machine, what lands in your repo, and what happens when you close the tab.
+  </Card>
+</Cards>

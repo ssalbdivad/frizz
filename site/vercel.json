@@ -1,16 +1,7 @@
 {
-  "cleanUrls": true,
+  "framework": "nextjs",
   "trailingSlash": false,
   "headers": [
-    {
-      "source": "/fonts/(.*)",
-      "headers": [
-        {
-          "key": "Cache-Control",
-          "value": "public, max-age=31536000, immutable"
-        }
-      ]
-    },
     {
       "source": "/img/(.*)",
       "headers": [
@@ -22,11 +13,6 @@
     }
   ],
   "redirects": [
-    {
-      "source": "/docs",
-      "destination": "/#remote-access",
-      "permanent": false
-    },
     {
       "source": "/(.*)",
       "has": [

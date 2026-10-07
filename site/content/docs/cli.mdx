@@ -1,0 +1,39 @@
+---
+title: CLI
+description: Everything npx frizz takes.
+---
+
+Run it in the directory you want to work in. One server serves every project on the machine, all on one page, so a second run joins the one already going.
+
+```bash
+npx frizz [options]
+```
+
+| Option | What it does |
+| --- | --- |
+| `--no-app` | Print the URL without opening a browser |
+| `--port <port>` | Request a fixed port for a new server |
+| `--sandbox` | A disposable Frizz to try things in: throwaway home and project, its own port, deleted when this terminal closes. Credentials (`gh`, cloudflared, Claude, Codex, the machine's frizz.sh key) are shared |
+| `--link` | Print a fresh single-use sign-in link for the running board |
+| `--sessions` | List the devices signed in to the running board |
+| `--sign-out <id\|all>` | Sign one device out, or every one of them |
+| `--status` | Report the board running for this project: address, pid, version |
+| `--stop` | Stop the board running for this project; running agents keep going |
+| `--debug` | Stream the full event feed to the terminal instead of the compact readout |
+| `-h`, `--help` | Show help |
+
+## Keys in the terminal
+
+While Frizz runs, its terminal takes two keys:
+
+| Key | What it does |
+| --- | --- |
+| <kbd>R</kbd> | Set up [remote access](/docs/remote-access) |
+| <kbd>L</kbd> | Show a fresh single-use sign-in link as a QR code |
+
+## Environment
+
+| Variable | What it does |
+| --- | --- |
+| `FRIZZ_CLAUDE_BIN` | Run this Claude Code build instead of the one Frizz pins |
+| `FRIZZ_CODEX_BIN` | Run this Codex build instead of the one Frizz pins |

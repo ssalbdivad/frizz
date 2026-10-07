@@ -1,0 +1,25 @@
+---
+title: Editor and desktop
+description: Frizz beside your code, and in a window of its own.
+---
+
+## VS Code, Cursor and Windsurf
+
+The Frizz extension puts the real Frizz page in your editor's sidebar, in your colour theme, on that window's project: the same queue, cards, prompt boxes and shortcuts.
+
+- **What you select goes with your message.** A bar over the prompt box names the file in front and your selection (`sample.ts:12-20`), and sends it with the next message — so "why does this throw?" needs no pasting. Files that may hold secrets send only which lines, never their text.
+- **Agents can see your editor.** An agent can read what you have in front of you — the file, your selection, your open tabs, the editor's errors and warnings — even when you talk to it in a browser. The eye on the bar turns all of it off.
+- **<kbd>Ctrl</kbd><kbd>L</kbd> (<kbd>⌘</kbd><kbd>L</kbd> on macOS) adds code to a prompt**, Cursor's chord; <kbd>Alt</kbd><kbd>K</kbd> works too, as in Claude Code.
+- **Review a thread's changes** as the editor's multi-file diff, from the thread's <kbd>⋯</kbd> menu or its list of edited files.
+- **File links open in the editor** at the line they name, in the window that has the project open.
+- **Open a thread in an editor tab**, beside the code.
+
+Install it from the [extension's README](https://github.com/colinhacks/frizz/blob/main/packages/vscode/README.md). Without it, file links can still open in `$VISUAL`/`$EDITOR` or another app of your choice, set under **Settings**.
+
+## Desktop app
+
+Prefer a window of its own to a browser tab? The desktop app is on [GitHub releases](https://github.com/colinhacks/frizz/releases?q=desktop) for macOS, Linux and Windows — unsigned builds, so the first launch asks once. It needs the same Node as `npx frizz`, and starts or joins the same server.
+
+## Files and pictures in Frizz
+
+Code and text files open in Frizz's own reader, which follows the file as it is saved; pictures and videos open in a viewer you can zoom and page through. When an agent wants to show you screenshots or a recording, it puts them in a gallery on its message.

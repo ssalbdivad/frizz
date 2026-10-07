@@ -1,11 +1,11 @@
 <!doctype html>
-<!-- Source for img/og.png (1200x630). Not deployed (see .vercelignore). Regenerate with:
-     node scripts/shot.mjs http://127.0.0.1:8765/og.html site/img/og.png "" --w=1200 --h=630 --dsf=1 --wait=1500
+<!-- Source for public/img/og.png (1200x630). Not deployed. Regenerate with:
+     node scripts/shot.mjs http://127.0.0.1:8765/og/og.html site/public/img/og.png "" --w=1200 --h=630 --dsf=1 --wait=1500
      with `python3 -m http.server 8765 --directory site` running. -->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <link rel="stylesheet" href="/site.css" />
+    <link rel="stylesheet" href="/og/og.css" />
     <style>
       html, body { margin: 0; width: 1200px; height: 630px; overflow: hidden; background: #0d0e10; }
       .og { display: grid; grid-template-columns: 300px 1fr; gap: 72px; align-items: center; height: 630px; padding: 0 96px; }
@@ -18,10 +18,10 @@
   </head>
   <body>
     <div class="og">
-      <img src="/img/og-mark.svg" alt="" />
+      <img src="/public/img/og-mark.svg" alt="" />
       <div>
         <h1>An opinionated agent console.</h1>
-        <p>Run many Claude Code and Codex agents at once from one browser tab.</p>
+        <p>Run many Claude Code, Codex and other agents at once from one browser tab.</p>
         <p style="margin-top:28px"><code><span class="prompt">$</span> npx frizz</code></p>
       </div>
     </div>

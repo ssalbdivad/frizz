@@ -1,0 +1,30 @@
+---
+title: Projects
+description: Every directory you run Frizz in, served by one server on one page.
+---
+
+Every directory you run `npx frizz` in becomes a **project**. Frizz is a single server: one on your machine serves every project, on one page at `http://127.0.0.1:9393/`. Running it in a second repo adds that project to the server already running rather than starting another.
+
+<Shot src="/img/projects.png" width={1760} height={1100} alt="The All projects page: projects listed with their threads beneath them, and every project's queue cards beside them." />
+
+## All projects, or one
+
+The page's title, top-left above the prompt box, switches between **All projects** and a single project. Focused on one, the list, the queue and new threads are all that project's. <kbd>⌥</kbd><kbd>↑</kbd> and <kbd>⌥</kbd><kbd>↓</kbd> step between projects from anywhere.
+
+A project's snoozed and done threads show as small counts on its row; click the row to list them in place. Drag rows to reorder projects.
+
+## What becomes a project
+
+A repository (`.git`, `.jj`, `.hg`, `.svn`), or a folder with a `package.json`, `pyproject.toml`, `go.mod`, `Cargo.toml` and the like, becomes a project the moment you run Frizz in it. A plain folder is offered first, and added once you confirm. Your home folder is never a project.
+
+## Home
+
+Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**.
+
+## Project instructions
+
+A project's instructions are its [`FRIZZ.md`](/docs/frizz-md), injected into every thread. Edit them from the agent settings beside the model picker; they save to the repo root, where they can be committed and reviewed.
+
+## State lives outside the repo
+
+Everything durable — threads, settings, logs — lives under your user directory, never in your checkout. All Frizz adds to a project is a `.frizz/` folder of per-thread [scratch directories](/docs/threads#scratch-directory) and a few small state files.
