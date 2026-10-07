@@ -184,19 +184,21 @@ function handleHostControl(message) {
   // The ONLY place real claude reports where a skill was resolved from — `SlashCommand` carries no
   // source at all. Shaped like 2.1.246's answer: "projectSettings" is a root frizz maps, the invented
   // root proves an unmapped one leaves its row unlabelled rather than mislabelled, and "compact" is a
-  // frontmatter entry that is NOT a skill, so it must never reach the listing.
+  // frontmatter entry that is NOT a skill, so it must never reach the listing. "commit" is a
+  // `.claude/commands/` file: a user root, though the init frame does not call it a skill.
   if (request.subtype === "get_context_usage") {
     record({ kind: "context-usage" })
     if (scenario === "context-usage-failure") return respondError(message.request_id, "context usage unavailable")
     respond(message.request_id, {
       skills: {
-        totalSkills: 3,
-        includedSkills: 3,
+        totalSkills: 4,
+        includedSkills: 4,
         tokens: 120,
         skillFrontmatter: [
           { name: "review", source: "projectSettings", tokens: 40 },
           { name: "explore", source: "someFutureRoot", tokens: 40 },
           { name: "compact", source: "built-in", tokens: 40 },
+          { name: "commit", source: "userSettings", tokens: 40 },
         ],
       },
       isAutoCompactEnabled: false,
@@ -604,6 +606,9 @@ function initializationPayload() {
       { name: "review", description: "Review changes (project)", argumentHint: "<path>", aliases: ["inspect"] },
       { name: "compact", description: "Compact the conversation", argumentHint: "", aliases: [] },
       { name: "explore", description: "Explore the repository (dynamic workflow)", argumentHint: "", aliases: [] },
+      // A `.claude/commands/` file: absent from the init frame's `skills`, yet the model can run it
+      // from anywhere in a message, so it must list as a skill rather than a built-in command.
+      { name: "commit", description: "Commit the work (user)", argumentHint: "", aliases: [] },
       { name: "clear", description: "Start a new session with empty context", argumentHint: "[name]", aliases: ["reset"] },
       { name: "__remote-workflow", description: "Run the workflow script delivered in this session environment", argumentHint: "", aliases: [] },
       { name: "extra-usage", description: "Renamed to /usage-credits", argumentHint: "", aliases: [] },

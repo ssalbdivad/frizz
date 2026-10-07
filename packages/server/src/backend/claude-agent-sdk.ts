@@ -528,6 +528,11 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
   // in the CLI, its output drawn under the command in the transcript. What is left out is the handful a
   // Frizz thread must not run (see FRIZZ_EXCLUDED_COMMANDS) and the CLI's own retired and internal rows.
   // A built-in is tagged `builtin` when claude names no source for it, which is what it is.
+  //
+  // A command FILE (`.claude/commands/commit.md`, a plugin's `commands/`) is missing from the init
+  // `skills` array, but claude hands it to the model through the Skill tool like any skill, so it runs
+  // from anywhere in a message — not only as the message's first token, which is all a built-in gets.
+  // The context usage names its root (user, project, plugin); a built-in's root is "built-in".
   async listSkills(): Promise<ClaudeSkillInfo[]> {
     const initialization = await this.initializationResult()
     const sources = await this.skillSources()
@@ -535,7 +540,8 @@ class RealClaudeQueryHandle implements ClaudeQueryHandle {
     const skills: ClaudeSkillInfo[] = []
     for (const command of initialization.commands) {
       if (!command.name) continue
-      const isSkill = skillNames.has(command.name)
+      const fileSource = sources.get(command.name)
+      const isSkill = skillNames.has(command.name) || (fileSource !== undefined && fileSource !== "builtin")
       if (!isSkill && !offeredBuiltinCommand(command)) continue
       const source = sources.get(command.name) ?? (isSkill ? undefined : "builtin")
       // The wire cap for a typeahead row is tighter than the 4KB the initialize mapper allows a

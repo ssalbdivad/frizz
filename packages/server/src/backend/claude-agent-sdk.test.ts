@@ -249,6 +249,8 @@ test("listSkills offers the skills and the built-in commands a Frizz thread can 
       { name: "review", description: "Review changes", source: "project" },
       { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
+      // A command FILE from a user root is invocable anywhere in a message, like a skill.
+      { name: "commit", description: "Commit the work", source: "user" },
     ])
     // The source map is memoized: a second listing must not re-ask for the context usage, which is a
     // real ~1.2s round trip against a live CLI.
@@ -273,6 +275,8 @@ test("listSkills still answers when the harness cannot report where its skills c
       // A built-in with no reported source is still a built-in.
       { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
+      // With no source either, a command file cannot be told from a built-in, so it stays one.
+      { name: "commit", description: "Commit the work (user)", source: "builtin", command: true },
     ])
   } finally {
     await harness.close()
