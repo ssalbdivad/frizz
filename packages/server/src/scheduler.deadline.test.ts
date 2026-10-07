@@ -7,7 +7,7 @@ import { createStorage, type SessionRow, type Storage } from "./storage.ts"
 import { createScheduler, enqueueDeadlineNoticeWake } from "./scheduler.ts"
 import type { SessionTelemetry, Tailer, TurnState } from "./tailer.ts"
 
-// THE THREAD'S TIME LIMIT (plans/time-limits.md, scheduler SOURCE 15). What must hold:
+// THE THREAD'S TIME LIMIT (ARCHITECTURE.md § Time limits, scheduler SOURCE 15). What must hold:
 //  · check-ins at half-time, 80%, the final lead and the deadline — each ONCE per generation, across
 //    passes and a restart, and only the LATEST due stage when several have passed;
 //  · delivered MID-TURN, like a Goal heartbeat;

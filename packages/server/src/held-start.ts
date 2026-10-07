@@ -7,7 +7,7 @@ import { isHeldRow, type SessionRow } from "./storage.ts"
 // STARTING A HELD THREAD (SessionRow.held_by): its first message runs `dispatch` with `opts.onto`, on the
 // row's own slug, session id and title, so its place, pin, links and name carry over. Whoever holds it —
 // base's schedules, a Frizz plugin's `threads.start`, a message to a thread whose plugin is gone — starts
-// it here. It lived in the router's closure until scheduled threads (plans/scheduled-threads.md §4), whose
+// it here. It lived in the router's closure until scheduled threads (ARCHITECTURE.md § Scheduled threads), whose
 // next run IS a held row the SCHEDULER starts, so it is built once per project in context.ts and shared,
 // and the one-launch-at-a-time guard below sees every launch, whoever makes it. A second launch while the
 // first is still spawning would start a second agent on the SAME session id; it is refused here rather

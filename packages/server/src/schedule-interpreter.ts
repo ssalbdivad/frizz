@@ -14,7 +14,7 @@ import type { ClaudeOneShot } from "./backend/claude-oneshot.ts"
 import type { ThreadScheduleRow } from "./schedule-store.ts"
 import { cleanThreadName, threadNameProblem } from "./thread-names.ts"
 
-// THE SCHEDULE INTERPRETER (plans/scheduled-threads.md §3): ONE short model call that decides whether what
+// THE SCHEDULE INTERPRETER (ARCHITECTURE.md § Scheduled threads): ONE short model call that decides whether what
 // the human typed into the prompt box asks for its task to REPEAT on a schedule, and if it does, finds the
 // schedule in it. The model INTERPRETS; Frizz COMPUTES — it returns an RRULE and a local start, and
 // everything the human then sees (the echo, the next runs) is built from that rule by schedule-rule.ts, so

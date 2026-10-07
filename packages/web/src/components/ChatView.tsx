@@ -3715,7 +3715,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // bubble honors \n but not a lone \r → the breaks collapse into a run-on. Normalize for BOTH render
     // paths (the server does this too, but this is the definitive per-surface guarantee for user text).
     const text = messagePresentationText(m).replace(/\r\n?/g, "\n")
-    // A SCHEDULED RUN'S OPENING (plans/scheduled-threads.md §5): Frizz's header for the worker, then the
+    // A SCHEDULED RUN'S OPENING (ARCHITECTURE.md § Scheduled threads): Frizz's header for the worker, then the
     // schedule's saved prompt. The header is machinery — which occurrence, how late, how to finish quietly
     // — so it folds to one line naming the schedule, and the prompt, which the human wrote, keeps the
     // human's bubble (ScheduledRunOpening).

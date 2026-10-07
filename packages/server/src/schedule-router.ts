@@ -17,7 +17,7 @@ import {
 } from "@frizz/shared"
 import type { AppContext } from "./context.ts"
 
-// THE SCHEDULE RPCs (plans/scheduled-threads.md §3, §8). Spread into the router (router.ts createRouter), so
+// THE SCHEDULE RPCs (ARCHITECTURE.md § Scheduled threads). Spread into the router (router.ts createRouter), so
 // they are ordinary procedures of the tenant they are addressed to — `/_frizz/<project>/rpc/<name>` — and
 // every one is mirrored in packages/web/src/api/contract.ts, which rpc-contract.ts holds to these schemas.
 //

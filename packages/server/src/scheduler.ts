@@ -889,7 +889,7 @@ function isGoalEndFenceId(fenceId: string): boolean {
 
 /** Which limit this LIVE Goal has reached, if any. A row with every trigger off, no generation, or one
  *  already stopped has nothing left to stop. */
-/** THE GOAL STOPS AT THE THREAD'S DEADLINE (plans/time-limits.md § Interactions). A stop-hook Goal that
+/** THE GOAL STOPS AT THE THREAD'S DEADLINE (ARCHITECTURE.md § Time limits). A stop-hook Goal that
  *  keeps saying "keep going" past the limit would undo the limit, so no trigger delivers once the
  *  deadline has passed — the rest, the clock and the compaction trigger alike. It is a HOLD, not a stop:
  *  the Goal stays armed and its own `for:` and run cap are untouched, so a human who extends the deadline
@@ -1405,7 +1405,7 @@ export interface SchedulerDeps {
   // Deterministic hard-crash fault injection. Throwing here escapes tick without compensating writes,
   // exactly like process death at the named durability boundary. Never configured in production.
   crashPoint?: (point: SchedulerCrashPoint, delivery: WakeDelivery) => void
-  // SCHEDULED THREADS (schedules.ts, plans/scheduled-threads.md §6): the pass that starts a schedule's next
+  // SCHEDULED THREADS (schedules.ts, ARCHITECTURE.md § Scheduled threads): the pass that starts a schedule's next
   // run when its time comes. `evalDue` claims synchronously and launches OFF the tick, so an auth preflight
   // or a cold daemon never holds up this project's other wakes; `drain` is what `stop` awaits so no launch
   // outlives the scheduler that started it. Absent ⇒ no schedule ever fires (tests of other sources).
@@ -3829,7 +3829,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   }
 
   // ---- SOURCE 15: THE THREAD'S TIME LIMIT -------------------------------------------------------
-  // plans/time-limits.md. A thread with a deadline is checked in with at fixed points in its budget —
+  // ARCHITECTURE.md § Time limits. A thread with a deadline is checked in with at fixed points in its budget —
   // half-time, 80%, shortly before and at the deadline (@frizz/shared deadlineStageFraction) — each
   // asking for a different behaviour (deadline.ts deadlineCheckInMessage). Delivered MID-TURN at the
   // worker's next tool boundary, as a Goal heartbeat is; a resting thread is woken by it.

@@ -396,7 +396,7 @@ export function checkSchedule(spec: ScheduleSpec, nowMs: number, preview = 3): S
   }
   // Runs a day, counted over the 24h from the first run. The 60-run sample is too short to count a dense
   // rule — every 15 minutes is 96 a day and read as 60 — so a saturated sample is recounted over 97 runs,
-  // one more than the 15m floor allows in a day (plans/schedule-live-reading.md §3.5.1).
+  // one more than the 15m floor allows in a day (`git show 7e0b68b5:plans/schedule-live-reading.md` §3.5.1).
   let perDay = sample.filter((ms) => ms < sample[0]! + DAY_MS).length
   if (perDay === sample.length && sample.length === 60) {
     const dense = occurrencesAfter(compiled.value, nowMs, 97)
@@ -415,7 +415,7 @@ const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "Ju
 const ORDINAL_WORDS: Record<number, string> = { 1: "first", 2: "second", 3: "third", 4: "fourth", 5: "fifth", [-1]: "last", [-2]: "second-to-last" }
 
 /** One run of a rule's description, typed by what it says, so a reader can mark the parts it ASSUMED
- *  (plans/schedule-live-reading.md §3.4): the prompt box dims `9am` when nobody typed a time, `Monday`
+ *  (`git show 7e0b68b5:plans/schedule-live-reading.md` §3.4): the prompt box dims `9am` when nobody typed a time, `Monday`
  *  when "weekly" named no day, and only the `pm` of a `time` when "at 3" was read as the afternoon.
  *  `lead` is connective wording ("every ", " at ", ", "); the rest carry the rule. Joined, the parts are
  *  exactly {@link describeSchedule} — a test pins that for every rule in the grammar corpus. */
@@ -476,7 +476,7 @@ function phraseParts(rule: ScheduleRule, dtstart: Wall): Parts | undefined {
     if (days === undefined) return undefined
     const on: Parts = days ? [lead(" on "), daysPart(pluralDays(rule.byDay!))] : []
     // An even step from :00 is a minute interval: BYMINUTE=0,15,30,45 is "every 15 minutes", not a list
-    // of four marks past the hour (plans/schedule-live-reading.md §3.5.4).
+    // of four marks past the hour (`git show 7e0b68b5:plans/schedule-live-reading.md` §3.5.4).
     const step = minuteStep(minute)
     if (step !== undefined && rule.interval === 1 && !rule.byHour) return [intervalPart(`every ${step} minutes`), ...on]
     const every = rule.interval === 1 ? "every hour" : `every ${rule.interval} hours`
@@ -654,7 +654,7 @@ export function formatClock(h: number, mi: number): string {
 
 /** "Mon Oct 12, 9am" in the schedule's zone. With `nowMs`, a run in another year than now (in that zone)
  *  says its year — "Sat Jan 2, 2027, 9am" — so a yearly rule's next three runs do not read as three
- *  identical dates (plans/schedule-live-reading.md §3.5.2). */
+ *  identical dates (`git show 7e0b68b5:plans/schedule-live-reading.md` §3.5.2). */
 export function formatOccurrence(ms: number, tz: string, nowMs?: number): string {
   const w = zonedWall(ms, tz)
   return `${formatOccurrenceDate(ms, tz, nowMs)}, ${formatClock(w.h, w.mi)}`

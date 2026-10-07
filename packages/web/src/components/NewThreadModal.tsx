@@ -293,7 +293,7 @@ function PromptForm({
     dispatch.mutate(input)
   }
 
-  // THE SCHEDULE IN THE WORDS (plans/schedule-live-reading.md, ScheduleComposer.tsx): there is no schedule button
+  // THE SCHEDULE IN THE WORDS (ARCHITECTURE.md § Scheduled threads, ScheduleComposer.tsx): there is no schedule button
   // and no mode. A prompt with a schedule word in it is read by the model as it is typed; when the words ask for
   // the work to repeat, a strip under the box says what will run when, the send wears ↻, and Enter creates the
   // schedule instead of starting the thread. It reads the PROSE the box shows (what every span indexes), never

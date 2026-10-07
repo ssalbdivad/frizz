@@ -241,7 +241,7 @@ test("a steps fence queues the thread — new contract, legacy, and with a false
   assert.equal(deriveAwaitingBackground(row(), tele(stepsFence()), "turn-idle", false, NOW, undefined, false, {}, new Set(), new Set(), [], 1), false)
 })
 
-// THE TIME LIMIT CUTS A PARK (plans/time-limits.md § Interactions): a fence written before the deadline
+// THE TIME LIMIT CUTS A PARK (ARCHITECTURE.md § Time limits): a fence written before the deadline
 // holds only until it, so a thread still parked when its time runs out shows in the queue. A fence
 // written after the deadline is the worker's considered answer to the `over` check-in, and holds.
 test("a park written before the thread's deadline stops holding at the deadline; one written after holds", () => {

@@ -2,7 +2,7 @@ import type { ActionId, Chord, Platform } from "./keybindings.ts"
 
 // THE KEYBOARD IN AN EDITOR'S SIDEBAR — what the shortcuts sheet (components/KeyboardShortcuts.tsx) says
 // where the sidebar differs from the browser. Every key the sheet lists works there; these are the
-// differences, said where the key is listed (plans/vscode-extension.md § The editor in the sidebar).
+// differences, said where the key is listed (ARCHITECTURE.md § VS Code extension).
 //
 // WHERE A KEY GOES. While the frame has focus no VS Code keybinding sees a key (the sidebar spike,
 // 2026-10-01), so every key reaches Frizz — and Frizz's chords that VS Code also binds (⌘K, its chord
@@ -41,7 +41,7 @@ export const SIDEBAR_KEY_NAMES: Partial<Record<ActionId, string>> = {
 /**
  * The sheet's note over the keys, in the sidebar. The second sentence because a rebind is kept in the
  * frame's own storage, which the browser partitions from a tab's: a key changed here is not changed in a
- * browser tab, and the reverse (plans/vscode-extension.md § What the sidebar keeps apart).
+ * browser tab, and the reverse (ARCHITECTURE.md § VS Code extension).
  */
 export const SIDEBAR_KEYS_NOTE = "Keys reach Frizz while the sidebar has focus. Changes here stay in the sidebar."
 

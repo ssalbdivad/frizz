@@ -3813,7 +3813,7 @@ export function createRouter(ctx: AppContext) {
           if (thread.state === "archived") throw new Error("Reopen this thread before snoozing it")
           if (Date.parse(input.until) <= Date.now()) throw new Error("Snooze time must be in the future")
         }
-        // A SCHEDULE'S NEXT RUN (plans/scheduled-threads.md §4): snoozing it moves this one occurrence, and
+        // A SCHEDULE'S NEXT RUN (ARCHITECTURE.md § Scheduled threads): snoozing it moves this one occurrence, and
         // Wake now runs it now — there is no "un-parked and waiting" for a run whose start the scheduler
         // owns. A prompt is dropped: the run's own note is what it starts with.
         const row = ctx.storage.getSession(input.slug)
@@ -4344,7 +4344,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // ---- THE THREAD'S TIME LIMIT (plans/time-limits.md, deadline.ts) ----------------------------------
+    // ---- THE THREAD'S TIME LIMIT (ARCHITECTURE.md § Time limits, deadline.ts) ----------------------------------
     // Two doors onto one row, because the rule between them is the point: ONLY THE HUMAN may move or
     // clear a deadline the human set. `setThreadDeadline` is the drawer's (and refuses a worker's
     // transport, which app.ts records for this route — dispatch-caller.ts); `ownDeadline` is
@@ -5679,7 +5679,7 @@ export function createRouter(ctx: AppContext) {
         for (const { project, board, ctx: tenant } of open) {
           try {
             const snapshot = await board.snapshot()
-            // The row's fourth count (plans/scheduled-threads.md §8). The launching project's context may be
+            // The row's fourth count (ARCHITECTURE.md § Scheduled threads). The launching project's context may be
             // the one asking even when the tenant map did not hand it over.
             const schedules = (tenant ?? (project.id === ctx.project.id ? ctx : undefined))?.schedules?.summary()
             const done: ThreadView[] = []
@@ -6184,7 +6184,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // SCHEDULED THREADS (plans/scheduled-threads.md): the human's schedule surface and the worker's
+    // SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads): the human's schedule surface and the worker's
     // `schedule` tool — schedule-router.ts.
     ...scheduleProcedures(ctx),
   }

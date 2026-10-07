@@ -27,7 +27,7 @@ export const SETTINGS_HELP = {
 
 // The few that read differently in an editor's sidebar (lib/embed.ts), where the row itself says what
 // differs. The frame's preferences are its own — the editor's theme for the session, and a separate
-// localStorage the browser never sees (plans/vscode-extension.md § The sidebar) — so a help text that
+// localStorage the browser never sees (ARCHITECTURE.md § VS Code extension) — so a help text that
 // says "this browser" would contradict the row above it.
 export const SETTINGS_HELP_IN_EDITOR = {
   appearance: "Follows VS Code's color theme. Your browser keeps its own.",

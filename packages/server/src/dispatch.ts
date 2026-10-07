@@ -828,7 +828,7 @@ export interface Dispatcher {
   // starts it later. The prompt rides `lazy_prompt` too — the run's own prompt for a schedule, and for any
   // holder the column an older server generation reads as "unstarted" (SessionRow.lazy_prompt).
   //
-  // `opts.scheduleRun` writes a SCHEDULE's next run (plans/scheduled-threads.md §4): the row carries the
+  // `opts.scheduleRun` writes a SCHEDULE's next run (ARCHITECTURE.md § Scheduled threads): the row carries the
   // schedule's id and is snoozed until the occurrence in the SAME write, so no reader ever sees one half
   // — a held row with no instant would read as due. Its title is used
   // exactly as given (the schedule numbers a collision, `Triage issues 2`, rather than taking the namer's

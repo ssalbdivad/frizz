@@ -9,7 +9,7 @@ import { joinComposerValue, splitComposerValue } from "./imagePaths.ts"
 // draft becomes. The runtime half writes the draft, stages the chip, moves the page and places the caret.
 //
 // Pure, so every decision here is a unit test rather than a browser session: the target table below is
-// the one from plans/vscode-extension.md, and a wrong row would put someone's code into a prompt for the
+// the whole rule for where an insert lands, and a wrong row would put someone's code into a prompt for the
 // wrong project.
 
 /** One project as a compose target needs it: whose box, and whether this server can take a thread there. */

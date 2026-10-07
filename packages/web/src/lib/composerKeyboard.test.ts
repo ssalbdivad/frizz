@@ -139,7 +139,7 @@ test("⌘/Ctrl-Shift-Enter is the alternate submit, and claims no other Enter", 
   assert.equal(shouldSubmitComposerEnter(key({ metaKey: true, shiftKey: true }), true), false)
 })
 
-// There is no schedule chord (plans/schedule-live-reading.md): the new-thread box reads its words for a schedule,
+// There is no schedule chord (ARCHITECTURE.md § Scheduled threads): the new-thread box reads its words for a schedule,
 // and Enter is the one submit. ⌘/Ctrl-Option-Enter is no send, no alternate submit and no newline repair.
 test("⌘/Ctrl-Option-Enter claims nothing", () => {
   for (const chord of [key({ metaKey: true, altKey: true }), key({ ctrlKey: true, altKey: true })]) {

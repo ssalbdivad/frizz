@@ -252,8 +252,8 @@ export function registerContextBar(strip: HTMLElement, box: ContextBox): () => v
 
 /**
  * ⌘I / Ctrl+I IN THE SIDEBAR does what the editor's ⌘I does — puts the code in front into the prompt — so
- * one chord means one thing on both sides of the frame, as in Cursor (plans/vscode-extension.md § The
- * editor in the sidebar). Typed in a prompt box that shows a context bar it is a press of that bar: the
+ * one chord means one thing on both sides of the frame, as in Cursor (ARCHITECTURE.md § VS Code
+ * extension). Typed in a prompt box that shows a context bar it is a press of that bar: the
  * selection, else the file in front, as a chip in THAT box. With no drawer up, and the caret in no such
  * box, it goes into the page's new-thread box (the New thread dialog's, while that is up). Anywhere else —
  * a thread open and the caret outside its reply box — it is not this key's, and Thread details keeps it

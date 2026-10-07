@@ -1,4 +1,4 @@
-// THE THREAD'S TIME LIMIT AT THE RPC BOUNDARY — the real router against real SQLite (plans/time-limits.md).
+// THE THREAD'S TIME LIMIT AT THE RPC BOUNDARY — the real router against real SQLite (ARCHITECTURE.md § Time limits).
 //
 // The rule these pin is the one the plan calls irreversible-in-spirit: ONLY THE HUMAN may move or clear a
 // deadline the human set. A worker reads it, sets one where there is none, and moves only its own.

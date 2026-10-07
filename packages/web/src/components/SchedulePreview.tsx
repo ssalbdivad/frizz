@@ -4,7 +4,7 @@ import { spanUntil } from "../lib/activityTime.ts"
 import { isFailedRead, type ModelReadOk, type ModelReadView } from "../lib/scheduleModelRead.ts"
 
 // WHAT A RULE WILL DO, rebuilt in the browser from the rule itself — the drawer's Change when and the prompt box's
-// strip under the box (plans/schedule-live-reading.md). Built from the COMPILED rule with the same `scheduleEcho`
+// strip under the box (ARCHITECTURE.md § Scheduled threads). Built from the COMPILED rule with the same `scheduleEcho`
 // the server saves, never from the model's own summary, so it says what will fire; and the next runs come from
 // the rule and the clock, so they move on with the time without another read.
 //

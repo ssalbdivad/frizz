@@ -316,6 +316,33 @@ A **Frizz plugin** is a folder in `<data>/user-plugins/<id>/` whose `package.jso
 
 **No plugin ships with Frizz.** The operator puts the folder in `<data>/user-plugins/` and a restart loads it; removing it leaves the plugin's database where it is, and any thread it held starts on its next message.
 
+## Scheduled threads (a saved prompt that starts a fresh thread on a calendar rule)
+
+A **schedule** is a prompt plus a recurrence; each occurrence starts a NEW thread in the schedule's project, which lands in the queue like any other. It is the third recurring pattern beside a Goal (the same thread, on rest or a clock) and a timer (the same thread, once). Server: `schedules.ts` (the service and the tick), `schedule-store.ts` (`thread_schedule`, `thread_schedule_run`), `schedule-router.ts`, `schedule-interpreter.ts`; shared: `schedule-rule.ts` (the engine), `schedules.ts` (views, caps, the run header).
+
+- **The model interprets; Frizz computes.** Words become one RFC 5545 `RRULE`, a wall-clock `DTSTART` and an IANA zone. `schedule-rule.ts` accepts a subset (`FREQ` HOURLY…YEARLY, `INTERVAL`, `COUNT`, `UNTIL`, `BYMONTH`, `BYMONTHDAY`, `BYDAY` with ordinals, `BYHOUR`, `BYMINUTE`, `BYSETPOS`, `WKST`) and refuses the rest with a reason an agent can act on, computes every occurrence itself, and builds the echo the human reads from the rule it will fire. RRULE, not cron, because "every other Friday", "the first weekday of the month" and "for three weeks" need an interval anchored on a start, `BYSETPOS` and `COUNT`/`UNTIL`. Its own engine, with no dependency: `rrule-temporal` pulls in a Temporal polyfill and skips a time that does not exist on a DST day. A nonexistent local time runs at the next valid one, an ambiguous one once at its first instance; `DTSTART` is an occurrence only when it matches the rule; runs closer than 15m apart are refused.
+- **The zone is the human's and is stored on the schedule.** The page reports its `Intl` zone on load (`reportClientZone`), kept as a machine setting and used as the default, because a WSL or container server is often UTC while the human is not.
+- **A condition stays in words and the run checks it.** "unless it's a holiday" is never compiled: the run's header opens with it, and a run whose condition does not hold finishes quietly with the reason. The run is the only evaluator with tools.
+- **The next run is ONE held thread per active schedule** (`held_by = schedules`, `session.schedule_id`, `snoozed_until` = the occurrence), shown in Snoozed. Every per-occurrence act is then one the human already knows: send it to run now, Mark as done to skip, snooze to move, edit its note to change this run's prompt. The slug is reserved and the session row written before any spawn, and catch-up-once is structural.
+- **Each occurrence starts at most once.** `evalScheduledThreads` on each project's tick first reconciles what the human did to the held run, then claims the occurrence in one transaction: a `thread_schedule_run` row (`UNIQUE(project_id, schedule_id, occurrence_at)`, the permanent never-twice record) and a `revision` bump guarded on the revision read. The start runs off the tick, tracked so `stop()` awaits it; a failed start is recorded and never retried. A `starting` row whose owner process is gone settles by whether its thread left the held state.
+- **A missed run runs once, late, within reason.** A machine asleep for a week wakes ONE overdue run, and only within min(half the gap to the following occurrence, 12h), after a 60s post-boot grace so the tailer has vouched for the previous run; past that it is skipped, saying so. Resume never catches up.
+- **Back-pressure pauses a schedule.** 3 unreviewed runs (started, not archived) pause it, and clearing them resumes it; 3 failed starts, or 3 occurrences skipped because the previous run was still working (read from a vouched view, never raw telemetry), pause it until a human resumes. At most 2 scheduled starts are in flight machine-wide. 25 schedules per project; 200 history rows per schedule.
+- **A worker can only PROPOSE a schedule.** The `schedule` MCP tool creates it as `proposed`, which never fires until a human clicks Turn on; on an active schedule a worker may only `skip_next`, `move_next` and `pause`. A worker reading untrusted text must not be able to create something that runs unattended, and `ask` cannot gate it, because an unanswered question takes its recommended option.
+- **A run** is the held note under a `<scheduled-run>` header: the schedule, its condition first, the occurrence and any lateness, the previous run's `@thread`. `done` takes `quiet: true` on a scheduled run alone, sending it straight to Done with its first line in the schedule's history, so an hourly check with nothing to say does not fill the queue. Runs take the schedule's title, a collision a numeric suffix.
+- **The prompt box reads a schedule out of its words; there is no schedule button, mode or chord.** A closed list of schedule words (`shared/schedule-trigger.ts`, matched outside code, quotes, chips and mentions) gates ONE model read (`interpretSchedule`) that decides whether the words ask for the work to repeat and returns the phrase verbatim, the rule, the start, a condition and a title. The saved prompt is the typed text minus that phrase, never rewritten (`shared/schedule-text.ts`), and a reading is used only for the exact text submitted. The reader (`web lib/scheduleModelRead.ts`, `scheduleReadScheduler.ts`) is single-flight per draft, cached 10m across boxes, capped at 40 automatic reads per draft and 15s per read; the strip's next runs are computed in the browser from the rule. A read that fails is never cached and never read as "no schedule". Which model reads, and the measurement behind it, is the comment above `SCHEDULE_INTERPRETER_MODEL`.
+- **Enter never waits on the model, and never dispatches silently in place of a schedule.** An Enter with no answer yet takes the whole draft out of the box at once and the answer settles it: a schedule is created, anything else (none, a refusal, a failed or unanswered read) starts the thread, and a toast says which. × or Esc dismisses the reading for those words, kept in the draft's sessionStorage sibling so it survives a reload. "Change when" in the schedule's drawer reads its field by the same rules and saves only a fresh reading of exactly its words.
+
+## Time limits (a deadline a thread plans around)
+
+A thread may carry a **deadline**, set by the human at dispatch (the prompt box's control: `30m`, `2h`, `15:30`) or later from the drawer. The worker is told to deliver the best result it can by then, is checked in with as time runs out, and passes a share to its sub-agents. Shared `deadline.ts` (the grammar, the stages, the child share), server `deadline.ts` and the scheduler's check-in source, `cc-worker/hooks/agent-deadline.mjs`.
+
+- **There is no hard kill.** Running out never interrupts a turn or a sub-agent (the agent completion invariant); the limit is enforced by what the agent is told and by the card reading over time. Wall clock only, never tokens.
+- **Only the human may extend a deadline the human set.** `deadline_set_by` records who set it. A worker's `deadline` MCP tool may read its deadline and set one where there is none. The dispatch field is honoured only from a browser (`dispatchCaller`), so a worker's own dispatch cannot mint a human's deadline. Prose such as "go until 3:30" is never parsed: the control is the only input, so the board never disagrees with the prompt.
+- **The row** holds `deadline_at`, `deadline_set_at` (the generation: moving the deadline restarts the check-ins, whose delivery ids are keyed on it), `deadline_set_by` and `deadline_stage` (the last stage queued, so none is sent twice). A re-dispatch onto a new session drops it; a resume keeps it.
+- **Check-ins come at fixed stages**, delivered mid-turn the way a Goal heartbeat is, or as a wake to a resting thread: `half` (50%, which says it is not a signal to wrap up), `converge` (80%), `final` (95%, or 5m before if that is earlier, never before 87.5%), `over`. Only the latest due stage is sent. They are exempt from the wake quiet window, which otherwise held three of four stages on the first real run. A thread resting on a handoff is not woken by one; a quiet park is. Every wake header carries `· 42m left`, exact and rounded down under 10m. After `over` there is no second nag: the board is the escalation.
+- **It bounds what would outrun it.** Goal deliveries stop at the deadline, and an `awaiting` park's `for:` is clamped to it. A usage-limit pause does not stop the clock.
+- **Sub-agents get a share (Claude only).** `agent-dispatch.mjs` adds the child's deadline above the dispatch epilogue, ending in a marker line `⟦frizz-deadline⟧ <deadline> <start>`. A `Time limit: 20m` line in the dispatch declares the share and is stripped; without one the child gets the parent's remaining time minus a reserve of max(20%, 5m), capped at half. A declared limit is clamped to the same ceiling, and the floor is 1m. The child's first PostToolUse (`agent-inbox.mjs`) reads the marker back out of its own transcript, whose first record is the rewritten prompt, because SubagentStart carries no tool-use id and races sibling dispatches (measured on Claude Code 2.1.287). Each stage is claimed by an exclusive file create under `<sessionDir>/frizz-deadlines/`. `agent-deadline.mjs` is a plain-JS twin of shared `deadline.ts`, because hooks run under bare node, and `agent-deadline-hook.test.ts` pins the two together. A Workflow agent works out its share from its first record's timestamp and is told the limit in its first check-in. A child dispatched before the deadline was set gets none.
+
 ## Switching projects without a document load (the invariants that keep one project's data off another's page)
 
 The singleton's characteristic bug is not a crash: it is **another project's board, transcript or settings rendered under this project's URL, silently**. It shipped once (2026-08-11, `/project/frizz` showing the zod board on every board on the machine), and auditing it turned up two more live instances, so treat this section as load-bearing rather than descriptive. The reason the class keeps recurring is that "which project" used to be AMBIENT — re-derived from `location` by a dozen modules — and never travelled WITH the data, while thread slugs are unique only WITHIN a project. Nothing downstream can tell one project's payload from another's unless the payload says.
@@ -409,7 +436,8 @@ ICNS in idle shims). *Windows/Linux Dock branding is an unwired TODO:* Windows w
 [`packages/vscode`](packages/vscode/README.md) connects each editor window to the one server, in both
 directions: a selection becomes a new thread (Ask Frizz), a follow-up (Send to Frizz thread) or a chip
 in the page's prompt box (Add to Frizz prompt), and a file link clicked on the page opens in the window
-that has its folder open, at the line it names. Design and protocol: [`plans/vscode-extension.md`](plans/vscode-extension.md).
+that has its folder open, at the line it names. It also frames the page in an editor sidebar and gives
+every worker the editor through the `editor` MCP tool.
 
 - **The extension dials the server, never the reverse.** Each window holds one WebSocket to the
   MACHINE-WIDE `/_frizz/editor` (`server/src/editor-bridge.ts`), answered in `index.ts`'s upgrade
@@ -425,6 +453,38 @@ that has its folder open, at the line it names. Design and protocol: [`plans/vsc
 - **Prompt-box inserts are claimed, not broadcast.** The server holds what an editor sends and
   publishes a payload-free `compose-pending` on every open project's bus; the page that has focus takes
   it with `composeTake`, so exactly one tab inserts it (`web/src/lib/editorBridge.ts`).
+- **The protocol stays v1 and grows by advertisement.** The server closes a socket on any frame it
+  does not know, on every redial, so the welcome names `features` (`editor-state`, `sidebar`,
+  `attention`, `review`, …) and the extension sends a newer frame or field only to a Frizz that named
+  it. Limits: 64 KiB a frame (128 KiB for compose), 64 folders, 32 windows; the extension fits itself to
+  them rather than be refused.
+- **The sidebar is the real page, framed** (`?embed=vscode`, `web/src/lib/embed.ts`): the app's own
+  queue, cards and composer, so nothing is drawn twice and an approval button cannot drift from the
+  page's. A native rebuild, a TreeView and a chat participant (which Cursor cannot host) were each
+  rejected for that. The page and the extension talk only through `shared/src/embed-protocol.ts`,
+  relayed by the webview document, never through the server. In embed mode the page is the wide layout
+  narrowed, not the phone layout, and a code link opens in the window holding the sidebar. The frame's
+  storage is partitioned from the browser's by design: it is another browser. An editor tab
+  (`frizz.thread`) frames the same page on a thread's own address.
+- **What the editor shows is one reading behind one switch.** `packages/vscode` `editor-front.ts`
+  decides the editor in front for the sidebar's context bar, the editor-context block every sidebar
+  send carries, and the agents' `editor` tool, so the three never disagree; `frizz.shareEditorState`
+  (the bar's eye) governs all three. A selection's TEXT never leaves from a file whose name says it holds
+  secrets, or that `files.exclude` hides; its path and lines still do. `editorState` describes only the
+  windows that have the caller's project open and counts the rest. A held thread carries no editor
+  block, since it would be read hours later as the moment of launch.
+- **Worktrees: everything that crosses names its copy.** The `editor` tool, sidebar sends and a
+  thread's links resolve against the thread's checkout first, then the project. Done is refused while a
+  sharing window holds an unsaved file in a worktree Done would remove. A worker never attaches to the
+  human's IDE: `inheritWorkerEnvironment` drops Claude Code's IDE variables, and a Claude worker gets
+  `CLAUDE_CODE_AUTO_CONNECT_IDE=false`.
+- **Review changes opens VS Code's multi-file diff.** The server names the checkouts from where the
+  thread wrote (`server/src/review-target.ts`: its own worktree is the whole branch, the shared project
+  folder only its files); the extension asks git (`review.ts`): files against HEAD, a branch against
+  where it left the branch it came from.
+- **A thread that needs the human reaches ONE window** (`attention`): the most recently focused one that
+  listens and has the project open, so an old extension or a window with notifications off cannot
+  swallow it. The extension says nothing while the sidebar is in sight.
 - It finds the server the way the launcher does (the address record, trusted only with a live owner
   generation behind it, as `readStableServerOwner` checks; then the well-known ports with the
   launch-token proof), plus frizz-dev's `dev-supervisor.lock`, and declares `extensionKind: ["workspace"]`

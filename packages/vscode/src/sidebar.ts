@@ -6,7 +6,7 @@
 // editor commands' selections put straight into a composer, and the HEADER: the page draws none in the
 // sidebar, so VS Code's own title row above the frame carries the header's doors (`frizz:command`), shown
 // by the page's view (`frizz:route` → the `frizz.sidebarView` context key), and the badge's tooltip carries
-// its counts. Design: plans/vscode-extension.md § The sidebar; the wire:
+// its counts. Design: ARCHITECTURE.md § VS Code extension; the wire:
 // packages/shared/src/embed-protocol.ts; the pure rules: embed.ts.
 //
 // Only `import type` from vscode, like app.ts.

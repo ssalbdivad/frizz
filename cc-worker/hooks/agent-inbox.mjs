@@ -18,7 +18,7 @@
 //                               copy for a resume to duplicate.
 //   PostToolUse               — inside a sub-agent (`agent_id` set), hand it whatever is waiting for it,
 //                               and its time check when one is due (agent-deadline.mjs: a child's share
-//                               of its dispatcher's deadline, plans/time-limits.md).
+//                               of its dispatcher's deadline, ARCHITECTURE.md § Time limits).
 //   SubagentStop              — the same, as it tries to finish: `decision: "block"` keeps it going with
 //                               the messages as its next input, so one sent after its last tool call is
 //                               not stranded. It blocks only when something was waiting, so it cannot loop.

@@ -25,7 +25,7 @@ import { spaNavigate } from "./router.ts"
 import { addContextItem, stagedItems } from "./stagedContext.ts"
 import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 
-// THE PAGE'S HALF OF THE EDITOR BRIDGE (packages/vscode; plans/vscode-extension.md). Three jobs, all
+// THE PAGE'S HALF OF THE EDITOR BRIDGE (packages/vscode; ARCHITECTURE.md § VS Code extension). Three jobs, all
 // machine-wide, so this module is set up once per page (main.tsx) rather than per project:
 //
 //  1. WHICH EDITOR WINDOWS ARE CONNECTED — store.editorWindows, read at boot and replaced by every

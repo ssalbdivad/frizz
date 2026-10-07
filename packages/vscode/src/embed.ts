@@ -1,7 +1,7 @@
 // THE SIDEBAR'S PURE HALF — what the Frizz sidebar (sidebar.ts) frames, how it checks what the page
 // says, which key chords it acts on, and where an editor command's selection goes. No `vscode` here, so
 // every rule below is a unit test under plain node (embed.test.ts); sidebar.ts and app.ts are the glue.
-// Design: plans/vscode-extension.md § The sidebar. The wire: packages/shared/src/embed-protocol.ts.
+// Design: ARCHITECTURE.md § VS Code extension. The wire: packages/shared/src/embed-protocol.ts.
 
 import { isAbsolute } from "node:path"
 import {

@@ -12,7 +12,7 @@
 //      the scratch directory, no fan-out of its own unless asked, and how a helper it DID dispatch
 //      is collected. It carries no handoff format and no build, test, git or process policy — the
 //      maintainer had the handoff-format doctrine cut on 2026-08-26.
-//   4) CARVE THE CHILD'S TIME SHARE (plans/time-limits.md § Sub-agents). When the dispatcher has a
+//   4) CARVE THE CHILD'S TIME SHARE (ARCHITECTURE.md § Time limits). When the dispatcher has a
 //      deadline — the thread's, read from the server, or for a nested dispatch the dispatching child's
 //      own — or the prompt declares one with a `Time limit: 20m` line, the child gets a deadline of its
 //      own, never past its dispatcher's minus a reserve, stated in a paragraph above the epilogue that

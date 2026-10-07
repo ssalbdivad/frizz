@@ -45,7 +45,7 @@ import { spanUntil } from "../lib/activityTime.ts"
 import { SOON_MS, UNPHRASABLE_COPY, browserZone, describeRule, schedulePreviewModel, unphrasableRule } from "./SchedulePreview.tsx"
 import type { ComposerMark } from "./Composer.tsx"
 
-// THE PROMPT BOX'S SCHEDULE (plans/schedule-live-reading.md). There is no schedule button and no mode: the box
+// THE PROMPT BOX'S SCHEDULE (ARCHITECTURE.md § Scheduled threads). There is no schedule button and no mode: the box
 // works out from the words whether Enter should start the thread or create a schedule. A prompt with a schedule
 // word in it ("every", "weekdays", "morning", a weekday's name — packages/shared/src/schedule-trigger.ts) is read
 // by the model as it is typed (lib/scheduleReadScheduler.ts), and when the model says the words ask for the work

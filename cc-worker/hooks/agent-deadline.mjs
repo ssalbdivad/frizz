@@ -1,5 +1,5 @@
 // @ts-check
-// A SUB-AGENT'S TIME LIMIT (frizz-worker) — plans/time-limits.md § Sub-agents. A library, not a hook:
+// A SUB-AGENT'S TIME LIMIT (frizz-worker) — ARCHITECTURE.md § Time limits. A library, not a hook:
 // agent-dispatch.mjs carves the child's share when the Agent call is made, and agent-inbox.mjs, which
 // already speaks to a running sub-agent after each of its tool calls, delivers its check-ins.
 //

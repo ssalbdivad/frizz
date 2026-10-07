@@ -7,7 +7,7 @@ import {
   type InterpretScheduleResult,
 } from "@frizz/shared"
 
-// THE MODEL READS OF A SCHEDULE (plans/schedule-live-reading.md), shared by the prompt box and the drawer's
+// THE MODEL READS OF A SCHEDULE (ARCHITECTURE.md § Scheduled threads), shared by the prompt box and the drawer's
 // Change when. The server's interpreter (`interpretSchedule`, schedule-interpreter.ts) decides whether the
 // words ask for a schedule and reads it out of them. Each read costs the human's quota and holds the
 // interpreter's per-project `concurrency: 1` queue, so it is spent carefully:

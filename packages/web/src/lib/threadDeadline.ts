@@ -3,7 +3,7 @@ import { deadlineStageAtMs, formatDeadlineLeft, parseDeadlineInput, type ThreadD
 import { formatSnoozeWake } from "./snooze.ts"
 import { useNowMs } from "./liveClock.ts"
 
-// A THREAD'S TIME LIMIT, AS THE BROWSER READS AND WRITES IT (plans/time-limits.md § Setting it).
+// A THREAD'S TIME LIMIT, AS THE BROWSER READS AND WRITES IT (ARCHITECTURE.md § Time limits).
 //
 // The grammar and the reading are shared with the server (@frizz/shared deadline.ts): `parseDeadlineInput`
 // is the one parser of what the human types, `formatDeadlineLeft` the one "42m left" / "over by 8m". This

@@ -1,7 +1,7 @@
 import { z } from "zod"
 import { ThreadSlug } from "./thread-slug.ts"
 
-// A THREAD'S DEADLINE — the time limit a prompt carries (plans/time-limits.md).
+// A THREAD'S DEADLINE — the time limit a prompt carries (ARCHITECTURE.md § Time limits).
 //
 // A thread may carry one absolute instant by which its worker owes the best deliverable it can hand
 // over, rather than the complete one eventually. The human sets it when dispatching ("2h", "15:30") or
@@ -22,7 +22,7 @@ export const DEADLINE_MIN_MS = 60_000
 export const DEADLINE_MAX_MS = 7 * 24 * 60 * 60_000
 
 /** Who set the current deadline. Only the human may move or clear one the human set: an agent moving
- *  its own goalposts defeats the point (plans/time-limits.md § Setting it). */
+ *  its own goalposts defeats the point (ARCHITECTURE.md § Time limits). */
 export type DeadlineSetter = "human" | "worker"
 
 // ---- THE CHECK-IN STAGES ---------------------------------------------------------------------------

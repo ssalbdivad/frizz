@@ -116,7 +116,7 @@ const CONTEXT_PILL = "rounded-[5px] bg-fg/[0.07] py-0.5 -mx-px px-px inset-ring 
 
 /**
  * A run of the PROSE marked behind its own words — the schedule the box read in them
- * (plans/schedule-live-reading.md). Painted in the highlight layer behind the textarea, so a mark is zero-layout
+ * (ARCHITECTURE.md § Scheduled threads). Painted in the highlight layer behind the textarea, so a mark is zero-layout
  * like every backdrop decoration; its whole look is `[data-composer-mark]` in styles.css, in one place:
  *
  *   pending   a faint dotted underline on a schedule word, fading in late, while the model reads the words

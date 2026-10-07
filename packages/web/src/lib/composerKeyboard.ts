@@ -29,7 +29,7 @@ export type ComposerKeyboardEvent = {
 // A FOURTH, in the new-thread box alone: ⌘/Ctrl-Shift-Enter is its ALTERNATE SUBMIT — a Frizz plugin's,
 // which takes the prompt instead of starting it — shouldSubmitAltComposerEnter. There is no schedule chord:
 // the new-thread box reads its words for a schedule, and Enter creates it when there is one
-// (plans/schedule-live-reading.md).
+// (ARCHITECTURE.md § Scheduled threads).
 function isEnter(event: ComposerKeyboardEvent): boolean {
   return event.key === "Enter"
     && !event.altKey

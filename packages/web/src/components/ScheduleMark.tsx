@@ -1,7 +1,7 @@
 import { Repeat } from "lucide-react"
 import type { ThreadScheduleRef } from "@frizz/shared"
 
-// THE REPEAT GLYPH on a thread that a SCHEDULE started, or will start (plans/scheduled-threads.md §8): its
+// THE REPEAT GLYPH on a thread that a SCHEDULE started, or will start (ARCHITECTURE.md § Scheduled threads): its
 // pending next run, a held row in Snoozed, and every run it has started. One small mark after the title —
 // the rail's rows are their titles and nothing else (Sidebar.tsx ThreadRow), so the schedule is a glyph with
 // a tooltip, never a chip — saying "this came from a schedule", with the schedule and its rule one hover

@@ -1094,7 +1094,7 @@ const UNLINK = {
   },
 }
 
-// THE THREAD'S TIME LIMIT (2026-10-06, plans/time-limits.md). Read it, or set one on a thread that has
+// THE THREAD'S TIME LIMIT (2026-10-06, ARCHITECTURE.md § Time limits). Read it, or set one on a thread that has
 // none. Only the human may move or clear a deadline the human set — an agent moving its own goalposts
 // defeats the point — so `extend` and `clear` work on a deadline the worker set itself, and the server
 // (router `ownDeadline`) holds the same rule.

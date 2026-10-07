@@ -2,7 +2,7 @@ import { EMBED_PARAM, EMBED_THEME_PARAM, type EmbedRouteMessage } from "@frizz/s
 import { embedded, postToHost } from "./embed.ts"
 
 // WHERE THE SIDEBAR IS, said to VS Code's title row (`frizz:route`, packages/shared/src/embed-protocol.ts).
-// An editor's sidebar draws no header of its own (plans/vscode-extension.md § The editor in the sidebar):
+// An editor's sidebar draws no header of its own (ARCHITECTURE.md § VS Code extension):
 // the row VS Code already draws above the frame is the header, so the page tells it the view's name and
 // the reading beside it, and the row's buttons come back as `frizz:command` (lib/embedCommand.ts).
 //

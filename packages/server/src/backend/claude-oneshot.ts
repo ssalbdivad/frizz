@@ -192,7 +192,7 @@ interface OneShotRun {
 // calls the iterator's `return()` and AWAITS it, and the SDK's `return()` waits (bounded) for the CLI to
 // exit after the stdin EOF it sends. Measured 2026-10-05 against the real CLI: 420–520ms on every call
 // between the result message arriving and the completion resolving, paid by the schedule interpreter, the
-// thread namer and the live status line alike (plans/schedule-live-reading.md §13). Nothing the caller
+// thread namer and the live status line alike (`git show 7e0b68b5:plans/schedule-live-reading.md` §13). Nothing the caller
 // needs arrives after `result` in a single-turn, tool-less session, so the answer settles there and the
 // identical shutdown — `return()` then `close()` — runs after it, unawaited. A shutdown failure is logged,
 // never thrown: the answer it would have rejected is already in the caller's hands. The timeout stays

@@ -2,7 +2,7 @@ import type { EditorWindowSummary, LocalFileOpener } from "@frizz/shared"
 import type { CodeFiles } from "./prefs.ts"
 
 // WHAT THE PAGE MAKES OF THE CONNECTED EDITOR WINDOWS (store.editorWindows; packages/vscode is the
-// extension, plans/vscode-extension.md the design) — the pure half: which External app choices have a
+// extension, design in ARCHITECTURE.md § VS Code extension) — the pure half: which External app choices have a
 // window behind them, where this browser's code files go, and whether it should be offered an editor.
 // lib/editorBridge.ts acts on it.
 

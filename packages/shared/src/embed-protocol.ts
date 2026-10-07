@@ -1,6 +1,6 @@
 // THE SIDEBAR EMBED — the wire between the VS Code extension's Frizz sidebar (packages/vscode/src/sidebar.ts)
 // and the real Frizz page it frames (packages/web/src/lib/embed.ts). Design and rationale:
-// plans/vscode-extension.md § The sidebar.
+// ARCHITECTURE.md § VS Code extension.
 //
 // Three documents take part: the extension host (Node), the webview document VS Code serves from a
 // `vscode-webview://` origin (a relay script and nothing else), and the Frizz page in an iframe of it,
@@ -421,7 +421,7 @@ export type EmbedPageMessage =
 //
 // Cursor and Claude Code's VS Code extension both let the human name a file with `@`, drag one in from
 // the explorer, and pull in the file's lint errors or the terminal's last output; the sidebar's prompt
-// boxes do the same (plans/vscode-extension.md § More ways in). The page has no file index of its own and
+// boxes do the same (ARCHITECTURE.md § VS Code extension). The page has no file index of its own and
 // no access to the editor's diagnostics or terminal, so it asks the host for each — the host answers from
 // the workspace as VS Code sees it (files.exclude, search.exclude and .gitignore honoured), and nothing
 // here goes through the Frizz server.

@@ -20,7 +20,7 @@ import { Sheet } from "./ui/Sheet.tsx"
 import { SheetHeader } from "./ui/SheetHeader.tsx"
 import { FOOTER_STYLE } from "./FileReaderDrawer.tsx"
 
-// A SCHEDULE'S DRAWER (plans/scheduled-threads.md §8): everything about one schedule, in the drawer stack
+// A SCHEDULE'S DRAWER (ARCHITECTURE.md § Scheduled threads): everything about one schedule, in the drawer stack
 // rather than a modal, so a run's thread opened from its history stacks over it and Esc comes back here.
 //
 // It reads and writes through the SCHEDULE's project (`projectId` on the stack entry), never the page's:
@@ -235,7 +235,7 @@ function Echo({ schedule }: { schedule: ScheduleView }) {
 }
 
 /**
- * "Change when", LIVE (plans/schedule-live-reading.md). The field means nothing but WHEN, so it needs no schedule
+ * "Change when", LIVE (ARCHITECTURE.md § Scheduled threads). The field means nothing but WHEN, so it needs no schedule
  * word to be read: every change is read by the model — at a word's end, or after the typing rests
  * (lib/scheduleReadScheduler.ts) — against the schedule's stored words, rule and condition, in its own zone.
  *

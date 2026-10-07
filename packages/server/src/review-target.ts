@@ -3,8 +3,8 @@ import { EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, type EditorReview
 import { liftRepoWorktree } from "./thread-cwd.ts"
 
 // WHAT "REVIEW CHANGES" SHOWS FOR A THREAD — the checkouts its edits are in, for the editor extension to
-// diff (packages/vscode review.ts asks git for the rest). Design: plans/vscode-extension.md § Reviewing a
-// thread's changes.
+// diff (packages/vscode review.ts asks git for the rest). Design: ARCHITECTURE.md § VS Code
+// extension.
 //
 // Frizz records nothing about a thread's base: it stays out of the worktree decision (thread-cwd.ts), and
 // a thread's start is a transcript, not a commit. What it DOES know is where the thread wrote — the rail's

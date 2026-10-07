@@ -1,4 +1,4 @@
-// A SUB-AGENT'S TIME LIMIT (plans/time-limits.md § Sub-agents) — cc-worker/hooks/agent-deadline.mjs, as
+// A SUB-AGENT'S TIME LIMIT (ARCHITECTURE.md § Time limits) — cc-worker/hooks/agent-deadline.mjs, as
 // agent-dispatch.mjs carves a child's share and agent-inbox.mjs delivers its check-ins. Driven as the
 // harness drives them: the real scripts as child processes, the hook events on stdin with the shapes
 // measured on 2.1.287, a session directory laid out as Claude Code writes it, and for the thread's own

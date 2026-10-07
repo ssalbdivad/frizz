@@ -2,7 +2,7 @@ import type { QueryClient } from "@tanstack/react-query"
 import type { ScheduleView } from "@frizz/shared"
 import { spanUntil } from "./activityTime.ts"
 
-// SCHEDULES ON THE PAGE (plans/scheduled-threads.md §8): the cache keys every surface reads them under,
+// SCHEDULES ON THE PAGE (ARCHITECTURE.md § Scheduled threads): the cache keys every surface reads them under,
 // and the one reading of a schedule's right-hand column.
 //
 // A schedule is read from pages that name another project — the project list draws every project's, the

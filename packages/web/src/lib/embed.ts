@@ -25,7 +25,7 @@ import {
 } from "@frizz/shared"
 
 // THE PAGE INSIDE AN EDITOR'S SIDEBAR — embed mode's state and its wire (packages/shared/src/
-// embed-protocol.ts is the contract; plans/vscode-extension.md § The sidebar the design). The VS Code
+// embed-protocol.ts is the contract; design in ARCHITECTURE.md § VS Code extension). The VS Code
 // extension frames this very page at `/project/<slug>?embed=vscode&theme=<light|dark>`, and the page
 // then behaves as a resident of that editor rather than of a browser: the desktop's left column at any
 // width (components/SidebarPage.tsx; never the phone's page, lib/mobile.ts), VS Code's theme (lib/theme.ts), code files and web links handed out to the editor

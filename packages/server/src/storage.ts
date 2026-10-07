@@ -189,7 +189,7 @@ export interface SessionRow {
   recurring_run_anchor?: string | null
   recurring_stop_reason?: string | null
   recurring_stopped_at?: string | null
-  // THE THREAD'S TIME LIMIT (plans/time-limits.md, deadline.ts). `deadline_at` is the instant the worker
+  // THE THREAD'S TIME LIMIT (ARCHITECTURE.md § Time limits, deadline.ts). `deadline_at` is the instant the worker
   // owes its best deliverable by; NULL means no limit. `deadline_set_at` is when the CURRENT deadline was
   // set — with `deadline_at` it gives the budget the check-in stages are fractions of, and it is the
   // GENERATION: moving the deadline mints a new one, the way `recurring_armed_at` does for a Goal, so an
@@ -288,7 +288,7 @@ export interface SessionRow {
 // on 2026-10-07, and its rows are held threads whose holder is gone).
   // Two readers remain, and nothing else may read it as a state:
   //   · base's own holder, a schedule's next run (`held_by = 'schedules'`): the run's prompt, which the
-  //     human may edit for this run alone (plans/scheduled-threads.md §4);
+  //     human may edit for this run alone (ARCHITECTURE.md § Scheduled threads);
   //   · the DOWNGRADE path. Every held row carries a non-NULL value here (`""` at least), because an OLDER
   //     server generation — which the stable-artifact model keeps and can roll back to — knows only this
   //     column, and reads it as a lazy thread rather than as a started thread with no transcript. A held
@@ -307,7 +307,7 @@ export interface SessionRow {
   // live holder starts it on that message, so removing a plugin never strands one. Starting it dispatches on
   // this same slug and session id (dispatch.ts `onto`), and that dispatch's upsert writes NULL here.
   held_by?: string | null
-  // The SCHEDULE this thread is a run of (plans/scheduled-threads.md): set on the held row a schedule
+  // The SCHEDULE this thread is a run of (ARCHITECTURE.md § Scheduled threads): set on the held row a schedule
   // materializes as its next run, and kept when that row starts — the dispatch upsert never writes it —
   // so every run carries its schedule for life. A row held by `schedules` is a schedule's pending next run:
   // the board parks it in Snoozed with its wake time even once that time has passed, and the scheduler
@@ -1670,7 +1670,7 @@ export const STORAGE_SCHEMA = `
       shell       INTEGER NOT NULL DEFAULT 0,
       PRIMARY KEY (project_id, slug)
     );
-    -- SCHEDULED THREADS (plans/scheduled-threads.md §7): a saved prompt plus a recurrence that starts a
+    -- SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads): a saved prompt plus a recurrence that starts a
     -- FRESH thread at each occurrence. Instants are epoch ms, like thread_timer's. The statements that
     -- read and write both tables are in schedule-store.ts.
     --
@@ -1766,7 +1766,7 @@ export function ensureStorageSchema(db: Database): void {
     "schedule_id TEXT",
     // 2026-10-06: who holds an unstarted thread (SessionRow.held_by).
     "held_by TEXT",
-    // 2026-10-06: the thread's time limit (SessionRow.deadline_*; plans/time-limits.md).
+    // 2026-10-06: the thread's time limit (SessionRow.deadline_*; ARCHITECTURE.md § Time limits).
     "deadline_at TEXT", "deadline_set_at TEXT", "deadline_set_by TEXT", "deadline_stage TEXT",
   ]) {
     try {

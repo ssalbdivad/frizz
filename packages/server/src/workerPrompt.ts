@@ -1355,7 +1355,7 @@ same facts in parallel and nobody notices. Spawn only when the work genuinely ca
 and never merely to clear your own \` \`\`\`done \`. See **When the work is finished but the thread found
 more**.`
 
-// SCHEDULED THREADS (plans/scheduled-threads.md). Short on purpose: the contract states the rule and the
+// SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads). Short on purpose: the contract states the rule and the
 // `schedule` tool's description carries the detail (the RRULE subset, the echo, the occurrence moves).
 const SCHEDULES = `## Recurring work in fresh threads
 

@@ -5,7 +5,7 @@ import { ThreadSlug } from "./thread-slug.ts"
 
 // ---- SCHEDULED THREADS: THE CONTRACT ------------------------------------------------------------------
 // A schedule is a saved prompt plus a recurrence; at each occurrence Frizz starts a FRESH thread with that
-// prompt (plans/scheduled-threads.md). This module is everything both sides of the wire share: the views
+// prompt (ARCHITECTURE.md § Scheduled threads). This module is everything both sides of the wire share: the views
 // the web renders, every RPC's input and output, the echo the human confirms before saving, and the
 // header a run's prompt opens with. The recurrence engine itself is schedule-rule.ts; nothing here turns
 // a rule into instants on its own.
@@ -150,7 +150,7 @@ export interface ScheduledRunHeaderInput {
   byHuman?: boolean
 }
 
-/** The header a scheduled run's prompt opens with (plans/scheduled-threads.md §5), wrapped in a tag the
+/** The header a scheduled run's prompt opens with (ARCHITECTURE.md § Scheduled threads), wrapped in a tag the
  *  chat can recognise (`parseScheduledRunPrompt`). The saved prompt follows it verbatim. Durations are
  *  in the house grammar (`2h 10m`). */
 export function scheduledRunHeader(input: ScheduledRunHeaderInput): string {
@@ -378,7 +378,7 @@ export const CreateScheduleInput = z.object({
   backend: ScheduleFields.backend.optional(),
   /** The title is the browser's provisional one (`provisionalScheduleTitle`) — the model named no task — so
    *  the server may rename it once through the thread namer, only while nobody has touched the row since
-   *  (plans/schedule-live-reading.md). */
+   *  (ARCHITECTURE.md § Scheduled threads). */
   titleAuto: z.literal(true).optional(),
 }).strict()
 export type CreateScheduleInput = z.infer<typeof CreateScheduleInput>
@@ -420,7 +420,7 @@ export type ReportClientZoneInput = z.infer<typeof ReportClientZoneInput>
 // ---- the worker's RPC (the `schedule` MCP tool) -------------------------------------------------------
 // One procedure with an `action`, like the tool. Keyed by the caller's own slug, which the MCP server
 // reads from its environment — never from the model's arguments. What a worker may do is narrower than
-// what the human may (plans/scheduled-threads.md §3): it may PROPOSE a schedule (it waits for the human's
+// what the human may (ARCHITECTURE.md § Scheduled threads): it may PROPOSE a schedule (it waits for the human's
 // Turn on), refine its own proposal, and on any schedule in the project skip or move the next run or pause
 // it. It cannot turn anything on, resume, edit an active schedule's rule, or delete.
 

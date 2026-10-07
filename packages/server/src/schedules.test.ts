@@ -1,4 +1,4 @@
-// SCHEDULED THREADS (plans/scheduled-threads.md): the schedule service against the REAL dispatcher, the REAL
+// SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads): the schedule service against the REAL dispatcher, the REAL
 // held-thread starter, the REAL router and real SQLite. Only the Claude broker is a recorder (what Frizz
 // asks it to start, and when) and the clock is injected, so every case below is the scheduler pass exactly
 // as production runs it, at an instant the test chooses.
@@ -653,7 +653,7 @@ test("Mark as done then Undo before the next pass leaves the next run at its tim
   }
 })
 
-// ---- the provisional title's rename (plans/schedule-live-reading.md, "Title compare-and-set") ------------------
+// ---- the provisional title's rename (ARCHITECTURE.md § Scheduled threads) ------------------
 
 /** A namer whose answers the test releases by hand, recording what it was asked. */
 function heldNamer() {

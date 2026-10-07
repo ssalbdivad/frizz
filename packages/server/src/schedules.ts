@@ -44,7 +44,7 @@ import { isHeldRow, isScheduleHeldRow, SCHEDULES_HOLDER, type SessionRow, type S
 import { threadNameProblem } from "./thread-names.ts"
 
 // ---- SCHEDULED THREADS: THE SERVER HALF ------------------------------------------------------------------
-// plans/scheduled-threads.md is the design; this module is all of it that is not storage, the RPC surface
+// ARCHITECTURE.md § Scheduled threads is the design; this module is all of it that is not storage, the RPC surface
 // or the interpreter's model call (schedule-interpreter.ts):
 //
 //   · create / validate / echo, the per-project cap, update, pause / resume / Turn on, delete, Run now;
@@ -833,7 +833,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
     return storage.getSchedule(row.id)!
   }
 
-  // ---- the provisional title's rename (plans/schedule-live-reading.md) --------------------------------------
+  // ---- the provisional title's rename (ARCHITECTURE.md § Scheduled threads) --------------------------------------
   //
   // A schedule made in the prompt box from a reading the model gave no title arrives titled by
   // `provisionalScheduleTitle` (the cut prompt's verb and head noun, "Triage issues") with `titleAuto: true`.

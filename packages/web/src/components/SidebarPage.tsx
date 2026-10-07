@@ -12,7 +12,7 @@ import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { StatusRow } from "./StatusRow.tsx"
 import { ThreadConnector } from "./ThreadConnector.tsx"
 
-// THE PAGE IN AN EDITOR'S SIDEBAR — the desktop app's left column, alone (plans/vscode-extension.md
+// THE PAGE IN AN EDITOR'S SIDEBAR — the desktop app's left column, alone (ARCHITECTURE.md § VS Code extension
 // § The editor in the sidebar, and the app's own feel). The VS Code extension frames this page at any
 // width from ~250px up (lib/embed.ts), and it is the DESKTOP app narrowed, not the phone app: someone who
 // uses Frizz in the browser must recognize every surface in it.

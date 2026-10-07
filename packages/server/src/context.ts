@@ -300,7 +300,7 @@ export interface AppContext {
   // Thread terminals: ptys the human opened on a thread, run in the folder its agent works in, each
   // owned by this server (thread-terminals.ts) and watched over the /term transport.
   terminalRunner: TerminalRunner
-  // SCHEDULED THREADS (schedules.ts, plans/scheduled-threads.md). Optional so a hand-built test context
+  // SCHEDULED THREADS (schedules.ts, ARCHITECTURE.md § Scheduled threads). Optional so a hand-built test context
   // need not supply one; the schedule RPCs then refuse.
   schedules?: ScheduleService
   // The one-shot model call that reads a schedule out of plain words (schedule-interpreter.ts).
@@ -1172,7 +1172,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
     pluginSystemPrompt: (kind) => plugins?.systemPrompt(kind) ?? "",
   })
 
-  // SCHEDULED THREADS (plans/scheduled-threads.md). One held-thread starter per project, shared by the
+  // SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads). One held-thread starter per project, shared by the
   // router, the plugins and the scheduler so its one-launch-at-a-time guard sees every launch.
   const heldStarter = createHeldThreadStarter({ dispatcher, board })
   schedules = createScheduleService({

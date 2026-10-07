@@ -8,7 +8,7 @@ import type { ThreadScheduleRow } from "./schedule-store.ts"
 // The interpreter's VALIDATION around the model (schedule-interpreter.ts): the model is scripted here, so
 // these pin what Frizz does with each kind of answer — accept, retry once with the reason, or refuse with
 // the human's copy. What a real model makes of real phrasings is recorded by a live run instead
-// (plans/scheduled-threads.md; the five phrasings were read for real on 2026-10-05).
+// (ARCHITECTURE.md § Scheduled threads; the five phrasings were read for real on 2026-10-05).
 
 // Monday 2026-10-05 14:32 in New York.
 const NOW = Date.parse("2026-10-05T18:32:00Z")

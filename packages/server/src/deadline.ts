@@ -1,7 +1,7 @@
 import { deadlineStageAtMs, deadlineStageDue, deadlineStageRank, preciseSpanLabel, spanLabel, type DeadlineSetter, type DeadlineStage, type ThreadDeadlineView } from "@frizz/shared"
 import type { SessionRow } from "./storage.ts"
 
-// THE THREAD'S TIME LIMIT, as the WORKER meets it (plans/time-limits.md). The shared half
+// THE THREAD'S TIME LIMIT, as the WORKER meets it (ARCHITECTURE.md § Time limits). The shared half
 // (@frizz/shared deadline.ts) parses what the human typed and places the stages; this half is what the
 // worker reads — the section of its system prompt, the check-ins, the notice when the human moves the
 // clock — and the one reading of a row's deadline every server reader shares.

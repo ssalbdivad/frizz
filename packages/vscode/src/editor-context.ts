@@ -3,7 +3,7 @@
 // or else the caret's line, the other open files) and of the ways a piece of the editor gets into the
 // sidebar's prompt (a problem's quick fix, a terminal selection). No `vscode` here, so every rule is a
 // unit test under plain node (editor-context.test.ts); context-feed.ts and app.ts are the glue. Design:
-// plans/vscode-extension.md § The editor in the sidebar; the wire: packages/shared/src/embed-protocol.ts.
+// ARCHITECTURE.md § VS Code extension; the wire: packages/shared/src/embed-protocol.ts.
 
 import { basename, isAbsolute } from "node:path"
 import { EDITOR_MAX_PATH } from "@frizz/shared/editor-protocol"

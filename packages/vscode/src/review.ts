@@ -1,8 +1,8 @@
 // A THREAD'S CHANGES, AS GIT TELLS THEM — what "Review changes" opens as VS Code's multi-file diff, the
 // pure half (no `vscode`; review-view.ts is the glue and the content provider). Frizz names WHICH
 // checkouts the thread changed (server review-target.ts, `EditorReviewCheckout`); this asks git, in each,
-// what to compare against and which files differ. Design: plans/vscode-extension.md § Reviewing a
-// thread's changes.
+// what to compare against and which files differ. Design: ARCHITECTURE.md § VS Code
+// extension.
 //
 // THE BASE. Frizz records nothing about where a thread started, so it is read off git:
 //

@@ -83,7 +83,7 @@ export function App() {
     rpc.board().then(seedBoard).catch(() => {})
   }, [pageSlug])
 
-  // THE HUMAN'S TIME ZONE, once per page load (plans/scheduled-threads.md §1). A server under WSL or in a
+  // THE HUMAN'S TIME ZONE, once per page load (ARCHITECTURE.md § Scheduled threads). A server under WSL or in a
   // container often runs in UTC while the human does not, and "every Monday at 9am" means THEIR 9am: the
   // latest zone a browser reported is the default for every new schedule. Machine-scoped, so the page
   // project's client is as good as any. Best-effort — a server that predates it, or a failed write, leaves

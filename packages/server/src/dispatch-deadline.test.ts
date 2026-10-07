@@ -1,4 +1,4 @@
-// A TIME LIMIT SET AT DISPATCH (plans/time-limits.md): the row carries it, set by the human, and the
+// A TIME LIMIT SET AT DISPATCH (ARCHITECTURE.md § Time limits): the row carries it, set by the human, and the
 // worker's system prompt says what it means. Without one, neither.
 import { test } from "node:test"
 import assert from "node:assert/strict"

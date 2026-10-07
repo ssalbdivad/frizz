@@ -1,5 +1,5 @@
 // THE EDITOR SOCKET — this window's one live line to Frizz (`/_frizz/editor`, packages/shared
-// editor-protocol.ts; design in plans/vscode-extension.md).
+// editor-protocol.ts; design in ARCHITECTURE.md § VS Code extension).
 //
 // The extension dials out: Frizz is a singleton with a known way to find it, every editor window is a
 // client of it. Over the socket this window says which folders it has open and whether it has focus,

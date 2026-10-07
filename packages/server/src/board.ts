@@ -1673,7 +1673,7 @@ function needsInputQueues(
   armedTimerIds: ReadonlySet<string>,
 ): boolean {
   const fence = tele?.lastFence
-  // A PARK DOES NOT OUTLIVE THE THREAD'S DEADLINE (plans/time-limits.md § Interactions). A fence written
+  // A PARK DOES NOT OUTLIVE THE THREAD'S DEADLINE (ARCHITECTURE.md § Time limits). A fence written
   // before the deadline holds only until it: from then the thread is over time, and the board is the
   // escalation, so it queues even if the `for:` has hours left. (The scheduler's `over` check-in wakes the
   // worker at the same instant; a fence written AFTER the deadline is the worker's considered answer to
@@ -2546,7 +2546,7 @@ function sessionThreadView(
 // thread whose holder is gone stays out of the queue, in Active with a "Not started" box, until a message
 // starts it.
 //
-// A SCHEDULE'S NEXT RUN (`view.schedule.pending`, plans/scheduled-threads.md §4) is parked: it keeps its
+// A SCHEDULE'S NEXT RUN (`view.schedule.pending`, ARCHITECTURE.md § Scheduled threads) is parked: it keeps its
 // wake time even once that has passed — the scheduler, not the clock, starts it, and the seconds between
 // its time and the tick that starts it must not drop it into Active.
 export function heldThreadView(view: ThreadView, row: SessionRow): ThreadView {

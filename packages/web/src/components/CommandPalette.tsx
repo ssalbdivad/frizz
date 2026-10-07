@@ -28,7 +28,7 @@ export function CommandPalette() {
   const snap = useSnapshot(store)
   const board = useBoard()
   const [search, setSearch] = useState("")
-  // The palette's one sub-page: "Schedules", every project's (plans/scheduled-threads.md §8). Backspace on
+  // The palette's one sub-page: "Schedules", every project's (ARCHITECTURE.md § Scheduled threads). Backspace on
   // an empty query climbs back out, cmdk's own convention for pages.
   const [page, setPage] = useState<"root" | "schedules">("root")
   const inputRef = useRef<HTMLInputElement>(null)

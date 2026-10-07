@@ -1,7 +1,7 @@
 import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY, locatePhrase, type InterpretScheduleResult, type Span } from "@frizz/shared"
 import { isFailedRead, type ModelReadOk, type ModelReadView } from "./scheduleModelRead.ts"
 
-// WHAT THE PROMPT BOX MAKES OF ITS WORDS, AND WHAT ENTER DOES WITH THEM (plans/schedule-live-reading.md). There is
+// WHAT THE PROMPT BOX MAKES OF ITS WORDS, AND WHAT ENTER DOES WITH THEM (ARCHITECTURE.md § Scheduled threads). There is
 // one submit — Enter, the send button, the phone's send — and the model decides what it means: a prompt with a
 // schedule word in it is read (lib/scheduleReadScheduler.ts), and if the model says the words ask for the work
 // to REPEAT, Enter creates that schedule instead of starting the thread. Everything here is pure, so the

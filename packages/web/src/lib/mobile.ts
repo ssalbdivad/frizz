@@ -43,7 +43,7 @@ function viewportIsPhone(): boolean {
 // one-column STRUCTURE it wanted and, with it, every phone BEHAVIOUR it did not: the answer sheet in place
 // of inline question cards, a 16.5px type scale and 44px targets, the Settings page with the phone's rows,
 // a floating New thread pill. A sidebar has a pointer and a keyboard; it is the desktop app in a narrow
-// column, not a phone (plans/vscode-extension.md § The editor in the sidebar, and the app's own feel).
+// column, not a phone (ARCHITECTURE.md § VS Code extension).
 // So the two halves are asked separately:
 //
 //  - THE PHONE — its own page (PhonePage.tsx), its sheets, its touch-sized controls, no keyboard: this

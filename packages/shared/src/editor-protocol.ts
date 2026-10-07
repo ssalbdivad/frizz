@@ -1,5 +1,5 @@
 // THE EDITOR BRIDGE — the wire between Frizz and an editor extension (packages/vscode) running in a
-// VS Code, Cursor or Windsurf window. Design and rationale: plans/vscode-extension.md.
+// VS Code, Cursor or Windsurf window. Design and rationale: ARCHITECTURE.md § VS Code extension.
 //
 // One WebSocket per editor WINDOW, opened BY the extension to the one machine-wide endpoint
 // `/_frizz/editor` (never per project: a window's folders can span several projects, and the server

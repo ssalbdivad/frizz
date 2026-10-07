@@ -1,6 +1,6 @@
 // The extension's entry point, and the ONLY module with a value import of "vscode" — which exists solely
 // inside an editor's extension host. Everything else takes the API as an argument, so it loads (and is
-// unit-tested) under plain node. Design: plans/vscode-extension.md.
+// unit-tested) under plain node. Design: ARCHITECTURE.md § VS Code extension.
 
 import * as vscode from "vscode"
 import { activateFrizz, type FrizzExtensionApi } from "./app.ts"

@@ -7,7 +7,7 @@ import { detectPlatform } from "../lib/keybindings.ts"
 import { basename, dirnameLike } from "../lib/paths.ts"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
 
-// THE CONTEXT BAR — the top strip inside a prompt box in an editor's sidebar (plans/vscode-extension.md
+// THE CONTEXT BAR — the top strip inside a prompt box in an editor's sidebar (ARCHITECTURE.md § VS Code extension
 // § The editor in the sidebar). It shows what the editor around the sidebar has in front, live from
 // `frizz:editor-context` (lib/editorContext.ts): the file, and when code is selected, its range and size.
 //

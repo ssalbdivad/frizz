@@ -21,7 +21,7 @@ import { TooltipProvider } from "./components/Tooltip.tsx"
 import { store } from "./store.ts"
 import "./styles.css"
 
-// THE SCHEDULE IN THE WORDS, on the real prompt box (plans/schedule-live-reading.md). It mounts the real
+// THE SCHEDULE IN THE WORDS, on the real prompt box (ARCHITECTURE.md § Scheduled threads). It mounts the real
 // <DispatchForm> — Composer, useLiveSchedule, the strip, the draft store — over a stubbed RPC seam that COUNTS
 // every call the box can make that matters (dispatch, createSchedule, deleteSchedule, interpretSchedule) and
 // records their bodies, so composerScheduleLive.e2e.test.ts can say "Enter dispatched once and created

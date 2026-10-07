@@ -1,6 +1,6 @@
 // REVIEW CHANGES, IN THE EDITOR — a thread's changes as VS Code's multi-file diff (`vscode.changes`, the
 // editor Source Control opens for "View changes"), the glue half: review.ts asks git, this shows it.
-// Design: plans/vscode-extension.md § Reviewing a thread's changes.
+// Design: ARCHITECTURE.md § VS Code extension.
 //
 // Claude Code and Cursor show an agent's edits as diffs in the editor. A Frizz worker edits files directly,
 // usually in a worktree of its own, so here the review is of what is on disk: the LEFT side is the file

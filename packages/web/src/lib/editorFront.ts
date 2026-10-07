@@ -7,7 +7,7 @@ import { contextChipLabel, contextDisplayPath } from "./composerContext.ts"
 // WHY A BROWSER TAB GETS ONE. In an editor's sidebar the context bar reads the editor live and every send
 // carries what it names (lib/editorContext.ts). A human talking to a thread from a BROWSER TAB beside VS
 // Code has neither: the agent learns what is selected only if it decides to call its `editor` tool
-// (plans/vscode-extension.md § What the agents can read), and the human cannot see whether there is
+// (ARCHITECTURE.md § VS Code extension), and the human cannot see whether there is
 // anything for it to read. So the tab names exactly what that tool would read — the server answers from
 // the same window the tool does (server editor-bridge.ts `front`) — and a click adds it as a chip, the
 // way the sidebar's bar does, for the human who wants it in the message rather than left to the agent.

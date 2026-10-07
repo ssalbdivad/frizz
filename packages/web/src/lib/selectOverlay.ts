@@ -40,7 +40,7 @@ export function dismissOpenSelect(): boolean {
 }
 
 // ESCAPE CLAIMS: something INSIDE a dialog that owns the first Escape itself — the new-thread box's schedule
-// strip, which Escape dismisses, or its held Enter, which Escape cancels (plans/schedule-live-reading.md). Radix
+// strip, which Escape dismisses, or its held Enter, which Escape cancels (ARCHITECTURE.md § Scheduled threads). Radix
 // runs a dialog's Escape at the document's capture phase, before any handler in the dialog's own tree, so the
 // `c` dialog closed — taking the box and its strip with it — before the box ever saw the key. A claim is asked
 // first: it returns true only when it ACTED, and then the dialog stays open; the next Escape, with nothing left to

@@ -9,7 +9,7 @@ import { useOpenThreadInPlace } from "./AllQueuesCard.tsx"
 import { MobileBottomSheet } from "./MobileBottomSheet.tsx"
 import { scheduleRunOpens, useScheduleActions, useScheduleProfileLabel, useScheduleQuery } from "./ScheduleDrawer.tsx"
 
-// A SCHEDULE ON THE PHONE (plans/scheduled-threads.md §8): the desktop drawer's reading in the phone's bottom
+// A SCHEDULE ON THE PHONE (ARCHITECTURE.md § Scheduled threads): the desktop drawer's reading in the phone's bottom
 // sheet. Opened from the page's Schedules tab, from the repeat mark in a run's thread header, and from the
 // line that opens a run's transcript.
 //

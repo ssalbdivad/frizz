@@ -2,7 +2,7 @@ import { useCallback, useMemo, useSyncExternalStore } from "react"
 import { draftKey, draftStore, useDraft, type DraftStore } from "./drafts.ts"
 import { carryDraft } from "./stagedContext.ts"
 
-// WHAT THE HUMAN SAID ABOUT THE DRAFT'S SCHEDULE IS PART OF THE DRAFT (plans/schedule-live-reading.md).
+// WHAT THE HUMAN SAID ABOUT THE DRAFT'S SCHEDULE IS PART OF THE DRAFT (ARCHITECTURE.md § Scheduled threads).
 //
 // The box reads its words for a schedule as they are typed, and Enter creates what it reads. The human can say
 // "not a schedule" — × on the strip, Esc in the box, or Undo of the schedule just created — and from then Enter

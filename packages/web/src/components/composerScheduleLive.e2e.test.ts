@@ -4,7 +4,7 @@ import { join } from "node:path"
 import test, { after, before } from "node:test"
 import { SCHEDULE_SPACING_COPY } from "@frizz/shared"
 
-// THE SCHEDULE IN THE WORDS, in the real prompt box (plans/schedule-live-reading.md, the 2026-10-06 design):
+// THE SCHEDULE IN THE WORDS, in the real prompt box (ARCHITECTURE.md § Scheduled threads, the 2026-10-06 design):
 // there is no schedule button and no mode. A prompt with a schedule word in it is read by the model as it is
 // typed; a schedule reading hangs a strip under the box and turns the send glyph ↻, and Enter — the only submit —
 // creates it. The unit tests pin each piece (the read scheduler, the reader, the submit machine); this file pins

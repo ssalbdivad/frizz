@@ -172,7 +172,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // worker to reach for when the gate refuses it — a bypass riding the gated call gets learned, and the
     // gate degrades to a two-token tax (plans/rest-by-registration.md). `quiet` (2026-10-05) is not one:
     // the gate refuses a quiet done exactly as it refuses a loud one, and quiet only decides where an
-    // ALLOWED done lands — Done instead of the queue — on a scheduled run alone (plans/scheduled-threads.md).
+    // ALLOWED done lands — Done instead of the queue — on a scheduled run alone (ARCHITECTURE.md § Scheduled threads).
     assert.deepEqual(list.result.tools[8].inputSchema.required, ["body"])
     assert.deepEqual(Object.keys(list.result.tools[8].inputSchema.properties), ["body", "quiet"])
     // `title` takes ONLY the name. It exposes no thread parameter for `goal`'s reason — the slug comes

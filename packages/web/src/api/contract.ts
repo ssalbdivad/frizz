@@ -479,7 +479,7 @@ export interface Api {
   // project with no board here is absent. Each entry names its project, which is what every action
   // the page takes is addressed by.
   projectsQueues(): Promise<ProjectQueue[]>
-  // SCHEDULED THREADS (plans/scheduled-threads.md; shared schedules.ts holds every shape). Project-scoped
+  // SCHEDULED THREADS (ARCHITECTURE.md § Scheduled threads; shared schedules.ts holds every shape). Project-scoped
   // like everything else: call them through projectRpc(projectId) for a schedule in another project —
   // each ScheduleView names its own projectId. `listSchedules({ allProjects: true })` is the palette's
   // cross-project list.

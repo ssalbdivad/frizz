@@ -1,4 +1,4 @@
-// WHEN THE BOX ASKS THE MODEL (plans/schedule-live-reading.md). A prompt whose words include a schedule word
+// WHEN THE BOX ASKS THE MODEL (ARCHITECTURE.md § Scheduled threads). A prompt whose words include a schedule word
 // (`hasScheduleTrigger`, packages/shared/src/schedule-trigger.ts) is read by the model as it is typed, so the
 // schedule it holds is on screen before Enter. Not on every keystroke: a read takes seconds and costs quota,
 // and "every Mon" is not yet anything. The box asks when a WORD COMPLETES — the character just typed is a

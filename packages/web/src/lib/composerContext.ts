@@ -297,7 +297,7 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
 // In an editor's sidebar every send carries what the editor around it has in front — the selection, or
 // with nothing selected the file and the caret's line — while the human shares the editor (the context
 // bar's eye, which is the extension's `frizz.shareEditorState`; lib/editorContext.ts outgoingMessage;
-// plans/vscode-extension.md § The editor in the sidebar). Claude Code's VS Code extension and Cursor both
+// ARCHITECTURE.md § VS Code extension). Claude Code's VS Code extension and Cursor both
 // work this way, and the maintainer called it "the #1 feature": an agent in the sidebar that cannot see the
 // highlighted code is not beside the editor at all. Asked "can you see the highlighted code?", the first
 // cut's agent said no, because the selection reached a message only when the human made a chip of it.

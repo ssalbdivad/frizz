@@ -253,7 +253,7 @@ test("a rarely-firing hourly rule stays fast", () => {
   assert.deepEqual(runs.map((ms) => new Date(ms).toISOString().slice(0, 13)), ["2028-02-29T08", "2032-02-29T08", "2036-02-29T08"])
 })
 
-// ---- the echo fixes the live reading depends on (plans/schedule-live-reading.md §3.5) ----------------------
+// ---- the echo fixes the live reading depends on (`git show 7e0b68b5:plans/schedule-live-reading.md` §3.5) ----------------------
 
 const SPEC_NOW = Date.parse("2026-10-05T14:32:00-04:00") // Mon Oct 5 2026, 2:32pm New York
 

@@ -21,7 +21,7 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "./ui/Popover.tsx"
 import { Dialog } from "./ui/Dialog.tsx"
 
-// A THREAD'S TIME LIMIT IN THE BROWSER (plans/time-limits.md § Setting it): the prompt box's control, the
+// A THREAD'S TIME LIMIT IN THE BROWSER (ARCHITECTURE.md § Time limits): the prompt box's control, the
 // countdown on the facts line (queue card and drawer) and on the rail row, and the drawer's extend / set /
 // remove. The grammar, the reading and the tones are lib/threadDeadline.ts; this file only draws them.
 //

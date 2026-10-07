@@ -38,7 +38,7 @@ import { isUnder } from "./local-file.ts"
 import { isTrustedLocalWebSocketRequest, rejectWebSocketUpgrade } from "./local-origin.ts"
 
 // THE EDITOR BRIDGE — the server end of `/_frizz/editor`, the socket every VS Code / Cursor / Windsurf
-// window running the Frizz extension (packages/vscode) dials. Design: plans/vscode-extension.md; the
+// window running the Frizz extension (packages/vscode) dials. Design: ARCHITECTURE.md § VS Code extension; the
 // wire: @frizz/shared editor-protocol.ts.
 //
 // ONE PER MACHINE, like the server. index.ts builds it once beside the tenant map and answers the

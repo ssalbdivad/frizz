@@ -1,7 +1,7 @@
 import type Database from "./sqlite.ts"
 import type { ProjectScope } from "./project-scope.ts"
 
-// THE TWO SCHEDULED-THREADS TABLES (plans/scheduled-threads.md §7). Their CREATE statements live in
+// THE TWO SCHEDULED-THREADS TABLES (ARCHITECTURE.md § Scheduled threads). Their CREATE statements live in
 // storage.ts STORAGE_SCHEMA with every other table, so the importer, the purge and the isolation test
 // cover them like the rest; the statements that read and write them live here so storage.ts does not
 // grow by another few hundred lines. Every statement is prepared through the project scope, so each one

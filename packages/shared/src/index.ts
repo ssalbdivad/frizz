@@ -3601,7 +3601,7 @@ export function parseQuestionsCancelledWake(text: string): { count: number } | u
 export const MarkOwnDoneInput = z.object({
   slug: ThreadSlug,
   body: z.string().trim().min(1).max(20_000),
-  // A SCHEDULED RUN's quiet finish (plans/scheduled-threads.md §5): nothing for the human, so the thread
+  // A SCHEDULED RUN's quiet finish (ARCHITECTURE.md § Scheduled threads): nothing for the human, so the thread
   // goes straight to Done instead of the queue and the body's first line becomes the run's history line.
   // Refused on any thread that is not a run of a schedule.
   quiet: z.boolean().optional(),
@@ -4026,7 +4026,7 @@ export const ThreadView = z.object({
   // What each FRIZZ PLUGIN wrote for this thread (its `threadView`), keyed by plugin id — read only by that
   // plugin's own web half. Absent when no plugin wrote anything.
   plugins: z.record(z.string(), z.unknown()).optional(),
-  // The SCHEDULE this thread is a run of (plans/scheduled-threads.md) — what draws the repeat glyph and
+  // The SCHEDULE this thread is a run of (ARCHITECTURE.md § Scheduled threads) — what draws the repeat glyph and
   // its tooltip. `pending` marks the schedule's next run: a held row that sits in Snoozed with its wake
   // time until the scheduler starts it, even once that time has passed (isSnoozed). Absent on every other
   // thread, and on a run whose schedule has since been deleted.
@@ -4422,7 +4422,7 @@ export function isSnoozed(t: ThreadView, nowMs = Date.now()): boolean {
   if (t.state === "archived") return false
   // A SCHEDULE'S NEXT RUN is parked until the scheduler starts it — including the seconds after its wake
   // time passes and before the tick that starts it (a post-boot grace, the start cap). Reading its clock
-  // here would drop it into Active for exactly that window (plans/scheduled-threads.md §4).
+  // here would drop it into Active for exactly that window (ARCHITECTURE.md § Scheduled threads).
   if (t.schedule?.pending === true && t.held !== undefined) return true
   // THE RESTING CARD'S EVENT-SNOOZE IS A PARK THE HUMAN MADE, and it parks into Snoozed exactly as the
   // wall-clock snooze does. It arrives as `bgSnoozed` (server truth: bg_snooze_rested_at equals the
@@ -6695,7 +6695,7 @@ export const BoardMeta = z.object({
 })
 export type BoardMeta = z.infer<typeof BoardMeta>
 
-// ── The editor bridge's wire (types and rationale: ./editor-protocol.ts, plans/vscode-extension.md) ──
+// ── The editor bridge's wire (types and rationale: ./editor-protocol.ts, ARCHITECTURE.md § VS Code extension) ──
 // The server validates every frame an editor sends with these; each is pinned to its plain type below.
 const EditorKindSchema = z.enum(["vscode", "cursor", "windsurf", "other"])
 const EditorWindowSummarySchema = z.object({ app: z.string(), kind: EditorKindSchema, acceptsOpens: z.boolean(), reviews: z.literal(true).optional(), extensionVersion: z.string().optional() }).strict()
