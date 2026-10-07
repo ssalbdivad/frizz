@@ -4828,6 +4828,15 @@ export const Settings = z.object({
   // (No `worktreeDir` / `removeWorktreesOnDone`: Frizz mandates no worktree folder and removes no
   // worktree on done, as upstream. Settings from 2026-09-30 to 2026-10-07; stripped on parse.)
   /**
+   * Remove a linked git worktree under a registered project's `<main checkout>/.frizz/worktrees` once it
+   * has been idle this many days and nothing in it could be lost: clean, only regenerable ignored files,
+   * its HEAD on a ref, and no open thread working in it. Checked shortly after boot and daily after
+   * (server/worktree-sweep.ts). Branches are never deleted. 0 = never. Optional so an old blob parses;
+   * defaultSettings pins 7. A number rather than an absent key for "never", for the same reason as
+   * `deleteDoneThreadsUntouchedDays`. Machine-level.
+   */
+  removeIdleWorktreesDays: z.number().int().min(0).max(3650).optional(),
+  /**
    * Done threads the human has not touched (opened, replied to, acted on) for this many days are deleted, in every open project, by an hourly sweep
    * (server/thread-retention.ts). 0 = never, the default — a delete cannot be undone, so nothing is
    * deleted on an operator's behalf until they choose a period. A number rather than an absent key for
@@ -4925,7 +4934,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "removeIdleWorktreesDays", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
 
 /** Whether Frizz asks Claude for names, status lines, auto effort and schedule readings (Settings
  *  `backgroundSummaries`). On unless the human turned it off: an absent key, an older server's

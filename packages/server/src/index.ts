@@ -2,7 +2,7 @@ export type { AppRouter } from "./router.ts"
 
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http"
 import { readFileSync, existsSync, statSync } from "node:fs"
-import { dirname, join, resolve, extname, posix, sep } from "node:path"
+import { basename, dirname, join, resolve, extname, posix, sep } from "node:path"
 import { DEFAULT_PORT, FRIZZ_ROUTE_PREFIX } from "@frizz/shared"
 import {
 ContextStartupError,
@@ -51,7 +51,9 @@ import { createTenantMap } from "./tenants.ts"
 import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
 import { startWakeLockLoop, type WakeLockLoop } from "./wake-lock.ts"
-import { findWorkspaceById, findWorkspaceBySegment, listWorkspaces, projectForEntry } from "./home-workspace.ts"
+import { startIdleWorktreeSweep, type WorktreeSweepLoop } from "./worktree-sweep.ts"
+import { threadFoldersInUse } from "./router.ts"
+import { findWorkspaceById, findWorkspaceBySegment, isHomeWorkspace, listWorkspaces, projectForEntry } from "./home-workspace.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
@@ -605,6 +607,9 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   let tenantPrime: TenantPrimeRun | undefined
   // Holds the OS's idle-sleep request while any open project has work running (wake-lock.ts).
   let wakeLock: WakeLockLoop | undefined
+  // Settings → Remove idle worktrees after: one machine-wide pass over every registered project's
+  // `.frizz/worktrees`, shortly after boot and daily after (worktree-sweep.ts).
+  let worktreeSweep: WorktreeSweepLoop | undefined
   // One process, N projects (tenants.ts). The launching project is adopted below once its own boot
   // phases have built it; anything opened later goes through activate(), which is where the
   // AppContext-seam error boundary lives.
@@ -829,6 +834,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
   const cleanupAppSocket = createRetryableCleanup(async () => { await appSocket?.close() })
   const cleanupEditorBridge = createRetryableCleanup(() => editors.close())
   const cleanupWakeLock = createRetryableCleanup(() => wakeLock?.stop())
+  const cleanupWorktreeSweep = createRetryableCleanup(async () => { await worktreeSweep?.stop() })
   // The per-project half, from context.ts, so one project can be torn down without the server —
   // `() => ctx` rather than `ctx` because these are built before the context exists.
   const tenant = projectContextCleanups(() => ctx)
@@ -882,6 +888,8 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       { name: "editor bridge", run: cleanupEditorBridge },
       // Before the tenants close: it reads their tailers, and a stopping server holds nothing awake.
       { name: "wake lock", run: cleanupWakeLock },
+      // Before the tenants close too: a pass in flight reads their boards.
+      { name: "idle worktree sweep", run: cleanupWorktreeSweep },
       { name: "other projects", run: cleanupExtraTenants },
       { name: "tailer producer", run: cleanupTailer },
       // Hang up every thread terminal, so a dev server started from Frizz stops with it.
@@ -1363,6 +1371,24 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         sessions: () => open.storage.allSessions(),
         telemetry: (slug: string) => open.tailer.get(slug),
       })))
+    }
+
+    if (process.env.FRIZZ_WORKTREE_SWEEP_OFF !== "1") {
+      const settingsOf = ctx!
+      worktreeSweep = startIdleWorktreeSweep({
+        days: () => settingsOf.getSettings().removeIdleWorktreesDays ?? 7,
+        // Home included: a thread working there can work in any repository's worktree.
+        projects: () => listWorkspaces().map((entry) => ({
+          id: entry.id,
+          name: entry.name ?? basename(entry.path),
+          dir: tenants.get(entry.id) ? workDirOf(tenants.get(entry.id)!.project) : entry.path,
+          stale: entry.stale,
+          open: tenants.get(entry.id) !== undefined,
+          // Home's folder is the home folder: a source of threads, never a repository to sweep.
+          ...(isHomeWorkspace(entry.id) ? { notARepo: true } : {}),
+        })),
+        inUse: async () => (await Promise.all(tenants.active().map(({ ctx: open }) => threadFoldersInUse(open)))).flat(),
+      })
     }
 
     return { httpServer, ctx, port, close: beginClose, shutdownFence }

@@ -225,6 +225,7 @@ import { peekClaudeModels, readClaudeModels } from "./backend/claude-models.ts"
 import { claudeModelStanding, claudeModelUpgradeBlock, claudeModelUpgradeDue, claudeModelUpgradeRefusal, claudeUpgradeCandidate, SERVER_STARTED_AT_MS } from "./backend/claude-model-upgrade.ts"
 import { log as frizzLog } from "./logging.ts"
 import { expiredDoneThreads } from "./thread-retention.ts"
+import type { FolderInUse } from "./worktree-sweep.ts"
 import { readProjectInstructions, writeProjectInstructions } from "./project-instructions.ts"
 import { codexSandbox } from "./backend/codex.ts"
 import type { CodexSandboxMode } from "./backend/codex-app-server.ts"
@@ -785,6 +786,61 @@ export async function deleteExpiredDoneThreads(
   }
   if (deleted) ctx.board.refresh()
   return deleted
+}
+
+/**
+ * Every folder a thread that is still open work in this project is working in — for the idle-worktree
+ * sweep's in-use check (worktree-sweep.ts check 3). Open work is every thread but an unpinned Done one
+ * at rest: Running, Queue, Pinned and Snoozed, plus a Done thread whose worker is still finishing (which
+ * the board files under Running). A thread with no section (an external session) counts too: it can
+ * only keep a worktree.
+ *
+ * Each thread contributes the checkout its agent works in, read the way the terminal reads it (the
+ * tailer's `workingDir`, else its transcript — router threadWorkingDir), its board `checkout`, its
+ * background shells' folders and its recent sub-agents' folders. Over-reporting only keeps a worktree.
+ */
+export async function threadFoldersInUse(
+  ctx: Pick<AppContext, "project" | "storage" | "tailer" | "board" | "backendFor" | "codexAppServer">,
+): Promise<FolderInUse[]> {
+  const workDir = workDirOf(ctx.project)
+  const out: FolderInUse[] = []
+  const snapshot = await ctx.board.snapshot()
+  for (const t of snapshot.threads) {
+    if (sectionOf(t) === "inactive" && !t.pinnedAt) continue
+    const by = `${ctx.project.name}/${t.id}`
+    const add = (dir: string | undefined) => {
+      if (dir) out.push({ dir, by })
+    }
+    const folded = ctx.tailer.get(t.id)?.workingDir
+    add(folded)
+    add(t.checkout?.dir)
+    for (const shell of t.bgShells ?? []) {
+      add(shell.cwd)
+      add(shell.checkout?.dir)
+    }
+    const row = ctx.storage.getSession(t.id)
+    if (!row) continue
+    try {
+      const backend = row.backend === "codex" ? "codex" : row.backend === "acp" ? "acp" : "claude"
+      const source = threadTranscriptSource(ctx.project, ctx.storage, t.id, ctx.backendFor)
+      if (!folded) {
+        add(
+          resolveThreadWorkingDir({
+            projectDir: workDir,
+            backend,
+            transcriptPath: source?.path,
+            codexMessages: source && backend === "codex" ? () => readCodexTranscriptFile(source.path, source.nativeId) : undefined,
+            sessionCwd: backend === "codex" ? ctx.codexAppServer?.binding(t.id, row.session_id)?.cwd : undefined,
+          }).dir,
+        )
+      }
+      if (source && backend === "claude") for (const folder of subAgentFolders(source.path, workDir)) add(folder.dir)
+    } catch (error) {
+      // An unreadable transcript is no reading; the project root, where every thread starts, is not a worktree.
+      frizzLog.debug("worktrees", `${ctx.project.name}/${t.id}: could not read its working folder: ${String(error)}`)
+    }
+  }
+  return out
 }
 
 // The typed RPC surface. Every handler is thin: state mutations go through frizz scripts

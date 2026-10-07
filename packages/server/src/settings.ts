@@ -89,6 +89,8 @@ export const defaultSettings = (): Settings => ({
   codexContextWindow: undefined,
   // Hidden until asked for — see the schema for why.
   projectRail: false,
+  // A week — see the schema and worktree-sweep.ts.
+  removeIdleWorktreesDays: 7,
   // Never — see the schema.
   deleteDoneThreadsUntouchedDays: 0,
   // Off — it moves work onto Fable; see the schema and backend/fable-fallback.ts.

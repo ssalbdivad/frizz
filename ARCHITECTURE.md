@@ -134,12 +134,21 @@ shows less without scrolling than upstream's board does, with the project rail o
   is not offered (a saved `auto` launches on a fixed level, high for Claude), and a prompt is not read
   for a schedule. Every call that does go out is logged at debug with its purpose. `FRIZZ_THREAD_NAMER=0`, `FRIZZ_LIVE_STATUS=0` and
   `FRIZZ_AUTO_EFFORT=0` still work, as overrides that can only turn a call OFF.
-- **No worktree opinions.** Frizz creates no worktree or branch, mandates no folder for one, and
-  removes none when a thread is marked done; where an agent makes a worktree is the project's call, in
-  its `FRIZZ.md`. What Frizz does know is which checkout a thread works in (the tailer's `checkout`),
-  so the terminal, the `editor` tool and a thread's links follow it. The fork enforced one folder and
-  cleaned it up on done from 2026-09-30 to 2026-10-07; that went, matching upstream's "no git or
-  worktree opinions" (P10).
+- **No worktree opinions, one cleanup.** Frizz creates no worktree or branch, mandates no folder for
+  one, and removes none when a thread is marked done; where an agent makes a worktree is the project's
+  call, in its `FRIZZ.md`. What Frizz does know is which checkout a thread works in (the tailer's
+  `checkout`), so the terminal, the `editor` tool and a thread's links follow it. The one thing it does
+  do: shortly after boot and daily after, `server/worktree-sweep.ts` removes a linked worktree under a
+  registered project's `<main checkout>/.frizz/worktrees` once it has been idle 7d (Settings → Remove
+  idle worktrees after, `removeIdleWorktreesDays`; Never turns it off) — idle meaning no commit on its
+  HEAD and no tracked or untracked file modified in that long. Only when nothing could be lost: git says
+  it is clean, every ignored file is dependency or build output (a `.env` or a `.db` keeps it), its HEAD
+  is on a ref, no registered project lives in it, and no Running, Queue, Pinned or Snoozed thread on
+  this server works in it; any check it cannot answer keeps it, and a repository with a registered
+  project this server has not opened is skipped. `git worktree remove` without `--force`, then
+  `git worktree prune`; branches are never deleted. This bends upstream's "no git or worktree opinions"
+  (P10) for the fork. (The fork enforced one folder and removed a thread's worktrees on done from
+  2026-09-30 to 2026-10-07; that went, and this idle sweep replaced it.)
 - **Full-snapshot SSE.** The single `/events` SSE channel pushes `{type:"board", board}` full
   snapshots (see `@frizz/shared` `ServerEvent`). No diff protocol.
 - **Permission prompts come from a MARKER, not from JSONL.** Even under `--permission-mode auto` a
