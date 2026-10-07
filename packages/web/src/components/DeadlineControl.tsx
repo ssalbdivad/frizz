@@ -48,8 +48,15 @@ import { Dialog } from "./ui/Dialog.tsx"
  * taken in the gap to the TEXT: a fractional margin moves the svg off the pixel grid, and its ink then snaps
  * by up to ~0.75px — the first try, a 1.375px trim, read 3.87px where 4.63px was due.
  *
- * Measured on deadline-fixture, sans (DejaVu Sans on Linux): the readings, before and after, are in the
- * building thread's ui/notes.md (2026-10-06). Re-measure rather than re-guess if the glyph or a size changes.
+ * READINGS, deadline-fixture, sans (DejaVu Sans, Linux), 2026-10-06. Vertical, by PIXEL ink of the dial against
+ * the reading's ink (dsf 4; NEGATIVE = dial low): whole-glyph centring −1.05 (rail) / −1.41px (facts); dial
+ * term on the svg itself, 1em box: rail −0.50; this structure: rail −0.12…0.00, facts −0.12 (one device pixel
+ * at dsf 4; dsf 8: −0.12…+0.06). Horizontal, `scripts/ink-gaps.mjs` dsf 4: facts separator→glyph 8.5 → 7.5
+ * (text: 7.5), glyph→reading 6.0 → 4.5 (the band stamp's bot→WORKING: 4.5); rail glyph→reading 4.75 → 4.0 (the
+ * sub-agent count's bot→digit: 4.0). In the facts line's urgent slot the same marks read 7.0 / 4.0 — the svg's
+ * subpixel x lands differently there. Re-measure rather than re-guess if the glyph, a size or a gap changes;
+ * a canvas cap height taken AT 11px is hinted to a whole 9px (8.08 measured at 1100px), which alone fakes a
+ * 0.46px error.
  */
 function DeadlineGlyph({ size, trim, className = "" }: { size: number; trim: "both" | "end"; className?: string }) {
   return (
@@ -200,6 +207,8 @@ export function DispatchTimeLimit({ draftKey: key }: { draftKey: string }) {
           // the profile pill beside it whether or not it holds text. Empty, `px-[5px]` makes it a 26px square.
           className={`inline-flex shrink-0 items-center gap-[3px] rounded-md border border-border/50 bg-transparent py-1 text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${text ? "px-2" : "px-[6px]"} ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
         >
+          {/* Box-centred on the 16px line, as the profile pill's chevron is: the dial against the petite-caps
+              reading measured 0.00px by pixel ink (dsf 4 and 8), and 4.5px of ink to it on the pill's 3px gap. */}
           <span aria-hidden="true" className="flex h-4 shrink-0 items-center">
             <Timer data-time-limit-glyph size={12} strokeWidth={2} className={text ? "" : "text-muted-70"} />
           </span>
