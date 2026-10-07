@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
+import { useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react"
 import * as RadixDialog from "@radix-ui/react-dialog"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
@@ -385,7 +385,7 @@ function BandTab({ band, label, active, onClick, children }: { band: PageTab; la
       aria-selected={active}
       data-mobile-tab={band}
       onClick={onClick}
-      className={`-mb-px flex h-[44px] items-center border-b-2 ${active ? "border-fg text-fg" : "border-transparent text-muted"}`}
+      className={`flex h-[44px] shrink-0 items-center whitespace-nowrap border-b-2 ${active ? "border-fg text-fg" : "border-transparent text-muted"}`}
     >
       <span className="grid">
         <span aria-hidden className={`invisible ${TAB_FACE}`}>
@@ -400,6 +400,92 @@ function BandTab({ band, label, active, onClick, children }: { band: PageTab; la
     </button>
   )
 }
+
+/**
+ * THE BAND TABS: Queue, Snoozed, Done, and Schedules while the view has any, on ONE line that never wraps.
+ *
+ * A tab never shrinks (BandTab: `shrink-0`, `whitespace-nowrap`) — its label and count are one reading, and
+ * squeezing the tab is what broke "Queue 1 · 15" across two lines, the "15" under the "·", with the strip
+ * running 4px off a 390px screen (a question waiting, 14 queued and a schedule: QA 2026-10-06; 29px off at
+ * 360 with two-digit counts everywhere).
+ *
+ * THE GAPS GIVE WAY FIRST, from 22px down to 10, and they are measured, not estimated: each is a spacer
+ * that starts at 22px and shrinks, the tabs do not, so flexbox takes the overflow out of the three gaps
+ * equally and stops each at its 10px floor. This replaces a `clamp(10px, (100vw - 326px) / 3, 22px)` gap,
+ * which assumed the four tabs drew 290px — true at the counts it was tuned on (11.3px gaps at 360, 21.3 at
+ * 390), and wrong the moment a count grew a digit. With spacers the same counts land on the same gaps, and
+ * other counts land on theirs.
+ *
+ * ONLY WHEN 10px GAPS ARE NOT ENOUGH does the strip scroll sideways — no scrollbar, as the phone's effort
+ * row (MobileModelSheet.tsx) — with the cut-off tab at the edge as the cue there is more. The worst
+ * realistic counts get there on a 390px phone: asks, queue, snoozed and schedules all in two digits draw
+ * 345px of tabs, 411 with margins and 10px gaps, which a 430px phone still holds on 16.5px gaps; QA's case
+ * (1 ask of 15 queued, a schedule) fits 390 on 11.3px gaps and scrolls at 360 (2026-10-06, Linux Chrome,
+ * sans; components/phoneBandTabs.e2e.test.ts pins the contract, not these widths).
+ *
+ * The SELECTED tab is scrolled fully into view, its 18px margin with it, whenever the selection changes;
+ * nothing else moves the strip, so a poll re-rendering it never yanks back a strip the reader has scrolled.
+ *
+ * The scroller sits INSIDE the bordered box rather than being it: the underline overlaps the strip's
+ * bottom border by its own 1px (`-mb-px`), and a scroll container clips its children on both axes, so on
+ * the scroller itself that pixel would have been cut off (or made it scroll vertically by one).
+ */
+export function BandTabs({ tab, onTab, asks, queue, snoozed, schedules }: {
+  tab: PageTab
+  onTab: (tab: PageTab) => void
+  asks: number
+  queue: number
+  snoozed: number
+  /** The Schedules tab's count and tone, or null while the tab is not shown. */
+  schedules: { count: number; attention: boolean } | null
+}) {
+  const strip = useRef<HTMLDivElement>(null)
+  useLayoutEffect(() => {
+    const el = strip.current
+    const selected = el?.querySelector<HTMLElement>('[aria-selected="true"]')
+    if (!el || !selected) return
+    // offsetLeft is from the scroller's padding edge (it is `relative`) and ignores its scroll.
+    const left = selected.offsetLeft - TAB_MARGIN
+    const right = selected.offsetLeft + selected.offsetWidth + TAB_MARGIN - el.clientWidth
+    if (el.scrollLeft > left) el.scrollLeft = left
+    else if (el.scrollLeft < right) el.scrollLeft = right
+  }, [tab])
+  const gap = <span aria-hidden className="w-[22px] min-w-[10px] shrink" />
+  return (
+    <div className="border-b border-border/70">
+      <div ref={strip} role="tablist" aria-label="Bands" className="relative -mb-px flex overflow-x-auto px-[18px] scrollbar-none">
+        <BandTab band="queue" label="Queue" active={tab === "queue"} onClick={() => onTab("queue")}>
+          {asks > 0 ? <span className="text-[12.5px] font-bold tabular-nums text-accent">{asks}</span> : null}
+          {queue > 0 ? <span className={TAB_COUNT}>{asks > 0 ? `· ${queue}` : queue}</span> : null}
+        </BandTab>
+        {gap}
+        <BandTab band="snoozed" label="Snoozed" active={tab === "snoozed"} onClick={() => onTab("snoozed")}>
+          {snoozed > 0 ? <span className={TAB_COUNT}>{snoozed}</span> : null}
+        </BandTab>
+        {gap}
+        <BandTab band="done" label="Done" active={tab === "done"} onClick={() => onTab("done")} />
+        {/* SCHEDULES, after the bands, only while the view has any (or the tab is open, so deleting the
+            last one does not pull the tab out from under the reader). Its count turns warning-toned
+            when one was paused by Frizz or a proposal waits — the desktop project row's fourth count. */}
+        {schedules ? (
+          <>
+            {gap}
+            <BandTab band="schedules" label="Schedules" active={tab === "schedules"} onClick={() => onTab("schedules")}>
+              {schedules.count > 0 ? (
+                <span data-mobile-schedules-count className={schedules.attention ? "text-[12.5px] font-bold tabular-nums text-attention-soft" : TAB_COUNT}>
+                  {schedules.count}
+                </span>
+              ) : null}
+            </BandTab>
+          </>
+        ) : null}
+      </div>
+    </div>
+  )
+}
+
+/** The band tabs' side margin, which the selected tab keeps when it is scrolled into view. */
+const TAB_MARGIN = 18
 
 /** The view's name in the header. */
 const TITLE_TYPE = "text-[16.5px] font-semibold leading-[21px] tracking-[-0.01em] text-fg"
@@ -559,35 +645,14 @@ function PhoneThreads({ shown, viewed, focusedSlug, hidden, loading, error, comp
             <SettingsIcon size={21} strokeWidth={1.9} />
           </button>
         </div>
-        {/* With Schedules a fourth tab, 22px gaps ran it to x=374 on a 360px phone (the four tabs draw 290px
-            at their usual counts), off the screen. The gaps give way first: 22px where they fit, down to
-            what keeps the strip inside 18px margins — 11.3px at 360, 21.3 at 390. */}
-        <div
-          role="tablist"
-          aria-label="Bands"
-          className={`flex border-b border-border/70 px-[18px] ${scheduleCount > 0 || tab === "schedules" ? "gap-[clamp(10px,calc((100vw_-_326px)/3),22px)]" : "gap-[22px]"}`}
-        >
-          <BandTab band="queue" label="Queue" active={tab === "queue"} onClick={() => setTab("queue")}>
-            {counts.asks > 0 ? <span className="text-[12.5px] font-bold tabular-nums text-accent">{counts.asks}</span> : null}
-            {queue.length > 0 ? <span className={TAB_COUNT}>{counts.asks > 0 ? `· ${queue.length}` : queue.length}</span> : null}
-          </BandTab>
-          <BandTab band="snoozed" label="Snoozed" active={tab === "snoozed"} onClick={() => setTab("snoozed")}>
-            {snoozed.length > 0 ? <span className={TAB_COUNT}>{snoozed.length}</span> : null}
-          </BandTab>
-          <BandTab band="done" label="Done" active={tab === "done"} onClick={() => setTab("done")} />
-          {/* SCHEDULES, after the bands, only while the view has any (or the tab is open, so deleting the
-              last one does not pull the tab out from under the reader). Its count turns warning-toned
-              when one was paused by Frizz or a proposal waits — the desktop project row's fourth count. */}
-          {scheduleCount > 0 || tab === "schedules" ? (
-            <BandTab band="schedules" label="Schedules" active={tab === "schedules"} onClick={() => setTab("schedules")}>
-              {scheduleCount > 0 ? (
-                <span data-mobile-schedules-count className={scheduleAttention ? "text-[12.5px] font-bold tabular-nums text-attention-soft" : TAB_COUNT}>
-                  {scheduleCount}
-                </span>
-              ) : null}
-            </BandTab>
-          ) : null}
-        </div>
+        <BandTabs
+          tab={tab}
+          onTab={setTab}
+          asks={counts.asks}
+          queue={queue.length}
+          snoozed={snoozed.length}
+          schedules={scheduleCount > 0 || tab === "schedules" ? { count: scheduleCount, attention: scheduleAttention } : null}
+        />
       </div>
 
       {/* The list: 56 + 45 of header and tabs above; below, the "New thread" button's 50 plus 16 either
@@ -695,7 +760,7 @@ function useJustActed(): { live: ReturnType<typeof useBoard>; onPage: (project: 
 }
 
 /** The page's tabs: the three bands, and the view's schedules. */
-type PageTab = PhoneTab | "schedules"
+export type PageTab = PhoneTab | "schedules"
 
 /**
  * The view's SCHEDULES — the focused project's through its own client, or every project's for All projects
