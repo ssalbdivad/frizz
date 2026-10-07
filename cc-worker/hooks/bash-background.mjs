@@ -330,39 +330,22 @@ export function isDirectHookExecution(argv1, moduleUrl, realpath = realpathSync)
   }
 }
 
-/**
- * The hook's whole answer to one stdin payload: exactly what the entry point below prints. Exported so
- * bash-background.sh's equivalence test can ask node the same question the executable answers, for
- * thousands of inputs, without a node start per input.
- * @param {string} stdin @param {string[]} [argv] @param {Record<string, string | undefined>} [env]
- */
-export function bashHookResponse(stdin, argv = process.argv, env = process.env) {
-  try {
-    const effectiveEnv = argv.includes('--frizz-thread')
-      ? { ...env, FRIZZ_THREAD: env.FRIZZ_THREAD || 'codex-worker' }
-      : env;
-    const input = JSON.parse(stdin);
-    // The worktree-location guard rides this registration (worktree.mjs) so Codex, whose hooks arrive
-    // one config override at a time, gets it without a second one. Only inside a Frizz worker.
-    const worktreeDenial = String(effectiveEnv.FRIZZ_THREAD ?? '').trim()
-      ? evaluateWorktreeGuard(input, worktreeSetting(argv, effectiveEnv))
-      : undefined;
-    return worktreeDenial ?? evaluateBashBackgroundHook(input, effectiveEnv);
-  } catch {
-    return {};
-  }
-}
-
 // The server imports `hasEscapingBackgroundJob` and its production build bundles this module into
 // `src/index.js`. esbuild rewrites `import.meta.url` to that bundle URL, so URL equality alone would
 // mistake the whole server for this executable and block startup reading hook JSON from stdin.
-//
-// Claude reaches this file through bash-background.sh, which answers `{}` itself whenever it can prove
-// this would (hooks.json); Codex's registration (server dispatch.ts) still calls it directly.
 if (isDirectHookExecution(process.argv[1], import.meta.url)) {
-  let stdin = '';
   try {
-    stdin = readFileSync(0, 'utf8');
-  } catch {}
-  emit(bashHookResponse(stdin));
+    const env = process.argv.includes('--frizz-thread')
+      ? { ...process.env, FRIZZ_THREAD: process.env.FRIZZ_THREAD || 'codex-worker' }
+      : process.env;
+    const input = JSON.parse(readFileSync(0, 'utf8'));
+    // The worktree-location guard rides this registration (worktree.mjs) so Codex, whose hooks arrive
+    // one config override at a time, gets it without a second one. Only inside a Frizz worker.
+    const worktreeDenial = String(env.FRIZZ_THREAD ?? '').trim()
+      ? evaluateWorktreeGuard(input, worktreeSetting(process.argv, env))
+      : undefined;
+    emit(worktreeDenial ?? evaluateBashBackgroundHook(input, env));
+  } catch {
+    emit({});
+  }
 }
