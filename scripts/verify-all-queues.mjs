@@ -1,6 +1,7 @@
 #!/usr/bin/env node
-// Drive the page's ALL PROJECTS view (`/`, web lib/pageView.ts — "Everything" until focus mode, and `/?all`
-// from 2026-09-29 to 2026-09-30) in a real headless browser against a seeded
+// Drive the page's ALL PROJECTS view (`/all`, web lib/pageView.ts — "Everything" until focus mode, `/?all`
+// from 2026-09-29 to 2026-09-30, and bare `/` until the project board became the default view on
+// 2026-10-06) in a real headless browser against a seeded
 // multi-project stack, and check that every action taken on a card lands on the card's OWN project — and
 // that the view works as a MODE: threads open in place, and new ones start in any project from it.
 //
@@ -71,6 +72,11 @@ async function step(name, run) {
 }
 
 const card = (project, slug) => `[data-xq-card="${ids[project]}/${slug}"]`
+// ALL PROJECTS' ADDRESS. `/all` is its name from now on (David 2026-10-06: the project board becomes the
+// default view, and `/` a redirect to the view the browser last showed), so nothing here asks for a bare
+// `/`. The page still WRITES `/` for All projects until that change lands (lib/pageView.ts viewHref), so
+// both read as All projects meanwhile; once `/` only redirects, the page never rests there.
+const ALL_PATHS = ["/all", "/"]
 
 const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--force-color-profile=srgb"] })
 try {
@@ -193,7 +199,7 @@ try {
     throw new Error(`${selector} never took the keyboard`)
   }
   // All projects, reached the way a person reaches it: the project's board, `/project/<slug>` (the
-  // launcher's own landing was `/?project=<slug>` from 2026-09-29, and is `/` since 2026-09-30) — then the
+  // launcher's own landing was `/?project=<slug>` from 2026-09-29, and `/` from 2026-09-30) — then the
   // status row's switcher, whose All projects keeps that project as the prompt box's pick (AllQueues.tsx
   // Switcher).
   const allFrom = async (slug) => {
@@ -201,7 +207,7 @@ try {
     await page.waitForSelector('[data-status-row] [data-xq-switcher="project"]', { timeout: 30_000 })
     await clickSettled("[data-status-row] [data-xq-switcher]")
     await clickSettled('[role="menuitem"][data-value="all-projects"]')
-    await page.waitForFunction(() => location.pathname === "/" && location.search === "", { timeout: 15_000 })
+    await page.waitForFunction((paths) => paths.includes(location.pathname) && location.search === "", { timeout: 15_000 }, ALL_PATHS)
     await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
     await page.waitForSelector('[data-surface="newComposer"]', { timeout: 30_000 })
     await pickerSays(slug, 30_000)
@@ -213,7 +219,7 @@ try {
   await step("All projects keeps the project it was left from as the page's, with its prompt box", async () => {
     await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
     const path = await page.evaluate(() => location.pathname + location.search)
-    check("All projects keeps the project it was left from as the page's, with its prompt box", path === "/" && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
+    check("All projects keeps the project it was left from as the page's, with its prompt box", ALL_PATHS.includes(path) && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
   })
 
   // Until 2026-09-28 this checked a lane per project in the rail's order; the queue is one queue now, in
@@ -409,7 +415,7 @@ try {
     // has finished (lib/router.ts `routerTransitioning`) — seconds at a load average of 30+. Before that
     // fix an Escape inside the transition was undone outright: the drawer re-opened and this wait timed
     // out, 2 of 3 loaded runs (~37, 2026-09-29), taking the next step down with it.
-    await page.waitForFunction(() => location.pathname === "/", { timeout: 20_000 })
+    await page.waitForFunction((paths) => paths.includes(location.pathname), { timeout: 20_000 }, ALL_PATHS)
     await page.waitForSelector("[data-xq-card]")
     check("fullscreen's way out leads back to the drawer it came from, and the drawer's to the page", back === drawer, `/full's way out → ${back}`)
   })
@@ -437,7 +443,7 @@ try {
 
   await step("closing it hands the prompt box back to the project that was chosen", async () => {
     await closeDrawer()
-    await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
+    await page.waitForFunction((paths) => paths.includes(location.pathname), { timeout: 8000 }, ALL_PATHS)
     const back = await pickerSays("acme-api")
     check("closing it hands the prompt box back to the project that was chosen", back, `picker "${await picker()}"`)
   })
@@ -467,7 +473,7 @@ try {
     // The drawer is the PAGE's, so it addresses the tenant by the page's own prefix — its slug.
     check("a follow-up typed in a tenant's drawer goes to the tenant, not the focus's namesake", sent.length === 1 && sent[0] === "/_frizz/marketing-site/rpc/followUp", sent.join(", ") || "none")
     await closeDrawer()
-    await page.waitForFunction(() => location.pathname === "/", { timeout: 8000 })
+    await page.waitForFunction((paths) => paths.includes(location.pathname), { timeout: 8000 }, ALL_PATHS)
   })
 
   // ⌥↓ / ⌥↑ in the prompt box step it down and up the picker's order (lib/crossProject.ts stepPick): the
@@ -608,7 +614,7 @@ try {
   const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort())
   // Back to All projects, and every project's cards in it.
   const backToAll = async (count) => {
-    await page.waitForFunction(() => location.pathname === "/" && location.search === "", { timeout: 15_000 }).catch(() => {})
+    await page.waitForFunction((paths) => paths.includes(location.pathname) && location.search === "", { timeout: 15_000 }, ALL_PATHS).catch(() => {})
     await page.waitForFunction((count) => new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])).size === count, { timeout: 30_000 }, count).catch(() => {})
     await sleep(400)
     return cardProjects()

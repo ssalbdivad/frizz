@@ -14,7 +14,7 @@ async function withQueues(answers: readonly unknown[], run: (fetched: () => Prom
   const original = globalThis.fetch
   const previous = globalThis.location
   let call = 0
-  globalThis.location = { pathname: "/", search: "", origin: "http://127.0.0.1:4100" } as unknown as Location
+  globalThis.location = { pathname: "/all", search: "", origin: "http://127.0.0.1:4100" } as unknown as Location
   globalThis.fetch = (async () => new Response(JSON.stringify({ result: answers[Math.min(call++, answers.length - 1)] }), { headers: { "content-type": "application/json" } })) as typeof fetch
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   try {
