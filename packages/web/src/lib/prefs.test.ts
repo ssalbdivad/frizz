@@ -36,6 +36,13 @@ test("the rail's edited-files fold is open by default and only a boolean folds i
   assert.equal(parseStoredPrefs(JSON.stringify({ railFilesCollapsed: "yes", diffsRedefaulted: true })).railFilesCollapsed, false)
 })
 
+test("status lines are a hover by default; only a stored true writes them after the name", () => {
+  assert.equal(parseStoredPrefs(null).alwaysShowStatusLines, false)
+  assert.equal(parseStoredPrefs("not-json").alwaysShowStatusLines, false)
+  assert.equal(parseStoredPrefs(JSON.stringify({ alwaysShowStatusLines: true, diffsRedefaulted: true })).alwaysShowStatusLines, true)
+  assert.equal(parseStoredPrefs(JSON.stringify({ alwaysShowStatusLines: "yes", diffsRedefaulted: true })).alwaysShowStatusLines, false)
+})
+
 test("keyboard-shortcut overrides persist, and a bad entry falls back to its default alone", () => {
   assert.deepEqual(parseStoredPrefs(null).keybindings, {})
   assert.deepEqual(parseStoredPrefs("not-json").keybindings, {})

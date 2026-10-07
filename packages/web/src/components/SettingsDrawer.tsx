@@ -197,6 +197,15 @@ export function SettingsDrawer() {
               />
             </SettingsField>
 
+            {/* Client-only VIEW preference (prefs `alwaysShowStatusLines`), under the switch that writes
+                the status lines: with that off there are none to show, so the row goes with it. */}
+            {backgroundSummariesOn(draft) && (
+              <SettingsField label="Always show status lines" help={SETTINGS_HELP.alwaysShowStatusLines}>
+                <AlwaysShowStatusLinesToggle />
+                {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
+              </SettingsField>
+            )}
+
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
             <SlashCommandsField />
 
@@ -655,6 +664,13 @@ function DensityToggle() {
       ))}
     </div>
   )
+}
+
+// Status lines inline after each working thread's name instead of on hover: client-only (localStorage
+// prefs proxy), applies live to every thread row (Sidebar.tsx ThreadRow).
+function AlwaysShowStatusLinesToggle() {
+  const { alwaysShowStatusLines } = useSnapshot(prefs)
+  return <OnOffToggle value={alwaysShowStatusLines} onChange={(on) => (prefs.alwaysShowStatusLines = on)} />
 }
 
 // Queue/rested-band direction: client-only (localStorage prefs proxy), applies live to the Needs-you

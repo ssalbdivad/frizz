@@ -27,6 +27,8 @@ import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.t
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import { clearPinned, markPinned } from "../lib/optimisticPin.ts"
 import type { ReactElement, ReactNode } from "react"
+import { useSnapshot } from "valtio"
+import { prefs } from "../lib/prefs.ts"
 import { RailDeadline } from "./DeadlineControl.tsx"
 
 // THE THREAD ROW — one thread as a line of a list, with its indicator, its title and trailers, and the
@@ -107,8 +109,8 @@ export interface RowScope {
 // board passes `subAgentRows` so the count is not said twice. Its TERMINALS get no row and no mark
 // (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already say everything one
 // could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false, subAgentRows = false, statusOnHover = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean; subAgentRows?: boolean; statusOnHover?: boolean }) {
-  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} subAgentRows={subAgentRows} statusOnHover={statusOnHover} />
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false, subAgentRows = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean; subAgentRows?: boolean }) {
+  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} subAgentRows={subAgentRows} />
 }
 
 // A BAND'S HEADER — its glyph, its NAME and its count, over its rows. ONE source of truth for every band
@@ -299,7 +301,6 @@ export const ThreadRow = memo(function ThreadRow({
   band,
   held = false,
   subAgentRows = false,
-  statusOnHover = false,
 }: {
   t: ThreadView
   active?: boolean
@@ -321,9 +322,6 @@ export const ThreadRow = memo(function ThreadRow({
   /** Its sub-agents are rows of their own under it (a project's board, SubAgentRows), so it draws no
    *  count of them. */
   subAgentRows?: boolean
-  /** A working thread's status shows on HOVER, not inline after its name (a project's board; see
-   *  RowStatusTip). Its task clock stays at the right edge either way. */
-  statusOnHover?: boolean
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -343,14 +341,15 @@ export const ThreadRow = memo(function ThreadRow({
   // row is read-only (the server has no session to write), so its check stays a plain mark.
   const uncheckable = done && !foreign
   const dimLabel = titleIsProvisional(t)
-  // A WORKING thread's status, inline in grey after its name, and its task clock in the right-edge
-  // column a rested row gives its rest time (ThreadStatusLine.tsx statusElapsed).
+  // A WORKING thread's status, and its task clock in the right-edge column a rested row gives its rest
+  // time (ThreadStatusLine.tsx statusElapsed). The status is a hover (RowStatusTip) unless Settings →
+  // Always show status lines puts it inline in grey after the name (prefs `alwaysShowStatusLines`).
   const nowMs = useNowMs()
+  const { alwaysShowStatusLines } = useSnapshot(prefs)
   const elapsed = statusElapsed(t, nowMs)
   const working = elapsed && t.statusLine ? { status: t.statusLine.trim(), elapsed } : undefined
-  // Inline on All projects; on a project's board, a hover (statusOnHover, RowStatusTip).
-  const inlineStatus = working && !statusOnHover ? working.status : undefined
-  const hoverStatus = working && statusOnHover ? working.status : undefined
+  const inlineStatus = working && alwaysShowStatusLines ? working.status : undefined
+  const hoverStatus = working && !alwaysShowStatusLines ? working.status : undefined
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
   // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
@@ -370,14 +369,13 @@ export const ThreadRow = memo(function ThreadRow({
   // count line. Every one of them was a second, competing status beside the row's own — the rail is a column
   // of NAMES you scan, and each caption added there made the next one harder to find.
   //
-  // ONE EXCEPTION, ON THE SAME LINE: a WORKING thread's status, in grey after its name, with its task clock
-  // at the right edge (David 2026-09-29: "it shouldn't show on hover — it should display in grey text
-  // next to the name of the thread inline", short enough to fit). It costs no line, only rows that are
-  // spinning carry it, and it truncates before the name gives up a character. That is ALL PROJECTS. On a
-  // PROJECT'S BOARD (`statusOnHover`) the status is a hover again and only the clock stays on the line:
-  // Colin's call (standup 2026-10-01: always-visible status lines are too dense for the sidebar, put them
-  // in hover states, and the status symbol's hover is wasted on bare labels), taken for the board when it
-  // became the default view (2026-10-06). See RowStatusTip.
+  // A WORKING thread's status is a HOVER (RowStatusTip), and only its task clock is on the line: Colin's
+  // call (standup 2026-10-01: always-visible status lines are too dense for the sidebar, put them in hover
+  // states, and the status symbol's hover is wasted on bare labels), taken first for a project's board
+  // (2026-10-06) and then for every row (2026-10-07). ONE OPT-IN puts it ON THE SAME LINE, in grey after
+  // its name (Settings → Always show status lines, prefs `alwaysShowStatusLines`), as the maintainer had
+  // it from 2026-09-29 ("it should display in grey text next to the name of the thread inline"): it costs
+  // no line, only rows that are spinning carry it, and it truncates before the name gives up a character.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
@@ -860,10 +858,10 @@ function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry
   )
 }
 
-// ── the status hover (a board's working rows) ────────────────────────────────────────────────────
+// ── the status hover (a working row) ─────────────────────────────────────────────────────────────
 
-// A WORKING THREAD'S STATUS, ON HOVER — a project's board only (ThreadRow `statusOnHover`); All projects
-// keeps it inline. Pointing at the TITLE shows it after a short rest, and so does the state glyph's own
+// A WORKING THREAD'S STATUS, ON HOVER — every row, unless Settings → Always show status lines puts it
+// inline (ThreadRow, prefs `alwaysShowStatusLines`). Pointing at the TITLE shows it after a short rest, and so does the state glyph's own
 // tip, under the state (ThreadIndicator `status`): Colin's suggestion was the glyph, whose hover "is
 // currently wasted on simple labels like 'done' or 'needs your input'" (standup 2026-10-01), and the fork
 // learned on 2026-09-29 (6dbe4e27) that a 16px glyph alone is a target almost nobody finds, so the title,
@@ -897,8 +895,8 @@ export function ThreadIndicator({ t, status }: { t: ThreadView; status?: string 
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's STATUS is here only where the row does not show it inline (a project's board, ThreadRow
-  // `statusOnHover`): under the state, as the 2026-09-29 version had it. On All projects it is inline.
+  // The thread's STATUS is here only when the row does not show it inline (the default; ThreadRow): under
+  // the state, as the 2026-09-29 version had it.
   const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one

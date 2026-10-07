@@ -44,6 +44,11 @@ export interface Prefs {
   // known. Until 2026-10-01 the default was "frizz" and only a one-time 12s toast switched it, so a
   // human who missed the toast clicked a link with VS Code connected and got the reader.
   codeFiles: CodeFiles
+  // A working thread's status line written out after its name on every thread row, instead of shown when
+  // you point at the row (Sidebar.tsx ThreadRow). Off by default (2026-10-07): Colin's standup call of
+  // 2026-10-01, always-visible status lines are too dense for a list of names, taken from the project
+  // board (2489fc34) to every row. Per browser, beside Density: it is how this screen likes to read.
+  alwaysShowStatusLines: boolean
   // (No `sendEditorContext` here any more. The context bar's eye was a pref of the sidebar's frame from
   // 2026-10-01 to 2026-10-02; it is now the extension's `frizz.shareEditorState` (lib/editorContext.ts
   // setShareEditor), the one switch that also keeps the agents' tool out of the editor. A stored value is
@@ -75,6 +80,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     railFilesCollapsed: false,
     keybindings: {},
     codeFiles: "auto",
+    alwaysShowStatusLines: false,
     diffsRedefaulted: true,
     snoozeRedefaulted: true,
     codeFilesRedefaulted: true,
@@ -115,6 +121,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
       keybindings: sanitizeOverrides(stored.keybindings),
       codeFiles: stored.codeFiles === "editor" || stored.codeFiles === "frizz" ? stored.codeFiles : "auto",
+      alwaysShowStatusLines: stored.alwaysShowStatusLines === true,
     }
   } catch {
     return fallback
