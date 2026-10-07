@@ -80,19 +80,22 @@ fix round, and a slow read's answer fell out of it.
 | No schedule word, or the reading's phrase dismissed | Starts the thread |
 | A schedule reading of exactly these words | Creates it |
 | The answer for these words is none, or a refusal already on screen | Starts the thread |
-| No answer for these words yet | Holds (below) |
-| "Couldn't check for a schedule" on screen for these words | Starts the thread |
+| No answer for these words yet (or a read that failed while typing) | Defers (below) |
 
-A held Enter spins the send button at once. After 250ms it shows "Checking for a schedule…". The answer then decides:
-- a schedule creates it, and none starts the thread;
-- a refusal or a failure stops on its line, and the NEXT Enter starts the thread;
-- typing, a file pasted or dropped into the box, or Esc cancels the hold;
-- after 15s it gives up: "Couldn't check for a schedule. Enter starts it now." with "Try again".
+**Enter never waits on the model (rev 2026-10-07; maintainer: "change checking for a schedule so that it doesnt delay
+submitting the prompt").** A deferred Enter takes the whole draft out of the box at once — the words, chips, pick,
+limit — and the toast says "Checking for a schedule…". The dispatch input and a schedule's prompt are both built from
+that snapshot at the Enter (`NewThreadModal detach`), so the box is free for the next prompt and the `c` dialog closes.
+The answer then settles it (`settleAct`, `awaitReading`):
+- a schedule is created, and its toast names it ("Triage issues scheduled · Every Monday at 9am · next Mon Oct 12, in
+  6d", Undo, Open); Undo merges the words back into the box, dismissed;
+- none, or a reading dismissed before Enter, starts the thread;
+- a refusal or a failed or 15s-unanswered read starts the thread, and its toast says why.
 
-Nothing is ever dispatched silently in place of a schedule the human may have meant. The machine is the pure
-`submitStep` in `scheduleIntent.ts`, which `ScheduleComposer.tsx` only executes. A hold belongs to the DRAFT
-(`claimDraftHold`): with the `c` dialog over the page box, the newest Enter holds and the other box lets go, and
-acting on the draft ends every hold on it.
+Nothing is ever dispatched silently in place of a schedule the human may have meant: the toast is the line. Until
+2026-10-07 the Enter HELD in the box instead — the send spun, "Checking for a schedule…" showed under it, typing or
+Esc cancelled it, and a failure stopped on its line for a second Enter. That machine (`submitStep`, the per-draft
+`claimDraftHold`) is gone with it.
 
 A create keeps the existing success path: the toast (8s Undo window) and the flash on the project row's schedule
 count. While it is in flight it owns its draft (`beginDraftCreate`): a re-aim does not carry the words, and Undo waits

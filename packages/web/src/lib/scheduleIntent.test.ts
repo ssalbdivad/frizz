@@ -1,16 +1,16 @@
 // What the prompt box makes of the model's answer and what each submit does with it (scheduleIntent.ts) — the
 // 2026-10-06 design's D5, branch by branch, as pure steps: no trigger or a dismissed reading dispatches; a reading
-// of exactly the current words creates or dispatches; no reading yet HOLDS until the answer lands, typing cancels
-// the hold, a failure or a timeout stops with a line and the NEXT Enter dispatches; Undo leaves the reading
-// dismissed. And the strip: nothing without a schedule word, the reading of earlier words kept while new ones are
+// of exactly the current words creates or dispatches; no reading yet DEFERS — the words leave at once and their
+// reading settles them, a failure or a refusal starting the thread with a note; Undo leaves the reading dismissed. And the strip: nothing without a schedule word, the reading of earlier words kept while new ones are
 // read (stale-while-revalidate), a "no schedule" answer taking it away.
 import assert from "node:assert/strict"
 import test from "node:test"
 import { SCHEDULE_NOT_FOUND_COPY, SCHEDULE_PRESENCE_COPY, SCHEDULE_SPACING_COPY, type InterpretScheduleResult } from "@frizz/shared"
 import {
   NO_TASK_COPY,
-  SUBMIT_READY,
+  UNCHECKED_NOTE,
   classifyResult,
+  dismissalCovers,
   dismissedPhrase,
   isDismissed,
   knownOf,
@@ -19,11 +19,10 @@ import {
   phraseSpan,
   readTextOf,
   stripLook,
+  settleAct,
   stripView,
-  submitStep,
+  submitAct,
   type ScheduleKnown,
-  type SubmitFacts,
-  type SubmitPhase,
 } from "./scheduleIntent.ts"
 import type { ModelReadOk } from "./scheduleModelRead.ts"
 
@@ -47,20 +46,8 @@ const NONE: ScheduleKnown = { kind: "none" }
 const PENDING: ScheduleKnown = { kind: "pending" }
 const FAILED: ScheduleKnown = { kind: "failed" }
 
-const facts = (over: Partial<SubmitFacts> = {}): SubmitFacts => ({ text: TEXT, trigger: true, known: PENDING, dismissed: undefined, ...over })
-
-/** Run events through the machine from `phase`, collecting every run it asks for. */
-function drive(phase: SubmitPhase, steps: [event: Parameters<typeof submitStep>[1], facts: SubmitFacts][]) {
-  const runs: string[] = []
-  for (const [event, f] of steps) {
-    const next = submitStep(phase, event, f)
-    phase = next.phase
-    if (next.then) runs.push(next.then.run)
-  }
-  return { phase, runs }
-}
-const enter = { type: "enter" as const, now: 1_000 }
-const update = { type: "update" as const }
+type Facts = Parameters<typeof submitAct>[0]
+const facts = (over: Partial<Facts> = {}): Facts => ({ trigger: true, known: PENDING, dismissed: undefined, ...over })
 
 // ---- the model's answer --------------------------------------------------------------------------------------
 
@@ -119,9 +106,10 @@ test("\"not a schedule\" said over an UPDATING strip is about the words on scree
   // …and once it lands, that reading — whatever its phrase.
   assert.equal(dismissedPhrase(pending, SCHEDULE, earlier), PHRASE)
   assert.equal(isDismissed(READING, dismissedPhrase(pending, SCHEDULE, earlier)), true)
-  // A held Enter landing on that answer starts the thread.
-  const held = submitStep(SUBMIT_READY, enter, facts({ dismissed: dismissedPhrase(pending, PENDING, earlier) })).phase
-  assert.deepEqual(submitStep(held, update, facts({ known: SCHEDULE, dismissed: dismissedPhrase(pending, SCHEDULE, earlier) })).then, { run: "dispatch" })
+  // An Enter deferred before that answer lands starts the thread on it, whatever its phrase.
+  assert.deepEqual(submitAct(facts({ dismissed: dismissedPhrase(pending, PENDING, earlier) })), { act: "defer" })
+  assert.deepEqual(settleAct(SCHEDULE as ReturnType<typeof classifyResult>, dismissalCovers(pending)), { act: "dispatch" })
+  assert.deepEqual(settleAct(SCHEDULE as ReturnType<typeof classifyResult>, dismissalCovers({ phrase: "every Tuesday" })).act, "create")
   // The draft then keeps the phrase it now holds for, so later edits are judged against it as usual.
   assert.deepEqual(nextDismissal({ trigger: true, known: SCHEDULE, dismissal: pending }), { adopt: PHRASE })
   assert.equal(nextDismissal({ trigger: true, known: PENDING, dismissal: pending }), "keep", "still being read")
@@ -139,109 +127,40 @@ test("\"not a schedule\" said over an UPDATING strip is about the words on scree
 // ---- D5: submit, branch by branch ------------------------------------------------------------------------------
 
 test("D5: no schedule word, or the reading dismissed → dispatch exactly as today", () => {
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ trigger: false, known: PENDING })]]), { phase: SUBMIT_READY, runs: ["dispatch"] })
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ known: SCHEDULE, dismissed: PHRASE })]]), { phase: SUBMIT_READY, runs: ["dispatch"] })
+  assert.deepEqual(submitAct(facts({ trigger: false, known: PENDING })), { act: "dispatch" })
+  assert.deepEqual(submitAct(facts({ known: SCHEDULE, dismissed: PHRASE })), { act: "dispatch" })
 })
 
 test("D5: a reading for the current words in hand → create it if it is a schedule, else dispatch", () => {
-  const created = submitStep(SUBMIT_READY, enter, facts({ known: SCHEDULE }))
-  assert.deepEqual(created, { phase: SUBMIT_READY, then: { run: "create", result: READING } })
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ known: NONE })]]).runs, ["dispatch"])
+  assert.deepEqual(submitAct(facts({ known: SCHEDULE })), { act: "create", result: READING })
+  assert.deepEqual(submitAct(facts({ known: NONE })), { act: "dispatch" })
 })
 
-test("D5: no reading for the current words yet → HOLD and read; the answer landing decides", () => {
-  const held = submitStep(SUBMIT_READY, enter, facts())
-  assert.deepEqual(held, { phase: { kind: "holding", text: TEXT, since: 1_000 }, then: { run: "read" } })
-  // Still nothing known: keep holding, ask nothing more.
-  assert.deepEqual(submitStep(held.phase, update, facts()), { phase: held.phase })
-  // A schedule lands: create it.
-  assert.deepEqual(submitStep(held.phase, update, facts({ known: SCHEDULE })), { phase: SUBMIT_READY, then: { run: "create", result: READING } })
-  // No schedule lands: start it now.
-  assert.deepEqual(submitStep(held.phase, update, facts({ known: NONE })), { phase: SUBMIT_READY, then: { run: "dispatch" } })
-  // The reading lands but was dismissed meanwhile (Esc on a stale strip): start it now.
-  assert.deepEqual(submitStep(held.phase, update, facts({ known: SCHEDULE, dismissed: PHRASE })).then, { run: "dispatch" })
+test("Enter never waits on the model: no reading yet, or a read that failed while typing, DEFERS", () => {
+  assert.deepEqual(submitAct(facts({ known: PENDING })), { act: "defer" })
+  assert.deepEqual(submitAct(facts({ known: FAILED })), { act: "defer" })
 })
 
-test("D5: a second Enter during the hold changes nothing; Esc cancels the hold and is claimed", () => {
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  assert.deepEqual(submitStep(held, { type: "enter", now: 2_000 }, facts()), { phase: held })
-  assert.deepEqual(submitStep(held, { type: "escape" }, facts()), { phase: SUBMIT_READY })
-  assert.deepEqual(submitStep(SUBMIT_READY, { type: "escape" }, facts()), { phase: SUBMIT_READY }, "with nothing held, Esc is not the machine's")
+test("a refusal at Enter: its line is on screen, saying Enter starts it now, so it does", () => {
+  assert.deepEqual(submitAct(facts({ known: { kind: "refused", copy: SCHEDULE_SPACING_COPY } })), { act: "dispatch" })
 })
 
-test("the hold line's Skip says there is no schedule: the held Enter starts the thread now, without the answer", () => {
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  assert.deepEqual(submitStep(held, { type: "skip" }, facts()), { phase: SUBMIT_READY, then: { run: "dispatch" } })
-  assert.deepEqual(submitStep(held, { type: "skip" }, facts({ uploading: true })), { phase: held }, "never without a file still uploading")
-  assert.deepEqual(submitStep(SUBMIT_READY, { type: "skip" }, facts()), { phase: SUBMIT_READY }, "with nothing held, it does nothing")
-})
-
-test("D5: typing during the hold cancels it — nothing runs — and Enter again submits the new words", () => {
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  const typed = `${TEXT} and label them`
-  const cancelled = submitStep(held, update, facts({ text: typed }))
-  assert.deepEqual(cancelled, { phase: SUBMIT_READY }, "cancelled, with no dispatch and no create")
-  // The answer for the OLD words lands after the edit: it is not the new words' answer, and nothing acts on it.
-  assert.deepEqual(submitStep(cancelled.phase, update, facts({ text: typed, known: PENDING })), { phase: SUBMIT_READY })
-  assert.deepEqual(submitStep(cancelled.phase, { type: "enter", now: 3_000 }, facts({ text: typed })).phase, { kind: "holding", text: typed, since: 3_000 })
-})
-
-test("D5: the read failing at submit never dispatches silently: the line, then the NEXT Enter dispatches", () => {
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  const failed = submitStep(held, update, facts({ known: FAILED }))
-  assert.deepEqual(failed, { phase: { kind: "failed", text: TEXT } }, "no run: nothing starts")
-  assert.deepEqual(drive(failed.phase, [[enter, facts({ known: FAILED })]]), { phase: SUBMIT_READY, runs: ["dispatch"] })
-  // A read still out for those words when the line is up (Try again's, or an automatic one): Enter dispatches too.
-  assert.deepEqual(drive(failed.phase, [[enter, facts({ known: PENDING })]]).runs, ["dispatch"])
-})
-
-test("D5: the hold timing out (15s) is a failure too: the line, then the next Enter dispatches", () => {
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  const timedOut = submitStep(held, { type: "timeout" }, facts())
-  assert.deepEqual(timedOut, { phase: { kind: "failed", text: TEXT } })
-  assert.deepEqual(drive(timedOut.phase, [[enter, facts()]]).runs, ["dispatch"])
-  assert.deepEqual(submitStep(SUBMIT_READY, { type: "timeout" }, facts()), { phase: SUBMIT_READY }, "a stray timer does nothing")
-})
-
-test("an upload started during the hold cancels it, as typing does: nothing is sent without the file (finding C)", () => {
-  // The held Enter used to act on the answer with an image still uploading, and the image was dropped — the very
-  // send the Composer's \`!uploading\` gate refuses.
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  assert.deepEqual(submitStep(held, update, facts({ uploading: true })), { phase: SUBMIT_READY }, "cancelled")
-  assert.deepEqual(submitStep(held, update, facts({ known: SCHEDULE, uploading: true })), { phase: SUBMIT_READY }, "and nothing created mid-upload")
-  assert.deepEqual(submitStep(SUBMIT_READY, enter, facts({ known: SCHEDULE, uploading: true })), { phase: SUBMIT_READY }, "an Enter mid-upload does nothing")
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ known: SCHEDULE })]]).runs, ["create"], "once it lands, Enter acts")
-})
-
-test("a read that failed while TYPING is not the failure line: Enter holds and reads again", () => {
-  assert.deepEqual(submitStep(SUBMIT_READY, enter, facts({ known: FAILED })).then, { run: "read" })
-})
-
-test("the failure line is about its words while nothing is known for them: an edit, or an answer, takes it away", () => {
-  const failed: SubmitPhase = { kind: "failed", text: TEXT }
-  assert.deepEqual(submitStep(failed, update, facts({ known: PENDING })), { phase: failed })
-  assert.deepEqual(submitStep(failed, update, facts({ text: `${TEXT}!` })), { phase: SUBMIT_READY })
-  assert.deepEqual(submitStep(failed, update, facts({ known: SCHEDULE })), { phase: SUBMIT_READY }, "a late answer replaces the line with the strip")
-  // Try again: hold and read once more, even with the line up.
-  assert.deepEqual(submitStep(failed, { type: "enter", now: 5_000, retry: true }, facts({ known: FAILED })), {
-    phase: { kind: "holding", text: TEXT, since: 5_000 },
-    then: { run: "read" },
-  })
-})
-
-test("a refusal (too frequent, at the keyboard, no task) — at Enter its line is on screen, so it dispatches; landing on a held Enter it stops", () => {
-  const refused: ScheduleKnown = { kind: "refused", copy: SCHEDULE_SPACING_COPY }
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ known: refused })]]).runs, ["dispatch"])
-  const held = submitStep(SUBMIT_READY, enter, facts()).phase
-  assert.deepEqual(submitStep(held, update, facts({ known: refused })), { phase: SUBMIT_READY }, "stopped: the human pressed Enter before they could read it")
+test("a deferred submit settles on its reading: a schedule is created, anything else starts the thread — never silently", () => {
+  const on = () => false
+  assert.deepEqual(settleAct({ kind: "schedule", result: READING }, on), { act: "create", result: READING })
+  assert.deepEqual(settleAct({ kind: "none" }, on), { act: "dispatch" })
+  // A reading dismissed before Enter (Esc on a stale strip): start it.
+  assert.deepEqual(settleAct({ kind: "schedule", result: READING }, () => true), { act: "dispatch" })
+  // A schedule word that did not make a schedule says why on the thread's toast.
+  assert.deepEqual(settleAct({ kind: "refused", copy: SCHEDULE_SPACING_COPY }, on), { act: "dispatch", note: SCHEDULE_SPACING_COPY })
+  assert.deepEqual(settleAct({ kind: "failed" }, on), { act: "dispatch", note: UNCHECKED_NOTE })
 })
 
 test("Undo → the words come back with their reading DISMISSED: Enter starts them now; Schedule it takes that back", () => {
   // What Undo writes (ScheduleComposer `undo`): the phrase dismissed, as undone. The words' reading is cached.
-  const undone = facts({ known: SCHEDULE, dismissed: PHRASE })
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, undone]]).runs, ["dispatch"])
+  assert.deepEqual(submitAct(facts({ known: SCHEDULE, dismissed: PHRASE })), { act: "dispatch" })
   // "Schedule it" clears the dismissal: Enter creates again.
-  assert.deepEqual(drive(SUBMIT_READY, [[enter, facts({ known: SCHEDULE })]]).runs, ["create"])
+  assert.deepEqual(submitAct(facts({ known: SCHEDULE })).act, "create")
 })
 
 // ---- the strip -----------------------------------------------------------------------------------------------

@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ArrowRight, Repeat, X } from "lucide-react"
+import { Repeat, X } from "lucide-react"
 import {
   cutPhrase,
   hasScheduleTrigger,
@@ -17,33 +17,27 @@ import {
   SCHEDULE_DRAFT_NONE,
   afterDraftCreates,
   beginDraftCreate,
-  claimDraftHold,
-  draftHolder,
-  releaseDraftHold,
   useDraftCreating,
-  useDraftHolder,
   useScheduleDraftState,
   writeScheduleDraftState,
 } from "../lib/scheduleDraftState.ts"
-import { modelReadKey, useModelReader, useNewestAnswer, type ModelReadOk } from "../lib/scheduleModelRead.ts"
+import { awaitReading, modelReadKey, useModelReader, useNewestAnswer, type ModelReadOk } from "../lib/scheduleModelRead.ts"
 import { classifyEdit, createReadScheduler, type BoxInputEvent, type ChangeKind, type ReadScheduler } from "../lib/scheduleReadScheduler.ts"
 import {
   NO_TASK_COPY,
-  SUBMIT_READY,
   classifyResult,
+  dismissalCovers,
   dismissedPhrase,
   knownOf,
   nextDismissal,
   phraseSpan,
   readTextOf,
+  settleAct,
   stripLook,
   stripView,
-  submitStep,
+  submitAct,
   type ScheduleKnown,
   type StripView,
-  type SubmitEvent,
-  type SubmitFacts,
-  type SubmitPhase,
 } from "../lib/scheduleIntent.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -64,7 +58,9 @@ import type { ComposerMark } from "./Composer.tsx"
 // and the send button wears ↻: Enter creates that schedule. × (or Esc) says "not a schedule", and Enter starts
 // the thread. Text with no schedule word looks exactly as the box always has; words with one that turn out not
 // to be a schedule ("fix the bug from this morning") show nothing but a faint mark on the word while the read is
-// out. What each submit does is lib/scheduleIntent.ts (`submitStep`), pure and tested; this file executes it.
+// out. What each submit does is lib/scheduleIntent.ts (`submitAct`, `settleAct`), pure and tested; this file
+// executes it. Enter never waits on the model: words it has not read yet leave the box at once, and a toast says
+// what they became once their reading lands.
 
 /** What the box hands in. */
 export interface LiveScheduleInput {
@@ -81,10 +77,13 @@ export interface LiveScheduleInput {
   promptOf: (cutProse: string) => string
   /** The model/effort the box would dispatch on. Undefined while the profile is loading. */
   profile: { model: string; backend: CreateScheduleInput["backend"]; effort: CreateScheduleInput["effort"] } | undefined
-  /** A file is uploading into the draft: Enter waits for it, and it cancels a held Enter (lib/scheduleIntent.ts). */
+  /** A file is uploading into the draft: Enter waits for it. */
   uploading?: boolean
   /** Start the thread now: the box's own dispatch, exactly as it is without schedules. */
   startNow: () => void
+  /** Submit words not read yet: take the draft out of the box NOW and hand back what it can become once the reading
+   *  lands. Undefined when the box refused the submit (and said why), with the draft left as it was. */
+  detach: () => DetachedDraft | undefined
   /** The draft became a schedule: take it out of the box (`submittedProse` is what was read; anything typed
    *  after it stays). Returns how to put it back, for Undo. The one handed in at the Enter that created it is
    *  the one called, so the words leave the draft they were created from even if the box has since been
@@ -92,6 +91,17 @@ export interface LiveScheduleInput {
   onCreated: (submittedProse: string) => () => void
   /** Focus the box (this one, or the page's when this one is gone), caret at the end. */
   focus: () => void
+}
+
+/** A submitted draft whose reading has not landed: everything it needs to become a thread or a schedule, captured
+ *  at the Enter, so neither depends on the box — which may hold other words, or be gone, by then. */
+export interface DetachedDraft {
+  /** Start it as a thread; `note` rides on its toast. */
+  dispatch: (note?: string) => void
+  /** The prompt a schedule would save for the CUT prose, as `LiveScheduleInput.promptOf`, over the captured draft. */
+  promptOf: (cutProse: string) => string
+  /** Put the draft back into the box (merged with anything typed since): an Undo. */
+  restore: () => void
 }
 
 export interface LiveSchedule {
@@ -104,21 +114,20 @@ export interface LiveSchedule {
   /** What Enter does, on the button that does it: ↻ while Enter creates a schedule. */
   sendGlyph: "send" | "schedule"
   sendTitle: string | undefined
-  /** The send is held — a check for a schedule, or a create, in flight: the button spins, the text stays live. */
+  /** A create is in flight: the button spins, the text stays live. */
   sendPending: boolean
   /** A schedule is being created from the draft's words: nothing else may take them (a lazy save). */
   creating: boolean
   /** Enter, the send button, the phone's send. */
   submit: () => void
-  /** Esc in the box: takes the strip away ("not a schedule"), or cancels a held Enter. False when it did nothing. */
+  /** Esc in the box: takes the strip away ("not a schedule"). False when it did nothing. */
   onEscape: () => boolean
   onInputEvent: (e: BoxInputEvent) => void
 }
 
 // ---- copy -------------------------------------------------------------------------------------------------------
 
-export const HOLD_COPY = "Checking for a schedule…"
-export const FAIL_COPY = "Couldn't check for a schedule."
+export const CHECKING_COPY = "Checking for a schedule…"
 export const UNDONE_COPY = "Schedule undone."
 /** What every line that is not a schedule ends with: what Enter does now. A phone names its send button. */
 export const startsNow = (phone: boolean) => (phone ? "Send starts it now." : "Enter starts it now.")
@@ -128,10 +137,6 @@ const UNNAMED_TITLE = "Scheduled run"
 
 // ---- timing -----------------------------------------------------------------------------------------------------
 
-/** A held Enter shows its line only after this long: an answer already on its way never flashes it. */
-const HOLD_NOTE_DELAY_MS = 250
-/** A held Enter gives up after this long: "Couldn't check for a schedule". */
-export const HOLD_TIMEOUT_MS = 15_000
 /** A reading still on screen while the next is read shimmers only after this long, so a fast answer never
  *  flickers it. */
 const UPDATING_DELAY_MS = 250
@@ -164,7 +169,12 @@ type CreateJob = {
   draftKey: string
   onCreated: LiveScheduleInput["onCreated"]
   landed: () => void
+  /** A detached draft's words are no longer in the box: a failed create puts them back. */
+  onFailed?: () => void
 }
+
+/** Where a create's words come from: the box as it is now, or a draft that left the box at its Enter. */
+type CreateSource = Pick<LiveScheduleInput, "prose" | "promptOf" | "profile" | "draftKey" | "onCreated"> & { detached?: DetachedDraft }
 
 export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   const { draftKey, prose, exclude, promptOf } = input
@@ -294,6 +304,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     },
     onError: (error, job) => {
       job.landed()
+      job.onFailed?.()
       showToast(`Could not create the schedule: ${(error as Error).message.slice(0, 100)}`)
     },
   })
@@ -320,22 +331,24 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
     )
   }
 
-  /** Create `result`, read from exactly the words in the box now (the submit machine never hands it another). */
-  const commit = (result: ModelReadOk) => {
-    const now = latest.current
-    if (!now.profile || creatingRef.current) return
-    const words = now.prose
+  /** Create `result`, read from exactly `src.prose` (the submit never hands it another reading). */
+  const commit = (result: ModelReadOk, src: CreateSource = latest.current) => {
+    if (!src.profile || (!src.detached && creatingRef.current)) return false
+    const words = src.prose
     const span = phraseSpan(words, readTextOf(words), result)
-    const prompt = span ? now.promptOf(cutPhrase(words, span)) : ""
-    if (!prompt) return
+    const prompt = span ? src.promptOf(cutPhrase(words, span)) : ""
+    if (!prompt) return false
     const named = result.title.trim() !== "" && result.title !== UNNAMED_TITLE
+    const detached = src.detached
     create.mutate({
       prose: words,
       phrase: result.phrase,
-      startedAt: Date.now(),
-      draftKey: now.draftKey,
-      onCreated: now.onCreated,
-      landed: beginDraftCreate(now.draftKey),
+      // A detached draft has left the box already: no wash, nothing for the box to wait on.
+      startedAt: detached ? 0 : Date.now(),
+      draftKey: src.draftKey,
+      onCreated: src.onCreated,
+      landed: detached ? () => {} : beginDraftCreate(src.draftKey),
+      ...(detached ? { onFailed: detached.restore } : {}),
       input: {
         // The model's title when it gave one; else the box's provisional title, which the namer replaces.
         title: named ? result.title : provisionalScheduleTitle(prompt),
@@ -346,81 +359,51 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
         dtstart: result.dtstart,
         tz: result.tz,
         ...(result.condition ? { condition: result.condition } : {}),
-        model: now.profile.model,
-        ...(now.profile.backend ? { backend: now.profile.backend } : {}),
-        ...(now.profile.effort ? { effort: now.profile.effort } : {}),
+        model: src.profile.model,
+        ...(src.profile.backend ? { backend: src.profile.backend } : {}),
+        ...(src.profile.effort ? { effort: src.profile.effort } : {}),
       },
     })
+    return true
   }
 
   // ---- submit -----------------------------------------------------------------------------------------------
 
-  // THE SUBMIT MACHINE (lib/scheduleIntent.ts `submitStep`): Enter dispatches, creates, or HOLDS for the answer
-  // about exactly these words — the send spins and, after a beat, a line says what it is waiting for; typing
-  // cancels it; it gives up after HOLD_TIMEOUT_MS with "Couldn't check for a schedule", and the next Enter starts
-  // the thread. This hook only runs the steps.
-  //
-  // ONE HELD ENTER PER DRAFT (lib/scheduleDraftState.ts `claimDraftHold`): the page box and the `c` dialog over it
-  // are two boxes on one draft, and with a hold each, one answer acted in both. A box's hold lasts while the draft
-  // says it is that box's: the newest Enter takes it, and acting on the draft ends every hold on it.
-  const [phase, setPhase] = useState<SubmitPhase>(SUBMIT_READY)
-  const phaseRef = useRef(phase)
-  const facts: SubmitFacts = { text, trigger, known, dismissed, uploading: input.uploading === true }
+  // Enter dispatches, creates, or — for words the model has not answered yet — DEFERS (lib/scheduleIntent.ts
+  // `submitAct`): the words leave the box at once (`detach`), and their reading, when it lands, settles them
+  // (`settleAct`): a schedule is created and its toast says what was detected, anything else starts the thread.
+  // Until 2026-10-07 that Enter HELD in the box, spinning, until the answer landed (up to 15s).
+  const facts = { trigger, known, dismissed }
   const factsRef = useRef(facts)
   factsRef.current = facts
-  const me = useRef<symbol | null>(null)
-  me.current ??= Symbol("schedule box")
-  /** The draft this box's hold is on (the box may be re-aimed while it holds). */
-  const heldOn = useRef<string | null>(null)
-  const step = (event: SubmitEvent) => {
-    let from = phaseRef.current
-    // Another box on the draft took the hold, or the draft was acted on: this box's hold is over, and it acts on
-    // nothing — not even an answer landing in this same effect pass.
-    if (from.kind === "holding" && (heldOn.current === null || draftHolder(heldOn.current) !== me.current)) {
-      from = SUBMIT_READY
-      heldOn.current = null
-    }
-    const next = submitStep(from, event, factsRef.current)
-    if (next.phase.kind === "holding" && from.kind !== "holding") {
-      heldOn.current = latest.current.draftKey
-      claimDraftHold(heldOn.current, me.current!)
-    } else if (next.phase.kind !== "holding" && heldOn.current !== null) {
-      releaseDraftHold(heldOn.current, me.current!)
-      heldOn.current = null
-    }
-    if (next.phase !== phaseRef.current) {
-      phaseRef.current = next.phase
-      setPhase(next.phase)
-    }
-    const then = next.then
-    if (!then) return
-    // The draft is taken: any other box's Enter held on it is over.
-    if (then.run !== "read") releaseDraftHold(latest.current.draftKey)
-    if (then.run === "dispatch") latest.current.startNow()
-    else if (then.run === "create") commit(then.result)
-    // A held Enter always asks, past the budget; a text already out is not sent twice.
-    else readerRef.current.request(factsRef.current.text, { explicit: true })
+
+  const defer = () => {
+    const now = latest.current
+    const words = now.prose
+    const readText = readTextOf(words)
+    // "Not a schedule" said before Enter covers what lands — a pending one, whatever lands (`dismissalCovers`).
+    const covers = dismissalCovers(record)
+    const reader = readerRef.current
+    const detached = now.detach()
+    if (!detached) return
+    showToast(CHECKING_COPY, { spinner: true, sticky: true })
+    const src: CreateSource = { prose: words, promptOf: detached.promptOf, profile: now.profile, draftKey: now.draftKey, onCreated: () => detached.restore, detached }
+    void awaitReading(reader, readText).then((view) => {
+      const answer = view.status === "answered"
+        ? classifyResult(view.result, vetter(words, readText, detached.promptOf))
+        : { kind: "failed" as const }
+      const act = settleAct(answer, covers)
+      if (act.act === "create" && commit(act.result, src)) return
+      detached.dispatch(act.act === "dispatch" ? act.note : undefined)
+    })
   }
-  const stepRef = useRef(step)
-  stepRef.current = step
-  const holder = useDraftHolder(draftKey)
-  useEffect(() => () => {
-    if (heldOn.current !== null) releaseDraftHold(heldOn.current, me.current!)
-  }, [])
-  // The answer landing, an edit, an upload, a dismissal, the hold moving to another box: a held Enter acts on what
-  // is now known, or is cancelled.
-  useEffect(() => stepRef.current({ type: "update" }), [text, trigger, known, dismissed, facts.uploading, holder])
-  useEffect(() => {
-    if (phase.kind !== "holding") return
-    const t = setTimeout(() => stepRef.current({ type: "timeout" }), Math.max(0, HOLD_TIMEOUT_MS - (Date.now() - phase.since)))
-    return () => clearTimeout(t)
-  }, [phase])
-  const holding = phase.kind === "holding"
-  const holdNote = useDelayedTrue(holding, HOLD_NOTE_DELAY_MS)
 
   const submit = () => {
-    if (creatingRef.current) return
-    step({ type: "enter", now: Date.now() })
+    if (creatingRef.current || latest.current.uploading) return
+    const act = submitAct(factsRef.current)
+    if (act.act === "dispatch") latest.current.startNow()
+    else if (act.act === "create") commit(act.result)
+    else defer()
   }
 
   // ---- what the box draws -------------------------------------------------------------------------------------
@@ -437,12 +420,7 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   // while the read for these words is out or due (once the typing rests, or again, expired); faint and still,
   // with a plain send, when no read is coming (the budget spent, the read failed): Enter checks first.
   const look = stripLook(strip, view.status === "reading" || view.status === "none" || view.status === "expired")
-  const failed = phase.kind === "failed" && phase.text === text
   const onEscape = () => {
-    if (phaseRef.current.kind === "holding") {
-      step({ type: "escape" })
-      return true
-    }
     if (strip.kind === "schedule" && !creating) {
       dismiss(strip)
       return true
@@ -454,30 +432,13 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
   if (strip.kind === "schedule") {
     const span = phraseSpan(prose, strip.readText, strip.result)
     if (span) marks.push({ ...span, tone: creating ? "wash" : "accepted", key: `p:${span.start}` })
-  } else if (strip.kind === "pending" && !holding) {
+  } else if (strip.kind === "pending") {
     // The faint cue: a read of these words is out. It fades in late (styles.css), so a quick answer never shows it.
     for (const s of scheduleTriggerSpans(prose, exclude)) marks.push({ start: s.start, end: s.end, tone: "pending", key: `t:${s.start}` })
   }
 
   let line: { kind: string; node: ReactNode; announce: string } | null = null
-  if (holding && holdNote) {
-    // Skip answers for the model: nothing to schedule here, start the thread now. Not a × — that reads as closing
-    // the line, and this one sends.
-    const line_ = (
-      <>
-        <span data-schedule-copy className="min-w-0 flex-1 shimmer-text">{HOLD_COPY}</span>
-        <SkipButton phone={phone} onClick={() => step({ type: "skip" })} />
-      </>
-    )
-    line = { kind: "hold", announce: HOLD_COPY, node: <ScheduleSlot kind="hold" phone={phone} line={line_} /> }
-  } else if (failed) {
-    const copy = `${FAIL_COPY} ${startsNow(phone)}`
-    line = {
-      kind: "failed",
-      announce: copy,
-      node: <ScheduleSlot kind="failed" phone={phone} line={<CopyLine copy={copy} action={{ label: "Try again", run: () => step({ type: "enter", now: Date.now(), retry: true }) }} />} />,
-    }
-  } else if (strip.kind === "schedule") {
+  if (strip.kind === "schedule") {
     const each = eachRun(prose, strip.readText, strip.result, promptOf)
     const describe = describeRule(strip.result.rrule, strip.result.dtstart, strip.result.tz)
     line = {
@@ -515,15 +476,15 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   const current = line?.node ?? null
   const slot = useLinger(current, SLOT_LINGER_MS)
-  const schedules = look.scheduleGlyph && !holding
+  const schedules = look.scheduleGlyph
   return {
     marks,
     slot,
     slotOpen: current !== null,
     announcement,
     sendGlyph: schedules ? "schedule" : "send",
-    sendTitle: holding ? HOLD_COPY : creating ? "Creating the schedule…" : schedules ? (phone ? "Create schedule" : "Create schedule (Enter)") : undefined,
-    sendPending: holding || creating,
+    sendTitle: creating ? "Creating the schedule…" : schedules ? (phone ? "Create schedule" : "Create schedule (Enter)") : undefined,
+    sendPending: creating,
     creating,
     submit,
     onEscape,
@@ -723,28 +684,6 @@ function StripLine({ result, nowMs, tz, phone, updating, stale, onClose }: {
       </span>
       {close}
     </>
-  )
-}
-
-/** The hold line's `Skip →`: not a schedule, so start the thread without waiting for the check. The arrow says it
- *  goes somewhere, which a × would not. Its ink ends at the line's 10px inset, where the strip's × ends: the arrow
- *  paints 2.5 of each 12px box side empty (lucide's 5–19 of 24), trimmed off with `-mr`. `gap-px` + that 2.5px
- *  + the p's side bearing puts ~4px of ink between the word and the arrow. On the cap band by the house lift.
- *  The phone's is a 32px-tall hit area, taken back off the layout so the 20px line sets the row's height. */
-function SkipButton({ phone, onClick }: { phone: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      data-schedule-skip
-      aria-label="Not a schedule, start it now"
-      title={phone ? undefined : "Not a schedule, start it now"}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={`ml-auto inline-flex shrink-0 items-baseline gap-px rounded-sm text-fg/80 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${phone ? "-my-1.5 -mr-[12.5px] py-1.5 pl-2 pr-2.5 active:text-fg" : "-mr-[2.5px]"}`}
-    >
-      Skip
-      <ArrowRight size={12} strokeWidth={2} aria-hidden className="shrink-0 translate-y-[calc(0.5em_-_0.5cap)] self-baseline" />
-    </button>
   )
 }
 

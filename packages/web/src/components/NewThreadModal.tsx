@@ -30,7 +30,7 @@ import { parseAccountAlias } from "../lib/signIn.ts"
 import { PROMPT_CONTROL_TYPOGRAPHY_CLASS } from "../lib/promptControlTypography.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 import { phoneLayout } from "../lib/mobile.ts"
-import { useLiveSchedule } from "./ScheduleComposer.tsx"
+import { useLiveSchedule, type DetachedDraft } from "./ScheduleComposer.tsx"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
 import { resolveDraftDeadline } from "../lib/threadDeadline.ts"
 import { DispatchTimeLimit } from "./DeadlineControl.tsx"
@@ -165,18 +165,20 @@ function PromptForm({
   // Dispatch does NOT navigate anywhere: you stay on the queue, the new thread appears in the
   // sidebar, and the toast walks through the lifecycle — an immediate spinner while the server
   // waits out session startup, then a link that opens the thread in the side drawer.
+  // `note`: why words with a schedule word in them started as a thread (ScheduleComposer `defer`) — said on the
+  // toast, never sent.
   const dispatch = useMutation({
-    mutationFn: (input: DispatchInput) => {
+    mutationFn: ({ note: _note, ...input }: DispatchInput & { note?: string }) => {
       const project = projectSlug()
       return rpc.dispatch(input).then((res) => ({ ...res, project }))
     },
-    onMutate: () => showToast("Starting thread…", { spinner: true, sticky: true }),
-    onSuccess: (res) => {
+    onMutate: ({ note }) => showToast("Starting thread…", { spinner: true, sticky: true, ...(note ? { detail: note } : {}) }),
+    onSuccess: (res, { note }) => {
       // The board stream now owns the durable thread row. Drop our local bridge as soon as the
       // server acknowledges it, preventing an optimistic card + server card duplicate.
       setPendingDispatch(null)
       onDispatched?.()
-      showToast("Thread started", { link: { label: "Open thread", slug: res.slug, project: res.project } })
+      showToast("Thread started", { link: { label: "Open thread", slug: res.slug, project: res.project }, ...(note ? { detail: note } : {}) })
     },
     onError: (e, input) => {
       // A submit clears before the RPC starts. Restore only into a still-empty field so retry is
@@ -297,6 +299,7 @@ function PromptForm({
       : undefined,
     uploading,
     startNow,
+    detach,
     onCreated: (submittedProse) => {
       // The draft became the schedule: the prompt, its chips and its pick leave the box in one commit. Words
       // typed after Enter (during the mark's wash) stay; Undo puts the rest back exactly.
@@ -350,9 +353,9 @@ function PromptForm({
   })), [])
 
   // ENTER — and the send button, and ⌘↵, which is Enter here — is the one submit. The account aliases are
-  // settled first, as before; then the words decide (ScheduleComposer.tsx, lib/scheduleIntent.ts `submitStep`):
+  // settled first, as before; then the words decide (ScheduleComposer.tsx, lib/scheduleIntent.ts `submitAct`):
   // a schedule in them is created, anything else starts the thread through `startNow`, and words with a
-  // schedule word the model has not answered for yet hold the send until it does.
+  // schedule word the model has not answered for yet leave the box at once and are settled when it does.
   function submit() {
     if (!prompt.trim() || !resolved || savingSettings) return
     // `/login` and `/logout` are frizz-owned aliases for the typed provider account actions — they
@@ -378,6 +381,12 @@ function PromptForm({
 
   /** Start the thread now: what Enter has always done, and still does for words that are not a schedule. */
   function startNow() {
+    const input = dispatchInput()
+    if (input) gateAndDispatch(input)
+  }
+
+  /** The dispatch these words would make, or undefined — having said why — when they cannot start now. */
+  function dispatchInput(): DispatchInput | undefined {
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     if (!resolved.modelAvailable) {
       showToast("Saved model is unavailable — choose a model before starting the thread")
@@ -396,7 +405,7 @@ function PromptForm({
       return
     }
     const expanded = expandedPrompt(prompt)
-    const input: DispatchInput = {
+    return {
       // The chips, and in an editor's sidebar what the editor has in front at THIS Enter
       // (lib/editorContext.ts outgoingMessage). Built here, once: a dispatch the sign-in gate holds runs
       // with this input after the sign-in, so it carries what the human saw when they pressed Enter.
@@ -414,15 +423,71 @@ function PromptForm({
       effort: (resolved.effort || undefined) as DispatchInput["effort"],
       ...(limit.deadline ? { deadline: limit.deadline } : {}),
     }
+  }
+
+  function gateAndDispatch(input: DispatchInput) {
     // Auth gate: block ONLY on a positive "signed-out" for this dispatch's backend. Loading/unknown/
     // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user. An ACP
     // agent has no account here at all — its own CLI reports a missing login on the first prompt.
-    if (resolved.backend !== "acp" && authStatus.data?.[resolved.backend] === "signed-out") {
+    const backend = input.backend ?? "claude"
+    if (backend !== "acp" && authStatus.data?.[backend] === "signed-out") {
       gatedInputRef.current = input
-      setSignInFor(resolved.backend)
+      setSignInFor(backend)
       return
     }
     runDispatch(input)
+  }
+
+  /**
+   * Submit words the schedule check has not answered for yet (ScheduleComposer `defer`): the whole draft leaves
+   * the box NOW — the prompt, its chips, its pick, its limit, what was said about its schedule — and what it
+   * becomes is decided when the reading lands. Its dispatch input is built HERE, at the Enter, so the thread
+   * carries what the human saw when they pressed it; a schedule's prompt is built from the same captured chips.
+   */
+  function detach(): DetachedDraft | undefined {
+    const input = dispatchInput()
+    if (!input) return
+    const value = prompt
+    const { attachments } = splitComposerValue(value)
+    const pickRaw = draftStore.get(pickKey)
+    const limitRaw = draftStore.get(limitKey)
+    const scheduleRaw = draftStore.get(scheduleKey)
+    const pickNow = pick
+    const items = takeContextItems(promptKey)
+    clearDispatchDraft(projectDir)
+    onDispatched?.()
+    const restore = () => {
+      mergeIntoDraft(promptKey, value)
+      restoreContextItems(promptKey, items)
+      if (pickRaw && !draftStore.get(pickKey)) draftStore.set(pickKey, pickRaw)
+      if (limitRaw && !draftStore.get(limitKey)) draftStore.set(limitKey, limitRaw)
+    }
+    return {
+      dispatch: (note) => {
+        const backend = input.backend ?? "claude"
+        if (backend !== "acp" && authStatus.data?.[backend] === "signed-out") {
+          // Signed out since the Enter: the words go back, and the sign-in runs them as before.
+          restore()
+          if (scheduleRaw && !draftStore.get(scheduleKey)) draftStore.set(scheduleKey, scheduleRaw)
+          gatedInputRef.current = input
+          setSignInFor(backend)
+          return
+        }
+        // What a failed dispatch puts back (`restoreSubmitted`), as it was at the Enter.
+        submittedDraftRef.current = value
+        submittedPickRef.current = pickNow
+        submittedScheduleRef.current = scheduleRaw
+        submittedLimitRef.current = limitRaw
+        submittedContextRef.current = items
+        setPendingDispatch(input.prompt)
+        dispatch.mutate({ ...input, ...(note ? { note } : {}) })
+      },
+      promptOf: (cut) => {
+        const joined = joinComposerValue(cut, attachments.map((a) => a.path))
+        return joined.trim() ? outgoingMessage(expandedPrompt(joined), items, projectDir, false).trim() : ""
+      },
+      restore,
+    }
   }
 
   // The profile readout lives INSIDE the box, along its bottom edge — petite caps, very quiet.

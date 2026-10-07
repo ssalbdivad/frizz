@@ -5,7 +5,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import type { ScheduleView } from "@frizz/shared"
-import { FAIL_COPY, HOLD_COPY, UNDONE_COPY, eachRun, startsNow, toastDetail, vetter } from "./ScheduleComposer.tsx"
+import { CHECKING_COPY, UNDONE_COPY, eachRun, startsNow, toastDetail, vetter } from "./ScheduleComposer.tsx"
 import { NO_TASK_COPY } from "../lib/scheduleIntent.ts"
 import { UNPHRASABLE_COPY } from "./SchedulePreview.tsx"
 import type { ModelReadOk } from "../lib/scheduleModelRead.ts"
@@ -57,11 +57,10 @@ test("the created toast: the rule and its next run, in the house's duration gram
 })
 
 test("the copy says what the human can do; a phone names its send button, never a key", () => {
-  assert.equal(HOLD_COPY, "Checking for a schedule…")
-  assert.equal(`${FAIL_COPY} ${startsNow(false)}`, "Couldn't check for a schedule. Enter starts it now.")
+  assert.equal(CHECKING_COPY, "Checking for a schedule…")
   assert.equal(`${UNDONE_COPY} ${startsNow(false)}`, "Schedule undone. Enter starts it now.")
   assert.equal(startsNow(true), "Send starts it now.")
-  for (const line of [HOLD_COPY, FAIL_COPY, UNDONE_COPY, startsNow(true)]) {
+  for (const line of [CHECKING_COPY, UNDONE_COPY, startsNow(true)]) {
     assert.doesNotMatch(line, /Enter|Esc|Tab|⌘/, `${line}: no key on a phone`)
   }
 })

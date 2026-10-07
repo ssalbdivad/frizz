@@ -428,3 +428,37 @@ export function useModelReader(deps: ModelReaderDeps, opts: { share?: string } =
   useEffect(() => reader.subscribe(bump), [reader])
   return reader
 }
+
+/**
+ * The reader's answer for exactly `text`, once it lands: what a submit that did not wait for it settles on
+ * (lib/scheduleIntent.ts `settleAct`). Asks explicitly — past the budget, and again after a failure — and asks
+ * again if the ask is dropped from under it: the box the words left empties, which cancels the queued read
+ * (lib/scheduleReadScheduler.ts) — and every edit of the next draft does that again. A read that never answers
+ * resolves `failed` after `timeoutMs`.
+ */
+export function awaitReading(reader: ModelReader, text: string, timeoutMs = READ_TIMEOUT_MS): Promise<Extract<ModelReadView, { status: "answered" | "failed" }>> {
+  return new Promise((resolve) => {
+    let finished = false
+    const finish = (view: Extract<ModelReadView, { status: "answered" | "failed" }>) => {
+      if (finished) return
+      finished = true
+      clearTimeout(timer)
+      unsubscribe()
+      resolve(view)
+    }
+    const check = (first: boolean) => {
+      if (finished) return
+      const view = reader.view(text)
+      if (view.status === "answered" || (view.status === "failed" && !first)) return finish(view)
+      if (view.status === "reading") return
+      // Nothing out for the words (a failure from before this submit, a dropped ask, an expired answer): ask. The
+      // box drops a queued ask at every edit of the next draft, so this re-asks as often as it takes; the timeout is
+      // the bound.
+      reader.request(text, { explicit: true })
+    }
+    const timer = setTimeout(() => finish({ status: "failed", message: "timed out" }), timeoutMs)
+    ;(timer as { unref?: () => void }).unref?.()
+    const unsubscribe = reader.subscribe(() => check(false))
+    check(true)
+  })
+}

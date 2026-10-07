@@ -11,6 +11,7 @@ import {
   MODEL_READ_BUDGET,
   READ_TIMEOUT_MS,
   TYPED_HISTORY_MAX,
+  awaitReading,
   cachedModelRead,
   clearModelReadCache,
   clearSharedModelReaders,
@@ -355,4 +356,43 @@ test("a reading out while MANY texts are typed is still found when it lands — 
   await settle()
   history = typedHistory(history, `${text}y`, r)
   assert.deepEqual(newestAnswer(history, `${text}y`, (t) => r.known(t)), { text: out, result: landed, current: false }, "the answer that landed is drawn")
+})
+
+test("awaitReading: a submit that did not wait settles on exactly its words' answer, asking again if the ask is dropped", async () => {
+  const { r, held } = reader({ budget: 0 })
+  const text = "every Monday at 9am post the digest"
+  const answer = awaitReading(r, text)
+  assert.deepEqual(held.asked, [text], "asked at once, past the budget")
+  held.pending[0]!.resolve(ok(text, "every Monday at 9am"))
+  assert.equal((await answer).status, "answered")
+  // Already known: no new ask.
+  assert.equal((await awaitReading(r, text)).status, "answered")
+  assert.equal(held.asked.length, 1)
+
+  // Queued behind another read, then dropped (the box emptied): asked again.
+  const other = "every day other"
+  r.request(other, { explicit: true })
+  const queued = awaitReading(r, "every Friday ship it")
+  for (let i = 0; i < 20; i++) r.cancelQueued()
+  assert.equal(r.view("every Friday ship it").status, "reading", "re-queued, however often it is dropped")
+  held.pending[1]!.resolve(NONE)
+  await settle()
+  held.pending[2]!.resolve(NONE)
+  const view = await queued
+  assert.equal(view.status, "answered")
+})
+
+test("awaitReading: a failure from before the submit is asked again; a failure of that ask, or no answer at all, is failed", async () => {
+  const { r, held } = reader()
+  const text = "weekdays at 8 run the report"
+  r.request(text)
+  held.pending[0]!.reject(new Error("boom"))
+  await settle()
+  assert.equal(r.view(text).status, "failed")
+  const again = awaitReading(r, text)
+  assert.equal(held.asked.length, 2, "asked again")
+  held.pending[1]!.reject(new Error("boom"))
+  assert.equal((await again).status, "failed")
+  const never = await awaitReading(r, "every night at 2 bench", 10)
+  assert.deepEqual(never, { status: "failed", message: "timed out" })
 })

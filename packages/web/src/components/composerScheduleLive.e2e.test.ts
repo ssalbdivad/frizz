@@ -376,31 +376,33 @@ test("5. stale-while-revalidate: newer words keep the strip, marked updating, an
   } finally { await page.close() }
 })
 
-test("6. Enter with no answer for these words yet HOLDS: the send spins, a line says so, and the answer decides", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("6. Enter with no answer for these words yet does not wait: the words leave at once, and the answer decides", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {
-    // (a) The answer is a schedule: created, never dispatched.
+    // (a) The answer is a schedule: created, never dispatched, and the toast says which.
     await arm(page, [MONDAY])
     await closeGate(page)
     await typeFast(page, PHRASE_TASK)
     await page.keyboard.press("Enter")
     await sleep(80)
     let s = (await state(page))!
-    assert.equal(s.sendPending, true, "the send spins at once")
-    assert.equal(s.sendTitle, "Checking for a schedule…")
-    assert.notEqual(s.slot, "hold", "the line waits a beat, so an answer on its way never flashes it")
-    await sleep(400)
-    s = (await state(page))!
-    assert.equal(s.slot, "hold")
-    assert.equal(s.copy, "Checking for a schedule…")
-    assert.equal(s.text, PHRASE_TASK, "the words stay in the box")
-    await shot(page, "intent-hold")
+    assert.equal(s.text, "", "the words left the box at once")
+    assert.equal(s.sendPending, false, "nothing spins in the box")
+    assert.equal(s.open, false, "no line under it")
+    assert.equal(s.toast?.text, "Checking for a schedule…")
+    await shot(page, "intent-checking")
     assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [0, 0], "nothing yet")
     await release(page)
     assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 4_000), "the schedule answer created it")
     assert.equal((await counts(page)).dispatch, 0)
+    assert.equal((await bodies(page, "createSchedule"))[0]!.prompt, "triage new issues")
+    assert.ok(await waitFor(async () => /^Triage issues scheduled/.test((await state(page))?.toast?.text ?? ""), 2_000), "the toast names what was scheduled")
+    s = (await state(page))!
+    assert.match(s.toast!.text, /Every Monday at 9am · next Mon Oct 12, in 6d/)
+    assert.deepEqual(s.toast!.actions, ["Undo", "Open"])
+    await shot(page, "intent-deferred-created")
 
-    // (b) The answer is no schedule: started now, nothing created.
+    // (b) The answer is no schedule: started, nothing created.
     await page.evaluate(() => window.__sched.reset())
     await arm(page, [])
     await sleep(400)
@@ -408,103 +410,77 @@ test("6. Enter with no answer for these words yet HOLDS: the send spins, a line 
     await closeGate(page)
     await typeFast(page, "every time CI fails, fix it")
     await page.keyboard.press("Enter")
-    await sleep(500)
-    assert.equal((await state(page))!.slot, "hold")
+    await sleep(200)
+    assert.equal((await state(page))!.text, "")
+    assert.equal((await counts(page)).dispatch, 0)
     await release(page)
     assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 4_000), "no schedule: dispatched")
+    assert.equal((await bodies(page, "dispatch"))[0]!.prompt, "every time CI fails, fix it")
     assert.equal((await counts(page)).createSchedule, 0)
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
 
-test("7. typing during the hold cancels it; nothing runs on the old words' answer; Enter again submits", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("7. words typed after a deferred Enter are a new draft: the answer acts on the submitted words only", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {
     await arm(page, [MONDAY])
     await closeGate(page)
     await typeFast(page, PHRASE_TASK)
     await page.keyboard.press("Enter")
-    await sleep(400)
-    assert.equal((await state(page))!.slot, "hold")
-    await typeFast(page, "!")
     await sleep(100)
-    const s = (await state(page))!
-    assert.equal(s.sendPending, false, "the hold is cancelled")
-    assert.notEqual(s.slot, "hold")
+    await typeFast(page, "fix the login bug")
     await release(page)
-    await sleep(800)
-    assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [0, 0], "the old words' answer acted on nothing")
-    assert.ok(await waitFor(async () => { const n = await state(page); return n?.slot === "schedule" && !n.updating }, 4_000), "the new words are read")
-    await page.keyboard.press("Enter")
-    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 3_000), "Enter again created")
-    assert.equal((await bodies(page, "createSchedule"))[0]!.prompt, "triage new issues!")
+    assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 4_000), `created: ${JSON.stringify(await counts(page))} ${JSON.stringify(await state(page))}`)
+    assert.equal((await bodies(page, "createSchedule"))[0]!.prompt, "triage new issues")
+    assert.equal((await state(page))!.text, "fix the login bug", "the new words stay")
+    assert.equal((await counts(page)).dispatch, 0)
+    // Undo puts the schedule's words back beside them, dismissed: Enter starts them now.
+    await page.click('[data-toast-action="Undo"]')
+    assert.ok(await waitFor(async () => (await counts(page)).deleteSchedule === 1 && (await state(page))!.text.includes(PHRASE_TASK), 3_000), "the words came back")
+    assert.match((await state(page))!.text, /fix the login bug/)
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
 
-test("7b. the hold line's Skip says there is nothing to schedule: the thread starts at once, and the late answer acts on nothing", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("8. a read that fails after a deferred Enter never dispatches silently: the thread starts, and its toast says why", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {
-    await arm(page, [MONDAY])
-    await closeGate(page)
-    await typeFast(page, PHRASE_TASK)
-    await page.keyboard.press("Enter")
-    await sleep(400)
-    assert.equal((await state(page))!.slot, "hold")
-    await shot(page, "intent-hold-dismiss")
-    await page.click(`${PAGE_BOX} [data-schedule-slot="hold"] [data-schedule-skip]`)
-    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 2_000), "Skip started it without the answer")
-    await release(page)
-    await sleep(800)
-    assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [1, 0], "the late schedule answer created nothing")
-    assert.deepEqual(errors, [])
-  } finally { await page.close() }
-})
-
-test("8. a read that fails at submit never dispatches silently: the line, and the NEXT Enter dispatches", { skip: !baseUrl, timeout: 60_000 }, async () => {
-  const { page, errors } = await open()
-  try {
-    // Two drafts, one per way a check fails: the model's own error, and the request never reaching it.
+    // One per way a check fails: the model's own error, and the request never reaching it.
     for (const [fail, task] of [["model", "and label them"], ["http", "and close dupes"]] as const) {
       await page.evaluate(() => window.__sched.reset())
       await arm(page, [{ match: "every Monday", fail } as Rule])
       await closeGate(page)
+      await focusEnd(page)
       await typeFast(page, `${PHRASE_TASK} ${task}`)
       await page.keyboard.press("Enter")
-      await sleep(300)
+      await sleep(200)
+      assert.equal((await state(page))!.text, "", `${fail}: the words left at once`)
       await release(page)
-      assert.ok(await waitFor(async () => (await state(page))?.slot === "failed", 4_000), `${fail}: the failure line`)
-      const s = (await state(page))!
-      assert.equal(s.copy, "Couldn't check for a schedule. Enter starts it now.")
-      assert.equal(s.action, "Try again")
-      assert.equal(s.send, "send")
-      assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [0, 0], `${fail}: nothing started`)
-      if (fail === "model") await shot(page, "intent-failed")
-      await focusEnd(page)
-      await page.keyboard.press("Enter")
-      assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000), `${fail}: the next Enter dispatched`)
+      assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 4_000), `${fail}: started as a thread`)
       assert.equal((await counts(page)).createSchedule, 0)
+      assert.ok(await waitFor(async () => /Couldn't check for a schedule, so it started as a thread\./.test((await state(page))?.toast?.text ?? ""), 3_000), `${fail}: the toast says why`)
+      if (fail === "model") await shot(page, "intent-unchecked")
       await sleep(400)
     }
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
 
-test("9. a check that never answers gives up after 15s: the failure line, then Enter dispatches", { skip: !baseUrl, timeout: 90_000 }, async () => {
+test("9. a check that never answers gives up after 15s: the thread starts, its toast says why", { skip: !baseUrl, timeout: 90_000 }, async () => {
   const { page, errors } = await open()
   try {
     await arm(page, [{ match: "every Monday", hang: true } as Rule])
     await typeFast(page, PHRASE_TASK)
     const pressed = Date.now()
     await page.keyboard.press("Enter")
-    await sleep(1_000)
-    assert.equal((await state(page))!.slot, "hold")
-    assert.ok(await waitFor(async () => (await state(page))?.slot === "failed", 20_000), "the failure line")
+    await sleep(200)
+    assert.equal((await state(page))!.text, "")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 20_000), "dispatched")
     const waited = Date.now() - pressed
     assert.ok(waited >= 14_000 && waited <= 17_500, `gave up after ~15s: ${waited}ms`)
-    assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [0, 0])
-    await page.keyboard.press("Enter")
-    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 3_000), "the next Enter dispatched")
+    assert.equal((await counts(page)).createSchedule, 0)
+    assert.match((await state(page))!.toast?.text ?? "", /Couldn't check for a schedule/)
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
@@ -642,7 +618,7 @@ test("14. the phone: the strip is a tap row with ×, its lines name Send, and ×
     await page.tap(`${PAGE_BOX} [data-schedule-dismiss]`)
     assert.ok(await waitFor(async () => !(await state(page))!.open, 2_000), "× dismissed")
 
-    // The phone's failure line names the send button, never a key.
+    // The phone's send never waits on the model either: the words leave at once.
     await arm(page, [{ match: "every Friday", fail: "model" } as Rule])
     await page.evaluate((sel) => {
       const area = document.querySelector<HTMLTextAreaElement>(sel)!
@@ -651,8 +627,8 @@ test("14. the phone: the strip is a tap row with ×, its lines name Send, and ×
     }, ta(PAGE_BOX))
     await typeFast(page, "every Friday at 5pm post the digest")
     await page.tap(`${PAGE_BOX} [data-composer-send]`)
-    assert.ok(await waitFor(async () => (await state(page))?.slot === "failed", 4_000))
-    assert.equal((await state(page))!.copy, "Couldn't check for a schedule. Send starts it now.")
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 4_000))
+    assert.equal((await state(page))!.text, "")
     assert.deepEqual(errors, [])
   } finally { await page.close() }
 })
@@ -711,7 +687,7 @@ test("16. a read out while MANY texts are typed: the strip stays, updating, and 
   } finally { await page.close() }
 })
 
-test("17. the `c` dialog and the page box hold ONE Enter on their draft: one answer acts once (A)", { skip: !baseUrl, timeout: 90_000 }, async () => {
+test("17. the `c` dialog over the page box: one deferred Enter takes the draft from BOTH boxes and acts once (A)", { skip: !baseUrl, timeout: 90_000 }, async () => {
   for (const answer of ["schedule", "none"] as const) {
     const { page, errors } = await open()
     try {
@@ -719,18 +695,17 @@ test("17. the `c` dialog and the page box hold ONE Enter on their draft: one ans
       await arm(page, answer === "schedule" ? [MONDAY] : [])
       await closeGate(page)
       await typeFast(page, text)
-      await page.keyboard.press("Enter")
-      await sleep(400)
-      assert.equal((await state(page))!.sendPending, true, `${answer}: the page box holds`)
-      // The human leaves the box and opens the `c` dialog — the same draft — and presses Enter there too.
+      // The human leaves the box and opens the `c` dialog — the same draft — and presses Enter there.
       await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
       await page.evaluate(() => window.__sched.openDialog())
       await ready(page, DIALOG_BOX)
       assert.equal((await state(page, DIALOG_BOX))!.text, text)
       await page.keyboard.press("Enter")
-      await sleep(400)
-      assert.equal((await state(page, DIALOG_BOX))!.sendPending, true, `${answer}: the dialog holds`)
-      assert.equal((await state(page, PAGE_BOX))!.sendPending, false, `${answer}: the page box let its hold go to the newer Enter`)
+      assert.ok(await waitFor(async () => (await state(page, DIALOG_BOX)) === null, 2_000), `${answer}: the dialog closed at once`)
+      assert.equal((await state(page, PAGE_BOX))!.text, "", `${answer}: the page box's draft left with it`)
+      // An Enter in the page box now has nothing to send.
+      await focusEnd(page)
+      await page.keyboard.press("Enter")
       await release(page)
       await waitFor(async () => { const c = await counts(page); return c.dispatch + c.createSchedule > 0 }, 4_000)
       await sleep(1_000)
@@ -838,25 +813,19 @@ async function pasteImage(page: Page, box = PAGE_BOX) {
   }, ta(box))
 }
 
-test("20. an image pasted during the hold cancels it, as typing does; once it is attached, Enter sends it with the words (C)", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("20. a deferred Enter carries its image: the words and the attachment leave together, and the schedule's prompt has it (C)", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {
-    await page.evaluate(() => { window.__sched.attachDelayMs = 2_000 })
     await arm(page, [MONDAY])
     await closeGate(page)
     await typeFast(page, PHRASE_TASK)
-    await page.keyboard.press("Enter")
-    await sleep(300)
-    assert.equal((await state(page))!.sendPending, true, "held")
     await pasteImage(page)
-    await sleep(150)
-    assert.equal((await state(page))!.sendPending, false, "the upload cancelled the hold")
-    await release(page)
-    await sleep(800)
-    assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [0, 0], "nothing went without the image")
     assert.ok(await waitFor(async () => !(await page.$eval(`${PAGE_BOX} [data-composer-send]`, (b) => (b as HTMLButtonElement).disabled)), 4_000), "the upload landed")
     await focusEnd(page)
     await page.keyboard.press("Enter")
+    await sleep(150)
+    assert.equal((await state(page))!.text, "", "everything left the box")
+    await release(page)
     assert.ok(await waitFor(async () => (await counts(page)).createSchedule === 1, 4_000))
     assert.ok(String((await bodies(page, "createSchedule"))[0]!.prompt).includes(ATTACHED), "the schedule's prompt carries the image")
     assert.equal((await counts(page)).dispatch, 0)
