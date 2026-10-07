@@ -16,7 +16,7 @@ import { liftWorkingDir } from "./thread-cwd.ts"
 import { isHeadlessRow, isBrokerClaudeRow, isLazyRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinoffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
-import { rowDeadline } from "./deadline.ts"
+import { deadlineViewOf, rowDeadline } from "./deadline.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { isReplyWait } from "./thread-mentions.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
@@ -2465,6 +2465,7 @@ function sessionThreadView(
     // already-delivered (or superseded) bump the row has not been swept clean of yet.
     snoozePrompt: snoozedUntil ? row.snooze_prompt ?? undefined : undefined,
     pinnedAt: row.pinned_at ?? undefined,
+    deadline: deadlineViewOf(row),
     // The event-snooze, as a fact the CHAT can read. `awaitingBackground` still ignores it — that flag
     // states whether the thread is waiting, which the snooze does not change — so the suppression is a
     // presentation rule the client applies, not a second opinion about the thread's state.

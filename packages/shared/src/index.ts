@@ -3,7 +3,7 @@ import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
 import { ProjectSchedules, ThreadScheduleRef } from "./schedules.ts"
-import { formatDeadlineLeft } from "./deadline.ts"
+import { formatDeadlineLeft, ThreadDeadlineView } from "./deadline.ts"
 import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorReviewTarget, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
@@ -4040,6 +4040,11 @@ export const ThreadView = z.object({
   // AUTO-bump (the scheduler resumes the agent with exactly this text) rather than a reminder, which is
   // the distinction the held row's tooltip renders. Absent ⇒ the card merely re-surfaces.
   snoozePrompt: z.string().optional(),
+  // THE THREAD'S TIME LIMIT (deadline.ts): when it runs out, when it was set (the budget runs from
+  // here) and by whom — only the human may move or clear one the human set, so the drawer offers its
+  // controls on that basis. Absent ⇒ no limit. The card and the drawer count down from `at` and read
+  // "over by …" past it; nothing is stopped there.
+  deadline: ThreadDeadlineView.optional(),
   // The instant the human PINNED this thread (absent = not pinned). A pinned thread leaves the rail's
   // band system entirely — Rested/Active/Snoozed/Done — and holds the pinned band at the very top, in
   // this instant's order. Lifecycle metadata like the snooze: written only by the pin/unpin verb, and

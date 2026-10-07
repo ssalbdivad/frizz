@@ -188,7 +188,7 @@ import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueDeadlineNoticeWake, enqueueThreadMessageWake } from "./scheduler.ts"
-import { deadlineNoticeMessage, deadlineSection, rowDeadline } from "./deadline.ts"
+import { deadlineNoticeMessage, deadlineSection, deadlineViewOf, rowDeadline } from "./deadline.ts"
 import { editedFilesOf } from "./edited-files.ts"
 import { removableWorktrees, removeThreadWorktrees, unsavedWorktreeRefusal, worktreesAddedBy } from "./worktree-cleanup.ts"
 import { worktreeRootFor } from "../../../cc-worker/hooks/worktree.mjs"
@@ -1696,8 +1696,7 @@ export function createRouter(ctx: AppContext) {
   // disagree about the same PR — they are one projection of one book.
   /** The thread's deadline as both deadline RPCs answer it. */
   function deadlineView(slug: string): ThreadDeadlineView | null {
-    const d = rowDeadline(ctx.storage.getSession(slug))
-    return d ? { at: new Date(d.atMs).toISOString(), setAt: d.setAt, setBy: d.setBy } : null
+    return deadlineViewOf(ctx.storage.getSession(slug)) ?? null
   }
 
   /** Tell the worker the HUMAN moved its clock — the one change it did not make and cannot otherwise see

@@ -134,9 +134,9 @@ test("a quiet park is woken; a thread resting on a handoff is not", async () => 
       h.storage.upsertSession(row(slug))
       setDeadline(h.storage, slug, START + BUDGET, START)
     }
-    h.tele.set("parked", tele("idle", { lastFence: { kind: "awaiting", hints: [{ kind: "agent", value: "a1" }, { kind: "for", value: "30m" }, { kind: "status", value: "working" }] } as SessionTelemetry["lastFence"] }))
-    h.tele.set("done", tele("idle", { lastFence: { kind: "done", hints: [] } as SessionTelemetry["lastFence"] }))
-    h.tele.set("asked", tele("idle", { lastFence: { kind: "awaiting", hints: [{ kind: "status", value: "needs_input" }, { kind: "for", value: "1h" }] } as SessionTelemetry["lastFence"] }))
+    h.tele.set("parked", tele("idle", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "agent", value: "a1" }, { kind: "for", value: "30m" }, { kind: "status", value: "working" }] } as SessionTelemetry["lastFence"] }))
+    h.tele.set("done", tele("idle", { lastFence: { kind: "done", body: "", hints: [] } as SessionTelemetry["lastFence"] }))
+    h.tele.set("asked", tele("idle", { lastFence: { kind: "awaiting", body: "", hints: [{ kind: "status", value: "needs_input" }, { kind: "for", value: "1h" }] } as SessionTelemetry["lastFence"] }))
     const s = h.make()
     h.clock.ms = START + 21 * M
     await s.tick()

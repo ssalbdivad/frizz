@@ -1,4 +1,4 @@
-import { deadlineStageAtMs, deadlineStageDue, deadlineStageRank, spanLabel, type DeadlineSetter, type DeadlineStage } from "@frizz/shared"
+import { deadlineStageAtMs, deadlineStageDue, deadlineStageRank, spanLabel, type DeadlineSetter, type DeadlineStage, type ThreadDeadlineView } from "@frizz/shared"
 import type { SessionRow } from "./storage.ts"
 
 // THE THREAD'S TIME LIMIT, as the WORKER meets it (plans/time-limits.md). The shared half
@@ -33,6 +33,12 @@ export function rowDeadline(row: Pick<SessionRow, "deadline_at" | "deadline_set_
     ? row.deadline_stage
     : undefined
   return { atMs, setAtMs, setBy: row.deadline_set_by === "worker" ? "worker" : "human", setAt: row.deadline_set_at, stage }
+}
+
+/** The board's reading of a row's deadline (ThreadView.deadline), or undefined when it has none. */
+export function deadlineViewOf(row: Parameters<typeof rowDeadline>[0]): ThreadDeadlineView | undefined {
+  const d = rowDeadline(row)
+  return d ? { at: new Date(d.atMs).toISOString(), setAt: d.setAt, setBy: d.setBy } : undefined
 }
 
 /** Local wall clock, `15:30` — or `Oct 7 15:30` when it is not today. The worker's other clock readings
