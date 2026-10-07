@@ -4,8 +4,8 @@ import {
   AtSign,
   Code2,
   GitPullRequest,
+  GitFork,
   Repeat,
-  Smartphone,
   SquareTerminal,
   Target,
   Timer,
@@ -24,10 +24,10 @@ const features = [
   { icon: Repeat, title: "Schedules", text: "“Every weekday at 9am” starts a fresh thread each time.", href: "/docs/schedules" },
   { icon: Timer, title: "Time limits", text: "“2h”, and the agent plans the best result by then.", href: "/docs/time-limits" },
   { icon: AtSign, title: "Handles", text: "Threads read and message each other by @handle.", href: "/docs/handles" },
+  { icon: GitFork, title: "Spinoff", text: "A new thread from any card, carrying its context.", href: "/docs/handles#spinoff" },
   { icon: SquareTerminal, title: "Terminals", text: "A shell in the folder the agent works in, on t.", href: "/docs/terminals" },
   { icon: GitPullRequest, title: "GitHub", text: "Issues into threads, and watchers that wake on CI.", href: "/docs/github" },
   { icon: Code2, title: "Your editor", text: "A VS Code sidebar that sends your selection along.", href: "/docs/editor" },
-  { icon: Smartphone, title: "Your phone", text: "The same queue, answered with a tap.", href: "/docs/phone" },
 ];
 
 // the commitments every feature is held to, one line each; /docs/principles says the rest
@@ -41,6 +41,17 @@ const principles = [
 ];
 
 const agents = ["Claude Code", "Codex", "OpenCode", "Gemini CLI", "Copilot CLI", "Cursor", "goose", "Qwen Code"];
+
+// a watch outliving the session that set it: the thread rests out of the queue, and each event wakes it
+const watchFeed = `  @settings-store  resting · watching acme/api#391
+
+  Tue 14:02   CI passed
+  Thu 09:41   review requested
+  Thu 11:17   2 review comments
+              ↳ @settings-store wakes and answers them
+
+  @parser-review   waiting on @settings-store
+              ↳ wakes when it hands back`;
 
 const remoteMenu = `  Reach this board from anywhere
 
@@ -93,6 +104,19 @@ export default function Home() {
         </ul>
       </section>
 
+      <section className="py-16">
+        <Heading title="Principles." subtitle="What every feature is held to." />
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {principles.map(({ title, text }) => (
+            <div key={title} className="rounded-2xl border border-dashed border-fd-border p-5">
+              <span className="font-semibold">{title}</span>
+              <p className="mt-1 text-sm text-fd-muted-foreground">{text}</p>
+            </div>
+          ))}
+        </div>
+        <More href="/docs/principles">All the principles</More>
+      </section>
+
       <Split
         title="One queue, not ten terminals."
         link={{ href: "/docs/queue", text: "How the queue works" }}
@@ -114,6 +138,33 @@ export default function Home() {
           to be dismissed. A question you leave alone takes the recommended option after ten minutes.
         </p>
       </Split>
+
+      <section className="grid gap-10 py-16 md:grid-cols-[1fr_1.1fr] md:items-center">
+        <div>
+          <Heading title="Waits that outlive the agent." />
+          <div className="mt-5 space-y-4 text-lg text-fd-muted-foreground">
+            <p>
+              An agent waiting on CI, a review, a reporter&rsquo;s reply or another thread registers a watch and rests,
+              out of your queue. Frizz holds the watch, not the agent&rsquo;s session, so it lasts as long as the
+              server: days, or years.
+            </p>
+            <p>
+              When something lands, the thread wakes and answers it on its own. Every thread has an{" "}
+              <Code>@handle</Code>, so agents read, message and wait on each other the same way.
+            </p>
+          </div>
+          <More href="/docs/github#watchers">Watchers</More>
+        </div>
+        <div className="overflow-hidden rounded-2xl border border-fd-border bg-fd-card shadow-xl shadow-black/10">
+          <div className="flex items-center gap-2 border-b border-fd-border px-4 py-3">
+            <span className="size-3 rounded-full bg-fd-border" />
+            <span className="size-3 rounded-full bg-fd-border" />
+            <span className="size-3 rounded-full bg-[var(--gold)]" />
+            <span className="ml-2 font-mono text-xs text-fd-muted-foreground">acme-api</span>
+          </div>
+          <pre className="overflow-x-auto p-5 font-mono text-[0.8rem] leading-relaxed">{watchFeed}</pre>
+        </div>
+      </section>
 
       <Split
         title="One server, every project."
@@ -208,18 +259,6 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="py-16">
-        <Heading title="Principles." subtitle="What every feature is held to." />
-        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-          {principles.map(({ title, text }) => (
-            <div key={title} className="rounded-2xl border border-dashed border-fd-border p-5">
-              <span className="font-semibold">{title}</span>
-              <p className="mt-1 text-sm text-fd-muted-foreground">{text}</p>
-            </div>
-          ))}
-        </div>
-        <More href="/docs/principles">All the principles</More>
-      </section>
 
       <section className="flex flex-col items-center py-24 text-center">
         <p className="text-lg text-fd-muted-foreground">Ready to clear your queue?</p>
