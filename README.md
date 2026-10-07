@@ -35,14 +35,14 @@ $ npx frizz
 
   FRIZZ v0.4.0  ready in 4.0s
 
-  ➜  Local:    http://127.0.0.1:9393/
+  ➜  Local:    http://127.0.0.1:9393/project/acme/
   ➜  Project:  acme — path/to/acme
   ➜  Logs:     ~/Library/Application Support/Frizz/projects/979dae3c-fe15-4038-817e-11d0e7491959/logs/frizz-2026-08-01T13-44-43-16931.log
 
   press ctrl-c to stop · run with --debug for the full event feed
 ```
 
-A browser tab opens at `http://127.0.0.1:9393/`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine on one page. A directory you run it in becomes a **project** on that page — at once for a repository or anything with a `package.json`, `Cargo.toml` and the like, and after a confirmation for a plain folder — so running `npx frizz` in a second repo adds that project to the server already running rather than starting another. Runs on macOS, Linux, and Windows.
+A browser tab opens on acme's board, `http://127.0.0.1:9393/project/acme`, with its prompt box aimed at `acme`. Frizz always listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine. A directory you run it in becomes a **project** — at once for a repository or anything with a `package.json`, `Cargo.toml` and the like, and after a confirmation for a plain folder — so running `npx frizz` in a second repo adds that project to the server already running rather than starting another. Runs on macOS, Linux, and Windows.
 
 Prefer a window of its own to a browser tab? The desktop app is on [GitHub releases](https://github.com/colinhacks/frizz/releases?q=desktop) for all three — unsigned builds, so the first launch asks once. It needs the same Node, and starts or joins the same server.
 
@@ -76,7 +76,11 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 
 ### Projects
 
-Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Its home, **All projects** at `http://127.0.0.1:9393/`, lists your projects down the left with the threads in flight under each, and every card waiting on you beside them. A project's snoozed and done threads show as small counts on its row; click one to list them in place, or click the row to fold the project away. To work through one project, open its **board** at `/project/<name>` from the switcher above the prompt box, or with **Focus on this project** in the project's ⋯ menu: its threads under named Pinned, Queue, Running, Snoozed and Done bands, its cards, and a prompt box that starts threads in it. The switcher also shows every other project's queue, running and waiting-on-you counts. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
+Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine, and each project has a **board** at `/project/<name>`: its threads under named Pinned, Queue, Running, Snoozed and Done bands, its cards, and a prompt box that starts threads in it. A working thread's status shows when you point at it. Running `npx frizz` in a project opens its board, and `http://127.0.0.1:9393/` opens whichever view you had last.
+
+**All projects**, at `/all`, is one click away: the first choice in the switcher above the prompt box, or the ⌂ beside it. It lists your projects down the left with the threads in flight under each, and every card waiting on you beside them. A project's snoozed and done threads show as small counts on its row; click one to list them in place, click the row to fold the project away, or drag rows to reorder your projects. In the prompt box, ⌥↑/⌥↓ aim the next thread at the project above or below. The switcher also shows every other project's queue, running and waiting-on-you counts. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
+
+To keep every project in view, switch on **Settings → Project sidebar**: a column of project icons down the left edge, each with a count of its queued and running threads. Click an icon to open that project's board, or drag it to reorder your projects. It is off by default.
 
 <p align="center">
   <img src="assets/projects.png" alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the ready cards from every project are queued on the right." width="100%">
@@ -312,7 +316,7 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 | Term | What it means |
 | --- | --- |
-| **Project** | A directory you ran Frizz in. One server holds all of them: **All projects** at `/` shows every one, and each has its own board at `/project/<name>`. |
+| **Project** | A directory you ran Frizz in. One server holds all of them: each has its own board at `/project/<name>`, and **All projects** at `/all` shows every one. |
 | **Thread** | One effort, start to finish. Not a chat tab and not a branch. The session *is* the thread — there's no sidecar document to keep in sync, and dispatching doesn't write a file into your repo. |
 | **Worker** | The agent driving a thread: a real Claude Code, Codex or ACP agent process, running as *you*, with your credentials and your CLI config. |
 | **Handle** | A thread's short name, `@port-the-parser`. You and the agents use it to mention, read and message a thread. |

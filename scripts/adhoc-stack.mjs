@@ -154,8 +154,9 @@ try {
   // are both gone — Everything at `/` is the home — and `/project/…` landed on `/` until 2026-10-06, so a
   // caller appending `/thread/<t>` to the old shape silently got the home page instead of a thread. It is
   // the project's focused board again since then (`/project/<slug>/thread/<t>` opens that thread too), but
-  // `url` stays the drawer prefix. `gridUrl` is kept, now naming that same `/`, so older callers keep a
-  // real address.
+  // `url` stays the drawer prefix. `gridUrl` is kept for older callers, naming All projects — the
+  // grid's successor — at `/all` since 2026-10-06, when `/` became a redirect to the browser's last view
+  // (a fresh browser's is a project's board, which is not what a caller asking for the grid meant).
   const { findByPath, registerProject } = await import("../packages/server/src/project-registry.ts")
   const { resolveProject } = await import("../packages/server/src/project.ts")
   // The real launcher stamps the project it was run in as LAUNCHED (src/production.ts noteLaunchedHere),
@@ -185,7 +186,7 @@ try {
   const slug = launcher?.slug
   console.log(JSON.stringify({
     url: slug ? `http://127.0.0.1:${port}/all/${slug}` : `http://127.0.0.1:${port}/`,
-    gridUrl: `http://127.0.0.1:${port}/`,
+    gridUrl: `http://127.0.0.1:${port}/all`,
     slug, port, home, project: projectDir,
     log: serverLog,
     // The launcher is the project whose `server.lock` this process publishes — the one file every
