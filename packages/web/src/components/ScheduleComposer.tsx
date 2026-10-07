@@ -1,6 +1,6 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { Repeat, X } from "lucide-react"
+import { ArrowRight, Repeat, X } from "lucide-react"
 import {
   cutPhrase,
   hasScheduleTrigger,
@@ -461,11 +461,12 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   let line: { kind: string; node: ReactNode; announce: string } | null = null
   if (holding && holdNote) {
-    // Its × answers for the model: nothing to schedule here, start the thread now.
+    // Skip answers for the model: nothing to schedule here, start the thread now. Not a × — that reads as closing
+    // the line, and this one sends.
     const line_ = (
       <>
         <span data-schedule-copy className="min-w-0 flex-1 shimmer-text">{HOLD_COPY}</span>
-        <DismissButton phone={phone} title="Not a schedule, start it now" onClick={() => step({ type: "skip" })} />
+        <SkipButton phone={phone} onClick={() => step({ type: "skip" })} />
       </>
     )
     line = { kind: "hold", announce: HOLD_COPY, node: <ScheduleSlot kind="hold" phone={phone} line={line_} /> }
@@ -722,6 +723,28 @@ function StripLine({ result, nowMs, tz, phone, updating, stale, onClose }: {
       </span>
       {close}
     </>
+  )
+}
+
+/** The hold line's `Skip →`: not a schedule, so start the thread without waiting for the check. The arrow says it
+ *  goes somewhere, which a × would not. Its ink ends at the line's 10px inset, where the strip's × ends: the arrow
+ *  paints 2.5 of each 12px box side empty (lucide's 5–19 of 24), trimmed off with `-mr`. `gap-px` + that 2.5px
+ *  + the p's side bearing puts ~4px of ink between the word and the arrow. On the cap band by the house lift.
+ *  The phone's is a 32px-tall hit area, taken back off the layout so the 20px line sets the row's height. */
+function SkipButton({ phone, onClick }: { phone: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-schedule-skip
+      aria-label="Not a schedule, start it now"
+      title={phone ? undefined : "Not a schedule, start it now"}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={`ml-auto inline-flex shrink-0 items-baseline gap-px rounded-sm text-fg/80 outline-none transition-colors hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${phone ? "-my-1.5 -mr-[12.5px] py-1.5 pl-2 pr-2.5 active:text-fg" : "-mr-[2.5px]"}`}
+    >
+      Skip
+      <ArrowRight size={12} strokeWidth={2} aria-hidden className="shrink-0 translate-y-[calc(0.5em_-_0.5cap)] self-baseline" />
+    </button>
   )
 }
 

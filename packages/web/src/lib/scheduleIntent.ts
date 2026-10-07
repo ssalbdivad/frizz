@@ -12,7 +12,7 @@ import { isFailedRead, type ModelReadOk, type ModelReadView } from "./scheduleMo
 //     from an earlier text: an edit since the last read is re-read before anything is created. A reading the
 //     cache holds costs nothing to re-use, so nothing relocates an old reading onto new words.
 //   - Without a reading for the text, Enter HOLDS ("Checking for a schedule…") until the answer lands, then
-//     acts on it. Typing during the hold cancels it; it gives up after 15s. Its × says "not a schedule" without
+//     acts on it. Typing during the hold cancels it; it gives up after 15s. Its Skip says "not a schedule" without
 //     waiting: the thread starts now.
 //   - Nothing is ever dispatched silently in place of a schedule the human may have meant: a read that fails or
 //     times out at submit, or a schedule the box cannot make, stops with a line that says so, and the NEXT
@@ -216,7 +216,7 @@ export type SubmitEvent =
   | { type: "timeout" }
   /** Esc in the box: cancels a held Enter (and is claimed); otherwise nothing here. */
   | { type: "escape" }
-  /** The hold line's ×: the human says there is no schedule in the words, so the held Enter starts the thread now
+  /** The hold line's Skip: the human says there is no schedule in the words, so the held Enter starts the thread now
    *  rather than wait for the model to agree. */
   | { type: "skip" }
 
