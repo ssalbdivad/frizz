@@ -11,7 +11,7 @@ import { permMarkerPath, workDirOf, type Project } from "./project.ts"
 import { isBrokerClaudeRow, isHeadlessRow, isHeldRow } from "./storage.ts"
 import type { Storage, SessionRow } from "./storage.ts"
 import { discoverTranscriptDir, discoverTranscriptId, mtimeOfNonEmpty, DISCOVERY_GRACE_MS } from "./discover.ts"
-import { CLAUDE_WORKER_ENV, type AgentBackend, type FoldState, type NormalizedEvent, type NormalizedTail, type OpenCall } from "./backend/types.ts"
+import { CLAUDE_WORKER_ENV, type AgentBackend, type FoldState, type NormalizedEvent, type NormalizedTail } from "./backend/types.ts"
 import { adoptionRuntimeBinding } from "./adoption-recovery.ts"
 import { normalizeObservedThreadModel, validateThreadProfile } from "./backend/thread-profiles.ts"
 import { dispatchProfileCell } from "./subagent-profile.ts"
@@ -1457,55 +1457,6 @@ function shellStartCwd(rec: Record, command: unknown): string | undefined {
   return leadingCd(command, base) ?? base
 }
 
-// OPEN CALLS — see FoldState.openCalls. Each is answered by its own result, usually the next record, so
-// this bounds only a turn whose results never land.
-const OPEN_CALLS_MAX = 32
-const OPEN_CALL_COMMAND_MAX = 400
-
-// The call as the human should read it. A shell call's command is the thing worth naming, whatever key
-// the backend spells it with: Claude's `command`, codex's `cmd`, or codex's older argv array.
-function openCallFrom(name: string, input: unknown, at: string | undefined): OpenCall {
-  const i = (input && typeof input === "object" ? input : {}) as { description?: unknown; command?: unknown; cmd?: unknown }
-  const raw = typeof i.command === "string" ? i.command
-    : typeof i.cmd === "string" ? i.cmd
-    : Array.isArray(i.command) && i.command.every((a) => typeof a === "string") ? (i.command as string[]).at(-1)
-    : typeof input === "string" && /shell|exec|bash/i.test(name) ? input
-    : undefined
-  const command = raw?.trim() ? (raw.trim().length > OPEN_CALL_COMMAND_MAX ? `${raw.trim().slice(0, OPEN_CALL_COMMAND_MAX - 1)}…` : raw.trim()) : undefined
-  const label = typeof i.description === "string" && i.description.trim() ? i.description.trim() : undefined
-  return { name, ...(label ? { label } : {}), ...(command ? { command } : {}), ...(at ? { startedAt: at } : {}) }
-}
-
-function openCallIssued(state: FoldState, id: string, call: OpenCall): void {
-  const open = (state.openCalls ??= new Map())
-  open.delete(id) // a re-seen id moves to newest
-  open.set(id, call)
-  while (open.size > OPEN_CALLS_MAX) {
-    const oldest = open.keys().next().value
-    if (oldest === undefined) break
-    open.delete(oldest)
-  }
-}
-
-export function newestOpenCall(state: FoldState): OpenCall | undefined {
-  let last: OpenCall | undefined
-  for (const call of state.openCalls?.values() ?? []) last = call
-  return last
-}
-
-// Claude: every tool_use in an assistant record opens a call; every tool_result in a user record settles
-// one; a user record carrying NO tool_result (a human turn, a notification, an interrupt receipt) opens a
-// new turn and forgets whatever the old one left unanswered.
-function trackOpenCalls(state: TailState, rec: Record): void {
-  const content = rec.message?.content
-  if (!Array.isArray(content)) return
-  const at = typeof rec.timestamp === "string" ? rec.timestamp : undefined
-  for (const block of content) {
-    const b = block as { type?: string; name?: unknown; id?: unknown; input?: unknown } | null
-    if (b?.type === "tool_use" && typeof b.id === "string") openCallIssued(state, b.id, openCallFrom(typeof b.name === "string" ? b.name : "tool", b.input, at))
-  }
-}
-
 // Claude: the folder a tool call works in (FoldState.toolCwd) — a Bash command's leading `cd` or the
 // folder of a file it edits. Reads and bare commands leave it alone: a Read of a neighbouring checkout
 // for reference is not a move, and a command with no `cd` runs wherever the session is.
@@ -1522,18 +1473,6 @@ function trackToolCwd(state: TailState, rec: Record): void {
       : undefined
     if (dir) state.toolCwd = dir
   }
-}
-
-function settleOpenCalls(state: TailState, rec: Record): void {
-  const content = rec.message?.content
-  const results = Array.isArray(content)
-    ? content.filter((b): b is { type: "tool_result"; tool_use_id?: unknown } => (b as { type?: unknown } | null)?.type === "tool_result")
-    : []
-  if (results.length === 0) {
-    state.openCalls = undefined
-    return
-  }
-  for (const r of results) if (typeof r.tool_use_id === "string") state.openCalls?.delete(r.tool_use_id)
 }
 
 // Register each BACKGROUND OP in an assistant message as a tracked live entry, keyed by tool_use id:
@@ -2695,7 +2634,6 @@ export function applyRecord(state: TailState, rec: Record): void {
       state.lastToolCallAt = rec.timestamp
     }
     trackDispatches(state, rec) // register any background Agent dispatches + background shells
-    trackOpenCalls(state, rec) // what a silent turn is blocked on
     trackToolCwd(state, rec) // where its tools work, when the session's own `cwd` cannot say
     trackLiveTools(state, rec) // the tool calls now awaiting a result — the board row's live line
     trackAsk(state, rec) // capture a pending native AskUserQuestion (frozen at a TUI dialog)
@@ -2754,7 +2692,6 @@ export function applyRecord(state: TailState, rec: Record): void {
         if (text) state.firstUserText = text.slice(0, FIRST_USER_TEXT_MAX)
       }
     }
-    settleOpenCalls(state, rec)
     trackLaunchResults(state, rec) // resolve a background dispatch's transcript path from its launch result
     settleLiveTools(state, rec) // a result (or a fresh prompt) ends the calls it answers
     trackResumes(state, rec) // a SendMessage that RESTARTED a stopped child is a fresh launch — revive it
@@ -2827,7 +2764,6 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // A turn opened → the agent is working.
       state.sawRecords = true
       state.turn = "in-flight"
-      state.openCalls = undefined // a call the last turn left unanswered is not what this one waits on
       break
     case "turn-end":
       // A turn bracketed closed → idle. finalText (when the backend carries the final message on the
@@ -2897,7 +2833,6 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
       // final message recomputes it), so a normalized backend must not let tool motion excuse a fence.
       state.sawRecords = true
       if (ev.kind === "tool-call" && typeof ev.at === "string") state.lastToolCallAt = ev.at
-      if (ev.kind === "tool-call") openCallIssued(state, ev.id, openCallFrom(ev.name, ev.input, ev.at))
       // A CODEX shell command names the folder it runs in (`workdir`), which is the agent's own latest word
       // on where it is working — the reading newestToolWorkdir takes by rescanning, folded here instead.
       // Read through the transcript projection's own reader (codexToolWorkdir), so BOTH tool protocols count
@@ -2910,7 +2845,6 @@ export function applyEvent(state: FoldState, ev: NormalizedEvent): void {
         const dir = codexToolWorkdir(ev.name, ev.input)?.trim()
         if (dir) state.cwd = dir
       }
-      else state.openCalls?.delete(ev.id)
       break
     case "agent-report":
     case "agent-instruction":
@@ -6501,7 +6435,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     // thread has no row and reads as legacy, which is what `questionFencesLive` does with unknown.
     const pendingQuestion = s.lastAssistantHasQuestion && questionFencesLive(row?.spawned_at)
     const nowMs = now()
-    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, lastAssistantLine: s.lastAssistantLine, liveTool: newestLiveTool(s), aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, openCall: newestOpenCall(s), lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...workingDirTelemetry(s) }
+    return { primed: s.primed, turn: s.turn, permPrompt: s.permPrompt, permPolicy: s.permPolicy, permDenies: s.permDenies, model: s.model, effort: s.effort, profileAt: s.profileAt, profileRevision: s.profileRevision, permissionMode: s.permissionMode, permissionModeAt: s.permissionModeAt, permissionModeRevision: s.permissionModeRevision, lastActivityAt: s.lastActivityAt, lastAssistantAt: s.lastAssistantAt, lastAssistant: s.lastAssistant, lastAssistantLine: s.lastAssistantLine, liveTool: newestLiveTool(s), aiTitle: s.aiTitle, customTitle: s.customTitle, customTitleRevision: s.customTitleRevision, subAgents: subAgentViews(s, nowMs), droppedReports: [...s.queuedReports.values()], bgShells: [...bgShellViews(s), ...codexBgShellViews(s)], retiredShells: retiredShellViews(s), retiredSubAgents: retiredSubAgentViews(s), pendingAsk: s.pendingAsk, pendingQuestion, lastAssistantAllDone: s.lastAssistantAllDone, lastUserAt: s.lastUserAt, lastHumanAt: s.lastHumanAt, lastToolCallAt: s.lastToolCallAt, lastUserText: s.lastUserText, firstUserText: s.firstUserText, lastFence: s.lastFence, noTranscript: s.noTranscript, authFault: s.authFault, apiFault: s.apiFault, providerError: s.providerError, limitFault: s.limitFault, contextTokens: s.contextTokens, contextWindow: s.contextWindow, lastCompactionAt: s.lastCompactionAt, ...workingDirTelemetry(s) }
   }
 
   // ---- the provisional reading (2026-09-30) ------------------------------------------------------

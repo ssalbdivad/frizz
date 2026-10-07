@@ -8,9 +8,9 @@
 //
 // Until 2026-09-29 a card named its children only inside AwaitingSubAgentsCard, which is drawn in place of
 // the worker's ```awaiting fence — at rest, with that fence, and no question open. Anything else drew
-// none: a card held on screen while its worker ran the answer to one of its questions, a quiet-turn card,
-// a done or a question beside live children, and every card from the moment a human reply retired the
-// fence until the worker rested again. The maintainer, replying to a parent with children running: it "no
+// none: a card held on screen while its worker ran the answer to one of its questions, a done
+// or a question beside live children, and every card from the moment a human reply retired the fence
+// until the worker rested again. The maintainer, replying to a parent with children running: it "no
 // longer appears to be running anything". The rail (Sidebar SubAgentCount) and the drawer's strip under
 // its prompt box (ChatView BackgroundOpsStrip) read `subAgents` with no such gate; now the card does too.
 //

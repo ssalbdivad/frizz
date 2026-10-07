@@ -189,7 +189,7 @@ test("a boot's unknown readings are not sightings out: a thread that rested whil
 test("a stored stamp is checked ONCE: whatever its agent writes while it stays queued never re-dates it", () => {
   const { run, saves } = harness({ a: at("10:00") })
   assert.deepEqual(run("13:00", thread("a", true, "10:00")), { a: at("10:00") })
-  // Queued mid-turn (a permission prompt, a silent turn): the agent writes on, and the stamp holds.
+  // Queued mid-turn (a permission prompt, a terminal at a prompt): the agent writes on, and the stamp holds.
   assert.deepEqual(run("13:01", thread("a", true, "13:00:30")), { a: at("10:00") })
   assert.deepEqual(saves, [])
 })

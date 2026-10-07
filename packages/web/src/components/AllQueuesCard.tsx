@@ -71,7 +71,6 @@ import { cardTranscriptQuery, useCardTranscript } from "../hooks/useCardTranscri
 import { handoffQuestionSlots } from "../lib/queueCardQuestions.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
 import { LogoutConfirmModal, SignInModal } from "./SignInModal.tsx"
-import { QuietTurnCard, showsQuietTurnCard } from "./QuietTurnCard.tsx"
 import { QueueChildOps } from "./QueueChildOps.tsx"
 import { QueueOpsSummary } from "./QueueOpsSummary.tsx"
 import { ThreadLinks } from "./ThreadLinks.tsx"
@@ -711,7 +710,6 @@ function CardArticle({
               is its ending (questionsAtCurrentRest). Without the transcript, any open question counts —
               the reading from before 2026-10-05 (showsRestedCard). */}
           {showsRestedCard(thread, text, messages ? slots?.here : undefined) && <RestedCard thread={thread} />}
-          {showsQuietTurnCard(thread) && <QuietTurnCard thread={thread} />}
           {/* A terminal of yours waiting at a prompt — what queued this card — as its live screen under its
               own row, so the answer is typed right here and the row says which terminal is asking. The
               strip below lists every other one. */}

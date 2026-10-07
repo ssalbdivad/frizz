@@ -6,7 +6,6 @@ import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath, pathToFileURL } from "node:url"
 import { evaluateBashBackgroundHook, isDirectHookExecution, LONG_FOREGROUND_MS, longForegroundContext } from "../../../cc-worker/hooks/bash-background.mjs"
-import { QUIET_TURN_MS } from "./board.ts"
 
 const here = dirname(fileURLToPath(import.meta.url))
 const hook = join(here, "../../../cc-worker/hooks/bash-background.mjs")
@@ -179,8 +178,8 @@ test("an aliased plugin path (symlink, junction, 8.3 short name) still recognize
 
 // THE LONG-FOREGROUND PROMPT (arktype session 50d1f5b7, 2026-09-29/30: a repo-wide gate run five times
 // in the foreground under a 1h `timeout`, the thread read as stuck each time). Advice, never a refusal —
-// the 24h foreground ceiling is deliberate — and only past the window the board's quiet card uses.
-test("a foreground call declaring more than the quiet-turn window gets ONE non-blocking line; nothing else does", () => {
+// the 24h foreground ceiling is deliberate — and only past LONG_FOREGROUND_MS (15m).
+test("a foreground call declaring more than the long-foreground window gets ONE non-blocking line; nothing else does", () => {
   const long = decision("pnpm prChecks", true, { timeout: 3_600_000 })
   assert.equal(long.hookSpecificOutput?.hookEventName, "PreToolUse")
   assert.equal(long.hookSpecificOutput?.permissionDecision, undefined, "never a decision — the call runs as written")
@@ -191,7 +190,7 @@ test("a foreground call declaring more than the quiet-turn window gets ONE non-b
   assert.ok(context.length < 500, "brief")
   assert.match(decision("pnpm prChecks", true, { timeout: 20 * 60_000, run_in_background: false }).hookSpecificOutput?.additionalContext ?? "", /up to 20m\./)
   // The negative controls.
-  assert.deepEqual(decision("pnpm prChecks", true, { timeout: LONG_FOREGROUND_MS }), {}, "at the window, the quiet card cannot trip")
+  assert.deepEqual(decision("pnpm prChecks", true, { timeout: LONG_FOREGROUND_MS }), {}, "at the window, no advice")
   assert.deepEqual(decision("pnpm prChecks", true, { timeout: 600_000 }), {}, "an ordinary sized call")
   assert.deepEqual(decision("pnpm prChecks", true, {}), {}, "no timeout: Claude bounces it to the background itself")
   assert.deepEqual(decision("pnpm prChecks", true, { timeout: 3_600_000, run_in_background: true }), {}, "already in the background")
@@ -200,8 +199,8 @@ test("a foreground call declaring more than the quiet-turn window gets ONE non-b
   assert.equal(decision("server &", true, { timeout: 3_600_000 }).hookSpecificOutput?.permissionDecision, "deny")
 })
 
-test("the long-foreground window IS the board's quiet-turn window", () => {
-  assert.equal(LONG_FOREGROUND_MS, QUIET_TURN_MS)
+test("the long-foreground window is 15m, the value the POSIX-sh pre-filter hard-codes", () => {
+  assert.equal(LONG_FOREGROUND_MS, 900_000)
   assert.match(longForegroundContext(150 * 60_000), /up to 2h 30m\./)
 })
 

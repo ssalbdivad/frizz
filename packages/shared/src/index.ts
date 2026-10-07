@@ -4088,18 +4088,6 @@ export const ThreadView = z.object({
   // Once every ordinary rest also queues, runtime=exited + needsYou is no longer enough for clients
   // to distinguish a failed worker from a clean completed process.
   crashed: z.boolean().optional(),
-  // A turn still in flight that has written nothing for a long stretch (board.ts quietTurnSince) — a
-  // foreground call blocked on a prompt or a 2FA approval nobody can see. It queues the thread with its
-  // runtime left `running`, so the card's interrupt-and-send stays offered. ISO time of the last activity.
-  quietTurnSince: z.string().optional(),
-  // …and the call it is blocked on, so the card names what is actually running. Absent when the turn went
-  // silent with no call open (the model itself stalled) or on a backend whose calls Frizz cannot see.
-  quietTurnCall: z.object({
-    name: z.string(),
-    label: z.string().optional(),
-    command: z.string().optional(),
-    startedAt: z.string().optional(),
-  }).optional(),
   // The queued reason is "resting while its OWN background work (sub-agents / shells) is still live,
   // with no human ask": the agent came to rest awaiting results it dispatched, not awaiting the human.
   // The card renders the informational awaiting-background banner + an event-Snooze that hides it until

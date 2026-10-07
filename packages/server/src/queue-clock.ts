@@ -50,7 +50,7 @@ import type { ThreadView } from "@frizz/shared"
 // A STORED STAMP IS CHECKED ONCE, the first time its thread reads as queued after a boot: if the agent
 // has spoken since it (a rest newer than the stamp), the thread left and re-entered while this server was
 // not watching, and the stamp is refused for a fresh one. After that the stamp simply holds — a thread
-// can be queued MID-TURN (a permission prompt, a silent turn, its terminal at a prompt), and whatever its
+// can be queued MID-TURN (a permission prompt, its terminal at a prompt), and whatever its
 // agent or process writes while it waits must not move it.
 //
 // A RESTART IS A GAP IN THE SIGHTINGS, and the clock bridges it with one durable instant: when the last

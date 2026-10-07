@@ -4,7 +4,6 @@ import {
   watch as fsWatch,
   type FSWatcher,
 } from "node:fs"
-import { processAwakeClock } from "./awake-clock.ts"
 import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
@@ -82,46 +81,6 @@ export function appServerTurnStalled(
   const advanced = lastActivityAt ? Date.parse(lastActivityAt) : NaN
   if (Number.isFinite(advanced) && advanced >= ownedSince) return false
   return nowMs - ownedSince > STALL_GRACE_MS
-}
-
-// A TURN THAT HAS GONE SILENT. The worker is mid-call and nothing has been written for a long time: no
-// transcript record, no word from a sub-agent it is waiting on. Frizz lifts Claude Code's Bash ceiling to
-// 24 hours (backend/types.ts BASH_MAX_TIMEOUT_MS) and an MCP call has no ceiling at all, so a foreground
-// `npm publish` stopped at a 2FA prompt nobody can see, or a wedged browser call, spun in the Active band
-// for as long as it liked — "running", never at rest, so never queued (maintainer 2026-09-24: a thread
-// "stuck in running after some 2fa call", clogging the board).
-//
-// It QUEUES the thread and leaves its runtime alone. `running` is what the composer reads to offer
-// interrupt-and-send (ThreadComposerBox canInterrupt), and interrupting is exactly the verb this card
-// exists to put in front of the human; degrading to turn-idle the way degradeIfAwaitingAnswer does would
-// take it away. The next record the worker writes clears it.
-//
-// Fifteen minutes: well past the 60-second default a foreground Bash bounces at, past the ~5-minute test
-// gate, and short enough that a turn blocked on a human is in front of one before they wonder where it
-// went. A deliberate long foreground wait does queue — the maintainer's standing trade applies: "a
-// spurious queue card costs one click, while a wrongly-held thread is invisible for hours" — and the
-// card's own Snooze parks it.
-export const QUIET_TURN_MS = 15 * 60_000
-export function quietTurnSince(
-  runtime: RuntimeState,
-  tele: Pick<SessionTelemetry, "turn" | "lastActivityAt" | "subAgents"> | undefined,
-  nowMs: number,
-  awakeBetween: (fromMs: number, toMs: number) => number = processAwakeClock.awakeBetween,
-): string | undefined {
-  if (runtime !== "running" || tele?.turn !== "in-flight" || !tele.lastActivityAt) return undefined
-  let latest = Date.parse(tele.lastActivityAt)
-  if (!Number.isFinite(latest)) return undefined
-  // A foreground sub-agent writes to its OWN transcript while the parent's sits still — that is work.
-  for (const agent of tele.subAgents ?? []) {
-    if (!isDirectSubAgent(agent) || agent.state !== "running") continue
-    const at = agent.lastActivityAt ? Date.parse(agent.lastActivityAt) : NaN
-    // A running child with no reading at all is not evidence of silence.
-    if (!Number.isFinite(at)) return undefined
-    latest = Math.max(latest, at)
-  }
-  // AWAKE time (awake-clock.ts): a laptop that slept through a turn is not a turn that went silent, and
-  // every in-flight thread would otherwise queue on waking.
-  return awakeBetween(latest, nowMs) >= QUIET_TURN_MS ? new Date(latest).toISOString() : undefined
 }
 
 // Runtime derivation: no session row → never spawned (none); a row whose worker is dead/absent →
@@ -2320,17 +2279,14 @@ function sessionThreadView(
   const state = effectiveSessionState(row, registeredLegacyTerminal)
   const archived = state === "archived"
   const limitPause = resolveLimitPause(row, tele, nowMs)
-  const quietSince = archived ? undefined : quietTurnSince(runtime, tele, nowMs)
   const answerInFlight = answerAwaitingDelivery(questionRows, rawTele?.lastUserAt, nowMs)
   const signoffNudgePending = !archived && registries.signoffNudgeOn && signoffNudgeDue(signoffNudgeVerdict(row, rawTele, {
     questionRows: () => questionRows,
     done: () => registries.done.get(row.slug),
     armedWatchCount: () => armedWatches.length,
   }, nowMs), rawTele, nowMs)
-  // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
-  // own wall-clock snooze, which is how a deliberate long wait is parked.
-  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending) || (quietSince !== undefined && !futureSnooze(row, nowMs))
-  const queuedForReply = needsYou && quietSince === undefined && queuedOnlyForReply(row, tele, nowMs, (r) =>
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending)
+  const queuedForReply = needsYou && queuedOnlyForReply(row, tele, nowMs, (r) =>
     deriveNeedsYou(r, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending))
   const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight || signoffNudgePending, nowMs)
   const awaitingBackground = archived ? false : deriveAwaitingBackground(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount)
@@ -2456,8 +2412,6 @@ function sessionThreadView(
     awaitingBackground,
     waitStatus,
     crashed,
-    quietTurnSince: quietSince,
-    quietTurnCall: quietSince !== undefined ? tele?.openCall : undefined,
     pendingInteraction: interactionPresence.pending,
     actionableInteraction: interactionPresence.needsUser,
     // Preserve only a durable, canonical backend identity. In particular, Claude is not inferred
@@ -2530,8 +2484,6 @@ export function heldThreadView(view: ThreadView, row: SessionRow): ThreadView {
     awaitingBackground: false,
     crashed: false,
     deliveryInFlight: undefined,
-    quietTurnSince: undefined,
-    quietTurnCall: undefined,
     subAgentsSnoozed: undefined,
     providerError: undefined,
     providerFault: undefined,
@@ -2676,12 +2628,11 @@ export interface BoardManagerDeps {
  *
  * A terminal has no row or card of its own (thread-terminals.ts), so the one moment it needs the human —
  * `npm publish` stopped at "Enter one-time password:", an ssh passphrase, a `[y/N]` — can only reach the
- * queue through its thread. That is the same trade the silent-turn rule makes (quietTurnSince): the
- * thread queues whatever its own runtime is doing, since the process is alive and will wait forever, and
- * a spurious card costs one click where a missed prompt stalls a publish for hours. Two gates: a thread
- * filed under Done queues nothing (its terminals were stopped with it, and the server clears `needsYou`
- * on an archived row everywhere), and the human's own wall-clock snooze still parks it, as it parks a
- * silent turn.
+ * queue through its thread. The thread queues whatever its own runtime is doing, since the terminal's
+ * process is alive and will wait forever, and a spurious card costs one click where a missed prompt stalls
+ * a publish for hours. Two gates: a thread filed under Done queues nothing (its terminals were stopped
+ * with it, and the server clears `needsYou` on an archived row everywhere), and the human's own wall-clock
+ * snooze still parks it.
  */
 // `projectDir` classifies each terminal's folder by the same rule an agent's shell row uses (thread-cwd.ts
 // liftWorkingDir): `checkout` when it is off the project root, `atRoot` when it is in it, and neither when

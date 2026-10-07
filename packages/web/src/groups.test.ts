@@ -188,20 +188,6 @@ test("sessionIndicatorKind: a rested QUEUED thread is at rest even with live sub
   assert.equal(sessionIndicatorKind(thread({ ...restedInQueue, runtime: "exited" })), "stalled")
 })
 
-test("a SILENT TURN queues with its runtime running, and its row spins in the queue beside its card", () => {
-  // board.ts quietTurnSince: 15 awake-minutes with no record queues the thread and leaves it `running`.
-  // The row sits in Ready (it has a QuietTurnCard) and still reads as Running by its mark, so Colin's
-  // Queue/Running distinction holds on the row (David 2026-10-06, plans/upstream-superset.md §4).
-  const quiet = thread({ kind: "session", state: "open", runtime: "running", needsYou: true, quietTurnSince: "2026-10-06T10:00:00.000Z", quietTurnCall: { name: "mcp__chrome-devtools__navigate_page" } })
-  assert.equal(bandOf(quiet), "ready", "it holds a queue card, so it is in the queue")
-  assert.equal(partitionActive([quiet]).rested.length, 1)
-  assert.equal(sessionIndicatorKind(quiet), "working", "and it spins there — the turn is still in flight")
-  // The same thread once the turn ends is an ordinary queued rest: the spinner goes with the turn.
-  assert.equal(sessionIndicatorKind(thread({ ...quiet, runtime: "turn-idle", quietTurnSince: undefined, quietTurnCall: undefined })), "rest")
-  // A wall-clock snooze parks it (the server drops needsYou), and a running row keeps spinning there.
-  assert.equal(sessionIndicatorKind(thread({ ...quiet, needsYou: false, quietTurnSince: undefined, snoozedUntil: "2099-01-01T00:00:00.000Z" })), "working")
-})
-
 // A REGISTERED question (mcp__frizz__ask) queues its thread server-side (deriveNeedsYou's
 // openQuestions) and the card renders the ask — the rail must agree. Found 2026-08-31: a queued thread
 // resting on nothing but an open registered row wore the bare-rest ellipsis beside its own question card.

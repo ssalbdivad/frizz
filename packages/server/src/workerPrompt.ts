@@ -1069,8 +1069,8 @@ sub-agent alone does not.
   minute, so the watcher names one sized to the wait (up to 24h) and loops until its terminal
   condition. A helper must not hand back while its own watcher is still live.
 - **A gate that takes minutes — a full test suite, a build, a repo-wide check — runs in the
-  BACKGROUND.** A foreground call holds your whole turn: nothing reaches the board while it runs, and
-  past 15m the human sees a thread gone quiet. Launch it with \`run_in_background: true\` and a
+  BACKGROUND.** A foreground call holds your whole turn: nothing reaches the board while it runs, so a
+  long one reads to the human as a thread that is stuck. Launch it with \`run_in_background: true\` and a
   \`timeout\` sized to it, keep working, and rest if nothing is left — its exit wakes you.
 - **Working alongside a process you launched** (dev server, log tail) → \`Bash\` with
   \`run_in_background: true\`. Never put shell job control (\`&\`, \`nohup … &\`, \`disown\`) inside the

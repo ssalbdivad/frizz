@@ -4,7 +4,7 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, w
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { questionAnswerMessage, questionsCancelledWakeMessage, type InteractionRequest } from "@frizz/shared"
-import { ANSWER_IN_FLIGHT_EXCUSAL_MS, SIGNOFF_NUDGE_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, queuedOnlyForReply, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch, QUIET_TURN_MS, quietTurnSince } from "./board.ts"
+import { ANSWER_IN_FLIGHT_EXCUSAL_MS, SIGNOFF_NUDGE_EXCUSAL_MS, DELIVERY_IN_FLIGHT_SPIN_MS, answerAwaitingDelivery, deriveDeliveryInFlight, answersInFlight, appServerTurnStalled, createBoard, deriveAwaitingBackground, deriveNeedsYou, degradeIfAwaitingAnswer, degradeIfNoTranscript, fenceWatchViews, hasDeclaredWait, hasParkedTimerWatch, hasRegisteredBackgroundPark, isBoardRelevantFrizzPath, registeredDoneFence, queuedOnlyForReply, replyUnseen, resolveLimitPause, returnedSubAgentsView, resolveSessionPermission, resolveSessionProfile, resolveSessionTitle, stampShellBudgets, type RegisteredWatch } from "./board.ts"
 import { Bus } from "./bus.ts"
 import { SETTLE_MS } from "./queue-clock.ts"
 import { createStorage, type ThreadQuestionRow } from "./storage.ts"
@@ -484,7 +484,7 @@ test("a needs-decision notification for a turn held on a request says what the r
   const bus = new Bus()
   const notified: { slug: string; title: string; body?: string }[] = []
   bus.subscribe((event) => { if (event.type === "notify" && event.kind === "needs-decision") notified.push({ slug: event.slug, title: event.title, body: event.body }) })
-  // A second after the narration, so the turn reads as working rather than gone quiet (QUIET_TURN_MS).
+  // A second after the narration, so the turn reads as working.
   const board = createBoard(project, storage, bus, tailer, "notify-boot", { now: () => Date.parse(T0) + 1_000 })
   const unsubscribe = storage.interactions.subscribe((change) => board.interactionChanged?.(change))
   try {
@@ -1100,9 +1100,8 @@ test("board: native Codex failures settle a lagging rollout, converge without du
   let current = tele({ turn: "in-flight", lastActivityAt: T0 })
   let live: { bridgeTurn: boolean; ownedSince: string; providerError: import("@frizz/shared").ProviderError } = { bridgeTurn: false, ownedSince: T0, providerError: error }
   const tailer = { get: () => current, foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {} } satisfies Tailer
-  // The clock sits beside the fixture's own dates. Unpinned, the final in-flight reading (last activity
-  // at LATER, months before any real run) was a turn gone quiet for months, which queues (QUIET_TURN_MS)
-  // — so the `needsYou === false` it ends on failed on the wall clock, not on the retry it pins.
+  // The clock sits beside the fixture's own dates, so the readings below hang on the retry this pins and
+  // never on how far the wall clock has run past the fixture.
   const board = createBoard(project, storage, new Bus(), tailer, "errors", { codexTurnLiveness: () => live, now: () => Date.parse(LATER) + 1_000 })
   try {
     let thread = (await board.snapshot()).threads[0]!
@@ -2792,57 +2791,30 @@ test("a Claude thread on an older edition of its family carries its running labe
   rmSync(dir, { recursive: true, force: true })
 })
 
-// THE 2FA WEDGE (2026-09-24). A foreground call blocked on a prompt nobody can see writes nothing, so its
-// turn reads in-flight forever and the thread spun in the Active band. Past QUIET_TURN_MS of silence it
-// queues — with its runtime still `running`, so the card keeps interrupt-and-send.
-test("quietTurnSince: a long-silent turn is flagged; recent activity or a working sub-agent is not", () => {
-  const now = Date.parse(LATER)
-  const stale = new Date(now - QUIET_TURN_MS - 1_000).toISOString()
-  const fresh = new Date(now - 60_000).toISOString()
-  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale }), now), stale)
-  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: fresh }), now), undefined)
-  // Only a turn in flight, only a thread that reads running (a permission prompt has its own card).
-  assert.equal(quietTurnSince("running", tele({ turn: "idle", lastActivityAt: stale }), now), undefined)
-  assert.equal(quietTurnSince("perm-prompt", tele({ turn: "in-flight", lastActivityAt: stale }), now), undefined)
-  // A foreground sub-agent writes its own transcript while the parent's sits still.
-  const child = (lastActivityAt?: string) => ({ id: "a", state: "running", lastActivityAt }) as unknown as SessionTelemetry["subAgents"][number]
-  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale, subAgents: [child(fresh)] }), now), undefined)
-  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale, subAgents: [child()] }), now), undefined)
-  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale, subAgents: [child(stale)] }), now), stale)
-  // Silence is AWAKE time: a turn quiet for 16 wall minutes, 10 of them with the laptop asleep, is not.
-  const slept = (from: number, to: number) => to - from - 10 * 60_000
-  assert.equal(quietTurnSince("running", tele({ turn: "in-flight", lastActivityAt: stale }), now, slept), undefined)
-})
-
-test("board: a silent in-flight turn queues while still running, and a snooze or fresh activity takes it out", async () => {
-  const dir = mkdtempSync(join(tmpdir(), "frizz-board-quiet-turn-"))
+// A RUNNING TURN NEVER QUEUES, however long it has written nothing. The worker's own last word decides its
+// thread's state, and a turn still in flight has not said one yet; a foreground call blocked on a prompt
+// is the human's to notice in the Running band and interrupt there. A worker whose process has DIED
+// mid-turn is deriveNeedsYou's crash net, which still queues it.
+test("board: a silent in-flight turn stays in Running", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-board-silent-turn-"))
   const project: Project = { dir, id: "p", name: "fixture", label: "fixture", stateDir: dir, cwdSlug: "fixture" }
   const storage = createStorage(join(dir, "ui.db"), "p")
   storage.upsertSession(row({ slug: "wedged", session_id: "sid", thread_name: "frizz-wedged", seen_at: LATER }))
   storage.setBackend("wedged", "codex")
   storage.setCodexRuntime("wedged", "app-server")
   const now = Date.now()
-  const openCall = { name: "Bash", label: "Publishing", command: "npm publish", startedAt: T0 }
-  let current = tele({ turn: "in-flight", lastActivityAt: new Date(now - QUIET_TURN_MS - 60_000).toISOString(), openCall })
+  let current = tele({ turn: "in-flight", lastActivityAt: new Date(now - 6 * 3_600_000).toISOString() })
   const tailer = { get: () => current, foreignIds: () => [], subAgent: () => undefined, forget: () => {}, start: () => {}, stop: () => {}, tick: () => {} } satisfies Tailer
-  const board = createBoard(project, storage, new Bus(), tailer, "quiet-turn", { codexTurnLiveness: () => ({ bridgeTurn: true, ownedSince: T0 }) })
+  const board = createBoard(project, storage, new Bus(), tailer, "silent-turn", { codexTurnLiveness: () => ({ bridgeTurn: true, ownedSince: T0 }) })
   try {
     let thread = (await board.snapshot()).threads[0]!
-    assert.equal(thread.runtime, "running")
+    assert.equal(thread.runtime, "running", "six silent hours on a live turn is still a running turn")
+    assert.equal(thread.needsYou, false, "and a running turn is never in the queue")
+    assert.equal(thread.queuedForReply, undefined)
+    // Negative control: the same thread at rest DOES queue, so the false above is the turn, not the fixture.
+    current = tele({ turn: "idle", lastActivityAt: new Date(now - 6 * 3_600_000).toISOString(), lastAssistant: "Finished." })
+    thread = board.refresh().threads[0]!
     assert.equal(thread.needsYou, true)
-    assert.equal(thread.quietTurnSince, current.lastActivityAt)
-    assert.deepEqual(thread.quietTurnCall, openCall, "the card names what the turn is blocked on")
-
-    current = tele({ turn: "in-flight", lastActivityAt: new Date(now - 30_000).toISOString(), openCall })
-    thread = board.refresh().threads[0]!
-    assert.equal(thread.needsYou, false)
-    assert.equal(thread.quietTurnSince, undefined)
-    assert.equal(thread.quietTurnCall, undefined, "an open call on a working turn is not news")
-
-    current = tele({ turn: "in-flight", lastActivityAt: new Date(now - QUIET_TURN_MS - 60_000).toISOString() })
-    storage.setSnoozedUntil("wedged", new Date(now + 3_600_000).toISOString())
-    thread = board.refresh().threads[0]!
-    assert.equal(thread.needsYou, false, "the human's snooze parks a deliberate long wait")
   } finally {
     await board.stop()
     storage.close()

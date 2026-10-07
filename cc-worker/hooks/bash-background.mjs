@@ -225,16 +225,16 @@ function isUntimedBackgroundCall(toolInput) {
 // THE LONG-FOREGROUND PROMPT. Frizz lifted the foreground ceiling to 24h on purpose (server
 // backend/types.ts BASH_MAX_TIMEOUT_MS: "a worker can block on anything it chooses"), so a long call is
 // never refused. But a foreground call holds the whole turn: no transcript record until it returns, so
-// past QUIET_TURN_MS (server board.ts, 15m) the board queues the thread as gone quiet, and the human
-// reads a worker that is running a gate as one that is stuck. Measured on 2026-09-29/30 (arktype
+// the thread sits in Running with nothing moving, and the human reads a worker that is running a gate
+// as one that is stuck. Measured on 2026-09-29/30 (arktype
 // session 50d1f5b7): a repo-wide pre-push gate run five times in the foreground under `timeout: 3600000`,
 // 13–25m each, two of them failing on load, and the maintainer twice asking whether the worker was
 // stuck. In the background the same run keeps the turn moving and its exit still wakes the worker.
 //
-// So a foreground call DECLARING more than that window gets one line of context. Only a declared
-// `timeout` counts — with none, Claude bounces the call to the background at BASH_DEFAULT_TIMEOUT_MS
-// itself — and a call declaring at most the window cannot trip the quiet card. Claude only: a codex
-// exec has no `run_in_background` to point at. Like the prompt above, it lands after the call is
+// So a foreground call DECLARING more than 15 minutes gets one line of context: past the ~5-minute test
+// gate, so an ordinary gate run in the foreground is left alone. Only a declared `timeout` counts — with
+// none, Claude bounces the call to the background at BASH_DEFAULT_TIMEOUT_MS itself. Claude only: a
+// codex exec has no `run_in_background` to point at. Like the prompt above, it lands after the call is
 // committed, so it speaks to the next one.
 export const LONG_FOREGROUND_MS = 15 * 60_000;
 
@@ -250,7 +250,7 @@ function minutesLabel(ms) {
 export function longForegroundContext(timeoutMs) {
   return (
     `⟦long foreground call⟧ This call may hold the turn for up to ${minutesLabel(timeoutMs)}. Nothing reaches the board while it runs, ` +
-    `and past ${minutesLabel(LONG_FOREGROUND_MS)} the human sees a thread gone quiet. Run a gate, build or suite that takes minutes with ` +
+    `so past ${minutesLabel(LONG_FOREGROUND_MS)} the human reads a thread with nothing moving as stuck. Run a gate, build or suite that takes minutes with ` +
     '`run_in_background: true` and the same `timeout` instead: its exit wakes you, and you can keep working or rest meanwhile.'
   );
 }
