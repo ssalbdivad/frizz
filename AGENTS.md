@@ -171,16 +171,19 @@ Two more things look like exceptions and are not. node-pty is a ROOT `devDepende
 
 # Board nomenclature: "active" means SPINNING, and nothing else
 
-The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *"when I say active, I'm only referring to the things that are currently spinning; the things beneath that, I would refer to as rested, or just items in the queue"*). Use them in code, comments, copy and when reporting back. (The quote says "beneath" because Rested sat below Active when it was said; on 2026-08-08 the two bands SWAPPED position — the cue moved up under the prompt box — and the vocabulary did not change with them.)
+The sidebar's row groups have names the maintainer uses precisely (2026-08-05: *"when I say active, I'm only referring to the things that are currently spinning; the things beneath that, I would refer to as rested, or just items in the queue"*). The UI labels the same bands with Colin's names, **Queue** and **Running** (`BANDS` in `web/src/components/BandLabel.tsx`, since 2026-10-06), and the two vocabularies map one to one: say Queue and Running in copy; in code, comments and when reporting back say either pair, never both in one sentence. (The quote says "beneath" because Rested sat below Active when it was said; on 2026-08-08 the two bands SWAPPED position — the cue moved up under the prompt box — and the vocabulary did not change with them.)
 
-Top to bottom:
+Every thread Frizz started is in exactly one of five bands, top to bottom:
 
-- **Rested** — the CUE: the top band, directly under the prompt box; the same set as **"the queue"** / "items in the queue", one row per card, each with a right-justified rest time.
-- **Active** — the rows below that rule, in practice the ones currently spinning. Never carries a queue card, and never a rest time — the rule is drawn on the CARD, so a thread the server excused from the queue while it rests lands here too (see `ARCHITECTURE.md`).
-- **Snoozed** — the dimmed, labeled park band (an armed timer, a wall-clock snooze, the resting card's event-snooze, a rest its worker called `status: watching`). A limit pause was a member until 2026-08-31; it queues as a failed thread now. It was called **Held** until 2026-08-26; the group key moved with the label, so `sectionOf` returns `"snoozed"` and nothing reads `"held"` any more.
-- **Done** — the collapsed archived section.
+- **Pinned** — the human's shelf, above everything. A pinned thread stays here, whatever it is doing, until it is unpinned.
+- **Queue** — the maintainer's **Rested**, the CUE: directly under the pins, the same set as **"the queue"** / "items in the queue", one row per card, each with a right-justified rest time.
+- **Running** — the maintainer's **Active**: the rows below that rule, in practice the ones currently spinning. Never carries a queue card, and never a rest time — the rule is drawn on the CARD, so a thread the server excused from the queue while it rests lands here too, and so does an archived thread whose worker is still running, until it rests (see `ARCHITECTURE.md`).
+- **Snoozed** — the dimmed park band (an armed timer, a wall-clock snooze, the resting card's event-snooze, a rest its worker called `status: watching`). A limit pause was a member until 2026-08-31; it queues as a failed thread now. It was called **Held** until 2026-08-26; the group key moved with the label, so `sectionOf` returns `"snoozed"` and nothing reads `"held"` any more.
+- **Done** — the archived section.
 
-The trap is that `groups.ts` `sectionOf` returns `"active"` for Active AND Rested rows alike — that key names the `<section>` holding both bands, not the maintainer's word. `partitionActive` splits it (`.running` = Active, `.rested` = Rested), and `inActiveBand` is the one predicate that means Active exactly. Full detail, including why the archived key is `"inactive"` while its label reads Done, in `ARCHITECTURE.md` § Board nomenclature.
+**External** (agent sessions Frizz did not start) is listed apart, never a sixth band. A project's board (`/project/<slug>`) names all five under headers, and Pinned, Queue and Running never fold; All projects (`/`) names none — each row says its band by its own mark (a pin, a rest time, a spinner), and a folded project's row counts its Pinned, Queue and Running.
+
+The trap is that `sectionOf` (`@frizz/shared`, re-exported by `groups.ts`) returns `"active"` for Running AND Queue rows alike — that key names the `<section>` holding both bands, not the maintainer's word — and the band keys are still the fork's old labels, `ready` (Queue) and `working` (Running). `partitionActive` splits the section (`.running` = Running, `.rested` = Queue), and `inActiveBand` is the one predicate that means Running exactly. Full detail, including why the archived key is `"inactive"` while its label reads Done, in `ARCHITECTURE.md` § Board nomenclature.
 
 # "Shipped" means merged into the primary branch
 
