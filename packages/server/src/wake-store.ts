@@ -51,10 +51,18 @@ export const WAKE_QUIET_WINDOW_MS = 5 * 60_000
  *  maintainer had opened it and asked how it stopped without a sign-off. Neither can burst, which is what
  *  the window rations: both are capped per consecutive rest (scheduler SIGNOFF_NUDGE_MAX, PARK_BUMP_MAX).
  *  An EXPIRED park stays held — it is a scheduled re-check, uncapped, and a `for: 30s` re-park would
- *  otherwise wake every 30 seconds. */
+ *  otherwise wake every 30 seconds.
+ *
+ *  A THREAD'S TIME LIMIT (`deadline:` check-ins and the human's `deadline-notice:`, scheduler SOURCE 15)
+ *  is the shell-budget case one level up: each check-in is pinned to a point in the budget, and a short
+ *  budget puts them closer together than the window. Held, they never arrived at all — observed
+ *  2026-10-06 on a 4m deadline: half-time reached the worker, its delivery opened the window, and
+ *  converge, final and over were each held and then superseded by the next stage, unsent. They cannot
+ *  burst: four per generation at most, and a new generation is the human's act (or the worker's own). */
 export const WAKE_QUIET_EXEMPT_HINT_PREFIXES = [
   "answers:", "limit:", "interrupt-ended:", "shell-budget:", "thread-message:",
   "signoff:", "park:question:", "park:retired:", "park:nameless:", "park:dead:",
+  "deadline:", "deadline-notice:",
 ] as const
 
 export function isQuietWindowExempt(hintKey: string): boolean {

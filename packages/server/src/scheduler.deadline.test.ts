@@ -33,7 +33,7 @@ function tele(turn: TurnState, over: Partial<SessionTelemetry> = {}): SessionTel
   return { turn, permPrompt: false, subAgents: [], bgShells: [], pendingQuestion: false, lastAssistantAt: new Date(START).toISOString(), ...over }
 }
 
-function harness() {
+function harness(opts: { wakeQuietWindowMs?: number } = { wakeQuietWindowMs: 0 }) {
   const dir = mkdtempSync(join(tmpdir(), "frizz-deadline-sched-"))
   const dbPath = join(dir, "ui.db")
   let storage: Storage = createStorage(dbPath, "p")
@@ -48,7 +48,7 @@ function harness() {
     storage, tailer, now: () => clock.ms,
     resume: (slug, message, deliveryId) => { resumes.push({ slug, message, deliveryId, at: clock.ms }) },
     fetchPr: async () => undefined, fetchGithubReview: async () => [], log: () => {},
-    wakeQuietWindowMs: 0,
+    wakeQuietWindowMs: opts.wakeQuietWindowMs,
   })
   return {
     get storage() { return storage },
@@ -103,6 +103,31 @@ test("each stage reaches a busy worker MID-TURN, once, across passes and a resta
     assert.match(got[2]!, /Hand off at your next stop/)
     assert.match(got[3]!, /Your time is up/)
     assert.match(got[3]!, /Only the human can extend this deadline/)
+    await s.stop()
+  } finally {
+    h.cleanup()
+  }
+})
+
+test("a short budget's stages are not held by the quiet window the previous check-in opened", async () => {
+  // Caught live (4m deadline, 2026-10-06): half reached the worker, and its delivery opened the
+  // 5m quiet window, which held converge, final and over until each was superseded unsent.
+  const h = harness({}) // the production window
+  try {
+    h.storage.upsertSession(row("t"))
+    setDeadline(h.storage, "t", START + 4 * M, START)
+    h.tele.set("t", tele("in-flight"))
+    const s = h.make()
+    for (const at of [2 * M + 1_000, 3.2 * M + 1_000, 3.5 * M + 1_000, 4 * M + 1_000, 5 * M]) {
+      h.clock.ms = START + at
+      await s.tick()
+      await s.tick()
+    }
+    const got = checkIns(h.resumes)
+    assert.deepEqual(got.map((r) => /half your time|Start nothing new|Hand off at your next stop|Your time is up/.exec(r.message)?.[0]), [
+      "half your time", "Start nothing new", "Hand off at your next stop", "Your time is up",
+    ])
+    assert.deepEqual(got.map((r) => r.at - START), [2 * M + 1_000, 3.2 * M + 1_000, 3.5 * M + 1_000, 4 * M + 1_000], "each on its own tick")
     await s.stop()
   } finally {
     h.cleanup()
@@ -237,6 +262,7 @@ test("the human's notice joins a running turn, and a later change supersedes an 
     await s.tick()
     const notices = h.resumes.filter((r) => r.message.includes("notice"))
     assert.deepEqual(notices.map((r) => r.message.split("\n")[0]), ["⏱ notice two"], "mid-turn, and only the standing change")
+    assert.match(notices[0]!.message, /\n\n⏱ \d{4}-\d\d-\d\d \d\d:\d\d — you last spoke [^\n]+ ago · 1h 30m left\.$/, "with the clock line, re-read at send")
     await s.stop()
   } finally {
     h.cleanup()

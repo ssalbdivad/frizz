@@ -48,6 +48,14 @@ test("the reading: left, rounded up to the minute; over by, past it", () => {
   assert.equal(formatDeadlineLeft(0, 8 * M), "over by 8m")
 })
 
+test("the worker's reading is exact under ten minutes, and never rounds time up", () => {
+  assert.equal(formatDeadlineLeft(80_000, 0, { precise: true }), "1m 20s left")
+  assert.equal(formatDeadlineLeft(2 * M - 1, 0, { precise: true }), "1m 59s left")
+  assert.equal(formatDeadlineLeft(40_500, 0, { precise: true }), "40s left")
+  assert.equal(formatDeadlineLeft(0, 8 * M, { precise: true }), "over by 8m 00s")
+  assert.equal(formatDeadlineLeft(42 * M, 0, { precise: true }), "42m left", "past ten minutes, the card's reading")
+})
+
 test("what the human types: durations, compounds and wall clocks", () => {
   const now = new Date(2026, 9, 6, 13, 0, 0).getTime() // 13:00 local
   const at = (raw: string) => {
@@ -101,7 +109,8 @@ test("the wake clock carries the time left, and the display stripper still takes
   const left = wakeTimeHeader(now, new Date(now - 3 * M).toISOString(), now + 42 * M)
   assert.match(left, /— you last spoke 3m ago · 42m left\.$/)
   const over = wakeTimeHeader(now, null, now - 8 * M)
-  assert.match(over, / · over by 8m\.$/)
+  assert.match(over, / · over by 8m 00s\.$/)
+  assert.match(wakeTimeHeader(now, null, now + 80_000), / · 1m 20s left\.$/)
   for (const clock of [left, over, wakeTimeHeader(now, null)]) {
     assert.equal(stripWakeTimeHeader(`Body text\n\n${clock}`), "Body text")
   }

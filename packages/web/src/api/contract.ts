@@ -307,6 +307,7 @@ export interface Api {
   extendOwnShell(input: ExtendOwnShellInput): Promise<ExtendOwnShellResult>
   // `mcp__frizz__deadline` — the worker's own time limit. Drift gate only, like its neighbours.
   ownDeadline(input: OwnDeadlineInput): Promise<OwnDeadlineResult>
+  threadDeadline(input: { slug: string }): Promise<OwnDeadlineResult>
   // The drawer's time-limit control: set, move or clear (`deadline: null`) the thread's deadline.
   setThreadDeadline(input: SetThreadDeadlineInput): Promise<{ deadline: ThreadDeadlineView | null }>
   upsertOwnLink(input: UpsertOwnLinkInput): Promise<UpsertOwnLinkResult>
@@ -590,6 +591,7 @@ export const PROCEDURES = {
   addOwnWatch: "mutation",
   extendOwnShell: "mutation",
   ownDeadline: "mutation",
+  threadDeadline: "query",
   setThreadDeadline: "mutation",
   upsertOwnLink: "mutation",
   dropOwnLink: "mutation",

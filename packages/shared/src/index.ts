@@ -5888,7 +5888,7 @@ export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null, d
   const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
   const since = lastAssistantAt ? Date.parse(lastAssistantAt) : NaN
   const elapsed = Number.isFinite(since) && nowMs >= since ? ` — you last spoke ${formatElapsed(nowMs - since)} ago` : ""
-  const left = deadlineMs != null && Number.isFinite(deadlineMs) ? ` · ${formatDeadlineLeft(deadlineMs, nowMs)}` : ""
+  const left = deadlineMs != null && Number.isFinite(deadlineMs) ? ` · ${formatDeadlineLeft(deadlineMs, nowMs, { precise: true })}` : ""
   return `⏱ ${stamp}${elapsed}${left}.`
 }
 

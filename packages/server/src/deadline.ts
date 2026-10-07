@@ -1,4 +1,4 @@
-import { deadlineStageAtMs, deadlineStageDue, deadlineStageRank, spanLabel, type DeadlineSetter, type DeadlineStage, type ThreadDeadlineView } from "@frizz/shared"
+import { deadlineStageAtMs, deadlineStageDue, deadlineStageRank, preciseSpanLabel, spanLabel, type DeadlineSetter, type DeadlineStage, type ThreadDeadlineView } from "@frizz/shared"
 import type { SessionRow } from "./storage.ts"
 
 // THE THREAD'S TIME LIMIT, as the WORKER meets it (plans/time-limits.md). The shared half
@@ -68,14 +68,14 @@ function named(d: Pick<ThreadDeadline, "atMs" | "setAtMs">, nowMs: number): stri
 // headed so the worker reads it as Frizz speaking rather than as output of whatever tool it just ran.
 
 export function deadlineCheckInMessage(stage: DeadlineStage, d: Pick<ThreadDeadline, "atMs" | "setAtMs" | "setBy">, nowMs: number): string {
-  const left = spanLabel(Math.max(0, d.atMs - nowMs))
+  const left = preciseSpanLabel(Math.max(0, d.atMs - nowMs))
   const when = named(d, nowMs)
   const setter = d.setBy === "human" ? "the human" : "you"
   switch (stage) {
     case "half":
       return (
         `⏰ Time check: half your time is gone — ${left} left until your deadline at ${when}, set by ${setter}.\n\n` +
-        "If you are still exploring, commit to an approach now: the one you can finish and hand over by the deadline, " +
+        "This is not a signal to wrap up: the other half is yours, so keep working. If you are still exploring, commit to an approach now: the one you can finish and hand over by the deadline, " +
         "not the one that would be best given unlimited time. Commit at each coherent checkpoint so what exists is " +
         "always something you could hand over."
       )
@@ -109,7 +109,7 @@ export function deadlineNoticeMessage(change: { kind: "set"; deadline: Pick<Thre
     return "⏰ The human removed your time limit. There is no deadline any more: work to the best deliverable, not to a clock."
   }
   const d = change.deadline
-  const left = spanLabel(Math.max(0, d.atMs - nowMs))
+  const left = preciseSpanLabel(Math.max(0, d.atMs - nowMs))
   const verb = change.previousAtMs === undefined ? "set a time limit" : d.atMs > change.previousAtMs ? "extended your deadline" : "moved your deadline earlier"
   return (
     `⏰ The human ${verb}: your deadline is now ${deadlineClock(d.atMs, nowMs)}, ${left} from now.\n\n` +

@@ -75,9 +75,20 @@ export function deadlineStageRank(stage: DeadlineStage | string | null | undefin
 
 /** `42m left`, `1h 12m left`, `40s left`, `over by 8m`. Seconds only under a minute, where they are
  *  the whole reading; past that they are noise on a chip that re-renders every few seconds. */
-export function formatDeadlineLeft(deadlineMs: number, nowMs: number): string {
+export function formatDeadlineLeft(deadlineMs: number, nowMs: number, opts: { precise?: boolean } = {}): string {
+  const label = opts.precise ? preciseSpanLabel : spanLabel
   const left = deadlineMs - nowMs
-  return left > 0 ? `${spanLabel(left)} left` : `over by ${spanLabel(-left)}`
+  return left > 0 ? `${label(left)} left` : `over by ${label(-left)}`
+}
+
+/** The WORKER's reading of a span: exact under ten minutes (`1m 20s`, `40s`), rounded DOWN, and the
+ *  card's reading past that. A minute rounded up is a large share of a short budget — on the first live
+ *  run a 3m sub-agent with 80s left was told "2m left" — and the worker plans by it, so it must never
+ *  claim time that is not there. The card keeps rounding up: a glance at a chip is not a plan. */
+export function preciseSpanLabel(ms: number): string {
+  if (ms >= 10 * 60_000) return spanLabel(ms)
+  const s = Math.max(0, Math.floor(ms / 1_000))
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, "0")}s`
 }
 
 /** A span in the house grammar, rounded UP to the minute past one (`59m 10s` left reads `1h` — a
