@@ -4825,21 +4825,8 @@ export const Settings = z.object({
   projectRail: z.boolean(),
   // (No `homeFolder`: the Home workspace's agents run in the operator's home folder, always. It was a
   // setting from 2026-09-28 to 2026-10-07; a stored value is stripped on parse, this being non-strict.)
-  /**
-   * Where a worker's git worktrees go. Relative is resolved against the repository's main checkout
-   * (`.frizz/worktrees` — git-ignored in every Frizz project); absolute or `~/…` is one folder for
-   * every repository. Enforced, not suggested: a worker hook refuses `git worktree add` anywhere else,
-   * because a prompt line alone kept producing `~/<repo>-<slug>` folders (cc-worker/hooks/worktree.mjs).
-   * Optional so an old blob parses; defaultSettings pins `.frizz/worktrees`. Machine-level.
-   */
-  worktreeDir: z.string().max(4_096).optional(),
-  /**
-   * Whether marking a thread done removes the worktrees it made in `worktreeDir`, plus their branch when
-   * merged. Only one nothing would be lost from: clean, its HEAD on another ref, no hand-made ignored
-   * files, no other live thread working in it. Optional so an old blob parses; defaultSettings pins
-   * true. Machine-level. See server/worktree-cleanup.ts.
-   */
-  removeWorktreesOnDone: z.boolean().optional(),
+  // (No `worktreeDir` / `removeWorktreesOnDone`: Frizz mandates no worktree folder and removes no
+  // worktree on done, as upstream. Settings from 2026-09-30 to 2026-10-07; stripped on parse.)
   /**
    * Done threads the human has not touched (opened, replied to, acted on) for this many days are deleted, in every open project, by an hourly sweep
    * (server/thread-retention.ts). 0 = never, the default — a delete cannot be undone, so nothing is
@@ -4938,7 +4925,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
 
 /** Whether Frizz asks Claude for names, status lines, auto effort and schedule readings (Settings
  *  `backgroundSummaries`). On unless the human turned it off: an absent key, an older server's

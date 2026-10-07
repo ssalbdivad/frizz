@@ -497,7 +497,7 @@ test("a path with a trailing position that does not exist as written opens the b
   assert.deepEqual(calls.map((c) => c.args), [["-g", `${file}:12`], ["-g", `${file}:40`]], "an explicit position wins over the path's own")
 })
 
-// A link an agent wrote in its worktree names the worktree's copy; Done removes the worktree. The same
+// A link an agent wrote in its worktree names the worktree's copy; the worktree goes once merged. The same
 // relative path in the main checkout is the file it meant (router.ts settleWorktreePath).
 test("mainCheckoutCopy: a file in one of the project's worktrees is the same path in the main checkout", () => {
   const root = "/repo"
@@ -511,7 +511,7 @@ test("mainCheckoutCopy: a file in one of the project's worktrees is the same pat
   assert.equal(mainCheckoutCopy("/repo/src/a.ts", root, trees), undefined)
   assert.equal(mainCheckoutCopy("/elsewhere/.frizz/worktrees/tidy/a.ts", root, trees), undefined)
   assert.equal(mainCheckoutCopy("/repo/.frizz/worktrees-old/tidy/a.ts", root, trees), undefined)
-  // The worktree folder may live outside the project (the `worktreeDir` setting).
+  // The caller names the worktree folder, which need not be inside the project.
   assert.equal(mainCheckoutCopy("/trees/tidy/src/a.ts", root, "/trees"), "/repo/src/a.ts")
 })
 

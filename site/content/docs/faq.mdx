@@ -31,7 +31,7 @@ Barely. Starting a thread writes no thread file into your repo. All Frizz adds i
 
 <Accordion title="Do I have to use worktrees?">
 
-No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back; tell your agents what you want in [`FRIZZ.md`](/docs/frizz-md). When an agent does make a worktree, Frizz keeps it in one folder (`.frizz/worktrees` by default, set under **Settings → Worktree folder**) and refuses any other path. When you mark the thread done, it removes the worktrees that thread made, unless one still holds uncommitted or unmerged work; **Settings → Remove worktrees when done** turns that off.
+No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back. Tell your agents what you want in [`FRIZZ.md`](/docs/frizz-md). If you do run Frizz inside a linked worktree, it isolates that worktree's state from its siblings automatically.
 
 </Accordion>
 

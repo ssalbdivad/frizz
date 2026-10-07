@@ -219,7 +219,7 @@ export function useSettingsAutosave() {
 // the page becomes visible again — and holds its writes until that read lands. No socket carries
 // settings, so nothing else tells an open draft that another surface wrote meanwhile, and its next save
 // of anything put the old value back: a sidebar's Settings, open beside the browser for hours, undid
-// "Remove worktrees: Off" set in the browser the moment Notifications was toggled in the sidebar (and
+// an Off set in the browser (Remove worktrees when done, a setting since removed) the moment Notifications was toggled in the sidebar (and
 // two browser tabs did the same). Focus arrives on the pointer-DOWN that clicks into the frame, a hair
 // before the click it carries, so the read alone loses that race (a scripted click into the sidebar,
 // down and up in one tick, lost it 3 runs of 3, while the drawer went on to SHOW the adopted Off); the

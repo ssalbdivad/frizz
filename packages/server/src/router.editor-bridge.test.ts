@@ -230,7 +230,7 @@ test("editorState names the calling thread's own checkout, and only when it is n
   assert.equal(r.editorState.input.safeParse({ slug: "tidy", extra: 1 }).success, true)
 })
 
-// A thread in a worktree links its own copy; once Done removes the worktree, the same link opens the main
+// A thread in a worktree links its own copy; once the worktree is removed, the same link opens the main
 // checkout's copy rather than "not found". A real repository, a real `git worktree add` and `remove`.
 test("file links: a thread's worktree first, the main checkout after it is gone, and the page's spelling kept", { skip: process.platform === "win32" }, async (t) => {
   const repo = realpathSync(mkdtempSync(join(tmpdir(), "frizz-router-links-")))
@@ -260,7 +260,7 @@ test("file links: a thread's worktree first, the main checkout after it is gone,
   assert.equal((await r.settleLocalPath.handler({ input: { path: join(tree, "src", "a.ts") } })).path, join(tree, "src", "a.ts"))
   assert.equal((await r.localFile.handler({ input: { path: join(tree, "src", "a.ts") } })).text, "worktree copy\n")
 
-  // Done: the worktree goes. Its links now open the main checkout's copy, in every opener.
+  // The worktree goes (merged and removed). Its links now open the main checkout's copy, in every opener.
   git("worktree", "remove", "--force", tree)
   assert.equal(existsSync(tree), false)
   assert.deepEqual(await r.settleLocalPath.handler({ input: { path: join(tree, "src", "a.ts") } }), { path: join(repo, "src", "a.ts") })

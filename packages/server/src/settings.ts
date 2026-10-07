@@ -89,9 +89,6 @@ export const defaultSettings = (): Settings => ({
   codexContextWindow: undefined,
   // Hidden until asked for — see the schema for why.
   projectRail: false,
-  // Inside the project, never beside it — see the schema and cc-worker/hooks/worktree.mjs.
-  worktreeDir: ".frizz/worktrees",
-  removeWorktreesOnDone: true,
   // Never — see the schema.
   deleteDoneThreadsUntouchedDays: 0,
   // Off — it moves work onto Fable; see the schema and backend/fable-fallback.ts.

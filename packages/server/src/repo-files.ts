@@ -23,8 +23,8 @@ import { liftRepoWorktree } from "./thread-cwd.ts"
 // The test is therefore `git check-ignore`, which keeps new work visible and still drops everything
 // ignored: build output, `node_modules`, and the thread scratch this rule is aimed at.
 //
-// ASKED OF THE CHECKOUT THE FILE IS IN. A worker that isolates itself works in a linked worktree, and
-// Frizz's own worktree folder is `.frizz/worktrees/<slug>` INSIDE the project — which the project's
+// ASKED OF THE CHECKOUT THE FILE IS IN. A worker that isolates itself works in a linked worktree, and a
+// common place for one is `.frizz/worktrees/<slug>` INSIDE the project — which the project's
 // `.gitignore` ignores, as it ignores all of `.frizz/`. Asked in the project root, `check-ignore` read
 // every file of every worktree thread as ignored, so the rail of a thread that worked in one was empty
 // (review-final #11, 2026-10-02: 22 of 144 sessions in a week ran in `.frizz/worktrees`). The worktree is

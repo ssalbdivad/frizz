@@ -90,20 +90,6 @@
         ]
       }
     ],
-    "WorktreeCreate": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree.mjs\" --event=create" }
-        ]
-      }
-    ],
-    "WorktreeRemove": [
-      {
-        "hooks": [
-          { "type": "command", "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/worktree.mjs\" --event=remove" }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "startup",

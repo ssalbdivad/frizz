@@ -116,13 +116,12 @@ export function resolveOpenableFile(
  * → `<projectDir>/src/a.ts`. Undefined for a path outside the worktree folder, and for a worktree folder
  * itself. Pure — whether either file exists is the caller's question.
  *
- * What it is for: a link an agent wrote while it worked in a worktree names the worktree's copy, and Done
- * removes the worktree (worktree-cleanup.ts). The work it pointed at is merged into the main checkout by
- * then (cleanup keeps any worktree whose commits are on no other ref), so the same relative path there is
- * the file the link meant — and the same holds for a file an agent in a worktree names that was never in
- * its worktree at all (`.frizz/threads/<id>/notes.md`, untracked, lives only in the main checkout). The
- * worktree folder is the one place Frizz's workers make worktrees (the PreToolUse guard and the
- * WorktreeCreate hook put them there), so its first segment under the root is always a worktree's name.
+ * What it is for: a link an agent wrote while it worked in a worktree names the worktree's copy, and the
+ * worktree is usually removed once its branch is merged into the main checkout, so the same relative path
+ * there is the file the link meant — and the same holds for a file an agent in a worktree names that was
+ * never in its worktree at all (`.frizz/threads/<id>/notes.md`, untracked, lives only in the main
+ * checkout). The caller names the folder (router.ts settleWorktreePath: `<project>/.frizz/worktrees`), and
+ * the first segment under it is taken as a worktree's name.
  */
 export function mainCheckoutCopy(path: string, projectDir: string, worktreeRoot: string): string | undefined {
   const rel = posix.normalize(relativePath(worktreeRoot, path))

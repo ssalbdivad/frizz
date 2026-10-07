@@ -49,7 +49,7 @@ function harness() {
     project, storage, board, tailer,
     terminalRunner: { live: () => [], stopThread: async () => {}, closeThread: async () => {}, forgetThread: async (slug: string) => { terminalsForgot.push(slug) } },
     // Worktree cleanup is off here: it is its own feature, with its own tests.
-    getSettings: () => ({ removeWorktreesOnDone: false }) as unknown as Settings,
+    getSettings: () => ({}) as unknown as Settings,
   } as unknown as AppContext
   return {
     dir, storage, ctx, tailerForgot, terminalsForgot,

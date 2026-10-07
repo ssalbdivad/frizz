@@ -188,8 +188,6 @@ import { handleOf, isReplyWaitFor, knownHandles, replyWaitOf, replyWaitPrompt, r
 import { enqueueDeadlineNoticeWake, enqueueThreadMessageWake } from "./scheduler.ts"
 import { deadlineNoticeMessage, deadlineSection, deadlineViewOf, rowDeadline } from "./deadline.ts"
 import { editedFilesOf } from "./edited-files.ts"
-import { removableWorktrees, removeThreadWorktrees, unsavedWorktreeRefusal, worktreesAddedBy } from "./worktree-cleanup.ts"
-import { worktreeRootFor } from "../../../cc-worker/hooks/worktree.mjs"
 import { mayHaveLiveBackgroundWork, needsFreshProcessForLimit } from "./backend/usage-limit.ts"
 import { appServerTurnStalled, registeredDoneFence, resolveLiveWatchTarget, resolveRecurringPrompt } from "./board.ts"
 import { runThreadUpdate } from "./frizz.ts"
@@ -1479,32 +1477,6 @@ export function createRouter(ctx: AppContext) {
     return true
   }
 
-  // Marked done ⇒ the worktrees the thread made in the worktree folder go too, when the setting says so
-  // (worktree-cleanup.ts says exactly what is kept and why). Off the request path: `git worktree remove`
-  // on a tree full of node_modules takes seconds, and the card should move now.
-  //
-  // `inUse` is every OTHER not-done thread's working folder, read the way the terminal reads it
-  // (threadWorkingDir), so a worktree another thread is still working in — a spinoff child forked into
-  // its parent's folder — is kept. Not-done is the board's own reading (effectiveSessionState): an
-  // explicit `state` wins, else the legacy `archived` bit. A legacy row whose paired thread file alone
-  // says done counts as live here, which can only keep a worktree, never remove one.
-  function cleanupThreadWorktrees(slug: string): void {
-    const settings = ctx.getSettings()
-    if (settings.removeWorktreesOnDone === false) return
-    void (async () => {
-      const candidates = threadWorktreeCandidates(slug)
-      const inUse = () =>
-        ctx.storage
-          .allSessions()
-          .filter((row) => row.slug !== slug && row.state !== "archived" && !(row.state !== "open" && row.archived === 1))
-          .map((row) => ({ dir: threadWorkingDir(row.slug).dir, by: row.slug }))
-      const unsaved = (dir: string) => (ctx.editors?.unsavedUnder([dir]) ?? []).map((file) => file.path)
-      const { removed, kept } = await removeThreadWorktrees(candidates, settings.worktreeDir, inUse, unsaved)
-      for (const dir of removed) frizzLog.info("worktree", `removed ${dir} (thread ${slug} marked done)`)
-      for (const { path: dir, reason } of kept) frizzLog.info("worktree", `kept ${dir} (thread ${slug}): ${reason}`)
-    })().catch((error) => frizzLog.warn("worktree", `cleanup for ${slug} failed: ${String(error)}`))
-  }
-
   /**
    * The checkout `slug` works in when it is not the project root, for the `editor` tool (EditorStateCheckout):
    * the thread's own reading (threadWorkingDir — the tailer's, else its transcript's), spelled through the
@@ -1526,61 +1498,24 @@ export function createRouter(ctx: AppContext) {
     return { dir, root: workDir, kind: reading.kind === "worktree" ? "worktree" : "folder" }
   }
 
-  /** The worktrees Done would consider removing for `slug`: the ones its Bash calls added, and the one it
-   *  is standing in (EnterWorktree). Reads the thread's transcript. */
-  function threadWorktreeCandidates(slug: string): string[] {
-    const messages = readThreadTranscript(ctx.project, ctx.storage, slug, ctx.backendFor)
-    const checkout = ctx.tailer.get(slug)?.checkout
-    return [...worktreesAddedBy(messages, workDir), ...(checkout?.kind === "worktree" ? [checkout.dir] : [])]
-  }
-
-  // The worktree folder (worktree-cleanup.ts worktreeRootFor), memoized per setting value: it asks git for
-  // the main checkout, and Done asks it on every press while any editor holds an unsaved file.
-  let worktreeRootMemo: { setting: string | undefined; root: string } | undefined
-  function worktreeRoot(setting: string | undefined): string {
-    if (worktreeRootMemo && worktreeRootMemo.setting === setting) return worktreeRootMemo.root
-    const root = worktreeRootFor(setting, workDir)
-    worktreeRootMemo = { setting, root }
-    return root
-  }
-
   // A LINK INTO A WORKTREE THAT IS GONE OPENS THE MAIN CHECKOUT'S COPY. An agent working in a worktree
   // names its files there — absolute paths in its tool calls and prose, relative ones the page resolves
-  // against its worktree (lib/useMarkdown.ts CheckoutBaseContext) — and Done removes the worktree. Every
+  // against its worktree (lib/useMarkdown.ts CheckoutBaseContext) — and the worktree is usually removed
+  // once its branch is merged. Only `<project>/.frizz/worktrees/` is recognized: Frizz mandates no
+  // worktree folder, and that is the one convention it already knows (board.ts ignores it too). Every
   // way the page opens a local file (the editor, the reader, inline-code links, the sidebar's own opener
   // through `settleLocalPath`) passes the path through here: as asked while it exists, else the main
   // checkout's copy when THAT exists (local-file.ts mainCheckoutCopy), else as asked, so the error a
   // missing file gets is unchanged. A trailing `:12` the opener strips later is carried along.
   function settleWorktreePath(path: string): string {
     if (!isAbsolute(path) || existsOrPositioned(path)) return path
-    const copy = mainCheckoutCopy(path, workDir, worktreeRoot(ctx.getSettings().worktreeDir))
+    const copy = mainCheckoutCopy(path, workDir, join(workDir, ".frizz", "worktrees"))
     return copy && existsOrPositioned(copy) ? copy : path
   }
   function existsOrPositioned(path: string): boolean {
     if (existsSync(path)) return true
     const split = splitFilePosition(path)
     return split.position !== undefined && existsSync(split.path)
-  }
-
-  // DONE REFUSES WHILE AN EDITOR HOLDS UNSAVED CHANGES IN A WORKTREE IT WOULD REMOVE. Marked done, a
-  // thread's worktree goes (cleanupThreadWorktrees), and git cannot see a buffer: a file the human edited
-  // in VS Code and has not saved reads as clean, so the folder would go out from under the tab. Refused
-  // HERE, before anything is archived or stopped, with what to do — save it (git then sees a modified
-  // file and keeps the worktree) or close it (nothing is lost) — because a worktree kept quietly by
-  // cleanup's own check 0 is a finished thread the human believes cleaned up and never hears about.
-  //
-  // Cheap when it does not apply, which is nearly always: no connected window with a dirty file under the
-  // worktree folder means no transcript read and no git. A dirty file in a worktree cleanup would keep
-  // anyway (an unmerged branch) is refused too: the human is plainly still working there, and saving or
-  // closing first costs one click.
-  function assertNoUnsavedWorktreeFiles(slug: string): void {
-    const editors = ctx.editors
-    const settings = ctx.getSettings()
-    if (!editors || settings.removeWorktreesOnDone === false) return
-    if (editors.unsavedUnder([worktreeRoot(settings.worktreeDir)]).length === 0) return
-    const dirs = removableWorktrees(threadWorktreeCandidates(slug), settings.worktreeDir)
-    const unsaved = editors.unsavedUnder(dirs)
-    if (unsaved.length > 0) throw new Error(unsavedWorktreeRefusal(unsaved))
   }
 
   // Starting a HELD thread goes through the project's ONE starter (held-start.ts), shared with the
@@ -3636,10 +3571,8 @@ export function createRouter(ctx: AppContext) {
         // answered success while the card stayed exactly where it was. Caught 2026-08-08 archiving a
         // thread over the RPC: `archived = 1` in SQLite, `archived: false` on the board, forever.
         // Filed under Done, so its terminals stop with it, as they do for Mark as done (completeThread).
-        assertNoUnsavedWorktreeFiles(input.slug)
         await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, "archived")
-        cleanupThreadWorktrees(input.slug)
         const t = (await ctx.board.snapshot()).threads.find((x) => x.id === input.slug)
         if (!isAutoTitledSession(input.slug) && t && t.status !== "done" && t.status !== "dismissed") {
           await runThreadUpdate(ctx.project.dir, input.slug, ["--status", "done"]).catch(() => {})
@@ -3677,11 +3610,9 @@ export function createRouter(ctx: AppContext) {
       input: z.object({ slug: ThreadSlug, state: z.enum(["open", "archived"]) }).strict(),
       handler: async ({ input }) => {
         if (!ctx.storage.getSession(input.slug)) throw new Error(`no session registered for ${input.slug}`)
-        if (input.state === "archived") assertNoUnsavedWorktreeFiles(input.slug)
         // Filed under Done ⇒ its terminals stop first (thread-terminals.ts), so nothing live is filed with it.
         if (input.state === "archived") await ctx.terminalRunner.closeThread(input.slug)
         ctx.storage.setState(input.slug, input.state)
-        if (input.state === "archived") cleanupThreadWorktrees(input.slug)
         ctx.board.refresh() // storage-only change — overlay is enough
       },
     }),
@@ -3694,8 +3625,6 @@ export function createRouter(ctx: AppContext) {
       output: z.object({ needsConfirmation: z.boolean(), hold: CompletionHold.optional() }),
       handler: async ({ input }) => {
         const row = currentOwnedSession(input.slug, input.sessionId)
-        // Before the worker is stopped or asked about: a refusal must leave the thread exactly as it was.
-        assertNoUnsavedWorktreeFiles(input.slug)
         // The standing sign-off, as the BOARD reads it: a done registered through the tool is in no
         // transcript record, so the tailer's own `lastFence` never carries it (board.registeredDoneFence).
         const raw = ctx.tailer.get(input.slug)
@@ -3709,10 +3638,7 @@ export function createRouter(ctx: AppContext) {
             close: () => ctx.terminalRunner.closeThread(input.slug),
           },
         )
-        if (!result.needsConfirmation) {
-          cleanupThreadWorktrees(input.slug)
-          ctx.board.refresh()
-        }
+        if (!result.needsConfirmation) ctx.board.refresh()
         return result
       },
     }),
@@ -4695,10 +4621,6 @@ export function createRouter(ctx: AppContext) {
     deleteThread: mutation({
       input: SlugInput,
       handler: async ({ input }) => {
-        // A thread deleted before it was marked done never had its worktrees cleaned up; do what done
-        // would have. It reads the transcript synchronously, so it has what it needs before the row goes.
-        const row = ctx.storage.getSession(input.slug)
-        if (row && row.state !== "archived" && row.archived !== 1) cleanupThreadWorktrees(input.slug)
         if (await deleteOwnedThread(ctx, input.slug)) ctx.board.refresh() // the removed row fans out as a delete delta on SSE
       },
     }),

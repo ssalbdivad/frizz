@@ -13,7 +13,6 @@
 import { readFileSync, realpathSync } from 'node:fs';
 import { basename } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { evaluateWorktreeGuard, worktreeSetting } from './worktree.mjs';
 
 /** @param {unknown} obj @returns {never} */
 function emit(obj) {
@@ -338,13 +337,7 @@ if (isDirectHookExecution(process.argv[1], import.meta.url)) {
     const env = process.argv.includes('--frizz-thread')
       ? { ...process.env, FRIZZ_THREAD: process.env.FRIZZ_THREAD || 'codex-worker' }
       : process.env;
-    const input = JSON.parse(readFileSync(0, 'utf8'));
-    // The worktree-location guard rides this registration (worktree.mjs) so Codex, whose hooks arrive
-    // one config override at a time, gets it without a second one. Only inside a Frizz worker.
-    const worktreeDenial = String(env.FRIZZ_THREAD ?? '').trim()
-      ? evaluateWorktreeGuard(input, worktreeSetting(process.argv, env))
-      : undefined;
-    emit(worktreeDenial ?? evaluateBashBackgroundHook(input, env));
+    emit(evaluateBashBackgroundHook(JSON.parse(readFileSync(0, 'utf8')), env));
   } catch {
     emit({});
   }

@@ -276,12 +276,12 @@ function registeredLegacyFileIsTerminal(projectDir: string, slug: string): boole
 // JS at all. The predicate is the CORRECTNESS half: it is an allow-list of what the board reads, so a
 // tree nobody has thought of yet costs one string test rather than a rebuild.
 //
-// `worktrees` is the costly one. Agent worktrees moved INTO `.frizz/worktrees/` (settings.ts
-// `worktreeDir`), and each is a full checkout with its own `node_modules` and build output: on
-// 2026-10-06 arktype's held 4.4G in 286,510 directories, every one an inotify descriptor. Opening
-// that project took 711s, and a build deleting `out/structure` mid-walk failed the subscribe with
-// ENOENT and took the whole project down with it — no scheduler, so a question answered a second
-// later was never delivered.
+// `worktrees` is the costly one. A project that keeps its agents' worktrees in `.frizz/worktrees/` (this
+// repo's own convention; Frizz mandates no folder) holds a full checkout in each, with its own
+// `node_modules` and build output: on 2026-10-06 arktype's held 4.4G in 286,510 directories, every one
+// an inotify descriptor. Opening that project took 711s, and a build deleting `out/structure` mid-walk
+// failed the subscribe with ENOENT and took the whole project down with it — no scheduler, so a
+// question answered a second later was never delivered.
 const FRIZZ_WATCH_IGNORED_DIRS = ["threads", ".session-state", "worktrees"]
 
 // True when a watcher event names a file the board would actually re-read. `roots` holds every spelling

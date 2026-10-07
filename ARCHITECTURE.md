@@ -134,22 +134,12 @@ shows less without scrolling than upstream's board does, with the project rail o
   is not offered (a saved `auto` launches on a fixed level, high for Claude), and a prompt is not read
   for a schedule. Every call that does go out is logged at debug with its purpose. `FRIZZ_THREAD_NAMER=0`, `FRIZZ_LIVE_STATUS=0` and
   `FRIZZ_AUTO_EFFORT=0` still work, as overrides that can only turn a call OFF.
-- **A worker's git worktrees go in ONE folder, and a thread marked done takes its own with it.** Frizz
-  creates no worktree or branch itself, but where an agent makes one is enforced, not suggested — a
-  prompt line alone kept producing `~/<repo>-<slug>` folders beside the checkout. The machine setting
-  `worktreeDir` (Settings → Worktree folder, default `.frizz/worktrees` against the repository's main
-  checkout, which `.frizz/.gitignore` keeps out of git; absolute or `~/…` for one folder across
-  repositories) reaches a worker as `FRIZZ_WORKTREE_DIR` (Claude) or `--worktree-dir=` (Codex), and
-  `cc-worker/hooks/worktree.mjs` holds it three ways: the PreToolUse(Bash) guard denies a
-  `git worktree add` outside the folder and names the path to use, Claude Code's WorktreeCreate /
-  WorktreeRemove hooks put `EnterWorktree` and `isolation: "worktree"` sub-agents there, and its parser
-  is what `server/worktree-cleanup.ts` reads back out of the transcript when the thread is marked done
-  (`removeWorktreesOnDone`, Settings → Remove worktrees when done, default on). Cleanup removes only a
-  worktree nothing would be lost from — no unsaved editor buffer, no other live thread in it, its HEAD on
-  another ref, only regenerable ignored files, and git agreeing it is clean — and its branch only through
-  `git branch -d`; any check it cannot answer keeps the worktree. The rule is the fork's and bends
-  upstream's "no git or worktree opinions" (P10), so it is offered to Colin as a decision
-  (`plans/upstream-superset.md` §1, §8).
+- **No worktree opinions.** Frizz creates no worktree or branch, mandates no folder for one, and
+  removes none when a thread is marked done; where an agent makes a worktree is the project's call, in
+  its `FRIZZ.md`. What Frizz does know is which checkout a thread works in (the tailer's `checkout`),
+  so the terminal, the `editor` tool and a thread's links follow it. The fork enforced one folder and
+  cleaned it up on done from 2026-09-30 to 2026-10-07; that went, matching upstream's "no git or
+  worktree opinions" (P10).
 - **Full-snapshot SSE.** The single `/events` SSE channel pushes `{type:"board", board}` full
   snapshots (see `@frizz/shared` `ServerEvent`). No diff protocol.
 - **Permission prompts come from a MARKER, not from JSONL.** Even under `--permission-mode auto` a
@@ -560,8 +550,7 @@ every worker the editor through the `editor` MCP tool.
   windows that have the caller's project open and counts the rest. A held thread carries no editor
   block, since it would be read hours later as the moment of launch.
 - **Worktrees: everything that crosses names its copy.** The `editor` tool, sidebar sends and a
-  thread's links resolve against the thread's checkout first, then the project. Done is refused while a
-  sharing window holds an unsaved file in a worktree Done would remove. A worker never attaches to the
+  thread's links resolve against the thread's checkout first, then the project. A worker never attaches to the
   human's IDE: `inheritWorkerEnvironment` drops Claude Code's IDE variables, and a Claude worker gets
   `CLAUDE_CODE_AUTO_CONNECT_IDE=false`.
 - **Review changes opens VS Code's multi-file diff.** The server names the checkouts from where the

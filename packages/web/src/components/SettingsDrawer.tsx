@@ -199,17 +199,6 @@ export function SettingsDrawer() {
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
             <SlashCommandsField />
 
-            <SettingsField label="Worktree folder" help={SETTINGS_HELP.worktreeDir}>
-              <WorktreeDirField value={draft.worktreeDir ?? ""} onCommit={(worktreeDir) => update({ ...draft, worktreeDir })} />
-            </SettingsField>
-
-            <SettingsField label="Remove worktrees when done" help={SETTINGS_HELP.removeWorktreesOnDone}>
-              <OnOffToggle
-                value={draft.removeWorktreesOnDone ?? true}
-                onChange={(removeWorktreesOnDone) => update({ ...draft, removeWorktreesOnDone })}
-              />
-            </SettingsField>
-
             <SettingsField label="Delete done threads" help={SETTINGS_HELP.deleteDoneThreadsUntouchedDays}>
               <Select
                 variant="bordered"
@@ -260,38 +249,6 @@ export function SettingsDrawer() {
       </div>
       </OverDrawersFocusLayer>
     </div>
-  )
-}
-
-/**
- * Settings → Worktree folder. Committed on Enter or blur like the Home folder, but with nothing for the
- * server to check: a relative value names a folder inside whichever repository a worktree is made in,
- * so there is no one path to validate. Blank restores the default.
- */
-function WorktreeDirField({ value, onCommit }: { value: string; onCommit: (dir: string) => void }) {
-  const [text, setText] = useState(value)
-  const commit = () => {
-    const dir = text.trim() || ".frizz/worktrees"
-    setText(dir)
-    if (dir !== value.trim()) onCommit(dir)
-  }
-  const commitRef = useRef(commit)
-  commitRef.current = commit
-  useEffect(() => () => commitRef.current(), [])
-  return (
-    <input
-      aria-label="Worktree folder"
-      value={text}
-      onChange={(event) => setText(event.target.value)}
-      onBlur={commit}
-      onKeyDown={(event) => {
-        if (event.key === "Enter") commit()
-      }}
-      placeholder=".frizz/worktrees"
-      spellCheck={false}
-      autoComplete="off"
-      className="w-full rounded-md border border-border bg-bg px-2 py-1 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-    />
   )
 }
 

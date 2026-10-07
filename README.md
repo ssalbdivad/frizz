@@ -87,7 +87,6 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 - A question unanswered 10m after its thread rests takes the agent's recommended option, never one that posts, merges, publishes or spends. The × under the card turns it off.
 - A parent waiting on its sub-agents is asked for a progress note every 30m, so a long fan-out never shows one stale line for hours.
 - Thread names, status lines, Auto effort and reading a schedule out of a prompt use your Claude sign-in. **Background summaries** turns all four off.
-- An agent's git worktrees go in one folder and are removed when the thread is marked done, if nothing would be lost. **Settings → Remove worktrees when done** turns that off.
 - Single-key shortcuts (`j`/`k`, `r`, `d`, `s`) are on. `?` lists them and rebinds any of them.
 
 <br/>
@@ -250,7 +249,7 @@ In the terminal running Frizz, **R** sets up remote access and **L** shows a fre
 <details>
 <summary><b>Do I have to use worktrees?</b></summary>
 
-> No. Frizz creates no branches or worktrees; tell your agents what you want in `FRIZZ.md`. When an agent does make a worktree, Frizz keeps it in one folder (**Settings → Worktree folder**, `.frizz/worktrees` by default) and removes it when the thread is marked done, unless it holds anything you'd lose.
+> No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back. Tell your agents what you want in `FRIZZ.md`. If you do run Frizz inside a linked worktree, it isolates that worktree's state from its siblings automatically.
 
 </details>
 

@@ -318,7 +318,6 @@ export function codexScratchpadHookConfig(
   hookScript: string | undefined,
   sessionId: string,
   boardRoot?: string,
-  worktreeDir?: string,
 ): Record<string, unknown> {
   if (!hookScript || !sessionId) return {}
   // `--session` is mandatory: codex reports its OWN rollout session id to the hook, so without frizz's
@@ -345,8 +344,7 @@ export function codexScratchpadHookConfig(
         matcher: "^Bash$",
         hooks: [{
           type: "command",
-          // `--worktree-dir` for the worktree-location guard it also runs (cc-worker/hooks/worktree.mjs).
-          command: `node ${JSON.stringify(bashBackgroundHook)} --frizz-thread${worktreeDir ? ` --worktree-dir=${JSON.stringify(worktreeDir)}` : ""}`,
+          command: `node ${JSON.stringify(bashBackgroundHook)} --frizz-thread`,
         }],
       }],
       // Native Codex children inherit the root scratch-directory instruction even with
@@ -1093,7 +1091,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             sandbox: codexSandbox(permissionMode) as "read-only" | "workspace-write" | "danger-full-access",
             baseInstructions: [loadWorkerPrompt("codex", workerCapabilities(deps.editors, workDir)), extraSystemPrompt].filter(Boolean).join("\n\n"),
             developerInstructions: codexFirstOutputTitleInstructions(deps.threadNamer?.promptNames(slug) ?? []),
-            config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId, boardRoot, settings.worktreeDir) },
+            config: { model_reasoning_summary: "detailed", ...codexScratchpadHookConfig(scratchpadHookScript(), sessionId, boardRoot) },
           })
           deps.storage.upsertSession({
             slug,
