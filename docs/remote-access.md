@@ -72,7 +72,7 @@ Your board stays on loopback and **dials out** to `frizz.sh`, which is what remo
 - **One name per machine key, and one custom name per GitHub account.** Accounts less than 30 days old cannot claim a custom name.
 - **The name is a lease, not property.** It lapses after 30 days unused, and Frizz can reclaim any name at any time — that is the only enforcement there is, so it has to exist.
 - **No warranty.** This is a free convenience on a domain someone else owns. Anything you cannot afford to lose access to belongs on a domain you control; every other section here shows how.
-- **Your traffic is not ours.** It goes from your machine to the relay to whoever is visiting. The registrar runs at signup and never again, and Frizz has no way to see what passes over your board.
+- **Your traffic passes through us.** A name on frizz.sh is served by a relay we run: every request and every keystroke goes through it. Frizz's own access gate still runs on your machine, so a visitor meets it whether or not the relay is honest — but if you would rather no third party carried the bytes, use a domain you control.
 
 ## Cloudflare Tunnel
 
@@ -84,6 +84,17 @@ cloudflared tunnel create my-board
 cloudflared tunnel route dns my-board board.example.com
 ```
 
+Point the tunnel at the board in `~/.cloudflared/frizz.yml`, which Frizz looks for by name. Keep it out of `config.yml`, whose catch-all shadows other tunnels:
+
+```yaml
+tunnel: my-board
+credentials-file: /Users/you/.cloudflared/<tunnel-id>.json
+ingress:
+  - hostname: board.example.com
+    service: http://127.0.0.1:9393
+  - service: http_status:404
+```
+
 Then pick **Cloudflare Tunnel** and name them:
 
 ```
@@ -91,7 +102,7 @@ Then pick **Cloudflare Tunnel** and name them:
   Tunnel     my-board
 ```
 
-Frizz writes `~/.cloudflared/frizz.yml` (an ingress from the hostname to the board's loopback port) and runs the tunnel beside the board, so the two share a lifetime: a tunnel that outlives its board serves Cloudflare error 1033, and a board that outlives its tunnel is unreachable with nothing to say why.
+Frizz runs the tunnel beside the board, so the two share a lifetime: a tunnel that outlives its board serves Cloudflare error 1033, and a board that outlives its tunnel is unreachable with nothing to say why.
 
 ## Tailscale
 

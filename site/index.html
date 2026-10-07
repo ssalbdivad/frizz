@@ -4,11 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>Frizz — an opinionated agent console</title>
-    <meta name="description" content="Run many Claude Code and Codex agents at once from one browser tab. Every agent that needs you becomes a card in one queue. Local only: no account, no telemetry." />
+    <meta name="description" content="Run many Claude Code, Codex and other coding agents at once from one browser tab. Every agent that needs you becomes a card in one queue. Local only: no account, no telemetry." />
     <link rel="canonical" href="https://frizz.sh/" />
     <meta property="og:type" content="website" />
     <meta property="og:title" content="Frizz — an opinionated agent console" />
-    <meta property="og:description" content="Run many Claude Code and Codex agents at once from one browser tab. Local only: no account, no telemetry." />
+    <meta property="og:description" content="Run many Claude Code, Codex and other coding agents at once from one browser tab. Local only: no account, no telemetry." />
     <meta property="og:url" content="https://frizz.sh/" />
     <meta property="og:image" content="https://frizz.sh/img/og.png?v=44cbd08b" />
     <meta property="og:image:width" content="1200" />
@@ -49,7 +49,7 @@
         </div>
         <h1>Frizz</h1>
         <p class="lede">An opinionated agent console for extreme productivity.</p>
-        <p>Frizz runs many Claude Code and Codex agents at once from one browser tab. Every agent that needs you becomes a card in one queue.</p>
+        <p>Frizz runs many Claude Code, Codex and other ACP agents at once from one browser tab. Every agent that needs you becomes a card in one queue.</p>
         <div class="install">
           <pre class="term"><code><span class="prompt">$</span> npx frizz</code></pre>
           <button class="copy" type="button" data-copy="npx frizz" aria-label="Copy the install command">Copy</button>
@@ -71,7 +71,7 @@
         <div class="row">
           <div class="row-text">
             <h3>The queue</h3>
-            <p>A worker runs until it reaches something only you can settle, then asks a question with lettered options. One keystroke answers it. Nothing shows up just to be dismissed.</p>
+            <p>A worker runs until it reaches something only you can settle, then asks a question with lettered options. One keystroke answers it, and a question left alone takes the recommended option after ten minutes. Nothing shows up just to be dismissed.</p>
           </div>
           <figure class="shot">
             <img src="/img/question.png?v=78ec2d59" width="1600" height="590" loading="lazy" alt="A question card: 'Should the settings store use SQLite or a JSON file?' with two lettered options, A tagged RECOMMENDED, and a row for typing something else." />
@@ -80,7 +80,7 @@
         <div class="row">
           <div class="row-text">
             <h3>Projects</h3>
-            <p>Every directory you run it in becomes a project with its own board, all on one server. The home page puts every project's queue on one page, and choosing a project narrows it to just that one.</p>
+            <p>Every directory you run it in becomes a project, all on one server. The home page puts every project's queue on one page, and choosing a project narrows it to just that one.</p>
           </div>
           <figure class="shot">
             <img src="/img/projects.png?v=f181107c" width="1760" height="1100" loading="lazy" alt="Frizz's home page: a list of projects with their threads beneath them, and beside it every project's ready cards in one column, the first asking a question with lettered options." />
@@ -89,7 +89,7 @@
         <div class="row">
           <div class="row-text">
             <h3>Goal</h3>
-            <p>Give a thread a standing goal. Frizz sends it as a prompt every time the thread rests, on a clock you set, or both, until you switch it off or the agent says it is done.</p>
+            <p>Give a thread a standing goal. Frizz sends it as a prompt every time the thread rests, on a clock you set, or both, until you switch it off, it reaches its limit, or the agent says it is done.</p>
           </div>
           <figure class="shot">
             <img src="/img/goal.png?v=d52d101d" width="1600" height="1170" loading="lazy" alt="The goal panel open above a queue card's prompt box: a goal saying to keep going until the test suite is green, sent at every rest and every 30 minutes." />
@@ -116,6 +116,15 @@
       </section>
 
       <article class="doc">
+        <h2>And more</h2>
+        <ul>
+          <li><strong>Schedules.</strong> Type “every weekday at 9am triage new issues” and each run starts a fresh thread.</li>
+          <li><strong>Time limits.</strong> Give a thread “2h” and its agent plans for the best result by then. The card counts down.</li>
+          <li><strong>Threads that talk.</strong> Every thread has an <code>@handle</code>. Agents read and message each other by it.</li>
+          <li><strong>Any agent.</strong> Claude Code and Codex on your subscription, plus OpenCode, Gemini CLI, Copilot CLI and other ACP agents.</li>
+          <li><strong>Your phone and your editor.</strong> A phone layout, a VS Code sidebar, and a desktop app.</li>
+        </ul>
+
         <h2>What it is not</h2>
         <ul>
           <li>Not a model. Frizz drives the CLIs you already have signed in, on your subscription.</li>
@@ -128,7 +137,8 @@
 
         <pre class="term"><code>  Reach this board from anywhere
 
-  <span class="prompt">❯</span> frizz.sh name
+  <span class="prompt">❯</span> Private name
+    Custom name
     Cloudflare Tunnel
     Tailscale
     Something else
@@ -139,7 +149,7 @@
         <p>Whichever you pick, <strong>Frizz does the authenticating</strong> — a tunnel or proxy only adds TLS and a hostname. Every request and every socket has to carry a session, and a device that has not redeemed a single-use sign-in link is refused no matter what sits in front. Press <code>L</code> for a fresh link. <code>npx frizz --sessions</code> lists the devices holding one; <code>--sign-out</code> revokes a device you no longer have.</p>
 
         <ul>
-          <li><a href="/docs/frizz-sh">A name on frizz.sh</a> — needs a GitHub account, nothing else.</li>
+          <li><a href="/docs/frizz-sh">A name on frizz.sh</a> — nothing to set up; a custom name needs a GitHub account.</li>
           <li><a href="/docs/cloudflare-tunnel">Cloudflare Tunnel</a> — a domain you own on Cloudflare.</li>
           <li><a href="/docs/tailscale">Tailscale</a> — your tailnet, reachable by your devices only.</li>
           <li><a href="/docs/ssh">SSH port forwarding</a> — one session, nothing exposed.</li>

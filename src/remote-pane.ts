@@ -231,7 +231,7 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
         "  cloudflared tunnel route dns my-board board.example.com",
         "",
         ...wrap(
-          `Then name them here. Frizz writes ~/.cloudflared/frizz.yml (ingress to http://127.0.0.1:${options.port}) and runs the tunnel beside the board, so the two share a lifetime.`,
+          `Point it at http://127.0.0.1:${options.port} in ~/.cloudflared/frizz.yml, which Frizz reads by name. Then name them here, and Frizz runs the tunnel beside the board, so the two share a lifetime.`,
         ),
       ];
     }

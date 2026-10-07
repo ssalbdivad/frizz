@@ -14,7 +14,11 @@ A name belongs to whoever holds an Ed25519 private key, kept at `identity.key` u
 claiming machine. Every claim is signed; the signature covers the public key, so a request cannot be
 re-attributed by swapping it. Ownership moves between machines the way an SSH key does: copy the file.
 
-**Claiming also needs a GitHub account, and that is the only thing standing between this and a
+**A private name needs nothing more.** Twenty random base32 characters can't be squatted, so the
+registrar recognizes that shape and waives the GitHub gate. Unauthenticated creation is capped at 10
+names an hour per network address, and renewals never count against it.
+
+**A custom name also needs a GitHub account, and that is the only thing standing between it and a
 squatter.** The CLI asks `gh` for a token; the registrar spends it on `api.github.com/user`, keeps the
 numeric id and discards the token. One name per account, and an account younger than 30 days cannot
 claim. Nothing afterwards touches GitHub — the keypair alone renews the lease, so a name keeps working
