@@ -61,18 +61,28 @@ export function deadlineNeedsFastTick(atMs: number, nowMs: number): boolean {
  * screenful of chips shares, and a 1s interval of this reading's own only while it counts seconds. A
  * reading in minutes on a 30s clock is at most 30s stale, and `spanLabel` rounds UP, so it never claims
  * less time than there is.
+ *
+ * NEVER OLDER THAN THE DEADLINE IT READS. The shared clock is only as fresh as its last tick, so a limit set
+ * just now — "45m" — read "46m left" for up to half a minute: 45m against a clock 20s behind, rounded up.
+ * The reading takes the wall clock afresh when it mounts and whenever its deadline moves.
  */
 export function useDeadlineNow(atMs: number | undefined): number {
   const shared = useNowMs()
-  const [fast, setFast] = useState(0)
-  const near = atMs !== undefined && deadlineNeedsFastTick(atMs, Math.max(shared, fast))
+  const [own, setOwn] = useState(() => Date.now())
+  const [readFor, setReadFor] = useState(atMs)
+  if (readFor !== atMs) {
+    setReadFor(atMs)
+    setOwn(Date.now())
+  }
+  const now = Math.max(shared, own)
+  const near = atMs !== undefined && deadlineNeedsFastTick(atMs, now)
   useEffect(() => {
     if (!near) return
-    setFast(Date.now())
-    const id = setInterval(() => setFast(Date.now()), 1_000)
+    setOwn(Date.now())
+    const id = setInterval(() => setOwn(Date.now()), 1_000)
     return () => clearInterval(id)
   }, [near])
-  return near && fast > shared ? fast : shared
+  return now
 }
 
 /** "Ends 3:30 PM" today, "Ends tomorrow at 9:00 AM", "Ends Friday at 3:30 PM"; "Ended 3:30 PM" once past.

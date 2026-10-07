@@ -6,7 +6,9 @@ import { ThreadHeader } from "./components/ChatView.tsx"
 import { DispatchForm } from "./components/NewThreadModal.tsx"
 import { ThreadRow, type RowScope } from "./components/Sidebar.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
+import { Toaster } from "./components/Toaster.tsx"
 import { draftKey, draftStore } from "./lib/drafts.ts"
+import { useSnapshot } from "valtio"
 import { store } from "./store.ts"
 import "./styles.css"
 
@@ -19,7 +21,8 @@ import "./styles.css"
 //   ?outcome=failure     the dispatch RPC fails, so the limit has to come back with the prompt
 //   &w=<px>              the rail's width (default 320)
 //
-// Every dispatch body and every setThreadDeadline call is recorded on window.deadlineFixture. Always sans:
+// Every dispatch body and every setThreadDeadline call is recorded on window.deadlineFixture; `&deadlineFail=1`
+// makes setThreadDeadline fail, so its toast can be seen. Always sans:
 // it is the only font the app renders (index.html), and a mono measurement is of a page nobody sees.
 
 document.documentElement.dataset.font = "sans"
@@ -95,6 +98,7 @@ window.fetch = async (input, init) => {
   if (rpc === "setThreadDeadline") {
     const call = body as unknown as SetThreadDeadlineInput
     recorded.deadlines.push(call)
+    if (params.get("deadlineFail") === "1") return new Response(JSON.stringify({ error: "Fixture refused the time limit" }), { status: 500, headers: { "content-type": "application/json" } })
     // The board push the server would send: the thread's deadline as now set, by the human.
     store.board!.threads = store.board!.threads.map((t) =>
       t.id === call.slug ? { ...t, deadline: call.deadline ? { at: call.deadline, setAt: new Date().toISOString(), setBy: "human" as const } : undefined } : t,
@@ -119,11 +123,13 @@ function Header({ slug }: { slug: string }) {
 }
 
 function Fixture() {
+  // The rail reads the board, as the page's does, so a setThreadDeadline the fixture applies shows there too.
+  const rows = (useSnapshot(store).board?.threads ?? []) as ThreadView[]
   return (
     <main className="min-h-screen bg-bg p-6 text-fg">
       <div className="flex flex-wrap items-start gap-8">
         <div data-sidebar-rail data-fixture-rail style={{ width: railWidth }}>
-          {threads.map((t) => <ThreadRow key={t.id} scope={ROW_SCOPE} t={t} restedAge={t.id === "rested"} />)}
+          {rows.map((t) => <ThreadRow key={t.id} scope={ROW_SCOPE} t={t} restedAge={t.id === "rested"} />)}
         </div>
         <div className="flex w-[560px] flex-col gap-4">
           <section data-fixture-dispatch className="rounded-xl border border-border bg-panel p-5">
@@ -132,8 +138,10 @@ function Fixture() {
           <Header slug="plenty" />
           <Header slug="closing" />
           <Header slug="over" />
+          <Header slug="none" />
         </div>
       </div>
+      <Toaster />
     </main>
   )
 }
