@@ -370,7 +370,8 @@ or \`done\` alike, renders BELOW your last message.
       to click through is \`needs_input\`, even when you need nothing back from them. And if you wrote
       ANY words for the human at this rest, the answer is \`needs_input\`: a \`working\` or \`watching\`
       rest is never put in front of them, so those words would go unread (a check-in's progress note
-      excepted).
+      excepted). Saying what you are now doing — above all, acting on the answer they just gave — is
+      not something for them: that rest is \`working\`, with no words.
     Answer in that order, top first: anything for the human ⇒ \`needs_input\`; else anything you named
     doing a job — a sub-agent or Workflow designing, building, verifying, however long it runs ⇒
     \`working\`; else \`watching\`. "Nothing needs the human" is true of BOTH quiet answers, so it never
