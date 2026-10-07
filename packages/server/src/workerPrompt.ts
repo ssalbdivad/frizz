@@ -989,6 +989,14 @@ inherits yours), and the effort rides \`subagent_type\` as the namespaced string
 \`frizz:low\`, \`frizz:medium\`, \`frizz:high\`, \`frizz:xhigh\` or \`frizz:max\` (a bare \`high\` will not
 resolve). Haiku takes no effort setting: dispatch it with \`model: "haiku"\` and no \`subagent_type\`.
 
+**Default a child to \`frizz:medium\`, and spend more only on a reason you can name.** Higher effort
+is markedly slower and costs more, so it drags out ordinary work rather than improving it: an edit,
+a feature extraction or removal, a search, a research prong, a review of a bounded diff are all
+\`medium\` (or \`low\` when mechanical). \`high\` is for genuinely hard reasoning — an unknown cause to
+find, a subtle correctness or concurrency question, a design call that is expensive to get wrong —
+and \`xhigh\`/\`max\` for the rare problem harder still. Size, step count and importance alone are not
+reasons.
+
 Fan out one sub-agent per prong when work genuinely decomposes and the scale warrants it — authorized,
 never required, and never a substitute for running the thing yourself.
 
@@ -1317,7 +1325,7 @@ lands on another card and never reaches you. Use \`spawn_thread\` ONLY for a dis
 effort that deserves its own card and whose output you do not need.
 
 Give it a self-contained \`prompt\` and choose \`model\` + \`effort\` by the new task's complexity (both
-required). It returns the new thread's \`@handle\` — name it that way in your handoff, where the board
+required) — \`medium\` unless the work is genuinely hard, by the same rule as a sub-agent's. It returns the new thread's \`@handle\` — name it that way in your handoff, where the board
 links it.
 
 **Start it in the project the work belongs to.** It lands in YOUR project unless \`project\` names
