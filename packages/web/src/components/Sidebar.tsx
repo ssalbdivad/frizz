@@ -869,12 +869,18 @@ function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry
 // learned on 2026-09-29 (6dbe4e27) that a 16px glyph alone is a target almost nobody finds, so the title,
 // a target the size of the row, carries it too. The delay keeps a pointer sweeping down the list from
 // flashing a tip per row it crosses. The task clock is not in the tip: it stays on the line.
+//
+// It opens UNDER the title, at its start. The title's box is `flex-1` (it fills the line up to the clock),
+// so `side="right"` opened the tip at the row's right edge: 173px past the end of a short name, on top of
+// the clock and the hover's pin (measured 2026-10-06, acme-api's board at 1440: title ink ends at x 397,
+// the box at 560, the tip opened at 570 over the clock at 572). Below and start-aligned, it sits under the
+// words it explains, whatever their length, and covers nothing of its own row.
 const ROW_STATUS_TIP_DELAY_MS = 350
 
 function RowStatusTip({ status, children }: { status: string | undefined; children: ReactElement }) {
   if (!status) return children
   return (
-    <Tooltip label={status} side="right" delay={ROW_STATUS_TIP_DELAY_MS}>
+    <Tooltip label={status} side="bottom" align="start" delay={ROW_STATUS_TIP_DELAY_MS}>
       {children}
     </Tooltip>
   )

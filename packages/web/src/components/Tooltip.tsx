@@ -20,6 +20,7 @@ export function Tooltip({
   label,
   children,
   side = "top",
+  align = "center",
   clickable = false,
   multiline = false,
   disabled = false,
@@ -28,6 +29,9 @@ export function Tooltip({
   label: string
   children: ReactNode
   side?: "top" | "right" | "bottom" | "left"
+  /** Where along that side it sits — `start` for a tip that belongs to the START of a wide trigger (a row's
+   *  title, whose box runs on to the row's right-edge column long after its text has ended). */
+  align?: "start" | "center" | "end"
   /** Force it shut without unmounting the trigger — the project rail uses this while a square is
    *  being dragged, where the pointer is necessarily inside the thing it is moving and a
    *  delayDuration-0 tooltip would open on grab and then chase the square. Unmounting the wrapper
@@ -112,6 +116,7 @@ export function Tooltip({
         <RT.Content
           id={contentId}
           side={side}
+          align={align}
           sideOffset={5}
           collisionPadding={12}
           className={`${OVERLAY_Z_CLASS} max-w-[min(22rem,calc(100vw-1.5rem))] select-none rounded-md border border-border bg-elevated px-3 py-2 text-[11px] leading-relaxed text-fg shadow-md shadow-shadow-ink/40 break-words ${whitespace}`}
