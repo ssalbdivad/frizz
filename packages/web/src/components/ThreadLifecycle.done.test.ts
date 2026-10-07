@@ -96,9 +96,10 @@ test("the header line draws no visible separator and no reading when there is no
   const html = facts({ lastActivityAt: new Date(Date.now() - 120_000).toISOString() })
   assert.doesNotMatch(html, /data-context-meter/)
   // Each fact carries its own separator, which CSS shows only after an earlier fact that rendered
-  // (FactSep). With the time alone, its separator is the one in the line's FIRST fact — hidden — and
-  // there is no other.
+  // (FactSep). With the time alone, its separator is the one in the line's first fact that RENDERED — hidden —
+  // and there is no other. (An empty fact may stand before it: the time limit's urgent slot, which draws only
+  // in its last stretch or over — DeadlineControl DeadlineFact. Empty, it takes no room and no gap.)
   assert.equal(html.match(/data-fact-sep/g)?.length, 1, "one separator, the time's own")
-  assert.match(html, /^<div data-thread-header-facts[^>]*><span data-fact[^>]*><span aria-hidden="true" data-fact-sep/, "and it is in the line's first fact")
+  assert.match(html, /^<div data-thread-header-facts[^>]*>(?:<span data-fact[^>]*><\/span>)*<span data-fact[^>]*><span aria-hidden="true" data-fact-sep/, "and it is in the line's first non-empty fact")
   assert.match(html, /data-fact-sep="true" class="hidden /, "hidden unless a fact precedes it")
 })

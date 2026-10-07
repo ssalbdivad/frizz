@@ -445,6 +445,11 @@ function CardArticle({
               rather than drop (`give`). */}
           <div data-facts-line className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75`}>
             {chipNode && <Fact>{chipNode}</Fact>}
+            {/* The time limit in its last stretch or over, ahead of the time: a narrow card drops facts from the
+                end, and over time is the one it must keep (DeadlineControl DeadlineFact). The card's project. */}
+            <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+              <Fact><DeadlineFact thread={thread} slot="urgent" lead={<FactSep />} /></Fact>
+            </ThreadProjectScope>
             {status !== undefined ? (
               <Fact give="5em">
                 <FactSep />
@@ -464,8 +469,8 @@ function CardArticle({
             {/* The thread-header facts the lifecycle footer used to carry (ThreadHeaderFacts): the context
                 reading — its Compact sent into the CARD's project — and the Goal's loop. */}
             <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
-              {/* The time limit, its extend / remove sent into the CARD's project (DeadlineControl). */}
-              <Fact><DeadlineFact thread={thread} lead={<FactSep />} /></Fact>
+              {/* The time limit while there is plenty of it, its extend / remove sent into the CARD's project. */}
+              <Fact><DeadlineFact thread={thread} slot="quiet" lead={<FactSep />} /></Fact>
               <Fact><ContextFact thread={thread} lead={<FactSep />} /></Fact>
               <Fact><GoalLoopFact thread={thread} lead={<FactSep />} /></Fact>
             </ThreadProjectScope>

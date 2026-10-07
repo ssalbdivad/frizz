@@ -243,14 +243,26 @@ export function liveDeadline(thread: Pick<ThreadView, "deadline" | "state" | "la
  * The countdown on a header FACTS LINE (ThreadHeaderFacts — the drawer and the queue card): the stopwatch
  * and `42m left`, in the line's own grey while there is plenty of time, amber in the last stretch, red once
  * over (`over by 8m`). It is the door to the drawer's extend / set / remove: a press opens the panel.
+ *
+ * TWO SLOTS, BY URGENCY. The facts line drops whatever does not fit from its END, so a reading placed after
+ * the time was the first thing a 420px queue card lost — over time included, where it is the one fact that
+ * matters (measured 2026-10-06: "Last active 4m ago" alone on a card 9m over). A line places this twice:
+ * `slot="urgent"` ahead of the time, drawn only in the last stretch or over; `slot="quiet"` after it, drawn
+ * only while there is plenty of time. Exactly one of the two draws at any moment.
  */
-export function DeadlineFact({ thread, lead }: { thread: ThreadView; lead?: ReactNode }) {
+export function DeadlineFact({ thread, lead, slot }: { thread: ThreadView; lead?: ReactNode; slot: "urgent" | "quiet" }) {
   const deadline = liveDeadline(thread)
   if (!deadline) return null
+  return <DeadlineSlot slug={thread.id} deadline={deadline} lead={lead} slot={slot} />
+}
+
+function DeadlineSlot({ slug, deadline, lead, slot }: { slug: string; deadline: ThreadDeadlineView; lead?: ReactNode; slot: "urgent" | "quiet" }) {
+  const nowMs = useDeadlineNow(Date.parse(deadline.at))
+  if ((deadlineTone(deadline, nowMs) === "plenty") !== (slot === "quiet")) return null
   return (
     <>
       {lead}
-      <DeadlineChip slug={thread.id} deadline={deadline} />
+      <DeadlineChip slug={slug} deadline={deadline} />
     </>
   )
 }

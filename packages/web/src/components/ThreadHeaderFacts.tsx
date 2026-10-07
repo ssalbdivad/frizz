@@ -39,6 +39,8 @@ export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadVi
           glyph's box bottom, so on this baseline row its WORDS rode 2.38px above the time's. Centred like
           the row it was drawn for, the two baselines match (0.00px, sans 11px, 2026-10-06). */}
       {lead && <Fact className="self-center">{lead}</Fact>}
+      {/* The time limit in its last stretch or over: ahead of the time, so a narrow line drops the time first. */}
+      <Fact><DeadlineFact thread={thread} slot="urgent" lead={<FactSep />} /></Fact>
       <Fact>
         <LastActive
           // A lazy thread has never been active: its time is when it was written down (the queue card's word too).
@@ -49,8 +51,8 @@ export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadVi
           className="min-w-0 truncate"
         />
       </Fact>
-      {/* The time limit, right after the time: over time, it is the most urgent thing the line says. */}
-      <Fact><DeadlineFact thread={thread} lead={<FactSep />} /></Fact>
+      {/* The time limit while there is plenty of it, right after the time (DeadlineFact says why two slots). */}
+      <Fact><DeadlineFact thread={thread} slot="quiet" lead={<FactSep />} /></Fact>
       <Fact><ContextFact thread={thread} lead={<FactSep />} /></Fact>
       <Fact><GoalLoopFact thread={thread} lead={<FactSep />} /></Fact>
       {children}
