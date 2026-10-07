@@ -41,7 +41,7 @@ export function Toaster() {
   // "Open thread" (or Undo, which would reverse a snooze minutes after its toast was gone) sat over
   // whatever was beneath. The fade's 32px drop does not take a button off screen: the snooze toast's
   // Undo stayed fully inside the viewport both at the page's bottom edge and above an open drawer's
-  // footer (scripts/verify-snooze-undo.mjs).
+  // footer (measured in a real browser, 2026-09-28).
   const buttonClass = `${visible ? "pointer-events-auto" : ""} shrink-0 rounded-md border border-border px-2 py-0.5 text-[12px] text-fg/90 transition-colors hover:bg-panel-2`
   const buttonTab = visible ? undefined : -1
   return (
