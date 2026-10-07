@@ -29,10 +29,11 @@ test("a new browser starts the tour, and ending it is remembered", async () => {
   assert.equal(again.hasOnboarded(), true, "the next page load does not start it again")
 })
 
-test("a browser that already showed a view predates the onboarding, and never gets it on its own", async () => {
+test("a browser that already showed a view, from before the onboarding, still gets it once", async () => {
   const map = storage({ "frizz.lastView": "all" })
   const tour = await load()
-  assert.equal(tour.hasOnboarded(), true)
+  assert.equal(tour.hasOnboarded(), false)
+  tour.endTour()
   assert.equal(map.get("frizz.onboarded"), "1")
 })
 

@@ -1,5 +1,4 @@
 import { useSyncExternalStore } from "react"
-import { lastView } from "./crossProject.ts"
 
 // FIRST RUN — the onboarding a browser sees once: a project to start in (components/Onboarding.tsx
 // ProjectPick, at a bare `/`), then a short tour of that project's board (Tour). A browser that arrives on a
@@ -7,9 +6,10 @@ import { lastView } from "./crossProject.ts"
 // only the tour.
 //
 // "Once" is per BROWSER, like the last view (crossProject.ts): `frizz.onboarded` is written when the tour
-// ends, however it ends. A browser that already has a view on record predates the onboarding, so it counts
-// as onboarded from the first read — the tour is for someone new, not a surprise on an upgrade. Read
-// before the page writes its first view, which is why it is captured at module load.
+// ends, however it ends. A browser that already has a view on record from before the onboarding existed
+// gets it too: the pick lists every project it already has, and the tour shows what the board has become
+// since — David, 2026-10-07, upgrading without ever having taken it: "I should get the tour and project
+// intro". Captured at module load, so the decision holds for the whole page.
 
 const ONBOARDED_KEY = "frizz.onboarded"
 
@@ -18,10 +18,7 @@ function read(): boolean {
   // the board or an overlay over it would stand in the way of whatever it came to check.
   if (typeof navigator !== "undefined" && navigator.webdriver) return true
   try {
-    if (localStorage.getItem(ONBOARDED_KEY) !== null) return true
-    if (lastView() === null) return false
-    localStorage.setItem(ONBOARDED_KEY, "1")
-    return true
+    return localStorage.getItem(ONBOARDED_KEY) !== null
   } catch {
     // Storage disabled: nothing could remember the tour was seen, so never start it on its own.
     return true
