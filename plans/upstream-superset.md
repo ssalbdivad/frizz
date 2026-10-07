@@ -9,8 +9,8 @@ in it:
 
 Where one of those principles collides with a fork behavior, the principle wins, and the fork's behavior survives in the
 least invasive form that still upholds it. The fork can then be offered as the product,
-or cherry-picked from, with a ledger showing nothing of Colin's was lost. A plugin system holds what doesn't make the
-product.
+or cherry-picked from, with a ledger showing nothing of Colin's was lost. What doesn't make the product is removed, not
+carried (2026-10-07, at the end of §10).
 
 An earlier revision of this plan went the other way. It restored upstream's surfaces as the default and moved fork features
 behind opt-ins or into plugins. David rejected that: features like thread names, status lines, auto effort, the single-key
@@ -67,8 +67,8 @@ argued rather than hidden.
 - schedules;
 - the VS Code integration with Ctrl+L, @-files and editor context;
 - thread terminals, spinoff, Home, inter-thread messages, handles;
-- the 10-minute question default, set-aside;
-- arrival-order queue, quiet-turn queueing, shell budgets, check-ins;
+- the 10-minute question default;
+- arrival-order queue, shell budgets, check-ins;
 - the queue card's docked prompt box, stable queue, cords;
 - the lightbox/ImageViewer/FileReaderDrawer, quota alerts, delete-old-threads, Fable fallback.
 
@@ -225,8 +225,9 @@ goes upstream as a PR naming that bug.
 | Register a question immediately and keep working | "Ask last, then rest" | **Fix.** Upstream never queues a running thread, and a registered question shows no [?] while it runs, so the card went unseen. |
 | Queue ordered by rest time | Ordered by arrival (`queuedAt`) + 12s settle | **Fix.** A thread released from a wait re-entered with its old rest time and jumped ahead in the queue. |
 | The rest's one Send sends every answer | Answers go one at a time, merged into one wake per pass | **Improvement that coexists:** same-pass answers merge, which answers upstream's half-wake worry. |
-| Nothing forces a re-ask | A typed message sets open questions aside; they are withdrawn at the next rest unless the worker calls `keep` | **Keep, flagged** for Colin (§8). It reverses his rule. |
-| Nothing running shows in the queue (08-01) | A turn silent for 15 awake-minutes queues while running | **Keep, flagged.** It fixes a thread left spinning on a 2FA prompt, but it bends his rule. Mark the row so it still reads as Running (spinner plus queue card), keeping S1's distinction. |
+| A question stays open until answered, dismissed or `unask`ed | A typed message set open questions aside; they were withdrawn at the next rest unless the worker called `keep` | **Adopted upstream's rule** (David 2026-10-07): `keep` and set-aside are gone. |
+| Nothing running shows in the queue (08-01) | A turn silent for 15 awake-minutes queued while running | **Adopted upstream's rule** (David 2026-10-07): quiet-turn queueing is gone. |
+| A wait always takes the awaiting fence | `message_thread` with `await_reply` parked with no fence | **Adopted upstream's rule** (David 2026-10-07): the rest names the thread under `threads:`. |
 
 ---
 
@@ -259,68 +260,20 @@ The fork's contract and tools stay. Under P6 two cheap changes remove cost witho
 - **Rename `command_thread` → `thread_terminal`** and drop its dead `queued_at`. It never shipped, so no migration is owed.
 - **Drop duplicate fixes:** `pending-call.ts` against upstream's `pendingCallDeadline` (keep upstream's, pass awake time in);
   the Monitor expiry; 7c00c397 (= upstream b89f6146).
-- **Shrink the bash prefilter corpus** from 1,000 lines to ~100.
+- **Shrink the bash prefilter corpus** from 1,000 lines to ~100. (Superseded 2026-10-07: the pre-filter is removed.)
 - **Small dedupes:** `isDirectory` ×4, `expandHome` ×3.
 - **Cut spinoff's legacy side-turn path** (1,533 of its 2,821 server lines), which only Codex, ACP or cross-project parents
-  still reach. Do it if those can use the main path.
+  still reach. Do it if those can use the main path. (Done 2026-10-07, with a summary route.)
 
 ---
 
-## 7. The plugin system: for what doesn't make the product
+## 7. The plugin system (built, then removed)
 
-Base keeps everything above. Plugins are for features that won't make the product. Lazy threads is the example, since
-upstream's rule is that "with no agent it makes no sense for a thread to ever show up inside the queue"
-(`shared/index.ts:4597`). Plugins also catch anything Colin declines when offered: a declined feature moves to a plugin
-instead of forcing the fork to diverge again. The design (`plugins.md`) is unchanged by this revision.
-
-**Size.** ~600 lines of base seams.
-
-**Shape.**
-- `<data>/user-plugins/<id>/package.json` with a `frizzPlugin` manifest `{id, api, server, web, claude}`.
-- Machine-wide only, enabled by being present, `FRIZZ_PLUGINS_OFF=1` safe mode.
-- Not `<data>/plugins`, which on a legacy install is the cc-worker staging root.
-
-**Loading, with no build step:**
-- **Server:** `import()` of `.ts` on Node's own type stripping; plugins use only `import type`, and every value comes
-  through `host`.
-- **Web:** the server serves the plugin's `.ts` through `module.stripTypeScriptTypes`, and the page `import()`s it and calls
-  `activate(host)`. Host-supplied React means one React, no import map, and nothing in the immutable `web-dist`.
-- The desktop app and the VS Code embed get it for free.
-
-**API v1 (all optional):**
-- `procedures` (mounted as `plugin.<id>.<name>`), `threadView`, `queuePolicy`, `onSend` for rows it holds;
-- events (`threadDone`, `threadDeleted`, `humanAct`, `rest`), `tick`, MCP tools as `<id>_<tool>`;
-- `systemPrompt`, `beforeDispatch`, a per-plugin SQLite file;
-- web slots `queue.head`, `settings.section`, `thread.menu`, `newThread.submitAlt`, `thread.composer`, plus `commands`.
-
-**Isolation:**
-- every hook runs through a guard, and three throws mark the plugin failed;
-- `setup()` is bounded at 5s, with failure reported, never fatal;
-- each slot gets its own error boundary;
-- residual risk: a plugin's raw `setTimeout` throw exits the child, so host timers are the documented path.
-
-**Security:** the user's own code, no sandbox, no signing. The guardrails are the machine-only directory, the existing
-`/_frizz` auth/CSRF gates, a read-only Settings → Plugins audit list, and the kill switch.
-
-**Lazy threads as a plugin.**
-- **Base keeps one primitive, the held thread** (`held_by = <plugin id>`, replacing `lazy_prompt`). It covers the tailer
-  skip, the empty transcript, `dispatch({onto: row})`, `threads.create({hold})`, the single-flight start, and generic
-  "Not started yet." rendering. Base never queues a held row.
-- A follow-up on a held row calls the holder's `onSend`; with no holder it starts the thread, so uninstalling never strands
-  one.
-- **The plugin holds the note table, `create`/`update`/`start`, a `threadView` that queues its rows, `LazyThreadBox` (slot
-  `thread.composer`), and the snail button with ⌘⇧⏎ (slot `newThread.submitAlt`).**
-
-**Seam order:**
-1. loader + `queue.head`
-2. RPC namespace + settings section + events
-3. Claude Code dirs + `systemPrompt`
-4. held threads + `threadView` + composer slots + db (lazy threads)
-5. `tick` + MCP proxy + palette/drawer slots
-6. `commands`, `beforeDispatch`, machine WebSocket routes
-
-Only the seams a declined or plugin-only feature needs get built. With lazy threads as the only plugin today, that means
-steps 1–4.
+Step 9 built a plugin system (loader, web slots, per-plugin database, Settings → Frizz plugins) to hold features that
+don't make the product, with lazy threads as its one plugin. On 2026-10-07 David removed lazy threads and then the
+system, since it had no other user: an empty extension API is structure Colin never asked for. It can be restored from
+git (`refactor(plugins): remove the Frizz plugin system`) if a declined feature needs a home. The held-thread primitive
+it introduced stays, because a schedule's next run is one.
 
 ---
 
@@ -359,13 +312,11 @@ steps 1–4.
    shortcuts, wake lock, Home, messaging. Each goes with its off switch or reason.
 
 **Decisions that are Colin's,** to put to him rather than to settle in the fork:
-- set-aside questions;
-- quiet-turn queueing;
+- the 10-minute default answer on an unanswered question (it bends "questions carry no timeout");
 - the worktree folder rule and cleanup on done;
 - the drawer strip moving into ⋯;
 - terminals and node-pty in base;
-- whether a held thread is acceptable as a base primitive;
-- what to call the plugin system ("plugin" already means Claude Code plugins in the UI and `FRIZZ_WORKER_PLUGIN_DIR`).
+- whether a held thread is acceptable as a base primitive.
 
 **Keeping parity from now on.** The daily merge already records what it does with upstream commits in its merge body.
 Make it checkable:
@@ -472,7 +423,7 @@ Each line names the step it amends.
 
 **Step 7 (hygiene)**
 - `scripts/schedule-extract-eval.*` deleted as listed, though 6554d0ea had kept it that morning as a benchmark. Its
-  numbers are in that commit, in the `SCHEDULE_INTERPRETER_MODEL` comment and in `plans/schedule-live-reading.md`;
+  numbers are in that commit, in the `SCHEDULE_INTERPRETER_MODEL` comment and in `git show 7e0b68b5:plans/schedule-live-reading.md`;
   reverting the commit "chore(scripts): delete the schedule extraction benchmark now that its choice is made"
   restores it (named by subject, since the branch is rebased as `main` moves and its hashes change).
 - 29 fork-added scripts deleted (5,124 lines), each with the maintained test that covers it named in the commit;
@@ -525,8 +476,42 @@ the default". So:
   by `lazy`, a holder that no longer exists, so they wait in Running's place as "Not started".
 
 **2026-10-07: lazy threads removed at David's request**
-- `plugins/lazy/`, its installer `plugins/install.ts`, its tests and `plans/lazy-threads.md` are gone; no plugin
-  ships in the repo. The plugin system itself (loader, slots, RPC, settings, `FRIZZ_PLUGINS_OFF`) stays.
+- `plugins/lazy/`, its installer `plugins/install.ts`, its tests and `plans/lazy-threads.md` are gone. The plugin
+  system went the same day (below).
 - The held-thread primitive stays, because a schedule's next run is one (`held_by = 'schedules'`). So do the
   `lazy_prompt` column and every migration that maps old lazy rows, so old databases still open: a legacy lazy
   row is an orphaned held row and starts on its next message, on the note base kept.
+
+**2026-10-07: removals before the offer, and the hand-off brought back to Colin's rule (David)**
+
+David asked that nothing reach Colin that reads as bloat. He picked these from a ranked audit, and each is one commit
+whose body says what went and what replaced it:
+- **The Frizz plugin system** (`refactor(plugins): remove the Frizz plugin system`). Held threads stay for schedules;
+  the `plugins` slug is no longer reserved; the alternate submit beside Send went with its slot.
+- **The desktop app** (`refactor(desktop): remove the Electron desktop app`), with its release workflow and docs.
+- **Spinoff's side turn** (`refactor(spinoff): replace the side-turn brief route with a summary Frizz builds itself`).
+  This supersedes Step 7's "NOT cut". A Codex, ACP, cross-project or no-transcript parent now gets a fresh child whose
+  prompt carries the parent's request and latest handoff. Nothing reaches the parent, and no model is called.
+- **The Bash pre-filter** (`refactor(cc-worker): the per-Bash hook calls node directly; …`). The cost is about 67ms
+  p50 per Bash call.
+- **Leftover scripts and plans**: three scripts, and the shipped schedule, time-limit and VS Code plans, folded into
+  ARCHITECTURE.md.
+
+Not removed, after the audit: terminals, schedules and their live reading, time limits, cords, ImageViewer, Remote
+access in Settings, the rarely-used settings and thread info.
+
+From Colin's tenets on hand-off (the worker's own last word decides a thread's state; Frizz only checks it), David
+chose three changes:
+- **A typed message leaves questions open.** Set-aside and `keep` are gone, so Frizz never withdraws a question by
+  omission. This supersedes §4's row and §8's item. The 10-minute default still skips a question the human typed past.
+- **A wait on another thread takes the awaiting fence**, naming it under `threads:`. `await_reply` no longer parks on
+  its own, and its own timeout is gone; the fence's `for:` is the timeout.
+- **A running thread never queues.** Quiet-turn queueing is gone, superseding Step 5's note. A terminal waiting at a
+  prompt still queues its thread, which is a separate rule from the same commit.
+
+Kept by David's choice, and documented in ARCHITECTURE.md as Frizz acting on a clock or with a model: the 10-minute
+default answer, the 30-minute check-in on sub-agent parks, model-written names and status lines (Background
+summaries), and per-question delivery.
+
+The worker contract went back to rules, not rationale: no worker anecdotes, no dated quotes, and the
+"a login is a question" rule replaced by `steps:`.
