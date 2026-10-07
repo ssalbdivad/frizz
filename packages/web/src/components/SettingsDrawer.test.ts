@@ -173,7 +173,9 @@ test("help tooltip uses custom accessible, touch-capable paragraph layout", () =
   // `&& !disabled` is drag suppression: the pointer is necessarily inside the trigger it is
   // dragging, so a delayDuration-0 tooltip would open on grab and chase it. It forces the tooltip SHUT without unmounting the trigger, which mid-drag would destroy
   // the element holding pointer capture. Hover behaviour is unchanged whenever nothing is dragging.
-  assert.match(tooltipSource, /<RT\.Root open=\{open && !disabled\} onOpenChange=\{setOpen\}>/)
+  // A tooltip may also carry its own open delay (a board row's status waits 350ms, so the tip does not flash
+  // as the pointer crosses the list); the drag suppression is the part this pins.
+  assert.match(tooltipSource, /<RT\.Root open=\{open && !disabled\} onOpenChange=\{setOpen\}(?: delayDuration=\{delay\})?>/)
   assert.match(tooltipSource, /clickable = false/)
   assert.match(tooltipSource, /cloneElement\(clickableChild, \{ "aria-describedby": contentId \}\)/)
   assert.match(tooltipSource, /onClick=\{\(\) => setOpen\(\(wasOpen\) => !wasOpen\)\}/)
