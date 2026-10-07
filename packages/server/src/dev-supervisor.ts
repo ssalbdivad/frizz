@@ -23,6 +23,7 @@ import {
 import type { SessionDirectory } from "./access-codes.ts"
 import { RestartSupervisorProxy, type RemoteControlHandler, type RestartResult } from "./restart-supervisor.ts"
 import { log as frizzLog } from "./logging.ts"
+import { startRemoteWake, type RemoteWake } from "./remote-wake.ts"
 import { withRootsPin } from "./frizz-paths.ts"
 import { BOOT_HARD_TIMEOUT_MS, BOOT_STALL_TIMEOUT_MS, readBootProgress } from "./boot-progress.ts"
 
@@ -617,6 +618,8 @@ class Supervisor implements DevSupervisor {
   /** Last beat emitted, so a transition reported twice is printed once. */
   private lastActivity: string | undefined
   private readonly publicProxy: RestartSupervisorProxy
+  /** Holds a plugged-in machine awake while a public origin is declared (remote-wake.ts). */
+  private remoteWake: RemoteWake | undefined
   private readonly updateRestart?: () => Promise<RestartResult>
   private readonly updateMode: "durableReexec" | "child"
   private readonly commitUpdate?: () => Promise<void> | void
@@ -740,6 +743,8 @@ class Supervisor implements DevSupervisor {
   /** Mint a single-use access link for the public origin, or null when none is declared. */
   setPublicOrigin(origin: string | undefined): void {
     this.publicProxy.setPublicOrigin(origin)
+    if (origin && !this.remoteWake && !this.closed && process.env.FRIZZ_WAKE_LOCK_OFF !== "1") this.remoteWake = startRemoteWake()
+    this.remoteWake?.setRemote(origin !== undefined)
   }
 
   setRemoteControl(handler: RemoteControlHandler | null): void {
@@ -1539,6 +1544,7 @@ class Supervisor implements DevSupervisor {
     this.debounce = null
     await Promise.allSettled(this.subscriptions.map((sub) => sub.unsubscribe()))
     this.subscriptions = []
+    this.remoteWake?.stop()
     await this.stopChild()
     await this.publicProxy.close()
     this.removeStatus()
