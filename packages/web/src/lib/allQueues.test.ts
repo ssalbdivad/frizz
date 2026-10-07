@@ -159,13 +159,15 @@ test("a PINNED Done thread is a Pinned row, never a number in Done — from the 
   })])
   assert.deepEqual(polled!.pinnedDone.map((t) => t.id), ["first-pin", "later-pin"], "oldest pin first, the shelf's own order")
   assert.equal(polled!.doneCount, 3)
-  // The focused project's live board sends every thread, archived ones included (liveQueue).
-  const live = liveQueue([queue("a", [], { doneCount: 9 })], {
+  // The focused project's live board sends every thread, archived ones included (liveQueue) — while the
+  // poll it is drawn over still carries the same pinned Done thread apart, as the server always sends it.
+  const donePin = thread("done-pin", { state: "archived", archived: true, pinnedAt: "2026-10-01T00:00:00.000Z" })
+  const live = liveQueue([queue("a", [], { doneCount: 9, pinnedDone: [donePin] })], {
     projectSlug: "a",
-    threads: [thread("open"), thread("done-pin", { state: "archived", archived: true, pinnedAt: "2026-10-01T00:00:00.000Z" }), thread("done", { state: "archived", archived: true })],
+    threads: [thread("open"), donePin, thread("done", { state: "archived", archived: true })],
   }, "a")
   const [focused] = queuesProjects([card("a")], [live!])
-  assert.deepEqual(focused!.pinnedDone.map((t) => t.id), ["done-pin"])
+  assert.deepEqual(focused!.pinnedDone.map((t) => t.id), ["done-pin"], "once: the board's copy, not the poll's as well")
   assert.equal(focused!.doneCount, 1, "only the unpinned Done thread is counted")
   assert.deepEqual([...focused!.queued, ...focused!.running, ...focused!.snoozed].map((t) => t.id), ["open"])
 })

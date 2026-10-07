@@ -160,7 +160,10 @@ export function queuesProjects(
  * focus change the store is cleared and refilled, and a board that is not yet the new focus must not be
  * drawn under its name. The rows are filtered as the server filters them for the poll (sessions of this
  * project, nothing foreign); Done is left to the rail's own banding, which
- * counts what it files there, so the server's Done count is dropped rather than added to.
+ * counts what it files there, so the server's Done count is dropped rather than added to — and so is the
+ * poll's `pinnedDone`, for the same reason: the board's threads already carry every pinned Done thread
+ * (queuesProjects files it from them), and keeping the poll's copy as well drew each one twice. The
+ * focused project's folded header counted 4 pins for 3 (found in QA of upstream-superset, 2026-10-06).
  */
 export function liveQueue(
   queues: readonly ProjectQueue[] | undefined,
@@ -171,7 +174,7 @@ export function liveQueue(
   const polled = queues.find((queue) => queue.projectSlug === focusSlug)
   if (!polled) return undefined
   const threads = board.threads.filter((thread) => thread.kind === "session" && !thread.foreign)
-  return { ...polled, threads, doneCount: 0 }
+  return { ...polled, threads, doneCount: 0, pinnedDone: [] }
 }
 
 /**
