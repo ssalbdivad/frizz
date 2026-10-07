@@ -730,6 +730,38 @@ a[href] {
     transform: translateY(0) scale(1);
   }
 }
+/* The first-run tour (components/Onboarding.tsx): its arrows draw themselves in from the tail — every path
+   carries `pathLength="1"`, so one dash animation fits any length — and their heads and labels fade in after.
+   `both`, so each holds its start state through its delay. */
+@keyframes tour-draw {
+  from {
+    stroke-dashoffset: 1;
+  }
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes tour-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.tour-draw {
+  stroke-dasharray: 1;
+  animation: tour-draw 380ms cubic-bezier(0.3, 0, 0.2, 1) both;
+}
+.tour-fade-in {
+  animation: tour-fade-in 180ms ease-out both;
+}
+@media (prefers-reduced-motion: reduce) {
+  .tour-draw,
+  .tour-fade-in {
+    animation: none;
+  }
+}
 /* PendingThreadSheet's slide-in: the drawer family's 200ms translate, as an animation so it starts on the
    frame's first paint without a second render (see that component). */
 @keyframes frizz-sheet-in {

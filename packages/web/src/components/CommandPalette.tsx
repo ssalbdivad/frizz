@@ -12,6 +12,7 @@ import { useBoard, asThreads } from "../hooks.ts"
 import { sortThreads, displayName, displayTitle } from "../groups.ts"
 import { isCrossProjectPath } from "../lib/base-path.ts"
 import { aboveDrawersZ } from "../lib/overlaySurface.ts"
+import { startTour } from "../lib/tour.ts"
 import type { ScheduleView } from "@frizz/shared"
 
 // Cmd+K palette: fuzzy-jump to any thread (over title + slug, grouped like the sidebar) plus the
@@ -135,6 +136,9 @@ export function CommandPalette() {
                 </Item>
                 <Item value="keyboard shortcuts keys hotkeys keybindings rebind" onSelect={() => run(() => (store.showShortcuts = true))}>
                   Keyboard shortcuts
+                </Item>
+                <Item value="take the tour onboarding help introduction walkthrough" onSelect={() => run(startTour)}>
+                  Take the tour
                 </Item>
                 <Item
                   value="schedules scheduled recurring repeat every cron routines"

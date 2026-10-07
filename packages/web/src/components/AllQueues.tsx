@@ -507,26 +507,29 @@ export function AllQueuesPage() {
               crumb={focused}
               identity={focused && viewed ? <BoardIdentity project={viewed} home={home} /> : undefined}
             />
-            <FocusedComposer
-              focus={focus}
-              project={focusProject}
-              dirs={dirs}
-              autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
-              caret={focusComposerFor?.caret}
-              onFocused={clearFocusComposerFor}
-              target={
-                focused ? undefined : (
-                  <ProjectPicker
-                    projects={projects}
-                    focus={focus}
-                    onPick={(project) => {
-                      setFocusComposerFor({ slug: project.slug })
-                      pickProject(project, dirs?.projectDir)
-                    }}
-                  />
-                )
-              }
-            />
+            {/* The first-run tour's "Start a thread" points here (components/Onboarding.tsx). */}
+            <div data-tour="composer">
+              <FocusedComposer
+                focus={focus}
+                project={focusProject}
+                dirs={dirs}
+                autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
+                caret={focusComposerFor?.caret}
+                onFocused={clearFocusComposerFor}
+                target={
+                  focused ? undefined : (
+                    <ProjectPicker
+                      projects={projects}
+                      focus={focus}
+                      onPick={(project) => {
+                        setFocusComposerFor({ slug: project.slug })
+                        pickProject(project, dirs?.projectDir)
+                      }}
+                    />
+                  )
+                }
+              />
+            </div>
           </div>
           {!stacked && (
             <div data-xq-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden">

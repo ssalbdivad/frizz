@@ -1,8 +1,9 @@
-import type { CSSProperties, ReactNode } from "react"
+import { useState, type CSSProperties, type ReactNode } from "react"
 import { Bot, Check, ChevronDown, Layers, Plus } from "lucide-react"
 import type { ProjectCard } from "@frizz/shared"
 import { ProjectSquare } from "./ProjectSquare.tsx"
 import { Menu, MenuContent, MenuItem, MenuSeparator, MenuTrigger } from "./ui/Menu.tsx"
+import { useTourHoldsSwitcher } from "../lib/tour.ts"
 
 // THE PROJECT SWITCHER — the page's TITLE, at the left end of the status row over the prompt box
 // (StatusRow.tsx): which project the page is focused on, or All projects (lib/pageView.ts). It was the
@@ -84,6 +85,10 @@ export function ProjectSwitcher({
    */
   row?: boolean
 }) {
+  // The first-run tour holds the menu open to point at its rows (components/Onboarding.tsx); while it does,
+  // nothing closes it — the tour's own overlay takes the clicks and keys that would.
+  const [open, setOpen] = useState(false)
+  const held = useTourHoldsSwitcher() && !row
   const every = [...projects, ...(home ? [home] : [])]
   const total = (key: "ready" | "running" | "asks") => every.reduce((sum, project) => sum + project[key], 0)
   const name = current ? current.name : "All projects"
@@ -100,7 +105,7 @@ export function ProjectSwitcher({
     )
   }
   return (
-    <Menu>
+    <Menu open={held || open} onOpenChange={(next) => { if (!held) setOpen(next) }}>
       <MenuTrigger asChild>
         <button
           type="button"
@@ -141,7 +146,7 @@ export function ProjectSwitcher({
         <div className="px-2.5 pb-1 pt-1.5 text-[10.5px] font-medium text-muted-55">Show</div>
         {/* Every item outside the scrolling list is inset by the gutter that list reserves (styles.css
             `scrollbar-gutter: stable`), so the badges and check marks stand in one column. */}
-        <div className="pr-[var(--sbw)]">
+        <div data-tour="switcher-all" className="pr-[var(--sbw)]">
           <MenuItem onSelect={onAll} icon={<Layers size={14} aria-hidden />} value="all-projects">
             <span className={`min-w-0 flex-1 truncate ${current ? "" : "text-fg"}`}>All projects</span>
             <SwitcherCounts asks={total("asks")} running={total("running")} ready={total("ready")} />
@@ -149,7 +154,7 @@ export function ProjectSwitcher({
           </MenuItem>
         </div>
         <MenuSeparator />
-        <div className="max-h-[min(50vh,360px)] overflow-y-auto">{projects.map((project) => item(project))}</div>
+        <div data-tour="switcher-projects" className="max-h-[min(50vh,360px)] overflow-y-auto">{projects.map((project) => item(project))}</div>
         {home && (
           <>
             {projects.length > 0 && <MenuSeparator />}
@@ -160,7 +165,7 @@ export function ProjectSwitcher({
         {onAdd && (
           <>
             <MenuSeparator />
-            <div className="pr-[var(--sbw)]">
+            <div data-tour="switcher-add" className="pr-[var(--sbw)]">
               <MenuItem onSelect={onAdd} icon={<Plus size={14} aria-hidden />} value="add-project">
                 <span className="min-w-0 flex-1 truncate">Add a project</span>
               </MenuItem>

@@ -1,0 +1,93 @@
+import { useSyncExternalStore } from "react"
+import { lastView } from "./crossProject.ts"
+
+// FIRST RUN — the onboarding a browser sees once: a project to start in (components/Onboarding.tsx
+// ProjectPick, at a bare `/`), then a short tour of that project's board (Tour). A browser that arrives on a
+// board directly — `frizz` run in a project opens `/project/<slug>` — has its project already, and gets
+// only the tour.
+//
+// "Once" is per BROWSER, like the last view (crossProject.ts): `frizz.onboarded` is written when the tour
+// ends, however it ends. A browser that already has a view on record predates the onboarding, so it counts
+// as onboarded from the first read — the tour is for someone new, not a surprise on an upgrade. Read
+// before the page writes its first view, which is why it is captured at module load.
+
+const ONBOARDED_KEY = "frizz.onboarded"
+
+function read(): boolean {
+  // An automated browser never gets it unasked: every e2e here runs a fresh profile, and a picker in front of
+  // the board or an overlay over it would stand in the way of whatever it came to check.
+  if (typeof navigator !== "undefined" && navigator.webdriver) return true
+  try {
+    if (localStorage.getItem(ONBOARDED_KEY) !== null) return true
+    if (lastView() === null) return false
+    localStorage.setItem(ONBOARDED_KEY, "1")
+    return true
+  } catch {
+    // Storage disabled: nothing could remember the tour was seen, so never start it on its own.
+    return true
+  }
+}
+
+let onboarded = read()
+
+export function hasOnboarded(): boolean {
+  return onboarded
+}
+
+function markOnboarded(): void {
+  onboarded = true
+  try {
+    localStorage.setItem(ONBOARDED_KEY, "1")
+  } catch {
+    // Storage disabled: see read().
+  }
+}
+
+// THE TOUR'S STEP, live across the page: null when no tour is showing. Module state rather than a store
+// field, since the store is reset on every project switch (store.resetProjectState) and the tour starts
+// exactly on one.
+let step: number | null = null
+const listeners = new Set<() => void>()
+
+function set(next: number | null): void {
+  if (step === next) return
+  step = next
+  for (const listener of listeners) listener()
+}
+
+/** Show the tour from its first step — on first arrival, and from the command palette's "Take the tour". */
+export function startTour(): void {
+  set(0)
+}
+
+/** Start the tour if this browser has never seen it. */
+export function startTourOnFirstRun(): void {
+  if (!onboarded) set(0)
+}
+
+export function setTourStep(next: number): void {
+  set(next)
+}
+
+/** Close the tour, finished or skipped, and remember it was seen. */
+export function endTour(): void {
+  markOnboarded()
+  set(null)
+}
+
+function subscribe(listener: () => void): () => void {
+  listeners.add(listener)
+  return () => listeners.delete(listener)
+}
+
+export function useTourStep(): number | null {
+  return useSyncExternalStore(subscribe, () => step, () => null)
+}
+
+/** The tour's step that holds the project switcher's menu open, so its arrows have the menu to point at. */
+export const SWITCHER_STEP = 0
+
+/** Whether the tour is holding the project switcher's menu open right now. */
+export function useTourHoldsSwitcher(): boolean {
+  return useTourStep() === SWITCHER_STEP
+}

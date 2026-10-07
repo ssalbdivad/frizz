@@ -5,6 +5,8 @@ import { App } from "./App.tsx"
 import { ProjectRail, RAIL_INSET_CLASS } from "./components/ProjectRail.tsx"
 import { StandaloneThreadPage } from "./components/StandaloneThreadPage.tsx"
 import { AddProjectHost, Welcome } from "./components/ProjectActions.tsx"
+import { ProjectPick, Tour } from "./components/Onboarding.tsx"
+import { hasOnboarded, startTourOnFirstRun } from "./lib/tour.ts"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import { GithubHovercards } from "./components/GithubHovercards.tsx"
 import { Toaster } from "./components/Toaster.tsx"
@@ -92,6 +94,8 @@ function RootLayout() {
       {/* The keyboard shortcuts and their sheet (`?`), for every page under the layout — the page and the
           welcome alike. /full mounts its own copy, since it sits outside this layout. */}
       <KeyboardLayer />
+      {/* The first-run tour (components/Onboarding.tsx), over whichever view the page shows. */}
+      <Tour />
     </TooltipProvider>
   )
 }
@@ -181,6 +185,9 @@ function LastViewRedirect() {
   const openIds = queues.data ? new Set(queues.data.map((queue) => queue.projectId)) : undefined
   const target = lastViewHref(cards.data, lastView(), openIds, lastFocusedProject())
   if (target === undefined) return <Welcome projects={cards.data} />
+  // A browser on its first run picks the project to start in, rather than being dropped into one
+  // (lib/tour.ts). Never in an editor's sidebar, whose view the editor pins.
+  if (!hasOnboarded() && !embedded()) return <ProjectPick projects={cards.data} />
   return <Navigate to={target} replace />
 }
 
@@ -219,6 +226,12 @@ function CrossProjectPage() {
   useRouteToStore()
   useRouterTransition()
   useState(() => primeReturnFromFullscreen(thread))
+  // A browser's first board starts the tour (lib/tour.ts) — whether it was picked on `/` or opened directly,
+  // as `frizz` run in a project does.
+  const boardShown = page.kind === "page" && page.view.kind === "project"
+  useEffect(() => {
+    if (boardShown && !embedded()) startTourOnFirstRun()
+  }, [boardShown])
   if (page.kind === "error") return <RegistryError error={page.error} />
   if (page.kind === "loading") return <PageSpinner />
   if (page.kind === "welcome") return <Welcome projects={page.projects} />
