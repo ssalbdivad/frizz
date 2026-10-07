@@ -1,9 +1,7 @@
-import { useDeferredValue, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
-import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { useSnapshot } from "valtio"
 import { ArrowLeft, Check, ChevronRight, Copy } from "lucide-react"
 import { backgroundSummariesOn, type Settings } from "@frizz/shared"
-import { rpc } from "../api/rpc.ts"
 import { store, type ConnectionState } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -39,7 +37,7 @@ function currentPerm(): NotifPerm {
 }
 
 // The drawer holds ONLY what belongs to the machine and this browser — appearance, the rail, how local
-// links open, density, queue order, notifications, and the folder the Home workspace's threads run in. Everything that belongs to a project or to one
+// links open, density, queue order and notifications. Everything that belongs to a project or to one
 // runtime is edited where it applies: a runtime's launch settings behind the gear on its band in the
 // model picker (AgentSettingsPopover), the GitHub triage prompt behind the gear in the GitHub picker's
 // header (GithubPromptPopover). A "Project settings" tab stood here for a few hours on 2026-09-19
@@ -60,16 +58,6 @@ export function SettingsDrawer() {
   const z = aboveDrawersZ(useSnapshot(store).drawers.length)
   const panelRef = useRef<HTMLDivElement>(null)
   const [perm, setPerm] = useState<NotifPerm>(currentPerm())
-  // The Home workspace's square, its picker row and its project list entry all show its folder, and they
-  // read it from the project list — so the list is re-read once a moved folder has actually saved.
-  const queryClient = useQueryClient()
-  const [folderSaved, setFolderSaved] = useState(true)
-  useEffect(() => {
-    if (folderSaved || saveState !== "saved") return
-    setFolderSaved(true)
-    void queryClient.invalidateQueries({ queryKey: ["projectsList"] })
-    void queryClient.invalidateQueries({ queryKey: ["projectsQueues"] })
-  }, [folderSaved, saveState, queryClient])
 
   // Enter/exit animation. `shown` drives the slide (mount → next frame flips it true → slides in;
   // close flips it false → slides out). App renders <SettingsDrawer> only while showSettings is true,
@@ -211,16 +199,6 @@ export function SettingsDrawer() {
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
             <SlashCommandsField />
 
-            <SettingsField label="Home folder" help={SETTINGS_HELP.homeFolder}>
-              <HomeFolderField
-                value={draft.homeFolder ?? ""}
-                onCommit={(homeFolder) => {
-                  setFolderSaved(false)
-                  update({ ...draft, homeFolder })
-                }}
-              />
-            </SettingsField>
-
             <SettingsField label="Worktree folder" help={SETTINGS_HELP.worktreeDir}>
               <WorktreeDirField value={draft.worktreeDir ?? ""} onCommit={(worktreeDir) => update({ ...draft, worktreeDir })} />
             </SettingsField>
@@ -281,71 +259,6 @@ export function SettingsDrawer() {
         </div>
       </div>
       </OverDrawersFocusLayer>
-    </div>
-  )
-}
-
-/**
- * Settings → Home folder: where the Home workspace's agents run.
- *
- * WRITTEN ON ENTER OR ON LEAVING THE FIELD, never per keystroke — half a path is not a folder — and
- * only once the server has passed it. Every settings write carries the WHOLE object, so a draft holding
- * a folder the save refuses would fail every later write in this drawer along with it. The line under
- * the field is the server's own reading of what is typed (`~` expanded on the machine that runs the
- * agents, a registered project's folder refused), so what it says is exactly what saving would do.
- */
-function HomeFolderField({ value, onCommit }: { value: string; onCommit: (folder: string) => void }) {
-  const [text, setText] = useState(value)
-  const typed = useDeferredValue(text.trim())
-  const queryClient = useQueryClient()
-  const check = useQuery({
-    queryKey: ["homeFolderCheck", typed],
-    queryFn: () => rpc.homeFolderCheck({ folder: typed }),
-    placeholderData: keepPreviousData,
-    staleTime: 2_000,
-  })
-  const commit = async () => {
-    const folder = text.trim()
-    if (folder === value.trim()) return
-    const verdict = await queryClient.fetchQuery({
-      queryKey: ["homeFolderCheck", folder],
-      queryFn: () => rpc.homeFolderCheck({ folder }),
-      staleTime: 0,
-    })
-    if (!verdict.problem) onCommit(folder)
-  }
-  // Esc closes the drawer without blurring the field, and an unmount fires no blur — so what was typed
-  // is committed on the way out too, as a pending debounce is flushed (useSettingsAutosave).
-  const commitRef = useRef(commit)
-  commitRef.current = commit
-  useEffect(() => () => void commitRef.current(), [])
-  const reading = check.data
-  return (
-    <div>
-      <input
-        aria-label="Home folder"
-        value={text}
-        onChange={(event) => setText(event.target.value)}
-        onBlur={() => void commit()}
-        onKeyDown={(event) => {
-          if (event.key === "Enter") void commit()
-        }}
-        placeholder="~"
-        spellCheck={false}
-        autoComplete="off"
-        // The bordered Select's own box (ui/Select.tsx), so the field stands in the drawer's column as one
-        // of its controls; mono because what it holds is a path.
-        className={`w-full rounded-md border bg-bg px-2 py-1 font-mono text-[12px] text-fg outline-none placeholder:text-muted-50 focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${
-          reading?.problem ? "border-danger-fill/60" : "border-border"
-        }`}
-      />
-      {/* Always a line tall, so the drawer does not jump as the reading comes and goes. The notification
-          field's hint type (PermHint), at the same 6px from its control. It WRAPS where it does not fit, the
-          path breaking anywhere: the folder is the whole reading, and truncated in a 300px sidebar it was the
-          part cut ("…run in /tmp/frizz-a…"). */}
-      <p className={`mt-1.5 min-h-[1.4em] break-words text-[11px] ${reading?.problem ? "text-danger" : "text-muted-70"}`}>
-        {reading ? reading.problem ?? `Threads started in Home run in ${reading.folder}` : ""}
-      </p>
     </div>
   )
 }

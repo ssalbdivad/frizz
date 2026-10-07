@@ -51,7 +51,7 @@ import { createTenantMap } from "./tenants.ts"
 import { openFrizzDatabase, type FrizzDatabase, type OpenFrizzDatabaseOptions } from "./frizz-db.ts"
 import { startTenantPrime, type TenantPrimeRun } from "./tenant-prime.ts"
 import { startWakeLockLoop, type WakeLockLoop } from "./wake-lock.ts"
-import { HOME_WORKSPACE_ID, findWorkspaceById, findWorkspaceBySegment, homeWorkspaceProject, listWorkspaces, projectForEntry } from "./home-workspace.ts"
+import { findWorkspaceById, findWorkspaceBySegment, listWorkspaces, projectForEntry } from "./home-workspace.ts"
 import { backfillRegistry } from "./project-registry.ts"
 import { servedByAnotherProcess } from "./project-launch.ts"
 import { deleteProjectState, stopProjectWorkers } from "./project-teardown.ts"
@@ -681,15 +681,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
     }
     return { closed, stoppedWorkers }
   }
-  /**
-   * Settings → Home folder moved: reopen the Home workspace where it now points (tenants.activate closes
-   * and reopens a tenant whose folder changed). Only if it is open — whatever opens it later reads the
-   * setting as it is then.
-   */
-  const reopenHomeWorkspace: NonNullable<AppContext["reopenHomeWorkspace"]> = async () => {
-    if (!tenants.get(HOME_WORKSPACE_ID)) return
-    await tenants.activate(homeWorkspaceProject())
-  }
   const tenants = createTenantMap<TenantSurfaces>({
     createContext: (contextOptions) => {
       if (contextOptions.project) assertNotServedElsewhere(contextOptions.project)
@@ -705,7 +696,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       activeTenants,
       openProject,
       teardownProject,
-      reopenHomeWorkspace,
       launchProjectId: project.id,
       editors,
       get database() { return frizzDb?.db },
@@ -1036,7 +1026,6 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
         activeTenants,
         openProject,
         teardownProject,
-        reopenHomeWorkspace,
         launchProjectId: project.id,
         editors,
         startup: {
@@ -1152,8 +1141,7 @@ export async function startServer(opts: StartOptions = {}): Promise<StartedServe
       // tenant that opened at the old one has to be reopened there (tenants.activate does that). The
       // launching project is exempt — its context is owned by the boot phases, not the map, and it is
       // the one directory this process is standing in. An entry's path is where its agents run, which
-      // for the Home workspace is Settings → Home folder rather than the directory holding its board —
-      // so a changed Home folder reopens Home there, exactly as a moved checkout is reopened.
+      // for the Home workspace is the home folder rather than the directory holding its board.
       const open = tenants.get(entry.id)?.project
       if (existing && (entry.id === project.id || (open && workDirOf(open) === entry.path))) {
         return { surfaces: existing, url: split.rest }

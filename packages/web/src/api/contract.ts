@@ -449,7 +449,6 @@ export interface Api {
   projectPickWarm(input: Record<never, never>): Promise<{ warming: boolean }>
   projectAdd(input: { path: string; exact?: boolean }): Promise<ProjectAddResult>
   pathComplete(input: { path: string }): Promise<{ status: "directory" | "file" | "missing" | "empty"; suggestions: string[] }>
-  homeFolderCheck(input: { folder: string }): Promise<{ folder: string; problem: string | null }>
   // The rail's squares. `projectIconSet` takes base64 from a browser file input (the bytes land in the
   // project's state dir, never in its working tree); clearing hands the square back to the automatic
   // scan, which is also what draws it in the first place — see server/project-icon.ts.
@@ -661,7 +660,6 @@ export const PROCEDURES = {
   projectPickWarm: "mutation",
   projectAdd: "mutation",
   pathComplete: "query",
-  homeFolderCheck: "query",
   projectsReorder: "mutation",
   projectRemove: "mutation",
   projectsRailCounts: "query",

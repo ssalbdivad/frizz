@@ -97,8 +97,8 @@ export function createTenantMap<App = unknown>(options: TenantMapOptions<App>): 
     // workers are detached daemons and survive exactly as they do a restart.
     //
     // Where its AGENTS run counts too. For every registered project that is the same directory; for the
-    // Home workspace it is Settings → Home folder, which moves while its board (`dir`) stays put — and a
-    // context built on the old folder would keep spawning every new thread there.
+    // Home workspace it is the home folder, apart from its board (`dir`) — and a context built on another
+    // folder would keep spawning every new thread there.
     if (already && already.project.dir === project.dir && workDirOf(already.project) === workDirOf(project)) return already.ctx
     const inFlight = opening.get(project.id)
     if (inFlight) return inFlight

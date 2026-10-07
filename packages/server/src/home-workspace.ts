@@ -1,20 +1,18 @@
-import { mkdirSync } from "node:fs"
+import { mkdirSync, realpathSync } from "node:fs"
 import { homedir } from "node:os"
 import { projectStateDir } from "./frizz-paths.ts"
-import { canonicalFolder, expandHomeFolder } from "./home-folder.ts"
 import { isDirectory } from "./path-probe.ts"
 import { cwdSlug, projectFromRegistryEntry, type Project } from "./project.ts"
 import { findById, findProjectBySegment, listProjects, readRegistry, reorderProjects, writeRegistry, type RegistryEntry } from "./project-registry.ts"
-import { readMachineSettings } from "./settings.ts"
 
 // THE HOME WORKSPACE — where a prompt that belongs to no project runs.
 //
 // Some work has no project yet: cloning a repository, a question about the machine, a scratch script.
 // Every thread needs a board to live on, and until this existed the only boards were registered project
 // folders, so that work was filed under whichever project happened to be open. Home is the prompt box's
-// other target: agents run in the operator's home folder (or the folder Settings → Home folder names),
-// and its threads get a board of their own that behaves like any project's — its entry in Everything's
-// project list, its lane in the queue, its square in the switcher.
+// other target: agents run in the operator's home folder, and its threads get a board of their own
+// that behaves like any project's — its entry in Everything's project list, its lane in the queue, its
+// square in the switcher.
 //
 // IT IS NOT A REGISTERED PROJECT, and cannot be one. A project's board is `<folder>/.frizz/`, and
 // `~/.frizz` is not a free name: it is Frizz's own data root on every install that predates the XDG
@@ -52,9 +50,16 @@ export function isHomeWorkspace(id: string | undefined): boolean {
   return id === HOME_WORKSPACE_ID
 }
 
-/** The folder Home's agents run in right now: Settings → Home folder, else the home folder itself. */
+/**
+ * The folder Home's agents run in: the operator's home folder, resolved through every symlink when it
+ * exists so it compares equal to the registry's paths.
+ */
 export function homeWorkspaceFolder(home = homedir()): string {
-  return canonicalFolder(expandHomeFolder(readMachineSettings(home).homeFolder, home))
+  try {
+    return realpathSync(home)
+  } catch {
+    return home
+  }
 }
 
 /**

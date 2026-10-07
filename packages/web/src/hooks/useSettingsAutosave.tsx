@@ -29,7 +29,7 @@ export const SETTINGS_WRITE_KEY = ["settingsSet"] as const
  * The cache keeps one `settingsGet` entry per project (lib/queryKeyScope.ts folds the page's project
  * into every hash but the machine-wide keys'), and that is right for the query as a whole: most of
  * `Settings` is a project's own, so it cannot join MACHINE_WIDE. But `projectRail`, `notifications`,
- * `localFileOpener`, `homeFolder` and the rest of MACHINE_SETTING_KEYS are one value for the machine, and
+ * `localFileOpener`, `fableFallback` and the rest of MACHINE_SETTING_KEYS are one value for the machine, and
  * a reader that is still bound to another project's entry has to see the new one too. That reader
  * exists: the project rail's hook lives in the layout, which a project switch on the one page does not
  * re-render, so it stays on the entry it was cold-loaded under (lib/projectRail.ts). Switch All projects'

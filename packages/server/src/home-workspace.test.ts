@@ -16,7 +16,6 @@ import {
   projectForEntry,
   reorderWorkspaces,
 } from "./home-workspace.ts"
-import { writeMachineConfig } from "./machine-config.ts"
 import { cwdSlug, workDirOf } from "./project.ts"
 import { registerProject, writeRegistry } from "./project-registry.ts"
 
@@ -84,7 +83,7 @@ test("findWorkspaceBySegment: projects by slug or id, Home on `home` and on its 
       const entry = findWorkspaceBySegment(segment, home)
       assert.equal(entry?.id, HOME_WORKSPACE_ID, segment)
       assert.equal(entry?.slug, "home", segment)
-      assert.equal(entry?.path, home, `${segment}: an unset Home folder is the home folder`)
+      assert.equal(entry?.path, home, `${segment}: Home runs in the home folder`)
     }
     assert.equal(findWorkspaceBySegment("nope", home), undefined)
     assert.equal(findWorkspaceById(HOME_WORKSPACE_ID, home)?.slug, "home")
@@ -95,7 +94,7 @@ test("findWorkspaceBySegment: projects by slug or id, Home on `home` and on its 
   }
 })
 
-test("listWorkspaces: registered projects first, Home last, stale when its folder is gone", () => {
+test("listWorkspaces: registered projects first, Home last", () => {
   const home = sandbox()
   try {
     project(home, "code/alpha", A)
@@ -107,17 +106,6 @@ test("listWorkspaces: registered projects first, Home last, stale when its folde
     assert.equal(last.id, HOME_WORKSPACE_ID, "Home is furniture: always last")
     assert.equal(last.stale, false)
     assert.equal(last.path, home)
-
-    // The folder existed when it was saved and has since been deleted — Home reports it rather than
-    // falling back to the home folder behind the operator's back.
-    mkdirSync(join(home, "work"))
-    writeMachineConfig(home, "settings", { homeFolder: "~/work" })
-    assert.equal(listWorkspaces(home).at(-1)?.stale, false)
-    assert.equal(listWorkspaces(home).at(-1)?.path, join(home, "work"))
-    rmSync(join(home, "work"), { recursive: true })
-    const gone = listWorkspaces(home).at(-1)
-    assert.equal(gone?.stale, true)
-    assert.equal(gone?.path, join(home, "work"))
     assertNoHomeBoard(home)
   } finally {
     rmSync(home, { recursive: true, force: true })
@@ -173,7 +161,7 @@ test("homeWorkspaceProject: the board is in Home's state dir, the agents in the 
     assert.equal(workspace.cwdSlug, cwdSlug(folder), "transcripts are sharded by where the agent runs")
     assert.equal(workspace.githubRepo, undefined, "a dotfiles repo in the home folder is not Home's GitHub")
 
-    // With no setting, the folder is the home folder itself — and the board is still NOT <home>/.frizz.
+    // By default the folder is the home folder itself — and the board is still NOT <home>/.frizz.
     const bare = homeWorkspaceProject(home)
     assert.equal(bare.workDir, home)
     assert.notEqual(bare.dir, home)

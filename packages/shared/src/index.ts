@@ -4823,13 +4823,8 @@ export const Settings = z.object({
    * (web components/ProjectRail.tsx). A blob saved in between has no key, and loads as the default.
    */
   projectRail: z.boolean(),
-  /**
-   * Where a prompt that belongs to NO project runs — the prompt box's "Home" target, for work like
-   * cloning a repository that has no project yet. A folder path as the operator typed it (`~` and
-   * `~/code` are expanded at use); unset or blank means their home folder. Machine-level: there is one
-   * Home per machine, not one per project. See server/home-workspace.ts.
-   */
-  homeFolder: z.string().max(4_096).optional(),
+  // (No `homeFolder`: the Home workspace's agents run in the operator's home folder, always. It was a
+  // setting from 2026-09-28 to 2026-10-07; a stored value is stripped on parse, this being non-strict.)
   /**
    * Where a worker's git worktrees go. Relative is resolved against the repository's main checkout
    * (`.frizz/worktrees` — git-ignored in every Frizz project); absolute or `~/…` is one folder for
@@ -4943,7 +4938,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
 
 /** Whether Frizz asks Claude for names, status lines, auto effort and schedule readings (Settings
  *  `backgroundSummaries`). On unless the human turned it off: an absent key, an older server's
@@ -7358,7 +7353,7 @@ export const ProjectCard = z.object({
   iconIsCustom: z.boolean().optional(),
   /**
    * The built-in HOME workspace rather than a registered project: the prompt box's target for work
-   * that belongs to no project, run in the operator's home folder (Settings → Home folder). `path` is
+   * that belongs to no project, run in the operator's home folder. `path` is
    * that folder. It cannot be renamed, given an icon or removed — it is not a folder Frizz adopted, so
    * there is nothing to forget — and it draws a house instead of a monogram.
    */

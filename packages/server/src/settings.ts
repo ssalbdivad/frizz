@@ -2,7 +2,6 @@ import { readFileSync, rmSync } from "node:fs"
 import { join } from "node:path"
 import { MACHINE_SETTING_KEYS, Settings } from "@frizz/shared"
 import { frizzPaths } from "./frizz-paths.ts"
-import { homeFolderProblem } from "./home-folder.ts"
 import { deleteMachineConfig, readMachineConfig, writeMachineConfig } from "./machine-config.ts"
 import type { Storage } from "./storage.ts"
 
@@ -12,8 +11,7 @@ const SETTINGS_KEY = "settings"
  * The settings that describe the MACHINE rather than a project.
  *
  * `notifications` tracks an OS permission, `localFileOpener` names which editor is installed,
- * `projectRail` is which chrome the person wants and `homeFolder` is where their projectless prompts
- * run (home-workspace.ts); none was ever a property of a repository. The
+ * `projectRail` is which chrome the person wants; none was ever a property of a repository. The
  * record was created for `font` (2026-08-25), which was inconsistent before one server served every
  * project — stored per project, mirrored per ORIGIN for a pre-paint guard — and that key is gone
  * since 2026-09-19: the interface is sans everywhere and offers no choice.
@@ -119,19 +117,6 @@ export function getSettings(storage: Storage, home: string): Settings {
 
 export function setSettings(storage: Storage, next: Settings, home: string): Settings {
   const validated = Settings.parse(next)
-  if (validated.homeFolder !== undefined) {
-    // Stored as the operator typed it, trimmed — and a CLEARED field is stored as "", never dropped. An
-    // absent machine key falls back to a project's own blob (getSettings), and every project that was
-    // open when a folder was set still carries it there, so dropping the key would resurrect it.
-    const folder = validated.homeFolder.trim()
-    // Checked only when it CHANGES: a folder that has since been deleted must not make every other
-    // setting unsavable. The Home workspace reports that one as missing instead.
-    if (folder !== (readMachineSettings(home).homeFolder ?? "").trim()) {
-      const problem = homeFolderProblem(folder, home)
-      if (problem) throw new Error(problem)
-    }
-    validated.homeFolder = folder
-  }
   writeMachineSettings(pickMachine(validated), home)
   storage.setSetting(SETTINGS_KEY, validated)
   return validated
