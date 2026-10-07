@@ -205,14 +205,25 @@ export function DispatchTimeLimit({ draftKey: key }: { draftKey: string }) {
           title={text ? (preview?.ok ? `Time limit · ${preview.text}` : preview?.text) : "No time limit"}
           // The pill's box exactly: py-1 around one 16px line (prompt-control-type), so it stands as tall as
           // the profile pill beside it whether or not it holds text. Empty, `px-[5px]` makes it a 26px square.
-          className={`inline-flex shrink-0 items-center gap-[3px] rounded-md border border-border/50 bg-transparent py-1 text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${text ? "px-2" : "px-[6px]"} ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
+          className={`inline-flex shrink-0 ${text ? "items-baseline gap-1 pt-[5px] pb-[3px]" : "items-center py-1"} rounded-md border border-border/50 bg-transparent text-muted outline-none transition-colors hover:border-border hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 data-[state=open]:border-border data-[state=open]:bg-panel-2 ${text ? "px-2" : "px-[6px]"} ${PROMPT_CONTROL_TYPOGRAPHY_CLASS}`}
         >
-          {/* Box-centred on the 16px line, as the profile pill's chevron is: the dial against the petite-caps
-              reading measured 0.00px by pixel ink (dsf 4 and 8), and 4.5px of ink to it on the pill's 3px gap. */}
-          <span aria-hidden="true" className="flex h-4 shrink-0 items-center">
-            <Timer data-time-limit-glyph size={12} strokeWidth={2} className={text ? "" : "text-muted-70"} />
-          </span>
-          {text && <span data-time-limit-text className={`tabular-nums ${preview && !preview.ok ? "text-danger" : ""}`}>{text}</span>}
+          {/* With no limit the stopwatch stands alone, box-centred on the 16px line as the profile pill's chevron
+              is. With one it sits beside a READING, and a reading is a duration in the house grammar — `2h`, never
+              the small-cap "2H" the strip's petite caps made of it — at the facts line's 11px, so the prompt box
+              and the drawer show one value one way. Its dial then rides the reading's cap band exactly as it does
+              there (DeadlineGlyph): box-centred beside lowercase ink it sat 1.56px low (pixel ink, dsf 8); this way,
+              +0.19px. The pixel moved from bottom padding to top puts the 11px reading on the profile pill's baseline
+              (it stood 1.00px above it on `py-1`), and the 26px box is unchanged. 4.75px of ink, dial to reading. */}
+          {text ? (
+            <>
+              <DeadlineGlyph size={12} trim="end" className="-mt-[1em]" />
+              <span data-time-limit-text className={`text-[11px] tabular-nums tracking-normal [font-variant-caps:normal] ${preview && !preview.ok ? "text-danger" : ""}`}>{text}</span>
+            </>
+          ) : (
+            <span aria-hidden="true" className="flex h-4 shrink-0 items-center">
+              <Timer data-time-limit-glyph size={12} strokeWidth={2} className="text-muted-70" />
+            </span>
+          )}
         </button>
       </PopoverTrigger>
       <PopoverContent side="top" align="start">
