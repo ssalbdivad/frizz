@@ -105,9 +105,9 @@ test("the header counts asks apart from the rest of Ready, and the spinning band
 test("the header never says nothing needs you over a queue that holds anything", () => {
   // Four handoffs and no asks: what the sidebar spike showed under "Nothing needs you" (2026-10-01).
   const handoffs = project("alpha", { queued: [ready("a", 40_000), ready("b", 30_000), ready("c", 20_000), ready("d", 10_000)] })
-  assert.deepEqual(phoneSubtitle(phoneCounts(phoneQueue([handoffs]))), { accent: null, rest: "4 ready" })
+  assert.deepEqual(phoneSubtitle(phoneCounts(phoneQueue([handoffs]))), { accent: null, rest: "4 queued" })
   const mixed = project("beta", { queued: [ask("q", 60_000), ready("h", 30_000)], running: [running("r", 1_000)] })
-  assert.deepEqual(phoneSubtitle(phoneCounts(phoneQueue([mixed]))), { accent: "1 needs you", rest: "1 ready · 1 working" })
+  assert.deepEqual(phoneSubtitle(phoneCounts(phoneQueue([mixed]))), { accent: "1 needs you", rest: "1 queued · 1 working" })
   assert.deepEqual(phoneSubtitle({ asks: 2, ready: 0, working: 0 }), { accent: "2 need you", rest: null })
   assert.deepEqual(phoneSubtitle(phoneCounts([])), { accent: null, rest: "Nothing needs you" })
 })

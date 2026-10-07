@@ -134,7 +134,10 @@ export function phoneCounts(queue: readonly PhoneRow[]): { asks: number; ready: 
 }
 
 /**
- * THE HEADER'S LINE under the view's name: `2 need you · 3 ready · 1 working`, the asks in the accent.
+ * THE HEADER'S LINE under the view's name: `2 need you · 3 queued · 1 working`, the asks in the accent.
+ * The rest of the queue reads "queued", the board's Queue (Colin's name, plans/upstream-superset.md §2; it
+ * read "ready" until 2026-10-06), and the spinning rows keep "working", which is what Colin's own phone
+ * board called them.
  *
  * "Nothing needs you" is said only of an EMPTY queue. Upstream's line counted the asks and the spinning
  * rows alone, so a queue of four handoffs — or four stalled threads, each with a Retry waiting — sat
@@ -143,7 +146,7 @@ export function phoneCounts(queue: readonly PhoneRow[]): { asks: number; ready: 
  */
 export function phoneSubtitle(counts: { asks: number; ready: number; working: number }): { accent: string | null; rest: string | null } {
   const accent = counts.asks > 0 ? `${counts.asks} ${counts.asks === 1 ? "needs" : "need"} you` : null
-  const parts = [counts.ready > 0 ? `${counts.ready} ready` : null, counts.working > 0 ? `${counts.working} working` : null].filter((part) => part !== null)
+  const parts = [counts.ready > 0 ? `${counts.ready} queued` : null, counts.working > 0 ? `${counts.working} working` : null].filter((part) => part !== null)
   const rest = parts.length > 0 ? parts.join(" · ") : accent ? null : "Nothing needs you"
   return { accent, rest }
 }
