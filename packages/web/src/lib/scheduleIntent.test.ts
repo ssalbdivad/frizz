@@ -169,6 +169,13 @@ test("D5: a second Enter during the hold changes nothing; Esc cancels the hold a
   assert.deepEqual(submitStep(SUBMIT_READY, { type: "escape" }, facts()), { phase: SUBMIT_READY }, "with nothing held, Esc is not the machine's")
 })
 
+test("the hold line's × says there is no schedule: the held Enter starts the thread now, without the answer", () => {
+  const held = submitStep(SUBMIT_READY, enter, facts()).phase
+  assert.deepEqual(submitStep(held, { type: "skip" }, facts()), { phase: SUBMIT_READY, then: { run: "dispatch" } })
+  assert.deepEqual(submitStep(held, { type: "skip" }, facts({ uploading: true })), { phase: held }, "never without a file still uploading")
+  assert.deepEqual(submitStep(SUBMIT_READY, { type: "skip" }, facts()), { phase: SUBMIT_READY }, "with nothing held, it does nothing")
+})
+
 test("D5: typing during the hold cancels it — nothing runs — and Enter again submits the new words", () => {
   const held = submitStep(SUBMIT_READY, enter, facts()).phase
   const typed = `${TEXT} and label them`

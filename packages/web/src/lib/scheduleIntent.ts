@@ -12,7 +12,8 @@ import { isFailedRead, type ModelReadOk, type ModelReadView } from "./scheduleMo
 //     from an earlier text: an edit since the last read is re-read before anything is created. A reading the
 //     cache holds costs nothing to re-use, so nothing relocates an old reading onto new words.
 //   - Without a reading for the text, Enter HOLDS ("Checking for a schedule…") until the answer lands, then
-//     acts on it. Typing during the hold cancels it; it gives up after 15s.
+//     acts on it. Typing during the hold cancels it; it gives up after 15s. Its × says "not a schedule" without
+//     waiting: the thread starts now.
 //   - Nothing is ever dispatched silently in place of a schedule the human may have meant: a read that fails or
 //     times out at submit, or a schedule the box cannot make, stops with a line that says so, and the NEXT
 //     Enter starts the thread.
@@ -215,6 +216,9 @@ export type SubmitEvent =
   | { type: "timeout" }
   /** Esc in the box: cancels a held Enter (and is claimed); otherwise nothing here. */
   | { type: "escape" }
+  /** The hold line's ×: the human says there is no schedule in the words, so the held Enter starts the thread now
+   *  rather than wait for the model to agree. */
+  | { type: "skip" }
 
 function enterStep(phase: SubmitPhase, facts: SubmitFacts, now: number, retry: boolean): SubmitStep {
   const act = retry ? { act: "hold" as const } : submitAct({
@@ -267,6 +271,8 @@ export function submitStep(phase: SubmitPhase, event: SubmitEvent, facts: Submit
       return phase.kind === "holding" ? { phase: { kind: "failed", text: phase.text } } : { phase }
     case "escape":
       return phase.kind === "holding" ? { phase: SUBMIT_READY } : { phase }
+    case "skip":
+      return phase.kind === "holding" && !facts.uploading ? { phase: SUBMIT_READY, then: { run: "dispatch" } } : { phase }
   }
 }
 

@@ -442,6 +442,25 @@ test("7. typing during the hold cancels it; nothing runs on the old words' answe
   } finally { await page.close() }
 })
 
+test("7b. the hold line's × says there is nothing to schedule: the thread starts at once, and the late answer acts on nothing", { skip: !baseUrl, timeout: 60_000 }, async () => {
+  const { page, errors } = await open()
+  try {
+    await arm(page, [MONDAY])
+    await closeGate(page)
+    await typeFast(page, PHRASE_TASK)
+    await page.keyboard.press("Enter")
+    await sleep(400)
+    assert.equal((await state(page))!.slot, "hold")
+    await shot(page, "intent-hold-dismiss")
+    await page.click(`${PAGE_BOX} [data-schedule-slot="hold"] [data-schedule-dismiss]`)
+    assert.ok(await waitFor(async () => (await counts(page)).dispatch === 1, 2_000), "× started it without the answer")
+    await release(page)
+    await sleep(800)
+    assert.deepEqual([(await counts(page)).dispatch, (await counts(page)).createSchedule], [1, 0], "the late schedule answer created nothing")
+    assert.deepEqual(errors, [])
+  } finally { await page.close() }
+})
+
 test("8. a read that fails at submit never dispatches silently: the line, and the NEXT Enter dispatches", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { page, errors } = await open()
   try {

@@ -461,7 +461,14 @@ export function useLiveSchedule(input: LiveScheduleInput): LiveSchedule {
 
   let line: { kind: string; node: ReactNode; announce: string } | null = null
   if (holding && holdNote) {
-    line = { kind: "hold", announce: HOLD_COPY, node: <ScheduleSlot kind="hold" phone={phone} line={<span data-schedule-copy className="min-w-0 flex-1 shimmer-text">{HOLD_COPY}</span>} /> }
+    // Its × answers for the model: nothing to schedule here, start the thread now.
+    const line_ = (
+      <>
+        <span data-schedule-copy className="min-w-0 flex-1 shimmer-text">{HOLD_COPY}</span>
+        <DismissButton phone={phone} title="Not a schedule, start it now" onClick={() => step({ type: "skip" })} />
+      </>
+    )
+    line = { kind: "hold", announce: HOLD_COPY, node: <ScheduleSlot kind="hold" phone={phone} line={line_} /> }
   } else if (failed) {
     const copy = `${FAIL_COPY} ${startsNow(phone)}`
     line = {
@@ -688,21 +695,7 @@ function StripLine({ result, nowMs, tz, phone, updating, stale, onClose }: {
   if (parts?.next) tails.push(<>{` · next ${parts.next}`}{parts.span && <span className={spanTone}>{`, in ${parts.span}`}</span>}</>)
   if (parts?.next && parts.span) tails.push(<span className={spanTone}>{` · in ${parts.span}`}</span>)
   const fit = useTailFit(phone ? tails.length : 0)
-  const close = onClose && (
-    <button
-      type="button"
-      data-schedule-dismiss
-      aria-label="Not a schedule"
-      title={phone ? undefined : "Not a schedule (Esc)"}
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClose}
-      className={phone
-        ? `${TAP_CLOSE_TRIM} -my-1 flex size-8 shrink-0 translate-y-[calc(6px_-_0.5cap)] items-center justify-center self-baseline rounded-md text-muted outline-none active:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`
-        : `${CLOSE_TRIM} ml-auto flex size-5 shrink-0 translate-y-[calc(6px_-_0.5cap)] items-center justify-center self-baseline rounded-sm text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
-    >
-      <X size={12} strokeWidth={2} />
-    </button>
-  )
+  const close = onClose && <DismissButton phone={phone} title="Not a schedule (Esc)" onClick={onClose} />
   if (!parts) return <span data-schedule-reading className="min-w-0 flex-1 truncate">{describeRule(result.rrule, result.dtstart, result.tz)}</span>
   if (phone) {
     const tail = fit.index < tails.length ? tails[fit.index] : null
@@ -729,6 +722,25 @@ function StripLine({ result, nowMs, tz, phone, updating, stale, onClose }: {
       </span>
       {close}
     </>
+  )
+}
+
+/** The strip's ×: "not a schedule". The phone's has a 32px hit square. */
+function DismissButton({ phone, title, onClick }: { phone: boolean; title: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      data-schedule-dismiss
+      aria-label="Not a schedule"
+      title={phone ? undefined : title}
+      onMouseDown={(e) => e.preventDefault()}
+      onClick={onClick}
+      className={phone
+        ? `${TAP_CLOSE_TRIM} -my-1 flex size-8 shrink-0 translate-y-[calc(6px_-_0.5cap)] items-center justify-center self-baseline rounded-md text-muted outline-none active:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`
+        : `${CLOSE_TRIM} ml-auto flex size-5 shrink-0 translate-y-[calc(6px_-_0.5cap)] items-center justify-center self-baseline rounded-sm text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60`}
+    >
+      <X size={12} strokeWidth={2} />
+    </button>
   )
 }
 
