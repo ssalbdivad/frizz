@@ -184,7 +184,7 @@ import { type AppContext } from "./context.ts"
 import { listAcpAgentsCached } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
-import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
+import { handleOf, isReplyWaitFor, knownHandles, replyWaitOf, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueDeadlineNoticeWake, enqueueThreadMessageWake } from "./scheduler.ts"
 import { deadlineNoticeMessage, deadlineSection, deadlineViewOf, rowDeadline } from "./deadline.ts"
 import { editedFilesOf } from "./edited-files.ts"
@@ -4009,6 +4009,13 @@ export function createRouter(ctx: AppContext) {
           if (a.id) activity.push({ kind: "agent", id: a.taskId ?? a.id, label: a.label, since: a.startedAt, ...(address ? { address } : {}), ...watchFor("agent", [a.taskId, a.id, a.label]) })
         }
         for (const t of ctx.storage.listThreadTimers(input.slug, { armedOnly: true })) {
+          // A REPLY WAIT is listed as the THREAD it waits on, by the handle a `threads:` fence entry names;
+          // its timer id rides the label, since that is what `unwatch` takes to stop waiting.
+          const reply = replyWaitOf(t.prompt)
+          if (reply) {
+            activity.push({ kind: "thread", id: `@${reply.handle}`, label: `a reply from @${reply.handle} (wait ${t.id})`, since: new Date(t.created_at).toISOString() })
+            continue
+          }
           activity.push({
             kind: "timer", id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 120),
             since: new Date(t.created_at).toISOString(), until: new Date(t.fire_at).toISOString(),
@@ -5217,21 +5224,21 @@ export function createRouter(ctx: AppContext) {
         }
         const self = threads.find((t) => t.slug === input.slug)
         const from = self ? handleOf(self) : input.slug
-        // THE WAIT FOR THE ANSWER is a one-off TIMER on the sender: an armed timer already parks a thread,
-        // blocks `done`, shows on its card and in `activity`, and wakes it when it fires — which here means
-        // "no answer in time". The answer CANCELS it (below, on the other side of the same exchange), so
-        // the only wake the sender gets is the answer itself. Checked before anything is sent, so a refusal
-        // never leaves a message out that nothing is waiting for.
+        // THE WAIT FOR THE ANSWER is REGISTERED as a one-off TIMER on the sender: an armed timer already
+        // blocks `done`, shows on its card and in `activity`, and is what the sender's ```awaiting fence
+        // names under `threads:` (awaiting.ts, thread-mentions.armedTimerKeys). Registering is not parking:
+        // the sender's rest still ends with that fence, and its `for:` is the timeout. The answer CANCELS the
+        // timer (below, on the other side of the same exchange), so the only wake the sender gets is the
+        // answer itself, or the fence's own expiry. The timer lives as long as the longest park on it can
+        // stand (AWAITING_FOR_MAX_MS), so it lapses on its own if nothing ever answers. A `for` from an
+        // older worker's MCP server is ignored: it only duplicated the fence's. Checked before anything is
+        // sent, so a refusal never leaves a message out that nothing is waiting for.
         let wait: { id: string; fireAtMs: number } | undefined
         if (input.awaitReply) {
-          const asked = input.for === undefined ? 3_600_000 : parseAwaitingDurationRaw(input.for)
-          if (asked === null) {
-            return { sent: false, handle, refusal: `\`for: ${input.for}\` is not a duration — give one like \`30m\` or \`2h\` (max 24h).` }
-          }
           if (ctx.storage.listThreadTimers(input.slug, { armedOnly: true }).length >= TIMER_MAX_ARMED) {
             return { sent: false, handle, refusal: `this thread already has ${TIMER_MAX_ARMED} armed timers, and a reply wait is one — cancel one first.` }
           }
-          wait = { id: `tmr_${randomUUID().replace(/-/g, "").slice(0, 12)}`, fireAtMs: nowMs + Math.min(asked, AWAITING_FOR_MAX_MS) }
+          wait = { id: `tmr_${randomUUID().replace(/-/g, "").slice(0, 12)}`, fireAtMs: nowMs + AWAITING_FOR_MAX_MS }
         }
         // …AND THIS MESSAGE MAY BE THE ANSWER to a wait on the recipient's side: every reply wait it holds
         // on THIS thread is settled by it, whatever the message says — the recipient reads it and decides.

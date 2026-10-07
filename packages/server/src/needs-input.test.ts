@@ -7,6 +7,7 @@ import assert from "node:assert/strict"
 import { AWAITING_QUESTIONS_MAX, AWAITING_STEP_VALUE_MAX, AWAITING_STEPS_MAX, awaitingNeedsInput, awaitingQuestions, awaitingSteps, NEEDS_INPUT_REQUIRED_AT, needsInputRequired, RETIRED_AWAITING_REPLACEMENT, splitAwaitingFrontmatter, type AwaitingHint } from "@frizz/shared"
 import { deriveAwaitingBackground, deriveNeedsYou, hasDeclaredWait, type RegisteredWatch } from "./board.ts"
 import type { GithubStatusBook } from "./awaiting.ts"
+import { armedTimerKeys, replyWaitPrompt } from "./thread-mentions.ts"
 import type { SessionRow } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 
@@ -36,8 +37,8 @@ const agentPark = (answer?: string, forValue = "2h") => awaiting(
 )
 
 // deriveNeedsYou's positional tail, named — so each case reads as the fact it changes.
-function needsYou(r: SessionRow, t: SessionTelemetry, extra: { now?: number; github?: GithubStatusBook; prs?: string[]; watches?: RegisteredWatch[]; questions?: number; runtime?: "turn-idle" | "exited" } = {}) {
-  return deriveNeedsYou(r, t, extra.runtime ?? "turn-idle", false, extra.now ?? NOW, undefined, true, false, extra.github ?? {}, new Set(extra.prs ?? []), new Set(), extra.watches ?? [], extra.questions ?? 0)
+function needsYou(r: SessionRow, t: SessionTelemetry, extra: { now?: number; github?: GithubStatusBook; prs?: string[]; timers?: ReadonlySet<string>; watches?: RegisteredWatch[]; questions?: number; runtime?: "turn-idle" | "exited" } = {}) {
+  return deriveNeedsYou(r, t, extra.runtime ?? "turn-idle", false, extra.now ?? NOW, undefined, true, false, extra.github ?? {}, new Set(extra.prs ?? []), extra.timers ?? new Set(), extra.watches ?? [], extra.questions ?? 0)
 }
 
 // ---- THE GRAMMAR ---------------------------------------------------------------------------------
@@ -251,4 +252,15 @@ test("a park written before the thread's deadline stops holding at the deadline;
   assert.equal(needsYou(row(deadline(NOW - 60_000)), live), true, "past the deadline, a park from before it queues")
   const after = tele({ ...agentPark("false", "2h"), subAgents: [LIVE_AGENT], lastAssistantAt: new Date(NOW - 30_000).toISOString() })
   assert.equal(needsYou(row(deadline(NOW - 60_000)), after), false, "a park written after the deadline holds")
+})
+
+// ---- `threads:` — A WAIT ON ANOTHER THREAD'S ANSWER TAKES THE FENCE LIKE EVERY OTHER WAIT ----------
+// `message_thread` with `await_reply` registers the wait; only a fence naming it parks, and only while the
+// wait is live.
+test("a `threads:` park on a live reply wait keeps the thread out of the queue; a dead name or no fence queues it", () => {
+  const replyWait = armedTimerKeys([{ id: "tmr_r", prompt: replyWaitPrompt("shell-budgets", "sb") }])
+  const park = awaiting({ kind: "thread", value: "@shell-budgets" }, { kind: "status", value: "watching" }, { kind: "for", value: "1h" })
+  assert.equal(needsYou(row(), tele(park), { timers: replyWait }), false)
+  assert.equal(needsYou(row(), tele(park), { timers: new Set() }), true, "no live await behind the name")
+  assert.equal(needsYou(row(), tele(), { timers: replyWait }), true, "the registration alone does not park")
 })

@@ -23,6 +23,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { createStorage, type SessionRow } from "./storage.ts"
+import { replyWaitPrompt } from "./thread-mentions.ts"
 
 const AT = "2026-08-14T00:00:00.000Z"
 const NOW = Date.parse("2026-08-14T00:05:00.000Z")
@@ -1061,6 +1062,56 @@ test("a question the human typed past still refuses a later fence that leaves it
     await withdrawn.s.tick()
     assert.deepEqual(withdrawn.queued().filter((r) => isParkCorrection(r.message)), [], "withdrawn: nothing left to name")
   } finally { withdrawn.close() }
+})
+
+// ---- `threads:` — a wait on another thread's answer -------------------------------------------------
+// `message_thread` with `await_reply` REGISTERS the wait (a reply-wait timer); the fence names it by
+// `@handle`, and the park check holds it to a live wait exactly as it holds every other name.
+const REPLY_WAIT = (rested: string) => ({ id: "tmr_replywait01", slug: "parked", prompt: replyWaitPrompt("shell-budgets", "sb"), fireAtMs: Date.parse(rested) + 24 * 3600_000, createdAtMs: Date.parse(rested) - 60_000 })
+
+test("a `threads:` name with a live await from this thread takes the park — by handle, slug or any casing", async () => {
+  for (const name of ["@shell-budgets", "shell-budgets", "@ShellBudgets", "sb"]) {
+    const h = parkHarness([{ kind: "thread", value: name }, { kind: "status", value: "watching" }, { kind: "for", value: "1h" }])
+    try {
+      h.storage.armThreadTimer(REPLY_WAIT(h.restedAt))
+      await h.s.tick()
+      assert.deepEqual(h.queued(), [], `\`threads: [${name}]\` names the live await`)
+    } finally { h.close() }
+  }
+})
+
+test("a `threads:` name matching no live await is refused, and the correction says how to register one", async () => {
+  const h = parkHarness([{ kind: "thread", value: "@focus-mode" }, { kind: "for", value: "1h" }])
+  try {
+    h.storage.armThreadTimer(REPLY_WAIT(h.restedAt))
+    await h.s.tick()
+    const rows = h.queued()
+    assert.equal(rows.length, 1, "a dead name is refused, a live wait on ANOTHER thread notwithstanding")
+    assert.equal(isParkCorrection(rows[0].message), true)
+    assert.match(rows[0].message, /`threads: \[@focus-mode\]` — NOT AWAITED — ask it with `mcp__frizz__message_thread` and `await_reply: true` first/)
+    assert.match(rows[0].message, /In a fence: `threads: \[@shell-budgets\]`/, "the live one is printed for the re-fence")
+  } finally { h.close() }
+})
+
+// The answer CANCELS the wait the instant it is sent, so until it is delivered the fence names a wait that
+// is no longer armed. Answered after the rest, that is the answer's own wake to deliver — no correction.
+test("a `threads:` wait answered after the rest draws no correction; the answer is its own wake", async () => {
+  const h = parkHarness([{ kind: "thread", value: "@shell-budgets" }, { kind: "for", value: "1h" }])
+  try {
+    h.storage.armThreadTimer(REPLY_WAIT(h.restedAt))
+    assert.equal(h.storage.cancelThreadTimer("parked", "tmr_replywait01", Date.now()), true)
+    await h.s.tick()
+    assert.deepEqual(h.queued(), [])
+  } finally { h.close() }
+  // Negative control: answered BEFORE the rest, the fence named a wait that was already over.
+  const before = parkHarness([{ kind: "thread", value: "@shell-budgets" }, { kind: "for", value: "1h" }])
+  try {
+    before.storage.armThreadTimer(REPLY_WAIT(before.restedAt))
+    before.storage.cancelThreadTimer("parked", "tmr_replywait01", Date.parse(before.restedAt) - 1_000)
+    await before.s.tick()
+    assert.equal(before.queued().length, 1)
+    assert.match(before.queued()[0].message, /ANSWERED/)
+  } finally { before.close() }
 })
 
 // ---- `issues:` (2026-09-14) ---------------------------------------------------------------------------

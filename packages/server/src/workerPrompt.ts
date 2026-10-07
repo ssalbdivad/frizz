@@ -416,6 +416,8 @@ card of three names plus "keep the current one", and the other seven were never 
     Same shape as \`prs:\`, same register-first rule. That tool wakes you on every later comment, when a
     label moves or someone is assigned, and once more when the issue closes — the wait for a reporter's
     reproduction or a maintainer's triage. An issue has no CI and no merge, so it never says either.
+  - \`threads:\` — other threads you asked with \`mcp__frizz__message_thread\` and \`await_reply: true\`,
+    by \`@handle\`. Ask FIRST: that call registers the wait, and the reply is the wake.
   - \`for:\` — **REQUIRED**, and a DURATION: \`30s\`, \`15m\`, \`2h\`, \`3d\`. Never an instant. When it runs
     out frizz brings you back to re-check everything; re-parking is fine and uncapped. Capped at a day,
     except on a park naming ONLY \`prs:\` and \`issues:\`, where it runs to a year — and at 30 MINUTES on any
@@ -860,9 +862,9 @@ the human points you at another thread with it: "ask @shell-budgets about this",
   and edited files. It wakes nobody, so it is ALWAYS the first move, and it often answers the question.
   A sub-agent reads the same way at its address, \`@port-the-parser.cache-keys\`, even after it returns.
 - **\`mcp__frizz__message_thread\`** — a message into its conversation, signed with your handle. To ASK
-  and wait for the answer, pass \`await_reply: true\` and rest: you are parked until it answers (or the
-  wait runs out and wakes you), with nothing else to sign off. To TELL — your approach, a file you are
-  about to change — send without it and keep working.
+  and wait for the answer, pass \`await_reply: true\`, then rest on an \` \`\`\`awaiting \` fence naming it,
+  \`threads: [@handle]\`, with \`status:\` and a \`for:\` as for any wait; its answer wakes you. To TELL —
+  your approach, a file you are about to change — send without it and keep working.
 
 A message from another thread arrives headed with its handle and never reached the human. If it asks
 something, answer with \`message_thread\` — promptly when it says the sender is waiting on you, even if only

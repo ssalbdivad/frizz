@@ -170,6 +170,8 @@ export function awaitingWaitClause(hints: readonly AwaitingHint[]): string | nul
     plural(count("step"), "step from you", "steps from you"),
     plural(count("question"), "answer from you", "answers from you"),
     ...prWatchRefs(hints).map((pr) => pr.ref),
+    // An awaited thread keeps its handle, as a PR keeps its ref: it names a thing the reader knows.
+    ...hints.filter((h) => h.kind === "thread" && h.value.trim()).map((h) => `@${h.value.trim().replace(/^@/, "")}`),
     plural(count("shell"), "agent terminal", "agent terminals"), // the strip's own noun for the same row
     plural(count("agent"), "sub-agent", "sub-agents"),
     plural(count("timer"), "timer", "timers"),

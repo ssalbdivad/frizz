@@ -26,9 +26,9 @@
 // and the parent genuinely resumes; measured 15/15 times on a live worker thread, with idle windows as
 // short as 0.13s. This card is what makes that alternation legible.)
 import { createContext, Fragment, useContext, useEffect, useState, type ReactNode } from "react"
-import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, SquareTerminal, TerminalSquare, X } from "lucide-react"
+import { Bot, ChevronRight, CircleAlert, CircleCheck, CircleDashed, CircleDot, CircleSlash, CircleX, Clock, GitMerge, GitPullRequestClosed, Hourglass, ListTodo, MessageSquare, SquareTerminal, TerminalSquare, X } from "lucide-react"
 import type { AwaitingHint, GithubIssueStatus, GithubWatchStatus, ThreadTerminal, ThreadView, ThreadWatchView } from "@frizz/shared"
-import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent } from "@frizz/shared"
+import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent, replyWaitOf } from "@frizz/shared"
 import { subAgentName } from "../groups.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
@@ -165,13 +165,20 @@ export const SHELLS_ALONE_TITLE = "Agent terminals running"
  *  kind-naming title over a mixed table names only half the wait. */
 function shellsAlone(thread: Pick<ThreadView, "subAgents" | "bgShells" | "watches">): boolean {
   const shells = (thread.bgShells ?? []).filter((s) => s.state === "running").length
-  return shells > 0 && !awaitsResults(thread) && prWatcherCount(thread) === 0 && armedTimerWatches(thread).length === 0
+  return shells > 0 && !awaitsResults(thread) && prWatcherCount(thread) === 0 && armedTimerWatches(thread).length === 0 && awaitedThreadWatches(thread).length === 0
 }
 
 /** The thread's armed timers, as the board's watch rows state them (kind "timer" since 2026-08-24 —
- *  before that a timer park reached this card nowhere at all). */
-function armedTimerWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView[] {
-  return (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed")
+ *  before that a timer park reached this card nowhere at all). A reply wait is a timer too, and is rowed
+ *  as the thread it waits on instead (awaitedThreadWatches). */
+export function armedTimerWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView[] {
+  return (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed" && !replyWaitOf(w.timer?.prompt ?? ""))
+}
+
+/** The other threads this one awaits a reply from (`message_thread` with `await_reply`) — registered as a
+ *  timer whose prompt names the thread (shared replyWaitOf). */
+export function awaitedThreadWatches(thread: Pick<ThreadView, "watches">): ThreadWatchView[] {
+  return (thread.watches ?? []).filter((w) => w.kind === "timer" && w.state === "armed" && replyWaitOf(w.timer?.prompt ?? "") !== undefined)
 }
 
 /** A card drawn with no owning thread — a fence in a SUB-AGENT's own transcript, which is a real
@@ -488,7 +495,7 @@ export function WaitRow({ mark, name, mono, hint, status, onOpen, onPrewarm, hre
    *  is right, because the whole row is the link. */
   ghRef?: string
   title?: string
-  testKind: "github" | "shell" | "terminal" | "agent" | "timer" | "file" | "link"
+  testKind: "github" | "shell" | "terminal" | "agent" | "timer" | "thread" | "file" | "link"
   testId: string
 }) {
   const tree = indent !== undefined
@@ -833,6 +840,25 @@ export function TimerRow({ watch, now }: { watch: ThreadWatchView; now: number }
   )
 }
 
+// ---- THE AWAITED THREADS -------------------------------------------------------------------------
+// Another thread this one asked with `await_reply`, rowed as that thread — its `@handle`, the name the
+// worker's `threads:` line uses — rather than as the timer the wait is registered as. Non-interactive,
+// like a timer row; the status is how long the question has been out.
+export function ThreadWaitRow({ watch, now }: { watch: ThreadWatchView; now: number }) {
+  const reply = replyWaitOf(watch.timer?.prompt ?? "")
+  const name = reply ? `@${reply.handle}` : watch.target
+  return (
+    <WaitRow
+      testKind="thread"
+      testId={watch.target}
+      mark={<MessageSquare size={12} className={`${ON_CAP} text-muted-60`} />}
+      name={name}
+      title={reply ? `Waiting on ${name} to reply${reply.project ? ` (in ${reply.project})` : ""}` : watch.target}
+      status={`awaiting reply · ${compactElapsedSince(watch.createdAt, now)}`}
+    />
+  )
+}
+
 // ---- THE LIVE SUB-AGENTS -------------------------------------------------------------------------
 // DIRECT children only. A descendant rides `subAgents` so other surfaces can nest the tree, but it was
 // dispatched by the child rather than by this thread's worker — and it has no retirement signal in this
@@ -927,18 +953,19 @@ function awaitingWaitItems(thread: Pick<ThreadView, "id" | "subAgents" | "bgShel
   const shells = [...declared, ...hintedShellWatches(thread, opts.hints ?? [], declared)]
   const agents = liveAgents(thread)
   const timers = armedTimerWatches(thread)
-  return { prs, issues, shells, agents, timers }
+  const threads = awaitedThreadWatches(thread)
+  return { prs, issues, shells, agents, timers, threads }
 }
 
 /** Would the wait table draw at least one row for this thread? A card with a heading and no rows says
  *  less than nothing, so a caller asks first. */
 export function hasAwaitingWaitRows(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches">, opts: AwaitingWaitOptions = {}): boolean {
   const items = awaitingWaitItems(thread, opts)
-  return items.prs.length + items.issues.length + items.shells.length + items.agents.length + items.timers.length > 0
+  return items.prs.length + items.issues.length + items.shells.length + items.agents.length + items.timers.length + items.threads.length > 0
 }
 
 function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShells" | "watches" | "checkout">, now: number, opts: AwaitingWaitOptions = {}): Array<{ head: string; rows: ReactNode[] }> {
-  const { prs, issues, shells, agents, timers } = awaitingWaitItems(thread, opts)
+  const { prs, issues, shells, agents, timers, threads } = awaitingWaitItems(thread, opts)
   // GROUPED BY KIND (maintainer 2026-08-15: "Definitely group them by kind"), and the order is the one
   // the ops strip already settled, for the same reason: a sub-agent and a shell are running RIGHT NOW,
   // a watched PR is waiting on somebody else, and a timer is waiting on nothing but the clock. Read
@@ -950,6 +977,8 @@ function awaitingWaitGroups(thread: Pick<ThreadView, "id" | "subAgents" | "bgShe
     // Its own group, under GitHub's own noun — an issue beside a PR under "Pull requests" would be the
     // one row on the card whose heading lied about it.
     { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+    // Another agent's work, like a PR: waited on, not running here.
+    { head: "Threads", rows: threads.map((w) => <ThreadWaitRow key={w.id} watch={w} now={now} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
   ].filter((g) => g.rows.length > 0)
 }

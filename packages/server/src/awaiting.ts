@@ -1,3 +1,4 @@
+import { threadAwaitKey } from "./thread-mentions.ts"
 import { AGENT_PARK_FOR_MAX_MS, AWAITING_FOR_MAX_MS, awaitingNeedsInput, awaitingQuestions, awaitingSteps, GithubIssueStatus, GithubWatchStatus, isAwaitingItemKind, parseAwaitingDurationRaw, PR_WATCH_FOR_MAX_MS, type AwaitingHint, type AwaitingItemKind } from "@frizz/shared"
 
 // The PR-reference vocabulary shared by the PR-watching scheduler and the board. It lives here rather
@@ -91,7 +92,9 @@ export interface LiveActivity {
   shells: ReadonlySet<string>
   /** Same, for live sub-agents. */
   agents: ReadonlySet<string>
-  /** Armed timer ids on this thread. */
+  /** Armed timer ids on this thread — and, for each reply wait among them, the `threadAwaitKey` of the
+   *  thread it waits on (thread-mentions.armedTimerKeys), which is what a `threads:` entry is checked
+   *  against: a reply wait IS a timer. */
   timers: ReadonlySet<string>
   /** Registered PR watcher refs on this thread, normalized (`owner/repo#N`). */
   prs: ReadonlySet<string>
@@ -102,7 +105,7 @@ export interface LiveActivity {
 }
 
 const LIVE_SET: Record<AwaitingItemKind, keyof LiveActivity> = {
-  shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues",
+  shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues", thread: "timers",
 }
 
 /** One shell or sub-agent as the fold reports it — the handles it answers to and whether it still runs. */
@@ -155,7 +158,7 @@ export function unaccountedItems(items: readonly AwaitingItem[], live: LiveActiv
   return items.filter((i) => !live[LIVE_SET[i.kind]]?.has(liveKey(i)))
 }
 
-/** The value to test against the live set. A PR is the one kind whose registry key is NORMALIZED
+/** The value to test against the live set. A PR is a kind whose registry key is NORMALIZED
  *  (`owner/repo#N` — registeredPrWatchesOf) while the fence holds whatever the worker wrote, and
  *  `watch_pr` itself advertises "owner/repo#123 or a PR URL". A raw string match called a registered
  *  PR named by URL unaccounted, so the worker was bumped "NOT REGISTERED", re-registered (idempotent),
@@ -170,6 +173,8 @@ function liveKey(i: AwaitingItem): string {
     const ref = parseIssueRef(i.value)
     return ref ? githubStatusKey(ref) : i.value
   }
+  // A thread is named by its `@handle` (or its slug), folded as every handle is.
+  if (i.kind === "thread") return threadAwaitKey(i.value)
   return i.value
 }
 

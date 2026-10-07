@@ -6,7 +6,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import type { BoardSnapshot, Settings } from "@frizz/shared"
+import { AWAITING_FOR_MAX_MS, type BoardSnapshot, type Settings } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -136,18 +136,19 @@ test("messageThread queues a signed message for the other thread, and refuses se
   } finally { h.close() }
 })
 
-test("await_reply parks the asker on a timer that the ANSWER cancels, and the answer says so", async () => {
+test("await_reply registers a wait on the asker that the ANSWER cancels, and the answer says so", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("sb", "Shell budgets"))
+    // A `for` from an older worker's MCP server is accepted and ignored: the fence's `for:` is the timeout.
     const asked = await h.router.messageThread.handler({ input: { slug: "me", handle: "shell-budgets", message: "Which file owns the cap?", awaitReply: true, for: "30m" } })
     assert.equal(asked.sent, true)
     assert.match(asked.timerId ?? "", /^tmr_/)
     const waits = h.storage.listThreadTimers("me", { armedOnly: true })
     assert.equal(waits.length, 1, "the asker holds one armed wait")
     assert.match(waits[0]!.prompt, /^Waiting on @shell-budgets to reply \(thread `sb`\)/)
-    assert.ok(Math.abs(waits[0]!.fire_at - Date.now() - 30 * 60_000) < 5_000)
+    assert.ok(Math.abs(waits[0]!.fire_at - Date.now() - AWAITING_FOR_MAX_MS) < 5_000, "the registration lives as long as the longest park on it")
     assert.match(createWakeDeliveryStore(h.storage.scope).list()[0]!.message, /@mentions is WAITING on your answer/)
 
     // An unrelated thread messaging the asker does not end the wait; the one it waits on does.
@@ -163,15 +164,16 @@ test("await_reply parks the asker on a timer that the ANSWER cancels, and the an
   } finally { h.close() }
 })
 
-test("a bad await_reply duration refuses before anything is sent", async () => {
+// `activity` lists a reply wait as the THREAD it waits on, by the `@handle` a `threads:` line names.
+test("activity lists a reply wait as its thread, by handle", async () => {
   const h = harness()
   try {
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("sb", "Shell budgets"))
-    const bad = await h.router.messageThread.handler({ input: { slug: "me", handle: "sb", message: "q", awaitReply: true, for: "soon" } })
-    assert.equal(bad.sent, false)
-    assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0)
-    assert.equal(h.storage.listThreadTimers("me", { armedOnly: true }).length, 0)
+    const asked = await h.router.messageThread.handler({ input: { slug: "me", handle: "sb", message: "q", awaitReply: true } })
+    const read = await h.router.listOwnThreadActivity.handler({ input: { slug: "me" } })
+    assert.deepEqual(read.activity.map((i) => [i.kind, i.id]), [["thread", "@shell-budgets"]])
+    assert.match(read.activity[0]!.label, new RegExp(asked.timerId!))
   } finally { h.close() }
 })
 

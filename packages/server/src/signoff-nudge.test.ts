@@ -380,31 +380,34 @@ test("an answered question ON ITS WAY to the worker is a sign-off too, until the
   } finally { h.close() }
 })
 
-// A THREAD WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) rests on that wait
-// and nothing else — the tool tells it to — so the wait is its sign-off, exactly as a watch is.
-test("a rest on a wait for another thread's answer is not nudged", async () => {
+// A WAIT ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a registration, not a park: a
+// rest after it with no fence is a bare rest, nudged like any other — with the fence that names the thread
+// written out for it.
+test("a fenceless rest after await_reply is nudged, with the `threads:` fence pre-filled", async () => {
   const h = nudger({})
   try {
     h.storage.armThreadTimer({ id: "tmr_reply", slug: h.slug, prompt: replyWaitPrompt("shell-budgets", "sb"), fireAtMs: Date.now() + 3_600_000, createdAtMs: Date.now() })
     await h.s.tick()
-    assert.deepEqual(h.nudges(), [])
+    const nudges = h.nudges()
+    assert.equal(nudges.length, 1)
+    assert.match(nudges[0]!.message, /waiting on a reply from @shell-budgets/)
+    assert.match(nudges[0]!.message, /```awaiting\nthreads: \[@shell-budgets\]\nstatus: watching\nfor: 1h\n```/)
+    assert.doesNotMatch(nudges[0]!.message, /tmr_reply`?\s*—/, "the wait is named as its thread, not as a timer")
   } finally { h.close() }
 })
 
-// …and the answer CANCELS that wait the instant it is sent, so until it is delivered the rest reads bare.
-// Seen on a real run (2026-09-29): the nudge rode in the same delivery as the answer. Enqueued an hour
-// out so it is still in flight when the tick runs.
-test("the answer ON ITS WAY from the other thread is a sign-off too", async () => {
+// …and a message on its way from another thread does not sign a bare rest off either.
+test("a thread message on its way does not sign off a bare rest", async () => {
   const h = nudger({})
   try {
     enqueueThreadMessageWake(h.storage, { slug: h.slug, sessionId: "sid", fromSlug: "sb", message: "Message from @shell-budgets: 742", nowMs: Date.now() + 3_600_000 })
     await h.s.tick()
     const minted = h.storage.db.prepare("SELECT id FROM wake_delivery WHERE thread_slug = ? AND fence_id LIKE 'signoff:%'").all(h.slug)
-    assert.deepEqual(minted, [])
+    assert.equal(minted.length, 1)
   } finally { h.close() }
 })
 
-// The failing control for the four above: with none of them recorded, this very thread IS nudged — so
+// The failing control for the cases above: with none of them recorded, this very thread IS nudged — so
 // they are what silenced it rather than something else about the fixture.
 test("…and with no fence and no registration, the same thread IS nudged", async () => {
   const h = nudger({})

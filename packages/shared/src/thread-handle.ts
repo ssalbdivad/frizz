@@ -107,3 +107,38 @@ export function threadMentions(text: string): string[] {
   for (const m of text.matchAll(new RegExp(String.raw`(?:^|[^\p{L}\p{N}_@./])@(${HANDLE_SEGMENT}(?:\.${HANDLE_SEGMENT})*)`, "gu"))) out.push(m[1]!)
   return out
 }
+
+// A REPLY WAIT (`message_thread` with `await_reply`) is an ordinary one-off TIMER on the asker whose prompt
+// names the thread it waits on. The prompt is also its NAME wherever a timer is listed, so it reads as the
+// wait; the `(thread \`slug\`)` tail is what the answer is matched by (a handle can change with a rename, a
+// slug cannot). The format and its reader live together here because both sides read it: the server
+// matches the answer and checks a fence's `threads:` against it, and the resting card rows it as a thread.
+const REPLY_WAIT_RE = /^Waiting on @(\S+) to reply \(thread `([^`]+)`(?: in ([^)]+))?\)/
+
+/** A wait on a thread in ANOTHER project names that project too: slugs are unique only within one, so an
+ *  answer from a same-slug thread here must not settle a wait on the other project's. */
+function replyWaitRef(slug: string, project?: string): string {
+  return project ? `thread \`${slug}\` in ${project}` : `thread \`${slug}\``
+}
+
+export function replyWaitPrompt(handle: string, slug: string, project?: string): string {
+  return (
+    // Read in two places: as the wait's name while it stands, and as the wake if it fires — so the first
+    // sentence is the wait and the rest is conditional on it having run out.
+    `Waiting on @${handle} to reply (${replyWaitRef(slug, project)}). If this fires, no answer came in time: read where it is ` +
+    "with `mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if " +
+    "the answer still matters, or go on without it."
+  )
+}
+
+/** The thread a timer's prompt waits on, or undefined for any other timer. */
+export function replyWaitOf(prompt: string): { handle: string; slug: string; project?: string } | undefined {
+  const m = REPLY_WAIT_RE.exec(prompt)
+  return m ? { handle: m[1], slug: m[2], ...(m[3] ? { project: m[3] } : {}) } : undefined
+}
+
+/** Is this timer a reply wait on that thread? */
+export function isReplyWaitFor(prompt: string, slug: string, project?: string): boolean {
+  const wait = replyWaitOf(prompt)
+  return wait !== undefined && wait.slug === slug && wait.project === project
+}

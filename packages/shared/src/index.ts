@@ -722,7 +722,7 @@ export function parseAskUserQuestionAnswers(result: unknown, questions: readonly
 //   prose bodies       narrowed to `reason:` so the fence is machine-checkable — then given back in full
 //                      below the `---` delimiter, where prose cannot be mistaken for structure.
 export const AwaitingHint = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "for", "title", "status", "needs_input", "step", "question"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "thread", "for", "title", "status", "needs_input", "step", "question"]),
   value: z.string(),
 })
 export type AwaitingHint = z.infer<typeof AwaitingHint>
@@ -807,7 +807,7 @@ const AWAITING_KEY_RE = /^([a-z][a-z_-]*):\s*(\S.*)?$/i
  *  recognised here so they never fall to the body, but are read verbatim rather than as YAML (see
  *  splitAwaitingFrontmatter). Anything else falls through to the body. `needs-input` is the same key
  *  spelled the way the other hyphenated kinds are. */
-const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "questions", "for", "title", "steps", "status", "needs_input", "needs-input"])
+const AWAITING_YAML_KEYS = new Set(["shells", "agents", "timers", "prs", "issues", "threads", "questions", "for", "title", "steps", "status", "needs_input", "needs-input"])
 
 /** Which singular hint kind each plural sequence key produces. The WIRE SHAPE is unchanged by the
  *  2026-08-24 cutover — every consumer still reads a flat `{kind, value}` list with SINGULAR kinds — so
@@ -917,9 +917,15 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   // what keeps a retired `pr:` with its list underneath from orphaning a bare sequence into the parser.
   // `inTitle` and `inSteps` are the same rule for the two keys that are prose: their lines follow them
   // verbatim.
+  // `threads:` names another Frizz thread this one asked with `mcp__frizz__message_thread` and
+  // `await_reply: true`, by its `@handle` — and `@` is a character YAML reserves, so `threads: [@x]` is a
+  // parse error that would cost the fence every lookup beside it. So its values are read verbatim too,
+  // as a flow list or `- ` items, with any quotes a worker added taken off.
+  const threads: string[] = []
   let structural = true
   let inTitle = false
   let inSteps = false
+  let inThreads = false
   for (const line of frontmatter) {
     const m = line.match(AWAITING_KEY_RE)
     const key = m?.[1].toLowerCase()
@@ -927,6 +933,7 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
       structural = AWAITING_YAML_KEYS.has(key)
       inTitle = key === "title"
       inSteps = key === "steps"
+      inThreads = key === "threads"
     }
     // A LINE THAT IS NOT A KEY AND NOT A CONTINUATION IS PROSE, exactly as it was under the line grammar:
     // a worker that omits the `---` and writes its handoff straight into the frontmatter must still park.
@@ -935,8 +942,15 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
       structural = false
       inTitle = false
       inSteps = false
+      inThreads = false
     }
     if (inTitle) titleLines.push(m && key === "title" ? (m[2] ?? "") : line)
+    else if (inThreads) {
+      const raw = m && key === "threads" ? (m[2] ?? "") : (/^\s*-\s+(.*)$/.exec(line)?.[1] ?? "")
+      const v = raw.trim()
+      const list = v.startsWith("[") && v.endsWith("]") ? v.slice(1, -1).split(",") : [v]
+      threads.push(...list.map((t) => t.trim().replace(/^(["'])(.*)\1$/, "$2").trim()).filter(Boolean))
+    }
     else if (inSteps) {
       if (m && key === "steps") steps.push(...inlineSteps(m[2] ?? ""))
       else {
@@ -951,6 +965,7 @@ export function splitAwaitingFrontmatter(raw: string): { body: string; hints: Aw
   // Unparsed lines go to the BODY rather than being dropped: the worker has to be able to see what it
   // wrote, or the correction it gets is about a fence it can no longer read.
   if (!parsed.ok) rest.push(...yamlLines)
+  for (const thread of threads) parsed.hints.push({ kind: "thread", value: thread.slice(0, AWAITING_HINT_VALUE_MAX) })
   rest.push(...after)
   // Capped HERE rather than at the card, so the hint on the wire is already the string that renders and
   // no consumer can draw a longer one. A title alone still parks nothing (see readAwaitingPark).
@@ -1154,7 +1169,7 @@ export function awaitingNeedsInput(hints: readonly AwaitingHint[] | undefined): 
   return needsInput
 }
 
-export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr", "issue"] as const
+export const AWAITING_ITEM_KINDS = ["shell", "agent", "timer", "pr", "issue", "thread"] as const
 export type AwaitingItemKind = (typeof AWAITING_ITEM_KINDS)[number]
 export function isAwaitingItemKind(kind: string): kind is AwaitingItemKind {
   return (AWAITING_ITEM_KINDS as readonly string[]).includes(kind)
@@ -1889,6 +1904,9 @@ export interface SignoffLiveOps {
   prs?: { id?: string; label: string }[]
   /** Registered GitHub issues, by ref (`owner/repo#N`) — what an `issues:` entry names. */
   issues?: { id?: string; label: string }[]
+  /** Other threads this one awaits a reply from (`message_thread` with `await_reply`), by `@handle` —
+   *  what a `threads:` entry names. */
+  threads?: { id?: string; label: string }[]
 }
 
 // THE NUDGE PRINTS THE IDS, and that is not a convenience — it is what makes the fence writable at all.
@@ -1909,11 +1927,13 @@ export interface SignoffLiveOps {
  *  the population most likely to be writing a bad fence. Printing the ids needs no tool at all. */
 export function liveOpsLines(ops?: SignoffLiveOps, needsInput = false): string[] {
   const lines: string[] = []
+  // `threads:` is read verbatim (splitAwaitingFrontmatter), so its `@handle`s are printed as written rather
+  // than quoted for YAML.
   const section = (heading: string, key: string, items: { id?: string; label: string }[]) => {
     if (!items.length) return
     lines.push("", heading)
     for (const i of items) lines.push(`- \`${i.id ?? "?"}\`  — ${i.label}`)
-    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ? fenceScalar(i.id) : "?").join(", ")}]\``)
+    lines.push(`In a fence: \`${key}: [${items.map((i) => i.id ? (key === "threads" ? i.id : fenceScalar(i.id)) : "?").join(", ")}]\``)
   }
   section("Background shells still running:", "shells", ops?.shells ?? [])
   // Under the answer-required contract (`status:`, NEEDS_INPUT_REQUIRED_AT) a sub-agent is no longer
@@ -1923,6 +1943,7 @@ export function liveOpsLines(ops?: SignoffLiveOps, needsInput = false): string[]
   section("Timers you have armed:", "timers", ops?.timers ?? [])
   section("Pull requests you registered:", "prs", ops?.prs ?? [])
   section("Issues you registered:", "issues", ops?.issues ?? [])
+  section("Threads you are awaiting a reply from:", "threads", ops?.threads ?? [])
   return lines
 }
 
@@ -1972,6 +1993,11 @@ export function fenceScalar(id: string): string {
 
 export function signoffWaitingNudgeMessage(ops: SignoffLiveOps, needsInput = false): string {
   const { shells, subAgents } = ops
+  const threads = ops.threads ?? []
+  // A REPLY WAIT ALONE (`message_thread` with `await_reply`) is a wait like a shell's: registered, so it
+  // has a wake, but not parked until the fence names it. It gets the same pre-filled fence, `watching`
+  // because the reply is another thread's work, not this one's.
+  if (shells.length + subAgents.length === 0 && threads.length > 0) return replyWaitNudgeMessage(threads, ops, needsInput)
   const count = shells.length + subAgents.length
   const one = count === 1
   // An id the fence can carry, or the label QUOTED — the park check answers to a shell's label too, and a
@@ -1996,6 +2022,8 @@ export function signoffWaitingNudgeMessage(ops: SignoffLiveOps, needsInput = fal
     "```awaiting",
     ...(shells.length ? [`shells: [${shells.map(handle).join(", ")}]`] : []),
     ...(subAgents.length ? [`agents: [${subAgents.map(handle).join(", ")}]`] : []),
+    // An awaited thread rides the fence pre-filled: the worker asked it and chose to wait on it.
+    ...(threads.length ? [`threads: [${threads.map((t) => t.id ?? t.label).join(", ")}]`] : []),
     ...(needsInput ? ["status: working"] : []),
     `for: ${SIGNOFF_WAITING_FOR}`,
     ...(needsInput ? [] : ["---", "What is running and what it gates, in one sentence."]),
@@ -2013,14 +2041,35 @@ export function signoffWaitingNudgeMessage(ops: SignoffLiveOps, needsInput = fal
   ].join("\n")
 }
 
+/** The waiting variant for a bare rest whose only live wait is a reply from another thread. */
+function replyWaitNudgeMessage(threads: readonly { id?: string; label: string }[], ops: SignoffLiveOps, needsInput: boolean): string {
+  const one = threads.length === 1
+  const names = threads.map((t) => t.id ?? t.label)
+  const extras = (
+    [["timers", ops.timers], ["prs", ops.prs], ["issues", ops.issues]] as const
+  ).filter(([, items]) => items?.length).map(([key, items]) => `\`${key}: [${items!.map((i) => (i.id ? fenceScalar(i.id) : JSON.stringify(i.label))).join(", ")}]\``)
+  return [
+    `${SIGNOFF_NUDGE_MARKER} You rested without a fence, waiting on ${one ? `a reply from ${names[0]}` : `replies from ${names.join(", ")}`}. Registering the wait is not parking: if you are waiting on ${one ? "it" : "them"}, end your next message with this fence, setting \`for:\` to how long to wait before you go on without ${one ? "it" : "them"}:`,
+    "",
+    "```awaiting",
+    `threads: [${names.join(", ")}]`,
+    ...(needsInput ? ["status: watching"] : []),
+    `for: ${SIGNOFF_WAITING_FOR}`,
+    "```",
+    ...(extras.length ? ["", `Add a line only if this rest waits on these too: ${extras.join(", ")}.`] : []),
+    "",
+    "If work is left, do it now; if you no longer need the answer, stop waiting with `mcp__frizz__unwatch` on the wait's `tmr_…` id (`mcp__frizz__activity` lists it) and sign off.",
+  ].join("\n")
+}
+
 /** The sign-off nudge for one fenceless rest: the short waiting variant when a background shell (or, on a
- *  Goal thread or under the answer-required contract, a direct child) is still running, the full protocol
- *  when nothing is. `needsInput` is the worker's contract (`needsInputRequired`): a worker dispatched under
+ *  Goal thread or under the answer-required contract, a direct child) is still running, or another thread's
+ *  reply is awaited, the full protocol when nothing is. `needsInput` is the worker's contract (`needsInputRequired`): a worker dispatched under
  *  the answer-required cut is taught `status:` — the 2026-10-05 spelling, which a worker that learned
  *  `needs_input:` can write just as well, since the fence reads both — and one dispatched before the cut
  *  is taught the grammar it can actually satisfy. */
 export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): string {
-  if (ops && (ops.shells.length || ops.subAgents.length)) return signoffWaitingNudgeMessage(ops, needsInput)
+  if (ops && (ops.shells.length || ops.subAgents.length || ops.threads?.length)) return signoffWaitingNudgeMessage(ops, needsInput)
   const base = needsInput ? SIGNOFF_NUDGE_MESSAGE_NEEDS_INPUT : SIGNOFF_NUDGE_MESSAGE
   const lines = liveOpsLines(ops, needsInput)
   if (lines.length) {
@@ -5364,9 +5413,10 @@ export type OwnThreadTimersResult = z.infer<typeof OwnThreadTimersResult>
 // compaction, a long turn, a wake it did not expect) cannot write a correct fence at all. This is how it
 // gets them back, and it is the same list the sign-off nudge prints, so the two can never disagree.
 export const ThreadActivityItem = z.object({
-  kind: z.enum(["shell", "agent", "timer", "pr", "issue"]),
+  kind: z.enum(["shell", "agent", "timer", "pr", "issue", "thread"]),
   /** The string a `<kind>:` fence line must carry. For a shell that is the runtime task id the worker
-   *  was shown; for a PR, `owner/repo#N`; for a timer, its `tmr_…` row id. */
+   *  was shown; for a PR, `owner/repo#N`; for a timer, its `tmr_…` row id; for a thread this one awaits a
+   *  reply from, its `@handle`. */
   id: z.string(),
   label: z.string(),
   /** ISO8601 of when it started or was armed — absent when frizz has no instant for it. */
@@ -5581,10 +5631,13 @@ export const MessageThreadInput = z.object({
   slug: ThreadSlug,
   handle: z.string().trim().min(1).max(200),
   message: z.string().trim().min(1).max(20_000),
-  /** Park the SENDER until the other thread answers. The wait is a one-off TIMER on the sender (so it parks
-   *  the thread, blocks `done` and shows on the card like any timer) that the ANSWER cancels; if it fires
-   *  first, the sender is woken to re-decide. `for` is how long to wait (a duration, default 1h, max 24h). */
+  /** Register a wait on the other thread's answer. The registration is a one-off TIMER on the sender (it
+   *  blocks `done` and is what a `threads:` fence entry is checked against) that the ANSWER cancels. It
+   *  does not park the sender: the rest that follows ends with an ```awaiting fence naming the thread
+   *  under `threads:`, whose `for:` is the timeout, as on every park. */
   awaitReply: z.boolean().optional(),
+  /** RETIRED, and ignored: the wait's own timeout, which only duplicated the fence's `for:`. Still
+   *  accepted because a worker's MCP server outlives a server upgrade and may still send it. */
   for: z.string().trim().min(1).max(16).optional(),
 }).strict()
 export type MessageThreadInput = z.infer<typeof MessageThreadInput>
@@ -5593,7 +5646,7 @@ export const MessageThreadResult = z.object({
   sent: z.boolean(),
   handle: z.string().optional(),
   from: z.string().optional(),
-  /** The `tmr_…` id of the reply wait, when `awaitReply` armed one, and when it runs out. */
+  /** The `tmr_…` id of the reply wait, when `awaitReply` armed one, and when the registration lapses. */
   timerId: z.string().optional(),
   waitUntil: z.string().optional(),
   /** A reply wait on the RECIPIENT's side that this message answered, now settled. */

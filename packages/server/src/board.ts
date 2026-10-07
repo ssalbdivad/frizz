@@ -18,7 +18,7 @@ import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, T
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
 import { deadlineViewOf, rowDeadline } from "./deadline.ts"
 import { threadLinkView } from "./thread-links.ts"
-import { isReplyWait } from "./thread-mentions.ts"
+import { armedTimerKeys } from "./thread-mentions.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { claudeModelStanding } from "./backend/claude-model-upgrade.ts"
 import type { Tailer, SessionTelemetry, FenceView } from "./tailer.ts"
@@ -699,8 +699,6 @@ export function signoffNudgeVerdict(
     questionRows: () => readonly ThreadQuestionRow[]
     done: () => { body: string; doneAt: number } | undefined
     armedWatchCount: () => number
-    replyWaitArmed: () => boolean
-    threadMessageInFlight?: () => boolean
   },
   nowMs = Date.now(),
 ): SignoffNudgeVerdict {
@@ -722,9 +720,7 @@ export function signoffNudgeVerdict(
     // wakes; it cannot say whether the human is needed meanwhile, and on a thread dispatched at or after
     // NEEDS_INPUT_REQUIRED_AT that answer lives only in the fence. So a rest behind a `watch` with no fence
     // is a bare rest there — it queues (needsInputQueues), and the reminder teaches the fence.
-    (!needsInputRequired(row.spawned_at) && facts.armedWatchCount() > 0) ||
-    facts.replyWaitArmed() ||
-    facts.threadMessageInFlight?.() === true
+    (!needsInputRequired(row.spawned_at) && facts.armedWatchCount() > 0)
   ) return "signed-off"
   // A RUNNING CHILD ALREADY PARKS, so there is no sign-off to ask for (2026-10-02). The queue rule excuses
   // a fenceless rest behind a direct sub-agent — a `Workflow` run is one — because its return re-invokes
@@ -2201,7 +2197,9 @@ function sessionThreadView(
     fireAt: new Date(t.fire_at).toISOString(),
     createdAt: new Date(t.created_at).toISOString(),
   }))
-  const armedTimerIds = new Set(armedTimers.map((t) => t.id))
+  // …with the threads its reply waits are on, which a `threads:` declaration is checked against
+  // (thread-mentions.armedTimerKeys).
+  const armedTimerIds = armedTimerKeys(armedTimers)
   // This thread's ARMED WATCHES on its own running work — the `thread_watch` rows `mcp__frizz__watch`
   // creates. Same per-thread lookup as the two registries above, and the same ms→ISO mapping as the
   // worker's own read-back (router.armedOwnWatchViews), so the row, the strip and the tool cannot
@@ -2328,17 +2326,10 @@ function sessionThreadView(
     questionRows: () => questionRows,
     done: () => registries.done.get(row.slug),
     armedWatchCount: () => armedWatches.length,
-    replyWaitArmed: () => armedTimers.some((t) => isReplyWait(t.prompt)),
   }, nowMs), rawTele, nowMs)
   // A silent turn queues past every rest gate in deriveNeedsYou (it is not at rest), except the human's
   // own wall-clock snooze, which is how a deliberate long wait is parked.
-  // WAITING ON ANOTHER THREAD'S ANSWER (`message_thread` with `await_reply`) is a wait on automation, like a
-  // sub-agent: the human owes nothing until that thread answers, so the rest stays OUT of the queue while
-  // the card still states the wait. Only when nothing else here is theirs — an open question or a
-  // permission prompt still queues it. The wait is a timer (thread-mentions.ts), so it lapses on its own.
-  const waitingOnThread = !archived && runtime === "turn-idle" && currentQuestionCount === 0 && !interactionPresence.needsUser &&
-    armedTimers.some((t) => isReplyWait(t.prompt) && Date.parse(t.fireAt) > nowMs)
-  const needsYou = archived || waitingOnThread ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending) || (quietSince !== undefined && !futureSnooze(row, nowMs))
+  const needsYou = archived ? false : deriveNeedsYou(row, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending) || (quietSince !== undefined && !futureSnooze(row, nowMs))
   const queuedForReply = needsYou && quietSince === undefined && queuedOnlyForReply(row, tele, nowMs, (r) =>
     deriveNeedsYou(r, tele, runtime, interactionPresence.needsUser, nowMs, limitPause, true, deliveryProcessGone, github, registeredPrWatches, armedTimerIds, armedWatches, currentQuestionCount, answerInFlight, signoffNudgePending))
   const deliveryInFlight = !archived && deriveDeliveryInFlight(row, runtime, needsYou, deliveryProcessGone, answerInFlight || signoffNudgePending, nowMs)

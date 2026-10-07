@@ -11,7 +11,7 @@ import { limitFaultResetKey, limitPauseIsStale, mayHaveLiveBackgroundWork, quota
 import { fableHasHeadroom } from "./backend/fable-fallback.ts"
 import { claudeFallbackModel, claudeModelFromLimitName, claudeProfile, normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
 import { createWakeDeliveryStore, WAKE_QUIET_WINDOW_MS, type WakeDelivery } from "./wake-store.ts"
-import { isReplyWait } from "./thread-mentions.ts"
+import { armedTimerKeys, replyWaitOf, threadAwaitKey } from "./thread-mentions.ts"
 // The board owns the registered-done lifetime rule, and the waker must read it by exactly the same rule
 // or the two disagree about whether a thread is finished.
 import { answersInFlight, carriedQuestionRows, childJustReturned, openQuestionRows, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
@@ -653,9 +653,23 @@ function armReopenedTheLoop(
   return Number.isFinite(signedOffAt) && armed > signedOffAt
 }
 
-/** This thread's ARMED timer ids — the other registry a \`timer:\` line is checked against. */
+/** This thread's ARMED timer ids — the other registry a \`timers:\` line is checked against — with the
+ *  threads its reply waits are on, which a \`threads:\` line is checked against (armedTimerKeys). */
 function armedTimerIdsOf(storage: Storage, slug: string): ReadonlySet<string> {
-  return new Set(storage.listThreadTimers(slug, { armedOnly: true }).map((t) => t.id))
+  return armedTimerKeys(storage.listThreadTimers(slug, { armedOnly: true }))
+}
+
+/** This thread's armed timers as the nudge and the corrections list them: a REPLY WAIT under the thread it
+ *  waits on, by the `@handle` a \`threads:\` line names, and every other timer by its id. */
+function timerOpsOf(storage: Storage, slug: string): Pick<SignoffLiveOps, "timers" | "threads"> {
+  const timers: { id?: string; label: string }[] = []
+  const threads: { id?: string; label: string }[] = []
+  for (const t of storage.listThreadTimers(slug, { armedOnly: true })) {
+    const reply = replyWaitOf(t.prompt)
+    if (reply) threads.push({ id: `@${reply.handle}`, label: `a reply from @${reply.handle}` })
+    else timers.push({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })
+  }
+  return { timers, threads }
 }
 
 /** The stop hook asks "you stopped — is there more?", and this is the message that ALREADY ANSWERED it:
@@ -1435,8 +1449,8 @@ export interface Scheduler {
 /** The FENCE key a wire kind is written as. The wire kinds stayed SINGULAR through the 2026-08-24 YAML
  *  cutover; the grammar the worker writes did not, so every message that quotes a fence line back at a
  *  worker has to translate — printing `i.kind` raw teaches a spelling the parser now refuses. */
-const AWAITING_KEY_OF: Record<"shell" | "agent" | "timer" | "pr" | "issue", string> = {
-  shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues",
+const AWAITING_KEY_OF: Record<"shell" | "agent" | "timer" | "pr" | "issue" | "thread", string> = {
+  shell: "shells", agent: "agents", timer: "timers", pr: "prs", issue: "issues", thread: "threads",
 }
 
 // ---- THE MID-TURN HOLD'S BOUND ------------------------------------------------------------------
@@ -2286,11 +2300,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // worker names it under `questions:` in an awaiting fence (evalParkIntegrity) or withdraws it, and is
       // told so below (carriedQuestionsNudgeMessage). A typed message changes nothing about that: a
       // question the human typed past is still open, still owed, and carried (board.carriedQuestionRows).
-        // A wait on ANOTHER THREAD's answer (`message_thread` with `await_reply`) is a registration like a
-        // watch: the tool tells the worker to rest on it with nothing else, so it must count here too…
-        // …and so does a thread's message ON ITS WAY, the twin of the answer-in-flight case above: the
-        // answer CANCELS the wait the instant it is sent, so until it is delivered the rest reads bare.
-        // Seen on a real run (2026-09-29): the nudge was merged into the very delivery carrying the answer.
       // A native ask is a question by another route: the thread is frozen on a modal the human has to
       // answer, and telling it to write a ```question fence is telling it to do what it already did.
       // The sentinel still ends the arrangement for sessions that predate the fence (see `saidDone`).
@@ -2320,8 +2329,6 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         questionRows: () => deps.storage.listThreadQuestions(row.slug),
         done: () => deps.storage.getThreadDone(row.slug),
         armedWatchCount: () => deps.storage.listThreadWatches(row.slug, { armedOnly: true }).length,
-        replyWaitArmed: () => deps.storage.listThreadTimers(row.slug, { armedOnly: true }).some((t) => isReplyWait(t.prompt)),
-        threadMessageInFlight: () => outbox.pendingFor(row.slug, row.session_id).some((d) => isThreadMessageFenceId(d.fenceId)),
       }, nowMs)
       if (verdict === "signed-off") {
         if ((row.signoff_nudges ?? 0) > 0) deps.storage.resetSignoffNudges(row.slug)
@@ -2348,11 +2355,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // running direct child parks any other thread, so the verdict never reaches a send behind one,
         // while a Goal thread is asked for the `agents:` fence because only a fence holds its Goal.
         subAgents: (tele.subAgents ?? []).filter((a) => isDirectSubAgent(a) && a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
-        // The other two registries, so the nudge lists EVERY kind an awaiting fence can name rather
-        // than the two the fold happens to know about — a worker told about half its work writes half
-        // a fence, and the half it left out is not what gets it bumped.
-        timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
-          .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
+        // The other registries, so the nudge lists EVERY kind an awaiting fence can name rather than the
+        // two the fold happens to know about — a worker told about half its work writes half a fence, and
+        // the half it left out is not what gets it bumped. A reply wait is listed as its thread.
+        ...timerOpsOf(deps.storage, row.slug),
         prs: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind !== "issue")
           .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
         issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")
@@ -2725,8 +2731,22 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const firedTimers = new Set(
         deps.storage.listThreadTimers(row.slug).filter((t) => t.state === "fired").map((t) => t.id),
       )
+      // A REPLY WAIT that is no longer armed: the answer CANCELS it (router messageThread), and one nobody
+      // answered lapses by firing. Keyed the way a `threads:` entry is checked, newest wait per thread.
+      const settledReplyWaits = new Map<string, { state: string; settledAt: number }>()
+      for (const t of deps.storage.listThreadTimers(row.slug)) {
+        const reply = t.state === "armed" ? undefined : replyWaitOf(t.prompt)
+        if (!reply) continue
+        for (const name of [reply.handle, reply.slug]) {
+          const key = threadAwaitKey(name)
+          const settledAt = t.settled_at ?? t.fire_at
+          if ((settledReplyWaits.get(key)?.settledAt ?? -Infinity) < settledAt) settledReplyWaits.set(key, { state: t.state, settledAt })
+        }
+      }
+      const replyWaitOfItem = (i: { kind: string; value: string }) => (i.kind === "thread" ? settledReplyWaits.get(threadAwaitKey(i.value)) : undefined)
+      const answeredItem = (i: { kind: string; value: string }) => replyWaitOfItem(i)?.state === "cancelled"
       const finishedItem = (i: { kind: string; value: string }) =>
-        finishedHandles.has(i.value) || (i.kind === "timer" && firedTimers.has(i.value))
+        finishedHandles.has(i.value) || (i.kind === "timer" && firedTimers.has(i.value)) || answeredItem(i)
       // SILENT IS NOT MISSING EITHER. A sub-agent that has written nothing for longer than its allowance —
       // 15 minutes of awake time, counted from the deadline of a Bash wait it declared (tailer.ts
       // pendingCallDeadline) — reads `stale`. The id is right and the child may well be alive; what frizz
@@ -2753,6 +2773,10 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           // note points back at the transcript rather than at a result that is not a thing.
           : i.kind === "timer" && firedTimers.has(i.value)
           ? "already FIRED — its wake was delivered; there is nothing left to wait on"
+          : answeredItem(i)
+          ? "ANSWERED — its reply was delivered to you; there is nothing left to wait on"
+          : i.kind === "thread" && replyWaitOfItem(i)?.state === "fired"
+          ? "LAPSED — no reply came while the wait stood; read where it is with `mcp__frizz__read_thread`"
           : finishedItem(i)
           ? "FINISHED — its result is waiting for you"
           : silentItem(i)
@@ -2763,6 +2787,8 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_pr` first, then name it here"
           : i.kind === "issue"
           ? "NOT REGISTERED — register it with `mcp__frizz__watch_issue` first, then name it here"
+          : i.kind === "thread"
+          ? "NOT AWAITED — ask it with `mcp__frizz__message_thread` and `await_reply: true` first, then name it here"
           : "NOT RUNNING (nothing by that name)"
         // The PLURAL key, because that is what the worker has to write. `i.kind` is the internal wire
         // kind and stayed singular through the 2026-08-24 YAML cutover; printing it raw taught a
@@ -2794,7 +2820,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         for (const h of [sh.taskId, sh.id, sh.label]) if (h) finishedAfterRest.add(h)
       }
       const retired = retiredAwaitingKindsIn(tele.lastFence.body ?? "")
-      if (allFinished && retired.length === 0 && dead.every((i) => i.kind === "shell" && finishedAfterRest.has(i.value))) continue
+      // The same for a thread that ANSWERED after this rest: the answer is its own wake.
+      const answeredAfterRest = (i: { kind: string; value: string }) => answeredItem(i) && replyWaitOfItem(i)!.settledAt > restedAtMs
+      if (allFinished && retired.length === 0 && dead.every((i) => (i.kind === "shell" && finishedAfterRest.has(i.value)) || answeredAfterRest(i))) continue
       const head = retired.length > 0
         ? [
           // The LEAD comes from shared so the transcript can recognise this delivery as a correction and
@@ -2881,8 +2909,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const ops = cause === "expired" ? [] : liveOpsLines({
         shells: (tele.bgShells ?? []).filter((sh) => sh.state === "running").map((sh) => ({ id: sh.taskId ?? sh.id, label: sh.label })),
         subAgents: (tele.subAgents ?? []).filter((a) => a.state === "running").map((a) => ({ id: a.taskId ?? a.id, label: a.label })),
-        timers: deps.storage.listThreadTimers(row.slug, { armedOnly: true })
-          .map((t) => ({ id: t.id, label: t.prompt.trim().replace(/\s+/g, " ").slice(0, 80) })),
+        ...timerOpsOf(deps.storage, row.slug),
         prs: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind !== "issue")
           .map((w) => ({ id: `${w.owner}/${w.repo}#${w.number}`, label: `${w.owner}/${w.repo}#${w.number}` })),
         issues: deps.storage.listPrWatches(row.slug, { armedOnly: true }).filter((w) => w.kind === "issue")

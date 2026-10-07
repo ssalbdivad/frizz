@@ -2076,6 +2076,35 @@ test("a handler's refusal reaches the worker as its own sentence, not an HTTP 50
   }
 })
 
+// A REPLY WAIT is read out as the THREAD it waits on, and the ready fence names it under `threads:`.
+test("`activity` puts an awaited thread in the ready fence under `threads:`", async () => {
+  const http = createServer((_req, res) => {
+    res.writeHead(200, { "content-type": "application/json" })
+    res.end(JSON.stringify({ result: {
+      activity: [{ kind: "thread", id: "@shell-budgets", label: "a reply from @shell-budgets (wait tmr_aaa111)", since: "2026-10-07T09:00:00.000Z" }],
+      questions: [],
+    } }))
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "asking-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "activity", arguments: {} } })
+    const text = (await rpc.next(2)).result.content[0].text
+    assert.match(text, / {2}thread: @shell-budgets {2}\(since 2026-10-07T09:00:00.000Z\)/)
+    const fence = text.slice(text.indexOf("```awaiting"), text.indexOf("```\n\nDrop the lines"))
+    assert.match(fence, /threads: \[@shell-budgets\]/)
+    assert.match(fence, /status: watching/, "another thread's reply is a wait outside this one")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
 // THE QUESTIONS ARE READ OUT TOO, in their own section (maintainer 2026-08-28: "Is there a way for the
 // agent to read out the current set of watchers and questions?"). They must NOT reach the fence block:
 // a question waits on a person, and there is no `questions:` key in the awaiting grammar to hold one.

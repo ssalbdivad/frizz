@@ -20,7 +20,7 @@ import { basename, tildePath } from "../lib/paths.ts"
 import { prefs } from "../lib/prefs.ts"
 import { PRIMER } from "../lib/primer.ts"
 import { processIsLive, threadProcesses } from "../lib/threadProcesses.ts"
-import { AgentRow, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, armedTimerWatches, awaitedThreadWatches, BgShellRow, GithubWatchRow, ON_CAP, TermWaitRow, ThreadWaitRow, TimerRow, WaitGrid, WaitRow, type WaitGroup } from "./AwaitingBackgroundCard.tsx"
 import { FolderHintToken, folderHintTitle, processFolderHint } from "./ThreadTerminals.tsx"
 
 // THE FULLSCREEN PAGE'S OPERATIONAL RAIL — what is going on in this thread, listed beside the transcript
@@ -254,7 +254,8 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
   const github = (thread.watches ?? []).filter((w) => watching && w.kind === "github" && w.state === "armed")
   const prs = github.filter((w) => w.subject !== "issue")
   const issues = github.filter((w) => w.subject === "issue")
-  const timers = (thread.watches ?? []).filter((w) => watching && w.kind === "timer" && w.state === "armed")
+  const timers = watching ? armedTimerWatches(thread) : []
+  const awaited = watching ? awaitedThreadWatches(thread) : []
   const { railFilesCollapsed } = useSnapshot(prefs)
   // The files' one verb: all of them as the editor's diff, where an editor that can show it is connected
   // (lib/reviewChanges.ts). Its full label is the tooltip; the heading's own word is enough beside it.
@@ -281,6 +282,7 @@ export function FocusRail({ thread }: { thread: ThreadView }) {
     },
     { head: "Pull requests", rows: prs.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
     { head: "Issues", rows: issues.map((w) => <GithubWatchRow key={w.id} watch={w} />) },
+    { head: "Threads", rows: awaited.map((w) => <ThreadWaitRow key={w.id} watch={w} now={now} />) },
     { head: "Timers", rows: timers.map((w) => <TimerRow key={w.id} watch={w} now={now} />) },
     // Saved references, not waits, so they follow every live row. Ahead of the edited files, though:
     // the worker chose these for the human to keep at hand, and the tree can run to dozens of rows.

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 import test from "node:test"
-import { SetThreadSnoozeInput } from "@frizz/shared"
+import { SetThreadSnoozeInput, type AwaitingHint } from "@frizz/shared"
 import {
   AWAITING_FALLBACK_TITLE,
   AWAITING_NO_PROSE,
@@ -106,6 +106,12 @@ test("the fence becomes one clause: the PR it watches, then what it counts", () 
   // generated one. A third assertion used to guard that against a `reason` hint riding in the same
   // array; the kind was retired on 2026-08-24 and cannot be constructed, so the exact-string assertion
   // above is now the whole of it.
+})
+
+test("an awaited thread keeps its handle in the clause, as a PR keeps its ref", () => {
+  const hints: AwaitingHint[] = [{ kind: "thread", value: "shell-budgets" }, { kind: "shell", value: "b1x" }, { kind: "for", value: "1h" }]
+  assert.equal(awaitingWaitClause(hints), "waiting on @shell-budgets and an agent terminal")
+  assert.equal(awaitingWaitClause([{ kind: "thread", value: "@shell-budgets" }]), "waiting on @shell-budgets", "an `@` written into the fence is not doubled")
 })
 
 test("a runtime id never reaches the popover — it is counted, not listed", () => {

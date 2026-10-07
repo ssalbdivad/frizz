@@ -854,7 +854,8 @@ const TITLE = {
 // THREAD-TO-THREAD, BY HANDLE. The board shows every thread under a kebab-case handle (`shell-budgets`), and
 // the human points one thread at another with it: "ask @shell-budgets", "reconcile with @focus-mode". Two
 // tools, one protocol: READ first (free, wakes nobody); MESSAGE when reading is not enough, with
-// `await_reply` when you need the answer before you can go on — that parks you until it comes.
+// `await_reply` when you need the answer before you can go on — that registers the wait, and the rest
+// that follows names it under `threads:` in its awaiting fence, as every wait is named.
 const READ_THREAD = {
   name: "read_thread",
   description:
@@ -891,10 +892,10 @@ const MESSAGE_THREAD = {
     "thread's conversation signed with THIS thread's handle, joining its current turn if it is working and " +
     "waking it if it is resting. Nothing reaches the human.\n\n" +
     "THE PROTOCOL:\n" +
-    "- ASKING, and you need the answer before you can go on → `await_reply: true`. You are PARKED until " +
-    "that thread messages you back (or `for` runs out, default 1h), so rest right after, with nothing " +
-    "else to sign off: the wait is registered like a timer and shows in `activity`. Its answer arrives as " +
-    "a message of its own and ends the wait.\n" +
+    "- ASKING, and you need the answer before you can go on → `await_reply: true`. That REGISTERS the " +
+    "wait; it does not park you. Rest right after on an ```awaiting fence naming the thread — " +
+    "`threads: [@handle]`, a `status:` and a `for:`, which is how long to wait before you go on without " +
+    "it — exactly as for any other wait. Its answer arrives as a message of its own and ends the wait.\n" +
     "- ASKING, but you have other work → leave `await_reply` off and keep working; the answer still " +
     "arrives as a message.\n" +
     "- TELLING (context, your approach, a heads-up that you are changing a shared file) → no " +
@@ -912,11 +913,7 @@ const MESSAGE_THREAD = {
       message: { type: "string", description: "What to tell or ask it, self-contained." },
       await_reply: {
         type: "boolean",
-        description: "Park this thread until that thread answers. Use when you need the answer before you can go on.",
-      },
-      for: {
-        type: "string",
-        description: "With `await_reply`: how long to wait for the answer, as a duration — `30m`, `2h` (default 1h, max 24h). If it runs out you are woken to decide what to do without it.",
+        description: "Register a wait on that thread's answer. Use when you need the answer before you can go on, then rest on an ```awaiting fence naming it under `threads:`.",
       },
     },
     required: ["handle", "message"],
@@ -1280,7 +1277,7 @@ async function readThread(args) {
 }
 
 /** The `message_thread` handler: deliver a message into another open thread's conversation, optionally
- * parking this one until it answers.
+ * registering a wait on its answer.
  * @param {Record<string, unknown>} args @returns {Promise<string>} */
 async function messageThread(args) {
   const handle = typeof args.handle === "string" ? args.handle.trim() : typeof args.to === "string" ? args.to.trim() : ""
@@ -1288,17 +1285,17 @@ async function messageThread(args) {
   if (!handle) throw new Error("`handle` is required — the other thread's kebab-case name, e.g. `shell-budgets`")
   if (!message) throw new Error("`message` is required")
   const awaitReply = args.await_reply === true || args.await_reply === "true"
-  const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}), ...(awaitReply && typeof args.for === "string" && args.for.trim() ? { for: args.for.trim() } : {}) }
+  const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}) }
   const r = (await callRpc("messageThread", body))?.result
   if (!r?.sent) return `Not sent — ${r?.refusal ?? "Frizz did not accept it."}${knownLine(r?.known)}`
   const where = r.project ? ` (in the ${r.project} project)` : ""
   const answered = r.answered ? ` It answers the message @${r.handle} was waiting on, so that thread is no longer parked on you.` : ""
   if (r.timerId) {
     return (
-      `Sent to @${r.handle}${where}, signed @${r.from}, and you are now WAITING on its answer (${r.timerId}, until ` +
-      `${r.waitUntil}).${answered} Rest now unless you have other work — the wait holds your thread and needs ` +
-      "no fence, and the answer arrives as a message of its own and ends the wait. If none comes in time, " +
-      `that timer wakes you to decide. \`timer\` with \`action: "cancel"\` and \`id: "${r.timerId}"\` stops waiting.`
+      `Sent to @${r.handle}${where}, signed @${r.from}, and your wait on its answer is registered (${r.timerId}).${answered} ` +
+      "Rest now unless you have other work, ending your message with an ```awaiting fence that names it, with " +
+      `\`for:\` set to how long to wait before you go on without it:\n\n\`\`\`awaiting\nthreads: [@${r.handle}]\nstatus: watching\nfor: 1h\n\`\`\`\n\n` +
+      `The answer arrives as a message of its own and ends the wait. \`unwatch\` with \`id: "${r.timerId}"\` stops waiting.`
     )
   }
   return (
@@ -1432,16 +1429,16 @@ async function activity() {
   // keys are PLURAL sequences, so an id printed on its own line is no longer something a worker can copy
   // into a fence — it has to see the shape. This tool is where the contract sends a worker that has lost
   // an id, so printing the retired one-line-per-item form would teach the very grammar frizz refuses.
-  const byKind = { shell: [], agent: [], timer: [], pr: [], issue: [] }
+  const byKind = { shell: [], agent: [], timer: [], pr: [], issue: [], thread: [] }
   for (const i of items) if (byKind[i.kind] && i.id) byKind[i.kind].push(i.id)
-  const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue })
+  const block = Object.entries({ shells: byKind.shell, agents: byKind.agent, timers: byKind.timer, prs: byKind.pr, issues: byKind.issue, threads: byKind.thread })
     .filter(([, ids]) => ids.length > 0)
     .map(([key, ids]) => `  ${key}: [${ids.join(", ")}]`)
   // Every open question rides the fence too: a fence that leaves one out is refused, and a fence on
   // questions always queues, so its `status:` answer is `needs_input` whatever else it names. Otherwise
-  // the template guesses
-  // from the kinds — a shell or a sub-agent is usually work that finishes by itself, a PR, an issue or a
-  // timer a watch — and the prose tells the worker to correct it.
+  // the template guesses from the kinds — a shell or a sub-agent is usually work that finishes by itself,
+  // a PR, an issue, a timer or another thread's reply a watch — and the prose tells the worker to correct
+  // it.
   const questionIds = questions.map((q) => q.id).filter(Boolean)
   if (questionIds.length > 0) block.push(`  questions: [${questionIds.join(", ")}]`)
   const status = questionIds.length > 0 ? "needs_input" : byKind.shell.length + byKind.agent.length > 0 ? "working" : "watching"

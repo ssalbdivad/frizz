@@ -1,4 +1,4 @@
-import { subAgentAddress, subAgentChain, subAgentHandle, threadHandle } from "@frizz/shared"
+import { replyWaitOf, subAgentAddress, subAgentChain, subAgentHandle, threadHandle } from "@frizz/shared"
 import { foldThreadName, type NamedThread } from "./thread-names.ts"
 
 // ONE THREAD POINTING AT ANOTHER BY HANDLE — "ask @shell-budgets about this", "reconcile with
@@ -110,29 +110,30 @@ export function threadMessageBody(input: { fromHandle: string; message: string; 
   ].join("\n")
 }
 
-// A REPLY WAIT is an ordinary one-off timer whose prompt names the thread it waits on. The prompt is also
-// its NAME on the card and in `activity`, so it reads as the wait; the `(thread \`slug\`)` tail is what
-// the answer is matched by (the handle can change with a rename, the slug cannot).
-export function replyWaitPrompt(handle: string, slug: string, project?: string): string {
-  return (
-    // Read in two places: as the wait's name on the card while it stands, and as the wake if it fires —
-    // so the first sentence is the wait and the rest is conditional on it having run out.
-    `Waiting on @${handle} to reply (${replyWaitRef(slug, project)}). If this fires, no answer came in time: read where it is ` +
-    "with `mcp__frizz__read_thread`, then ask again with `mcp__frizz__message_thread` (`await_reply: true`) if " +
-    "the answer still matters, or go on without it."
-  )
-}
+// A REPLY WAIT's prompt format and its reader live in @frizz/shared (thread-handle.ts), because the
+// resting card reads it too.
+export { isReplyWaitFor, replyWaitOf, replyWaitPrompt } from "@frizz/shared"
 
 export function isReplyWait(prompt: string): boolean {
-  return prompt.startsWith("Waiting on @") && prompt.includes(" to reply (thread `")
+  return replyWaitOf(prompt) !== undefined
 }
 
-/** A wait on a thread in ANOTHER project names that project too: slugs are unique only within one, so
- *  an answer from a same-slug thread here must not settle a wait on the other project's. */
-function replyWaitRef(slug: string, project?: string): string {
-  return project ? `thread \`${slug}\` in ${project}` : `thread \`${slug}\``
+/** The key a `threads:` fence entry is checked by, among a thread's armed-timer keys (awaiting.ts): the
+ *  handle or slug folded as every handle is, so `@Shell-Budgets` and `shellBudgets` name one wait. */
+export function threadAwaitKey(value: string): string {
+  return `thread:${key(value)}`
 }
 
-export function isReplyWaitFor(prompt: string, slug: string, project?: string): boolean {
-  return isReplyWait(prompt) && prompt.includes(`(${replyWaitRef(slug, project)})`)
+/** What a fence's `threads:` list is checked against: every armed timer's id, and for each reply wait
+ *  among them the key of the handle it was armed under and of the slug it waits on. A reply wait IS a
+ *  timer, so the one set the `timers:` check already reads carries both, and every caller that hands a
+ *  park check its armed timers hands it the awaited threads with them. */
+export function armedTimerKeys(timers: readonly { id: string; prompt: string }[]): Set<string> {
+  const keys = new Set<string>()
+  for (const t of timers) {
+    keys.add(t.id)
+    const wait = replyWaitOf(t.prompt)
+    if (wait) for (const name of [wait.handle, wait.slug]) keys.add(threadAwaitKey(name))
+  }
+  return keys
 }
