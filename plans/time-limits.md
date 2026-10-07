@@ -44,12 +44,16 @@ consequence is a handoff instead of a `TaskStop`.
 
 ## Storage
 
-The thread row gets two columns:
+The thread row gets four columns (built 2026-10-06; two were planned):
 
 | column | meaning |
 | --- | --- |
 | `deadline_at` | ISO instant. Null means no limit. |
 | `deadline_set_at` | When the current deadline was set. Together with `deadline_at` this gives the budget, so check-in points are fractions of it. Moving the deadline resets this; it is the generation, the same way `recurring_armed_at` is for a Goal. |
+| `deadline_set_by` | `human` or `worker`. What the "only the human may extend the human's" rule reads. |
+| `deadline_stage` | The last stage queued for this generation, so a stage is never queued twice (the `shell_budget.warned_deadline` pattern). The delivery id alone does not survive a superseded row. |
+
+A re-dispatch onto a NEW session drops the deadline; a resume of the same session keeps it.
 
 Check-in delivery ids are keyed `deadline:<deadline_set_at>:<stage>`, the way `heartbeatFenceId` keys a
 Goal's beats. So extending a deadline starts a fresh set of check-ins, and a restart never sends a stage
@@ -60,7 +64,10 @@ twice.
 - **At dispatch.** The prompt box gets a time-limit control. It parses the duration grammar used for
   `for:` (`30m`, `2h`) plus a wall-clock form (`15:30`). The dispatch RPC (`router.ts` → `dispatcher.dispatch`)
   takes an optional `deadline`. A typed "go until 3:30" in the prompt text is *not* parsed: the control
-  is the only input, so the board never disagrees with the prose.
+  is the only input, so the board never disagrees with the prose. As built: an unmarked `3:30` means
+  whichever of 03:30 and 15:30 comes next, a leading zero (`09:00`) means 24-hour, and a bare number
+  is refused. The field is honoured only from the browser (`dispatchCaller`, the `Origin`/`Mozilla`
+  rule), so a worker's own dispatch can never mint a deadline that reads as the human's.
 - **Later.** The drawer gets an extend/clear control, and the worker gets an MCP tool
   `mcp__frizz__deadline` (`action: set|extend|clear|read`). A worker may *read* its deadline and may
   set one on a thread that has none. Only the human may *extend* a deadline the human set: an agent
@@ -79,8 +86,19 @@ If the thread is resting, the check-in is delivered as an ordinary wake. Stages:
 | `start` | dispatch | Rides in the worker prompt rather than as a wake: deadline, budget, and the "best deliverable by then" framing. |
 | `half` | 50% | Time left. If still exploring, commit to an approach now. |
 | `converge` | 80% | Time left. Start nothing new. Finish what is open, commit it, make the write-up true. |
-| `final` | 95%, or 5m before the deadline if that is earlier | Hand off at your next stop. Say what is done, what is not, and what you would do next. |
+| `final` | 95%, or 5m before the deadline if that is earlier, but never before 87.5% | Hand off at your next stop. Say what is done, what is not, and what you would do next. |
 | `over` | deadline | Your time is up; your next stop is the handoff. The card goes to over-time. |
+
+The 87.5% floor is a measured change. Taken literally, "5m before" puts a 4m budget's final check-in a
+minute before the deadline was even set. Holding it between 87.5% and 95% keeps it after `converge` and
+never on top of it. A 1h budget still gets the full five minutes (55m), and a 10h one gets 95% (9h 30m).
+When several stages have passed (a server that was down, a busy reading), only the LATEST is sent.
+
+**Check-ins are exempt from the wake quiet window** (`wake-store.ts`, like `shell-budget:`). This came
+from the first real run (2026-10-06, 4m deadline). Half-time reached the worker, and its delivery opened
+the thread's 5m quiet window. Converge, final and over were then each held and superseded by the next
+stage, so none of them was ever sent. A thread resting on a handoff (`done`, an open question,
+`needs_input`, `steps:`) is not woken by a check-in. A quiet park (`working` / `watching`) is.
 
 Fixed stages beat a steady countdown: a reminder every N minutes is noise the model learns to ignore,
 while a few stage changes each ask for a different behaviour. Each wake header (`you last spoke 3h ago`)
@@ -97,29 +115,54 @@ board is the escalation from that point on.
 **Plumbing, all existing:**
 
 - `cc-worker/hooks/agent-dispatch.mjs` (PreToolUse on `Agent`) already rewrites every dispatch and
-  appends an epilogue. It gets the child's deadline and adds one paragraph to the epilogue: the absolute
-  deadline, the stage behaviour, and "your final message is due by then".
+  appends an epilogue. It gets the child's deadline and adds one paragraph ABOVE the epilogue: the absolute
+  deadline, the stage behaviour, and "your final message is due by then". The paragraph ends in a marker
+  line, `⟦frizz-deadline⟧ <deadline> <start>`. It goes above the epilogue so that the epilogue's
+  ends-with idempotence still holds. The thread's own deadline comes from a read-only `threadDeadline`
+  query, which the hook reaches the way `agent-address.mjs` does.
 - `cc-worker/hooks/agent-inbox.mjs` already delivers to a running sub-agent through PostToolUse
   `additionalContext` (any `agent_id`, Workflow agents included; measured on 2.1.287 in d6e6e048). Child
-  check-ins ride that path. The server, or the hook itself, which can read the clock, drops a file into
-  `frizz-inbox/<agentId>/` at each stage.
+  check-ins ride that path. As built, the hook computes them itself; no inbox file is written. Each stage
+  is claimed with an exclusive file create in `<sessionDir>/frizz-deadlines/`, so parallel tool calls in one
+  child send it once. The logic is in `agent-deadline.mjs`, a plain-JS twin of `@frizz/shared`
+  `deadline.ts`, because hooks run under bare node at the engines floor. `agent-deadline-hook.test.ts` pins
+  the two together.
 
 **Sizing the child's deadline.** Claude's `Agent` tool has no budget parameter, so the parent declares
 one in the prompt with a single line the hook strips and parses: `Time limit: 20m`. Without that line
 the child gets the parent's remaining time minus a reserve. The reserve is the larger of 20% of the
-remaining time and 5m. A declared limit is clamped to the same ceiling, so a child can never outlive
-its parent's deadline. A thread with no deadline imposes none: then a `Time limit:` line alone sets
+remaining time and 5m, but never more than half of it. As planned, a parent with 4m left would have
+handed its child nothing, so the cap is a built change. A declared limit is clamped to the same ceiling,
+so a child can never outlive its parent's deadline. The floor is 1m, even for a parent already over time.
+The hook strips a `Time limit:` line it can read, because the paragraph states the clamped figure. A line
+it cannot read stays in the prompt. A thread with no deadline imposes none: then a `Time limit:` line alone sets
 the child's.
 
-**Binding the deadline to the agent id.** This is the one unknown. PreToolUse runs before the child has
-an `agent_id`; SubagentStart has one. The plan is for the dispatch hook to write the computed deadline
-keyed by the dispatching `tool_use_id`, and for SubagentStart to claim it, if its input links back to that
-id. **Measure this first.** If it does not link back, fall back to a FIFO claimed in dispatch order. That
-is safe for one dispatch at a time and racy for a fan-out in one message, so measure before choosing.
+**Binding the deadline to the agent id — measured, and neither planned route was used.** On Claude
+Code 2.1.287 (2026-10-06):
+- SubagentStart's input is `session_id, transcript_path, cwd, prompt_id, agent_id, agent_type,
+  hook_event_name`, with no tool_use_id and no prompt.
+- With two children dispatched in one message, the two SubagentStart hooks overlap the parent's
+  PostToolUse(Agent) in no fixed order.
+- The child's `meta.json`, which does hold `toolUseId`, is written only AFTER SubagentStart returns.
 
-**Workflow agents.** A Workflow script's `agent()` opts are not ours to extend. The parent writes the
-`Time limit:` line into the agent prompt, and SubagentStart for `workflow-subagent` claims it the same
-way. The worker contract tells parents to give each Workflow agent its share in the prompt.
+So a FIFO would have been a race, and SubagentStart cannot claim anything. What is reliable is the
+child's own transcript. By its first PostToolUse, `<sessionDir>/subagents/agent-<id>.jsonl` exists, and
+its first record is the prompt AS REWRITTEN by the dispatch hook. In that event `transcript_path` is the
+PARENT's, and the session dir is that path minus `.jsonl`. So the deadline rides inside the prompt as the
+marker, and the child's hook reads it back. Nothing is keyed, so no child can claim another's deadline.
+
+**Workflow agents.** A Workflow script's `agent()` opts are not ours to extend, and no Agent call is
+made, so no prompt gets rewritten. Its transcript lives under `subagents/workflows/<run>/agent-<id>.jsonl`,
+wrapped in the harness's "computed task" preamble with every line indented. On the agent's first tool
+call, its hook works out the share from three things: the agent's own `Time limit:` line (optional), the
+thread's deadline, and the agent's start, taken from the record's timestamp. It then introduces the limit
+in the first ⏰ message, since the prompt never stated one. The mailbox intro, which a Workflow agent gets
+at SubagentStart before any tool runs, now says that time checks arrive the same way. That matters
+because a model rightly distrusts instructions that show up unannounced in tool output.
+
+**Not covered.** A child dispatched before its thread had a deadline gets none, even if one is set later.
+The share is fixed at dispatch.
 
 **Grandchildren.** Recursive by construction: a child's own `Agent` call goes through the same hook,
 with the child's deadline as the ceiling. Nesting stays default-off per the epilogue, so in practice
