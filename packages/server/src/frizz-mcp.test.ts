@@ -66,7 +66,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep", "editor", "schedule"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "keep", "editor", "schedule", "deadline"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     // `keep` takes the id, and optionally a whole reworded question in `ask`'s own tree shape.
     const keepTool = list.result.tools.find((t: { name: string }) => t.name === "keep")
@@ -161,7 +161,15 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 20)
+    assert.equal(list.result.tools.length, 21)
+    // `deadline` — the thread's time limit. `action` alone is required and there is NO thread parameter:
+    // the slug comes from the env, so a worker reads and sets only its own.
+    const deadlineTool = list.result.tools[20]
+    assert.equal(deadlineTool.name, "deadline")
+    assert.deepEqual(deadlineTool.inputSchema.required, ["action"])
+    assert.deepEqual(deadlineTool.inputSchema.properties.action.enum, ["read", "set", "extend", "clear"])
+    assert.ok(!("slug" in deadlineTool.inputSchema.properties))
+    assert.ok(deadlineTool.description.includes("only they can move"))
     // `schedule` — `action` alone is required, like its action-switch siblings, and NO thread parameter:
     // the caller (who proposed, who skipped) comes from the env. The echo instruction is the point of
     // the description: the human catches a mistranslated time only if the worker relays it.

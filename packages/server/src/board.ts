@@ -16,6 +16,7 @@ import { liftWorkingDir } from "./thread-cwd.ts"
 import { isHeadlessRow, isBrokerClaudeRow, isLazyRow, sessionTitleLocked, type ThreadQuestionRow } from "./storage.ts"
 import type { Storage, SessionRow, PrWatchRow, ThreadTimerRow, ThreadWatchRow, ThreadLinkRow, ShellBudgetRow, ThreadSpinoffRow } from "./storage.ts"
 import { resolveShellBudget, shellBudgetRecordOf } from "./shell-budget.ts"
+import { rowDeadline } from "./deadline.ts"
 import { threadLinkView } from "./thread-links.ts"
 import { isReplyWait } from "./thread-mentions.ts"
 import { normalizeObservedThreadModel } from "./backend/thread-profiles.ts"
@@ -1671,9 +1672,18 @@ function needsInputQueues(
   armedTimerIds: ReadonlySet<string>,
 ): boolean {
   const fence = tele?.lastFence
+  // A PARK DOES NOT OUTLIVE THE THREAD'S DEADLINE (plans/time-limits.md § Interactions). A fence written
+  // before the deadline holds only until it: from then the thread is over time, and the board is the
+  // escalation, so it queues even if the `for:` has hours left. (The scheduler's `over` check-in wakes the
+  // worker at the same instant; a fence written AFTER the deadline is the worker's considered answer to
+  // that, and holds as usual.)
+  const deadline = rowDeadline(row)
+  const fenceAtMs = Date.parse(tele?.lastAssistantAt ?? "")
+  const parkCutByDeadline = deadline !== undefined && nowMs >= deadline.atMs && !(fenceAtMs >= deadline.atMs)
   if (
     excuseLiveOwnWork &&
     runtime !== "exited" &&
+    !parkCutByDeadline &&
     fence?.kind === "awaiting" &&
     // `registeredPrWatches` carries both kinds' refs (see hasParkedPrWatch), so it answers for `issues:` too.
     needsInputParkHolds(fence.hints, liveActivityOf(tele, registeredPrWatches, armedTimerIds, registeredPrWatches), Date.parse(tele?.lastAssistantAt ?? ""), nowMs)

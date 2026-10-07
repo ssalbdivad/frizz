@@ -143,6 +143,10 @@ import type {
   AddOwnWatchInput,
   AddOwnWatchResult,
   ExtendOwnShellInput,
+  OwnDeadlineInput,
+  OwnDeadlineResult,
+  SetThreadDeadlineInput,
+  ThreadDeadlineView,
   ExtendOwnShellResult,
   DropOwnWatchInput,
   DropOwnWatchResult,
@@ -301,6 +305,10 @@ export interface Api {
   addOwnWatch(input: AddOwnWatchInput): Promise<AddOwnWatchResult>
   // `mcp__frizz__extend_shell` — a background shell's runtime budget. Drift gate only, like its neighbours.
   extendOwnShell(input: ExtendOwnShellInput): Promise<ExtendOwnShellResult>
+  // `mcp__frizz__deadline` — the worker's own time limit. Drift gate only, like its neighbours.
+  ownDeadline(input: OwnDeadlineInput): Promise<OwnDeadlineResult>
+  // The drawer's time-limit control: set, move or clear (`deadline: null`) the thread's deadline.
+  setThreadDeadline(input: SetThreadDeadlineInput): Promise<{ deadline: ThreadDeadlineView | null }>
   upsertOwnLink(input: UpsertOwnLinkInput): Promise<UpsertOwnLinkResult>
   dropOwnLink(input: DropOwnLinkInput): Promise<DropOwnLinkResult>
   dropOwnWatch(input: DropOwnWatchInput): Promise<DropOwnWatchResult>
@@ -581,6 +589,8 @@ export const PROCEDURES = {
   listOwnPrWatches: "mutation",
   addOwnWatch: "mutation",
   extendOwnShell: "mutation",
+  ownDeadline: "mutation",
+  setThreadDeadline: "mutation",
   upsertOwnLink: "mutation",
   dropOwnLink: "mutation",
   dropOwnWatch: "mutation",

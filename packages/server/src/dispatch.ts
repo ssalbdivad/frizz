@@ -35,7 +35,8 @@ import { threadNameProblem, type ThreadNamer } from "./thread-names.ts"
 import type { CodexAppServerBridge } from "./backend/codex-app-server.ts"
 import type { AcpBridge } from "./backend/acp-bridge.ts"
 import { acpAgentIdFromModel } from "./backend/acp-agents.ts"
-import { acpModelIdFromModel } from "@frizz/shared"
+import { acpModelIdFromModel, DEADLINE_MAX_MS, DEADLINE_MIN_MS } from "@frizz/shared"
+import { deadlineSection } from "./deadline.ts"
 import { claudeBrokerBridgeEnabled, type ClaudeAgentBrokerBridge } from "./backend/claude-agent-broker-bridge.ts"
 import { claudeUltracodeFlags, resolveClaudeEffort } from "./backend/claude-effort.ts"
 import { claudeEffortsFor } from "./backend/thread-profiles.ts"
@@ -419,6 +420,16 @@ const FABLE_FALLBACK_QUOTA_TIMEOUT_MS = 3_000
 
 const FRIZZ_MD_MAX_CHARS = 24_000
 const FRIZZ_MD_MAX_BYTES = 64 * 1024
+/** The row write for a dispatch-time time limit — the instant the browser resolved — or a refusal when it
+ *  is out of bounds by the time it arrived. The budget runs from NOW, the moment the thread starts. */
+export function dispatchDeadline(raw: string, nowMs = Date.now()): { deadlineAt: string; setAt: string; setBy: "human" } {
+  const atMs = Date.parse(raw)
+  if (!Number.isFinite(atMs)) throw new Error("The time limit is not a time.")
+  if (atMs - nowMs < DEADLINE_MIN_MS) throw new Error("The time limit must end at least 1m from now.")
+  if (atMs - nowMs > DEADLINE_MAX_MS) throw new Error("The time limit can be at most 7d from now.")
+  return { deadlineAt: new Date(atMs).toISOString(), setAt: new Date(nowMs).toISOString(), setBy: "human" }
+}
+
 export function frizzConfigBlock(projectDir: string): string {
   const path = join(projectDir, "FRIZZ.md")
   let body: string
@@ -1024,6 +1035,12 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       // Fable offers every Claude effort (ultracode included), so the chosen level carries across a fallback.
       const effort = await concreteEffort(kind, model, input.effort ?? (chosen === saved.model ? saved.effort : undefined), input.prompt)
 
+      // THE TIME LIMIT (deadline.ts), if the human set one in the prompt box. Checked here, before any
+      // thread state exists, so a limit already past (a slow submit) refuses the dispatch with no trace.
+      // The section rides the system prompt; the row is written after the upsert below.
+      const deadline = input.deadline ? dispatchDeadline(input.deadline) : undefined
+      const deadlineBlock = deadline ? deadlineSection({ deadline_at: deadline.deadlineAt, deadline_set_at: deadline.setAt, deadline_set_by: "human", deadline_stage: null }) : ""
+
       // Session-first: provision the thread's scratch DIRECTORY (empty; the worker fills it or does
       // not) — NO .frizz/<slug>.md file. It keys on the frizz-minted sessionId, which stays the row's
       // session_id for BOTH backends (codex's discovered rollout id is pinned separately on
@@ -1045,7 +1062,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error("Codex app-server is unavailable; cannot start this thread. Check that `codex` is installed and its app-server protocol matches the pinned revision (re-pin if you upgraded codex).")
         }
-        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir)]
+        const extraSystemPrompt = [scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({
@@ -1087,6 +1104,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // states and lists the thread's live work with the ids a fence needs — so arming a Goal as well is the
           // same nudge twice, and the maintainer called it redundant. Arming one is the GOAL PANEL's job now,
           // and that panel prefills the default text without switching any trigger on.
+          if (deadline) deps.storage.setDeadline(slug, deadline)
           deps.storage.setBackend(slug, "codex")
           // The codex SESSION id (not the thread id) matches the rollout filename the tailer scans for.
           deps.storage.setAgentSession(slug, spawned.binding.codexSessionId)
@@ -1117,7 +1135,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           cleanupDispatchFiles(scratchRel, { argv: [], env: {}, prewrite: [] }, sessionId)
           throw new Error(!bridge ? "The ACP bridge is unavailable; cannot start this thread." : `An ACP dispatch needs an agent: pick one in the composer (model \`acp:<agent>\`), got ${JSON.stringify(model ?? null)}.`)
         }
-        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), prompt]
+        const firstPrompt = [loadWorkerPrompt("acp"), scratchpadOrientation(sessionId, kind, scratchPath), frizzConfigBlock(deps.project.dir), deadlineBlock, prompt]
           .filter(Boolean).join("\n\n")
         try {
           const spawned = await bridge.spawnDispatch({ threadSlug: slug, sessionId, cwd: workDir, agentId, modelId: acpModelIdFromModel(model), prompt: firstPrompt, userText: input.prompt })
@@ -1142,6 +1160,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
             effort: null,
             permission_mode: permissionMode,
           })
+          if (deadline) deps.storage.setDeadline(slug, deadline)
           deps.storage.setBackend(slug, "acp")
           deps.storage.setAgentSession(slug, spawned.acpSessionId)
           deps.storage.setAcpAgent(slug, agentId)
@@ -1175,6 +1194,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           loadWorkerPrompt("claude"),
           scratchpadOrientation(sessionId, kind, scratchPath),
           frizzConfigBlock(deps.project.dir),
+          deadlineBlock,
         ].filter(Boolean).join("\n\n")
         // A FORK's opening prompt is sent under a uuid minted here, so the record the CLI writes for it —
         // the first record of this thread's own, below the copied conversation — can be found again.
@@ -1221,6 +1241,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
           // In the same synchronous run as the row itself, so no tailer tick can ever see this row
           // without its anchor and fold the copied conversation as the thread's own.
           if (forkAnchor) deps.storage.setForkAnchor(slug, sessionId, forkAnchor)
+          if (deadline) deps.storage.setDeadline(slug, deadline)
           deps.storage.setBackend(slug, "claude")
           deps.storage.setClaudeRuntime(slug, "broker")
           mintName(slug, sessionId)

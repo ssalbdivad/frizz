@@ -3,6 +3,7 @@ import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
 import { ProjectSchedules, ThreadScheduleRef } from "./schedules.ts"
+import { formatDeadlineLeft } from "./deadline.ts"
 import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorReviewTarget, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
@@ -5023,6 +5024,10 @@ export const DispatchInput = z.object({
   // `dispatch(input, { backend })`; the model picker sets it from the chosen model's family.
   backend: Backend.optional(),
   effort: Settings.shape.effort,
+  // The thread's TIME LIMIT (deadline.ts): the absolute instant the browser resolved from the prompt
+  // box's control ("2h", "15:30"). Set by the HUMAN — a worker's `spawn_thread` cannot pass one, so a
+  // spawned thread starts with none and its own worker may set it with `mcp__frizz__deadline`.
+  deadline: z.string().refine((v) => Number.isFinite(Date.parse(v)), "deadline must be an ISO-8601 instant").optional(),
   // A SPINOFF this dispatch fulfils (SpinoffInput below): the parent's worker names the request it was
   // handed, and the dispatch records the new thread as that request's child. `spinoffFrom` is the calling
   // thread, which must be the request's parent — `spawn_thread` fills it from its own identity, never
@@ -5868,14 +5873,18 @@ export function formatElapsed(ms: number): string {
 
 /** One line of wall clock, prepended to every frizz delivery. Local time, because that is the clock the
  *  human reading the transcript is on. `lastAssistantAt` absent ⇒ the elapsed clause is dropped rather
- *  than guessed. */
-export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null): string {
+ *  than guessed.
+ *
+ *  A THREAD WITH A TIME LIMIT (deadline.ts) also hears what is left of it — `· 42m left`, `· over by 8m`
+ *  — so the worker sees its clock on every turn Frizz starts, not only at the check-ins. */
+export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null, deadlineMs?: number | null): string {
   const d = new Date(nowMs)
   const p2 = (n: number) => String(n).padStart(2, "0")
   const stamp = `${d.getFullYear()}-${p2(d.getMonth() + 1)}-${p2(d.getDate())} ${p2(d.getHours())}:${p2(d.getMinutes())}`
   const since = lastAssistantAt ? Date.parse(lastAssistantAt) : NaN
   const elapsed = Number.isFinite(since) && nowMs >= since ? ` — you last spoke ${formatElapsed(nowMs - since)} ago` : ""
-  return `⏱ ${stamp}${elapsed}.`
+  const left = deadlineMs != null && Number.isFinite(deadlineMs) ? ` · ${formatDeadlineLeft(deadlineMs, nowMs)}` : ""
+  return `⏱ ${stamp}${elapsed}${left}.`
 }
 
 // PRODUCER AND STRIPPER LIVE TOGETHER, the same pairing (and the same reason) as the human-gap note
@@ -5890,7 +5899,7 @@ export function wakeTimeHeader(nowMs: number, lastAssistantAt?: string | null): 
 // Anchored to end-of-text on a line of its own and matched down to the wall clock, so prose that merely
 // quotes one — a bug report pasting the line — stays in the bubble. Stripping is a DISPLAY projection
 // only: the stored text keeps the stamp, which is the whole point of sending it.
-const WAKE_TIME_HEADER_TAIL = /\n+⏱ \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: — you last spoke [^\n]*? ago)?\.[ \t]*$/
+const WAKE_TIME_HEADER_TAIL = /\n+⏱ \d{4}-\d{2}-\d{2} \d{2}:\d{2}(?: — you last spoke [^\n]*? ago)?(?: · (?:[^\n]*? left|over by [^\n]*?))?\.[ \t]*$/
 
 /** Display projection: a frizz wake without the clock line frizz appended for the worker. */
 export function stripWakeTimeHeader(text: string): string {
@@ -6791,6 +6800,7 @@ export type BoardDelta = Extract<ServerEvent, { type: "board-delta" }>
 export * from "./claim.ts"
 export * from "./claude-editions.ts"
 export * from "./code-fences.ts"
+export * from "./deadline.ts"
 export * from "./delta.ts"
 export * from "./drainable-worker.ts"
 export * from "./editor-protocol.ts"

@@ -1092,11 +1092,40 @@ const UNLINK = {
   },
 }
 
+// THE THREAD'S TIME LIMIT (2026-10-06, plans/time-limits.md). Read it, or set one on a thread that has
+// none. Only the human may move or clear a deadline the human set — an agent moving its own goalposts
+// defeats the point — so `extend` and `clear` work on a deadline the worker set itself, and the server
+// (router `ownDeadline`) holds the same rule.
+const DEADLINE = {
+  name: "deadline",
+  description:
+    "READ OR SET THIS THREAD'S TIME LIMIT — the instant you owe your best deliverable by.\n\n" +
+    "A thread may carry a deadline: the human sets it when dispatching or from the board, or you may set one on a " +
+    "thread that has none. While one is set, frizz checks in with you mid-turn at half-time, at 80%, shortly before " +
+    "the deadline and at it, and every wake's clock line shows the time left. Nothing is ever stopped at the deadline: " +
+    "the job is the best deliverable you can hand over by then, not the complete one eventually.\n\n" +
+    "`read` shows the deadline (or that there is none). `set` gives a thread with NO deadline one — `for` a duration " +
+    "from now (`30m`, `2h`, `1h 30m`), or `at` an ISO instant. `extend` moves a deadline YOU set to a later one; " +
+    "`clear` removes a deadline you set. A deadline the HUMAN set is theirs: you can read it, and only they can move " +
+    "or remove it — `extend` and `clear` refuse it.\n\n" +
+    "To give a SUB-AGENT a budget, do not call this: write `Time limit: 20m` on a line of its own in its prompt.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      action: { type: "string", enum: ["read", "set", "extend", "clear"], description: "What to do. `read` takes no other argument." },
+      for: { type: "string", description: "For `set` / `extend`: a duration from NOW — `30m`, `2h`, `1h 30m` (at least 1m, at most 7d)." },
+      at: { type: "string", description: "For `set` / `extend`: an exact ISO-8601 instant instead of `for` (e.g. `2026-10-06T15:30:00Z`)." },
+    },
+    required: ["action"],
+    additionalProperties: false,
+  },
+}
+
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
 // EXTEND_SHELL is appended after it for the same reason (2026-09-29), EDITOR after KEEP (2026-10-02), and
-// SCHEDULE after EDITOR (2026-10-05).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR, SCHEDULE]
+// SCHEDULE after EDITOR (2026-10-05), DEADLINE after SCHEDULE (2026-10-06).
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, KEEP, EDITOR, SCHEDULE, DEADLINE]
 
 /** @type {Record<string, (args: Record<string, unknown>) => Promise<string>>} */
 const HANDLERS = {
@@ -1120,6 +1149,43 @@ const HANDLERS = {
   [MESSAGE_THREAD.name]: messageThread,
   [EDITOR.name]: editor,
   [SCHEDULE.name]: schedule,
+  [DEADLINE.name]: deadline,
+}
+
+/** The `deadline` handler: read, set, extend or clear this thread's time limit.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function deadline(args) {
+  const action = typeof args.action === "string" ? args.action.trim() : ""
+  if (!["read", "set", "extend", "clear"].includes(action)) throw new Error("`action` must be one of read, set, extend, clear")
+  const forValue = typeof args.for === "string" && args.for.trim() ? args.for.trim() : undefined
+  const at = typeof args.at === "string" && args.at.trim() ? args.at.trim() : undefined
+  if ((action === "set" || action === "extend") && !forValue && !at) {
+    throw new Error("`" + action + "` needs `for` (a duration from now, like `30m` or `2h`) or `at` (an ISO instant)")
+  }
+  const result = (await callRpc("ownDeadline", {
+    slug: threadSlug(),
+    action,
+    ...(forValue ? { for: forValue } : {}),
+    ...(at ? { at } : {}),
+  }))?.result
+  const d = result?.deadline
+  if (!d) return action === "clear" ? "This thread has no deadline now. Work to the best deliverable, not to a clock." : "This thread has no deadline."
+  const leftMs = Date.parse(d.at) - Date.now()
+  const left = leftMs > 0 ? `${budgetSpan(leftMs)} left` : `over by ${budgetSpan(-leftMs)}`
+  const who = d.setBy === "human" ? "the human (only they can move or clear it)" : "you"
+  return `Deadline: ${d.at} — ${left}. Set ${d.setAt} by ${who}. Frizz checks in at half-time, at 80%, shortly before it and at it.`
+}
+
+/** A span in the house grammar (`42m`, `1h 12m`), for the deadline readout.
+ * @param {number} ms @returns {string} */
+function budgetSpan(ms) {
+  if (ms < 60_000) return `${Math.max(0, Math.ceil(ms / 1000))}s`
+  const minutes = Math.ceil(ms / 60_000)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`
+  const days = Math.floor(hours / 24)
+  return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`
 }
 
 /** The `read_thread` handler: another thread's request, status, approach and newest message, by handle.

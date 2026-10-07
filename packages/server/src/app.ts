@@ -87,6 +87,10 @@ export function createApp(ctx: AppContext, options: AppOptions = {}) {
   // a worker whose shim predates `spawnedFrom` is still checked (dispatch-caller.ts).
   app.use(frizzRoute("/rpc/dispatch"), (c, next) =>
     withDispatchCaller({ origin: c.req.header("origin"), userAgent: c.req.header("user-agent") }, next))
+  // …and whether a deadline change came from the human's drawer: only the human may move a deadline the
+  // human set, and a worker's shim is told to use its own verb (router setThreadDeadline).
+  app.use(frizzRoute("/rpc/setThreadDeadline"), (c, next) =>
+    withDispatchCaller({ origin: c.req.header("origin"), userAgent: c.req.header("user-agent") }, next))
 
   // Compress RPC responses. The board payload for a busy project is ~780 KB of JSON and every page
   // load fetches it; the server produces it in ~11 ms and then spends far longer pushing it up a home

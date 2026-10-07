@@ -10,6 +10,13 @@ import {
   AdoptThreadResult,
   CreateLazyThreadInput,
   DispatchInput,
+  SetThreadDeadlineInput,
+  OwnDeadlineInput,
+  OwnDeadlineResult,
+  ThreadDeadlineView,
+  DEADLINE_MAX_MS,
+  DEADLINE_MIN_MS,
+  parseDeadlineInput,
   FollowUpInput,
   UnqueueFollowUpInput,
   DismissFailedFollowUpInput,
@@ -180,7 +187,8 @@ import { listAcpAgentsCached } from "./backend/acp-agents.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
-import { enqueueThreadMessageWake } from "./scheduler.ts"
+import { enqueueDeadlineNoticeWake, enqueueThreadMessageWake } from "./scheduler.ts"
+import { deadlineNoticeMessage, deadlineSection, rowDeadline } from "./deadline.ts"
 import { editedFilesOf } from "./edited-files.ts"
 import { removableWorktrees, removeThreadWorktrees, unsavedWorktreeRefusal, worktreesAddedBy } from "./worktree-cleanup.ts"
 import { worktreeRootFor } from "../../../cc-worker/hooks/worktree.mjs"
@@ -1686,6 +1694,28 @@ export function createRouter(ctx: AppContext) {
   // A thread's ARMED PR watchers, in the shape the worker's tool and the board both read. Each carries
   // the PR's last-polled checks/mergeability, so the tool's read-back and the resting card's row cannot
   // disagree about the same PR — they are one projection of one book.
+  /** The thread's deadline as both deadline RPCs answer it. */
+  function deadlineView(slug: string): ThreadDeadlineView | null {
+    const d = rowDeadline(ctx.storage.getSession(slug))
+    return d ? { at: new Date(d.atMs).toISOString(), setAt: d.setAt, setBy: d.setBy } : null
+  }
+
+  /** Tell the worker the HUMAN moved its clock — the one change it did not make and cannot otherwise see
+   *  (its system prompt states the deadline as of the last time it was composed). Mid-turn, like a typed
+   *  steer; scheduler `deadline-notice:` has the delivery rules. A thread that has not started has no
+   *  worker to tell: its first prompt will carry the deadline. */
+  function noticeDeadline(slug: string, change: Parameters<typeof deadlineNoticeMessage>[0], nowMs: number): void {
+    const row = ctx.storage.getSession(slug)
+    if (!row || row.state === "archived" || row.archived === 1 || isLazyRow(row)) return
+    enqueueDeadlineNoticeWake(ctx.storage, {
+      slug,
+      sessionId: row.session_id,
+      setAt: change.kind === "set" ? row.deadline_set_at ?? null : null,
+      message: deadlineNoticeMessage(change, nowMs),
+      nowMs,
+    })
+  }
+
   function armedPrWatchViews(slug: string): PrWatchView[] {
     const github = readGithubStatusBook(ctx.storage.getSetting(GITHUB_STATUS_SETTING))
     const issues = readGithubIssueStatusBook(ctx.storage.getSetting(GITHUB_ISSUE_STATUS_SETTING))
@@ -2796,7 +2826,14 @@ export function createRouter(ctx: AppContext) {
       // `backend` column (backendFor(row.backend)), which dispatch already stamped for a codex thread.
       handler: async ({ input }) => {
         // `spinOff`/`spinOffFrom` are the first-day spelling a long-lived worker's MCP server still sends.
-        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, project, spawnedFrom, ...rest } = input
+        const { spinoff, spinoffFrom, spinOff, spinOffFrom, awaitHandle, project, spawnedFrom, ...dispatched } = input
+        // A TIME LIMIT IS THE HUMAN'S TO SET at dispatch (deadline.ts). A worker's `spawn_thread` cannot
+        // pass one — the shim sends none — and one that arrives from a worker's transport anyway is dropped
+        // rather than refused, so the spawn itself still goes through. The spawned thread's own worker may
+        // set a deadline with `mcp__frizz__deadline`.
+        const { deadline: askedDeadline, ...undated } = dispatched
+        const rest = dispatchCaller() === "worker" ? undated : dispatched
+        void askedDeadline
         const request = spinoff ?? spinOff
         // A spinoff's project was chosen by the human with the request; `project` cannot redirect it.
         if (request) return fulfilSpinoff(request, spinoffFrom ?? spinOffFrom, rest)
@@ -3102,6 +3139,8 @@ export function createRouter(ctx: AppContext) {
             loadWorkerPrompt("claude"),
             scratchpadOrientation(row.session_id, "claude", workerScratchPath(ctx.project, row.session_id)),
             frizzConfigBlock(ctx.project.dir),
+            deadlineSection(row),
+
           ].filter(Boolean).join("\n\n")
           // Is this thread MID-TURN right now? Sampled BEFORE the bridge call on purpose: a cold resume
           // takes seconds, and by the time it returns the turn this very message started reads as
@@ -3436,6 +3475,8 @@ export function createRouter(ctx: AppContext) {
           loadWorkerPrompt("claude"),
           scratchpadOrientation(row.session_id, "claude"),
           frizzConfigBlock(ctx.project.dir),
+          deadlineSection(row),
+
         ].filter(Boolean).join("\n\n")
         await bridge.followUp({
           threadSlug: input.slug,
@@ -4303,6 +4344,85 @@ export function createRouter(ctx: AppContext) {
           budgetEndsAt: new Date(now + forMs).toISOString(),
           ...(asked > SHELL_BUDGET_MAX_MS ? { clampedFrom: input.for } : {}),
         }
+      },
+    }),
+
+    // ---- THE THREAD'S TIME LIMIT (plans/time-limits.md, deadline.ts) ----------------------------------
+    // Two doors onto one row, because the rule between them is the point: ONLY THE HUMAN may move or
+    // clear a deadline the human set. `setThreadDeadline` is the drawer's (and refuses a worker's
+    // transport, which app.ts records for this route — dispatch-caller.ts); `ownDeadline` is
+    // `mcp__frizz__deadline`, which may read any deadline, set one where there is none, and move or clear
+    // only one the worker set itself. Every write is a new GENERATION (`deadline_set_at`), so the
+    // check-ins start over against the new budget.
+    setThreadDeadline: mutation({
+      input: SetThreadDeadlineInput,
+      output: z.object({ deadline: ThreadDeadlineView.nullable() }),
+      handler: async ({ input }) => {
+        if (dispatchCaller() === "worker") {
+          throw new Error("A worker sets its own time limit with `mcp__frizz__deadline`; this control is the human's.")
+        }
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        const before = rowDeadline(row)
+        const nowMs = Date.now()
+        if (input.deadline === null) {
+          if (ctx.storage.clearDeadline(input.slug)) noticeDeadline(input.slug, { kind: "cleared" }, nowMs)
+        } else {
+          const atMs = Date.parse(input.deadline)
+          if (atMs - nowMs < DEADLINE_MIN_MS) throw new Error("A time limit must end at least 1m from now.")
+          if (atMs - nowMs > DEADLINE_MAX_MS) throw new Error("A time limit can be at most 7d from now.")
+          const setAt = new Date(nowMs).toISOString()
+          ctx.storage.setDeadline(input.slug, { deadlineAt: new Date(atMs).toISOString(), setAt, setBy: "human" })
+          noticeDeadline(input.slug, { kind: "set", deadline: { atMs, setAtMs: nowMs }, previousAtMs: before?.atMs }, nowMs)
+        }
+        ctx.board.refresh()
+        ctx.scheduler?.kick?.()
+        return { deadline: deadlineView(input.slug) }
+      },
+    }),
+
+    ownDeadline: mutation({
+      input: OwnDeadlineInput,
+      output: OwnDeadlineResult,
+      handler: async ({ input }) => {
+        const row = ctx.storage.getSession(input.slug)
+        if (!row) throw new Error(`thread ${input.slug} is not registered`)
+        const current = rowDeadline(row)
+        if (input.action === "read") return { deadline: deadlineView(input.slug) }
+        const humans = current?.setBy === "human"
+        if (input.action === "clear") {
+          if (humans) throw new Error("The human set this deadline, and only the human can remove it. Work to it, and say in your handoff if it is not enough.")
+          ctx.storage.clearDeadline(input.slug)
+        } else {
+          if (input.action === "set" && current) {
+            throw new Error(humans
+              ? "This thread already has a deadline the human set; only the human can move it. `read` shows it."
+              : "This thread already has a deadline you set — use `extend` to move it.")
+          }
+          if (input.action === "extend" && !current) throw new Error("This thread has no deadline to extend — use `set` to give it one.")
+          if (input.action === "extend" && humans) {
+            throw new Error("The human set this deadline, and only the human can extend it. Hand over the best you have by then, and say in your handoff what more time would buy.")
+          }
+          const nowMs = Date.now()
+          let atMs: number
+          if (input.at !== undefined) atMs = Date.parse(input.at)
+          else if (input.for !== undefined) {
+            const parsed = parseDeadlineInput(input.for, nowMs)
+            if (!parsed.ok || parsed.kind !== "duration") {
+              throw new Error(`\`for: ${input.for}\` is not a duration — give one like \`30m\`, \`2h\` or \`1h 30m\` (at least 1m, at most 7d)`)
+            }
+            atMs = parsed.atMs
+          } else throw new Error("give `for` (a duration from now) or `at` (an ISO instant)")
+          if (atMs - nowMs < DEADLINE_MIN_MS) throw new Error("A deadline must end at least 1m from now.")
+          if (atMs - nowMs > DEADLINE_MAX_MS) throw new Error("A deadline can be at most 7d from now.")
+          if (input.action === "extend" && current && atMs <= current.atMs) {
+            throw new Error(`\`extend\` moves a deadline later; this one is already ${new Date(current.atMs).toISOString()}.`)
+          }
+          ctx.storage.setDeadline(input.slug, { deadlineAt: new Date(atMs).toISOString(), setAt: new Date(nowMs).toISOString(), setBy: "worker" })
+        }
+        ctx.board.refresh()
+        ctx.scheduler?.kick?.()
+        return { deadline: deadlineView(input.slug) }
       },
     }),
 
@@ -5979,6 +6099,7 @@ const HUMAN_THREAD_ACTS = [
   "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "holdQuestionDefault", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
   "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateLazyPrompt", "startLazyThread",
+  "setThreadDeadline",
 ] as const satisfies readonly (keyof ReturnType<typeof createRouter>)[]
 
 export type AppRouter = ReturnType<typeof createRouter>

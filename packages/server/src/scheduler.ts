@@ -1,9 +1,9 @@
 import { execFile } from "node:child_process"
 import { promisify } from "node:util"
 import { createHash, randomUUID } from "node:crypto"
-import { AGENT_PARK_FOR_MAX_MS, awaitingNeedsInput, awaitingStatus, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, carriedQuestionsNudgeMessage, strayShellsMessage, type SignoffLiveOps, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot } from "@frizz/shared"
+import { AGENT_PARK_FOR_MAX_MS, awaitingNeedsInput, awaitingStatus, needsInputRequired, PARK_CORRECTION_NAMES_LEAD, PARK_CORRECTION_NEEDS_INPUT_LEAD, PARK_CORRECTION_QUESTION_LEAD, PARK_CORRECTION_RETIRED_LEAD, interruptEndedSubAgentsMessage, type InterruptEndedSubAgent, parkExpiredWakeMessage, parkFinishedWakeMessage, prWatchExpiredWakeMessage, ownWatchExpiredWakeMessage, mergeAnswerMessages, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type QuestionAnswer, type QuestionDismissal, RETIRED_AWAITING_REPLACEMENT, retiredAwaitingKindsIn, compactionPromptMessage, goalLimitMessage, limitResumeSteer, limitModelSwitchSteer, formatGithubWakeSteer, GithubWakeItem, type GithubWatchStatus, type GithubIssueStatus, prWatchWakeMessage, issueWatchWakeMessage, shellDoneMessage, restPromptMessage, schedulePromptMessage, timerPromptMessage, signoffNudgeMessage, carriedQuestionsNudgeMessage, strayShellsMessage, type SignoffLiveOps, liveOpsLines, isDirectSubAgent, wakeDeliveryToken, wakeTimeHeader, stripWakeTimeHeader, type QuotaSnapshot, deadlineStageDue, type DeadlineStage } from "@frizz/shared"
 import { GITHUB_ISSUE_STATUS_SETTING, GITHUB_STATUS_SETTING, liveActivityOf, parkExpiresAt, parkIsHonoured, parkOnHuman, readAwaitingPark, unaccountedItems, type LiveActivity } from "./awaiting.ts"
-import type { PrWatchRow, SessionRow, Storage, ThreadQuestionRow } from "./storage.ts"
+import { isLazyRow, type PrWatchRow, type SessionRow, type Storage, type ThreadQuestionRow } from "./storage.ts"
 import type { Tailer } from "./tailer.ts"
 import type { SessionTelemetry } from "./tailer.ts"
 import type { LimitFault } from "./backend/types.ts"
@@ -17,6 +17,7 @@ import { isReplyWait } from "./thread-mentions.ts"
 import { answersInFlight, carriedQuestionRows, childJustReturned, owedQuestionRows, registeredDoneFence, safeQuestionAnswer, safeQuestionSpec, SIGNOFF_NUDGE_SETTING, signoffNudgeVerdict } from "./board.ts"
 import { ProducerStoppedError } from "./shutdown.ts"
 import { liveShellBudget, SHELL_BUDGET_GRACE_MS, shellBudgetWarningMessage, type ShellStopReason } from "./shell-budget.ts"
+import { deadlineCheckInMessage, deadlineStageToSend, rowDeadline } from "./deadline.ts"
 import { completionsDueForRelay, relayMessage } from "./completion-relay.ts"
 import {
   createGithubReviewFetcher,
@@ -888,6 +889,16 @@ function isGoalEndFenceId(fenceId: string): boolean {
 
 /** Which limit this LIVE Goal has reached, if any. A row with every trigger off, no generation, or one
  *  already stopped has nothing left to stop. */
+/** THE GOAL STOPS AT THE THREAD'S DEADLINE (plans/time-limits.md § Interactions). A stop-hook Goal that
+ *  keeps saying "keep going" past the limit would undo the limit, so no trigger delivers once the
+ *  deadline has passed — the rest, the clock and the compaction trigger alike. It is a HOLD, not a stop:
+ *  the Goal stays armed and its own `for:` and run cap are untouched, so a human who extends the deadline
+ *  has the Goal back as it was. */
+function pastDeadline(row: Pick<SessionRow, "deadline_at" | "deadline_set_at">, nowMs: number): boolean {
+  const atMs = row.deadline_at && row.deadline_set_at ? Date.parse(row.deadline_at) : Number.NaN
+  return Number.isFinite(atMs) && nowMs >= atMs
+}
+
 function goalLimitHit(row: RecurringRow, nowMs: number): "runs" | "time" | undefined {
   if (!row.recurring_prompt?.trim() || !row.recurring_armed_at || row.recurring_stop_reason) return undefined
   if (row.recurring_on_rest !== 1 && row.recurring_on_schedule !== 1 && row.recurring_on_compact !== 1) return undefined
@@ -1004,6 +1015,52 @@ export function enqueueThreadMessageWake(
     reason: `a message from thread ${input.fromSlug}`,
   }, input.nowMs ?? Date.now())
   return id
+}
+
+/** THE HUMAN MOVED THE CLOCK (router setThreadDeadline → deadline.ts deadlineNoticeMessage). Bound to the
+ *  change still standing: a set is keyed on the generation it minted (`set:<deadline_set_at>`) and
+ *  superseded the moment the deadline moves again, a clear (`clear:<instant>`) the moment one is set
+ *  again — so two quick edits deliver the second only. Deliverable INTO a busy turn like a typed steer,
+ *  and exempt from the quiet window: it is the human's act, and the worker plans by it. */
+const DEADLINE_NOTICE_FENCE_PREFIX = "deadline-notice"
+function isDeadlineNoticeFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${DEADLINE_NOTICE_FENCE_PREFIX}:`)
+}
+
+export function enqueueDeadlineNoticeWake(
+  storage: Storage,
+  input: { slug: string; sessionId: string; setAt: string | null; message: string; nowMs?: number },
+): void {
+  const nowMs = input.nowMs ?? Date.now()
+  const fenceId = `${DEADLINE_NOTICE_FENCE_PREFIX}:${input.setAt ? `set:${input.setAt}` : `clear:${nowMs}`}`
+  createWakeDeliveryStore(storage.scope).enqueue({
+    id: wakeDeliveryId(input.slug, input.sessionId, fenceId),
+    slug: input.slug,
+    sessionId: input.sessionId,
+    fenceId,
+    hintKey: fenceId,
+    message: input.message,
+    reason: input.setAt ? `the human set the time limit (${input.setAt})` : "the human removed the time limit",
+  }, nowMs)
+}
+
+/** A DEADLINE CHECK-IN (SOURCE 15, evalDeadlines): `deadline:<generation>:<stage>`. The generation is
+ *  `deadline_set_at`, so moving the deadline supersedes a check-in still queued for the old one and earns
+ *  the new one its own set. (`deadline:` is not a `deadline-notice:` prefix, nor the reverse.) */
+const DEADLINE_FENCE_PREFIX = "deadline"
+function deadlineFenceId(setAt: string, stage: DeadlineStage): string {
+  return `${DEADLINE_FENCE_PREFIX}:${setAt}:${stage}`
+}
+function isDeadlineFenceId(fenceId: string): boolean {
+  return fenceId.startsWith(`${DEADLINE_FENCE_PREFIX}:`)
+}
+/** The generation and stage a check-in id was minted for. Split at the LAST colon — the generation is an
+ *  ISO instant and carries colons of its own. */
+function parseDeadlineFenceId(fenceId: string): { setAt: string; stage: string } | undefined {
+  if (!isDeadlineFenceId(fenceId)) return undefined
+  const body = fenceId.slice(DEADLINE_FENCE_PREFIX.length + 1)
+  const cut = body.lastIndexOf(":")
+  return cut < 0 ? undefined : { setAt: body.slice(0, cut), stage: body.slice(cut + 1) }
 }
 
 /** A registered PR watcher's delivery namespace. The id plus a monotonically-increasing REPORT number,
@@ -1530,6 +1587,27 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (!key || !shell || liveShellBudget(deps.storage, item.slug, shell)?.deadlineMs !== key.deadlineMs) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
+    // A DEADLINE CHECK-IN is bound to its GENERATION still being the thread's deadline, to being the
+    // latest stage due (a later one is enqueued in its place — the worker hears where it stands now, not
+    // a history), and to the thread not resting on a handoff: a worker that signed off, asked the human,
+    // or parked on them has already handed over, and waking it to say "hand over" is noise. The next
+    // stage, or the wake header's clock, reaches it when it runs again.
+    if (isDeadlineFenceId(item.fenceId)) {
+      const key = parseDeadlineFenceId(item.fenceId)
+      const d = rowDeadline(row)
+      if (!key || !d || d.setAt !== key.setAt) return "superseded"
+      if (deadlineStageDue(d.setAtMs, d.atMs, now()) !== key.stage) return "superseded"
+      if (restsOnHandoff(item.slug, tele)) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
+    // The human's notice is bound to its change still standing (DEADLINE_NOTICE_FENCE_PREFIX), and goes
+    // nowhere a thread that has signed off.
+    if (isDeadlineNoticeFenceId(item.fenceId)) {
+      const body = item.fenceId.slice(DEADLINE_NOTICE_FENCE_PREFIX.length + 1)
+      if (body.startsWith("set:") ? row.deadline_set_at !== body.slice(4) : Boolean(row.deadline_at)) return "superseded"
+      if (tele.turn === "idle" && threadSaidDone(deps.storage, item.slug, tele)) return "superseded"
+      return tele.turn === "idle" ? "current-idle" : "current-busy"
+    }
     // A REGISTERED PR WATCHER's report is bound to something that happened on GitHub, not to anything
     // this thread wrote, so no fence, rest or edit can supersede it either. Same reasoning as the shell
     // wake directly above, and the same bug if it is missing.
@@ -1566,6 +1644,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isHeartbeatFenceId(item.fenceId)) {
       const armed = armedSchedule(row)
       if (!armed || !item.fenceId.startsWith(`${HEARTBEAT_FENCE_PREFIX}:${armed.armedAt}:`)) return "superseded"
+      if (pastDeadline(row, now())) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A rest delivery is bound to the exact GENERATION that queued it AND to the exact REST it
@@ -1577,6 +1656,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       if (tele.authFault || tele.apiFault) return "superseded"
       const armed = armedRest(row)
       if (!armed || item.fenceId !== stopHookFenceId(armed.armedAt, tele.lastAssistantAt ?? "")) return "superseded"
+      if (pastDeadline(row, now())) return "superseded"
       if (restMessageIsSignedOff(deps.storage, item.slug, tele, registeredPrWatchesOf(deps.storage, item.slug), armedTimerIdsOf(deps.storage, item.slug), armed.armedAt)) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
@@ -1588,6 +1668,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     if (isCompactFenceId(item.fenceId)) {
       const armed = armedCompact(row)
       if (!armed || item.fenceId !== compactFenceId(armed.armedAt, tele.lastCompactionAt ?? "")) return "superseded"
+      if (pastDeadline(row, now())) return "superseded"
       return tele.turn === "idle" ? "current-idle" : "current-busy"
     }
     // A one-off timer is bound to its own row still being ARMED. The worker cancelling it, and a
@@ -1716,6 +1797,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     // The budget warning is "in the moment" by definition: its grace clock is already running, and a
     // worker mid-turn is the one most likely to still be using the shell — it has ten minutes to say so.
     if (isShellBudgetFenceId(item.fenceId)) return true
+    // A deadline check-in is the clock speaking, like a heartbeat: "you have 12m left" held until the
+    // turn ends has missed the turn it was for. The human's notice joins a running turn as a steer does.
+    if (isDeadlineFenceId(item.fenceId) || isDeadlineNoticeFenceId(item.fenceId)) return true
     // AN ANSWER IS THE HUMAN'S OWN WORDS, and it goes out mid-turn exactly as their typed steer does
     // (router followUp queues one into the running turn). Answers arrive ONE QUESTION AT A TIME since
     // 2026-09-29 — the worker starts on the first while the human reads the rest — so the second usually
@@ -2442,8 +2526,16 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
    *  operator-authored prompt (a Goal, a heartbeat, a snooze), whose text is delivered verbatim by
    *  invariant. A broker-run worker is told neither the date nor the time by its runtime, so without this
    *  it cannot tell a four-minute park from a four-hour one. */
-  function withClock(message: string, spokeAt?: string | null): string {
-    return `${message}\n\n${wakeTimeHeader(now(), spokeAt)}`
+  function withClock(message: string, spokeAt?: string | null, row?: Pick<SessionRow, "slug">): string {
+    return `${message}\n\n${clockLine(now(), spokeAt, row?.slug)}`
+  }
+
+  /** The wake's clock line, with the thread's time left when it has a deadline (deadline.ts). Read at
+   *  SEND as well as at enqueue (restampedWakeMessage), so "42m left" is the time left when the worker
+   *  reads it, not when the wake was queued. */
+  function clockLine(atMs: number, spokeAt: string | null | undefined, slug: string | undefined): string {
+    const d = slug ? rowDeadline(deps.storage.getSession(slug)) : undefined
+    return wakeTimeHeader(atMs, spokeAt, d?.atMs)
   }
 
   /** Rests the human asked to hear from early (requestCheckIn): slug → the rest instant it was asked of. */
@@ -3733,6 +3825,70 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
   }
 
+  // ---- SOURCE 15: THE THREAD'S TIME LIMIT -------------------------------------------------------
+  // plans/time-limits.md. A thread with a deadline is checked in with at fixed points in its budget —
+  // half-time, 80%, shortly before and at the deadline (@frizz/shared deadlineStageFraction) — each
+  // asking for a different behaviour (deadline.ts deadlineCheckInMessage). Delivered MID-TURN at the
+  // worker's next tool boundary, as a Goal heartbeat is; a resting thread is woken by it.
+  //
+  // ONLY THE LATEST DUE STAGE, and each at most once per generation: `deadline_stage` is the durable
+  // ledger (like `shell_budget`'s warned deadline), written in the same tick as the enqueue, so a restart
+  // — or an outbox that pruned the row — never sends a stage twice, and a server that was down across two
+  // stages sends the second alone.
+  //
+  // NOTHING IS EVER STOPPED. Past the deadline the worker is told once that its next stop is the handoff,
+  // and the board shows the thread over time; there is no second nag (the plan's "After over").
+  //
+  // A thread RESTING ON A HANDOFF is not woken (restsOnHandoff): one that signed off, asked the human or
+  // parked on them has already handed over. The stage is left unqueued rather than spent, so if the human
+  // answers and the worker runs again it hears where its clock stands — if that stage is still the latest.
+  function evalDeadlines(nowMs: number): void {
+    for (const row of deps.storage.allSessions()) {
+      if (row.state === "archived" || row.archived === 1 || isLazyRow(row)) continue
+      const d = rowDeadline(row)
+      if (!d) continue
+      const stage = deadlineStageToSend(d, nowMs)
+      if (!stage) continue
+      const tele = deps.tailer.get(row.slug)
+      if (!tele) continue
+      if (restsOnHandoff(row.slug, tele)) continue
+      const fenceId = deadlineFenceId(d.setAt, stage)
+      const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
+      if (!outbox.get(deliveryId)) {
+        const item = outbox.enqueue({
+          id: deliveryId,
+          slug: row.slug,
+          sessionId: row.session_id,
+          fenceId,
+          hintKey: fenceId,
+          message: withClock(deadlineCheckInMessage(stage, d, nowMs), tele.lastAssistantAt, row),
+          reason: `time limit check-in: ${stage} (deadline ${new Date(d.atMs).toISOString()})`,
+        }, nowMs).delivery
+        log(`waker: queued ${row.slug} — ${item.reason}`)
+        checkpoint("after-enqueue", item)
+      }
+      deps.storage.markDeadlineStage(row.slug, d.setAt, stage)
+    }
+  }
+
+  /** HAS THIS THREAD ALREADY HANDED OVER? Resting, and the rest is one the human now owns: a sign-off
+   *  (`done`, fenced or registered), a question it asked (registered or native), or a park on the human
+   *  (`status: needs_input`, `steps:`, `questions:`). A check-in there would ask for a handoff the
+   *  worker has already made. A quiet park (`working` / `watching`) and a bare rest are not handoffs — the
+   *  worker is waiting on its own work, and the clock is exactly what it needs to hear. */
+  function restsOnHandoff(slug: string, tele: SessionTelemetry): boolean {
+    if (tele.turn !== "idle") return false
+    if (threadSaidDone(deps.storage, slug, tele)) return true
+    if (tele.pendingQuestion) return true
+    if (owedQuestionRows(deps.storage.listThreadQuestions(slug, { openOnly: true }), tele).length > 0) return true
+    const fence = tele.lastFence
+    if (fence?.kind === "awaiting") {
+      if (awaitingStatus(fence.hints) === "needs_input") return true
+      if (parkOnHuman(readAwaitingPark(fence.hints))) return true
+    }
+    return false
+  }
+
   /** THE REGISTERED-WATCH REGISTRY PASS. Two settle conditions, and only one of them is news.
    *
    *  EXPIRED → settled + a wake. The expiry is the whole reason a registration cannot outlive its own
@@ -4028,6 +4184,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const armed = armedSchedule(row)
       if (!armed || armed.dueAtMs > nowMs) continue
       if (goalLimitHit(row, nowMs) || goalCapReserved(row)) continue // never deliver past a limit
+      if (pastDeadline(row, nowMs)) continue // nor past the thread's time limit (pastDeadline)
       // The ONE thing that silences a beat. Everything else about this source is unconditional — rest,
       // sub-agents, shells, all irrelevant — but a worker that has said there is no further work has
       // ended the arrangement, and a "permanently stalled" run that keeps being woken every interval is
@@ -4216,6 +4373,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const armed = armedRest(row)
       if (!armed) continue
       if (goalLimitHit(row, nowMs) || goalCapReserved(row)) continue // never deliver past a limit
+      if (pastDeadline(row, nowMs)) continue // nor past the thread's time limit (pastDeadline)
       const tele = deps.tailer.get(row.slug)
       if (!tele || tele.turn !== "idle") continue
       // THE AGENT MUST HAVE SPOKEN LAST. `turn === "idle"` alone is not "the agent rested": a thread
@@ -4319,6 +4477,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const armed = armedCompact(row)
       if (!armed) continue
       if (goalLimitHit(row, nowMs) || goalCapReserved(row)) continue // never deliver past a limit
+      if (pastDeadline(row, nowMs)) continue // nor past the thread's time limit (pastDeadline)
       const tele = deps.tailer.get(row.slug)
       if (!tele?.lastCompactionAt) continue
       // NEVER fire for a compaction that predates the arming. Without this, switching the trigger on for
@@ -4554,7 +4713,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     }
     const lead = `Frizz held ${frame.length} wakes for this thread and is delivering them together, oldest first. Each is under its own heading; read all of them before acting on any.`
     const body = sections.map((s, i) => `### ${i + 1}. ${s.reason}${s.count > 1 ? ` — ${s.count} identical events` : ""}\n\n${s.body}`)
-    return `${lead}\n\n${body.join("\n\n")}\n\n${wakeTimeHeader(now(), spokeAt)}`
+    return `${lead}\n\n${body.join("\n\n")}\n\n${clockLine(now(), spokeAt, frame[0]?.slug)}`
   }
 
   // A LONE wake's clock is re-read at SEND, for the same reason the merged one is: the stamp was taken at
@@ -4562,9 +4721,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
   // the meantime. Observed 2026-09-25: a PR-merged wake queued at 14:55 went out at 14:59 still saying
   // "you last spoke 14m ago" to a worker that had spoken 39 seconds earlier. Only a message that ends in
   // a clock gets a new one; the token is appended downstream, so this cannot disturb confirmation.
-  function restampedWakeMessage(message: string, spokeAt: string | null | undefined): string {
+  function restampedWakeMessage(message: string, spokeAt: string | null | undefined, slug: string): string {
     const bare = stripWakeTimeHeader(message)
-    return bare === message ? message : `${bare}\n\n${wakeTimeHeader(now(), spokeAt)}`
+    return bare === message ? message : `${bare}\n\n${clockLine(now(), spokeAt, slug)}`
   }
 
   // A frame confirmed by its carrier's token is confirmed whole. The merged delivery is ONE user record
@@ -4623,7 +4782,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const frame = [...companions, item].sort((a, b) => a.createdAt - b.createdAt || a.id.localeCompare(b.id))
       const spokeAt = deps.tailer.get(item.slug)?.lastAssistantAt
       const message = companions.length === 0
-        ? restampedWakeMessage(item.message, spokeAt)
+        ? restampedWakeMessage(item.message, spokeAt, item.slug)
         : isQuestionAnswerFenceId(item.fenceId)
           ? withClock(mergeAnswerMessages(frame.map((d) => d.message))!, spokeAt)
           : mergedWakeMessage(frame, spokeAt)
@@ -4816,6 +4975,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
     } catch (err) {
       if (err instanceof InjectedSchedulerCrash) throw err
       log(`waker: shell-budget pass failed: ${err instanceof Error ? err.message : String(err)}`)
+    }
+    try {
+      evalDeadlines(now())
+    } catch (err) {
+      if (err instanceof InjectedSchedulerCrash) throw err
+      log(`waker: time-limit pass failed: ${err instanceof Error ? err.message : String(err)}`)
     }
     try {
       evalTimers(now())

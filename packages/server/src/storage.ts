@@ -189,6 +189,18 @@ export interface SessionRow {
   recurring_run_anchor?: string | null
   recurring_stop_reason?: string | null
   recurring_stopped_at?: string | null
+  // THE THREAD'S TIME LIMIT (plans/time-limits.md, deadline.ts). `deadline_at` is the instant the worker
+  // owes its best deliverable by; NULL means no limit. `deadline_set_at` is when the CURRENT deadline was
+  // set — with `deadline_at` it gives the budget the check-in stages are fractions of, and it is the
+  // GENERATION: moving the deadline mints a new one, the way `recurring_armed_at` does for a Goal, so an
+  // extension starts a fresh set of check-ins. `deadline_set_by` is who set it ('human' | 'worker'); only
+  // the human may move or clear a deadline the human set. `deadline_stage` is the last check-in stage
+  // queued for THIS generation — the durable "never twice", like `shell_budget.warned_deadline`, so a
+  // restart (or a pruned outbox row) never sends a stage again.
+  deadline_at?: string | null
+  deadline_set_at?: string | null
+  deadline_set_by?: string | null
+  deadline_stage?: string | null
   meta: string | null // JSON blob for future annotations (unparsed here)
   seen_at: string | null // ISO8601 — interaction clearance: recorded when the human opens the thread
   // ISO8601 — when the HUMAN last acted on this thread: opened it, replied, marked it done, snoozed it,
@@ -1137,6 +1149,14 @@ export interface Storage extends ScheduleStore {
   setForkAnchor(slug: string, sessionId: string, anchor: string): boolean
   /** Rewrite an unstarted thread's note. False when the row is not (or no longer) a lazy thread. */
   setLazyPrompt(slug: string, sessionId: string, note: string): boolean
+  /** Set (or move) this thread's deadline — a new GENERATION: `deadline_set_at` restamped, the stage
+   *  ledger cleared, so the check-ins start over against the new budget. */
+  setDeadline(slug: string, input: { deadlineAt: string; setAt: string; setBy: "human" | "worker" }): boolean
+  /** Remove the deadline. The thread runs without a limit; nothing further is checked in. */
+  clearDeadline(slug: string): boolean
+  /** Record that `stage` was queued for the generation set at `setAt`. Guarded on the generation, so a
+   *  stage minted for a deadline the human has since moved cannot write onto the new one. */
+  markDeadlineStage(slug: string, setAt: string, stage: string): boolean
   setAcpAgent(slug: string, agentId: string): void
   setProfile(slug: string, model: string, effort: string): void
   setPermissionMode(slug: string, permissionMode: string): void
@@ -1288,6 +1308,11 @@ export const STORAGE_SCHEMA = `
       recurring_run_anchor TEXT,
       recurring_stop_reason TEXT,
       recurring_stopped_at TEXT,
+      -- The thread's time limit (2026-10-06); see SessionRow. Also in the ALTER list below.
+      deadline_at TEXT,
+      deadline_set_at TEXT,
+      deadline_set_by TEXT,
+      deadline_stage TEXT,
       -- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9): how many times in a row frizz has told this
       -- thread how to sign off without a fence appearing, and the last-nudged delivery id.
       signoff_nudges INTEGER NOT NULL DEFAULT 0,
@@ -1721,6 +1746,8 @@ export function ensureStorageSchema(db: Database): void {
     "lazy_prompt TEXT",
     // 2026-10-05: the schedule a thread is a run of (SessionRow.schedule_id).
     "schedule_id TEXT",
+    // 2026-10-06: the thread's time limit (SessionRow.deadline_*; plans/time-limits.md).
+    "deadline_at TEXT", "deadline_set_at TEXT", "deadline_set_by TEXT", "deadline_stage TEXT",
   ]) {
     try {
       db.exec(`ALTER TABLE session ADD COLUMN ${column}`)
@@ -1969,6 +1996,13 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- A forked thread's anchor names a record in ITS session's transcript: kept across a resume (the
       -- same session spread back), dropped by a re-dispatch or adopt, whose fresh session holds no copy.
       fork_anchor = CASE WHEN session.session_id = excluded.session_id THEN session.fork_anchor ELSE NULL END,
+      -- A time limit belongs to the SESSION it was set on: a resume (the same session spread back) keeps
+      -- it, and a re-dispatch or adopt — a fresh worker with a fresh prompt — starts without one. A
+      -- dispatch that carries a limit sets it after this write (setDeadline).
+      deadline_at = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_at ELSE NULL END,
+      deadline_set_at = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_set_at ELSE NULL END,
+      deadline_set_by = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_set_by ELSE NULL END,
+      deadline_stage = CASE WHEN session.session_id = excluded.session_id THEN session.deadline_stage ELSE NULL END,
       -- The note an UNSTARTED thread carries (SessionRow.lazy_prompt). Every dispatch writes NULL here, so the
       -- upsert that starts a lazy thread's agent is the same write that makes it an ordinary thread.
       lazy_prompt = excluded.lazy_prompt,
@@ -2783,6 +2817,15 @@ export function createStorage(source: string | Database, projectId: string): Sto
   const agentSessionStmt = scope.prepare("UPDATE session SET agent_session_id = ? WHERE project_id = @project_id AND slug = ?")
   const codexRuntimeStmt = scope.prepare("UPDATE session SET codex_runtime = ? WHERE project_id = @project_id AND slug = ?")
   const claudeRuntimeStmt = scope.prepare("UPDATE session SET claude_runtime = ? WHERE project_id = @project_id AND slug = ?")
+  const setDeadlineStmt = scope.prepare(
+    "UPDATE session SET deadline_at = ?, deadline_set_at = ?, deadline_set_by = ?, deadline_stage = NULL WHERE project_id = @project_id AND slug = ?",
+  )
+  const clearDeadlineStmt = scope.prepare(
+    "UPDATE session SET deadline_at = NULL, deadline_set_at = NULL, deadline_set_by = NULL, deadline_stage = NULL WHERE project_id = @project_id AND slug = ? AND deadline_at IS NOT NULL",
+  )
+  const markDeadlineStageStmt = scope.prepare(
+    "UPDATE session SET deadline_stage = ? WHERE project_id = @project_id AND slug = ? AND deadline_set_at = ?",
+  )
   const forkAnchorStmt = scope.prepare("UPDATE session SET fork_anchor = ? WHERE project_id = @project_id AND slug = ? AND session_id = ?")
   const lazyPromptStmt = scope.prepare("UPDATE session SET lazy_prompt = ? WHERE project_id = @project_id AND slug = ? AND session_id = ? AND lazy_prompt IS NOT NULL")
   const acpAgentStmt = scope.prepare("UPDATE session SET acp_agent = ? WHERE project_id = @project_id AND slug = ?")
@@ -3507,6 +3550,9 @@ export function createStorage(source: string | Database, projectId: string): Sto
     setClaudeRuntime: (slug, runtime) => void claudeRuntimeStmt.run(runtime, slug),
     setForkAnchor: (slug, sessionId, anchor) => forkAnchorStmt.run(anchor, slug, sessionId).changes === 1,
     setLazyPrompt: (slug, sessionId, note) => lazyPromptStmt.run(note, slug, sessionId).changes === 1,
+    setDeadline: (slug, input) => setDeadlineStmt.run(input.deadlineAt, input.setAt, input.setBy, slug).changes === 1,
+    clearDeadline: (slug) => clearDeadlineStmt.run(slug).changes === 1,
+    markDeadlineStage: (slug, setAt, stage) => markDeadlineStageStmt.run(stage, slug, setAt).changes === 1,
     setAcpAgent: (slug, agentId) => void acpAgentStmt.run(agentId, slug),
     setProfile: (slug, model, effort) => void profileStmt.run(model, effort, new Date().toISOString(), slug),
     setPermissionMode: (slug, permissionMode) => void permissionModeStmt.run(permissionMode, new Date().toISOString(), slug),

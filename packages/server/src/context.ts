@@ -39,6 +39,7 @@ import { createSpinoffEdgeRecovery, type SpinoffEdgeRecovery } from "./spinoff-e
 import { createTailer, defaultLogDir, type Tailer } from "./tailer.ts"
 import { backgroundShellStoppable, stopBackgroundShell } from "./shell-stop.ts"
 import { createDispatcher, loadWorkerPrompt, scratchpadOrientation, frizzConfigBlock, claudeMcpConfig, resolveFrizzMcp, workerPluginDir, coldResumePermission, workerScratchPath, type Dispatcher, type FrizzMcpTarget } from "./dispatch.ts"
+import { deadlineSection } from "./deadline.ts"
 import { createScheduler, type Scheduler, probeIssueReadable, probePrReadable, type PrRef, type PrProbe } from "./scheduler.ts"
 import {
 resumeThread,
@@ -511,7 +512,7 @@ export function deliverClaudeBrokerWake(deps: {
    * and scratch directories are in its state directory while its agents run in the home folder.
    */
   boardDir?: string
-  row: { session_id: string; model?: string | null; effort?: string | null; permission_mode?: string | null }
+  row: { session_id: string; model?: string | null; effort?: string | null; permission_mode?: string | null } & Parameters<typeof deadlineSection>[0]
   /** The operator's Settings, for the floor a row with NO persisted mode cold-resumes at (coldResumePermission). */
   settings: Pick<Settings, "permissionMode">
   deliveryMessage: string
@@ -524,6 +525,8 @@ export function deliverClaudeBrokerWake(deps: {
     loadWorkerPrompt("claude"),
     scratchpadOrientation(row.session_id, "claude", workerScratchPath(board, row.session_id)),
     frizzConfigBlock(board.dir),
+    deadlineSection(row),
+
   ].filter(Boolean).join("\n\n")
   return bridge.followUp({
     threadSlug: slug,
