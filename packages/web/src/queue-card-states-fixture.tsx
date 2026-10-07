@@ -62,6 +62,8 @@ import "./styles.css"
 // such. The terminal net's copy must call `/_frizz/<card project>/rpc/threadTerminalCommand`.
 
 const params = new URLSearchParams(location.search)
+// `&font=sans`: the app's own font (index.html pins it); a measurement on the stylesheet's mono default is wrong.
+if (params.get("font") === "sans") document.documentElement.dataset.font = "sans"
 const CASE = params.get("case") ?? "exit"
 const DELAY = Number(params.get("delay") ?? 1500)
 const DECLINE = params.get("needsConfirmation") === "1"
@@ -174,6 +176,22 @@ function scenario(): Scenario {
         threads: FACT_CASES.filter((c) => c.id !== "no-band").map((c) => thread(c.id, c.title, { lastAssistantAt: new Date(Date.now() - 37 * 60_000).toISOString(), ...c.extra })),
         text: () => "Both regions verified; the old key is retired.",
       }
+    // A thread's TIME LIMIT on the facts line (DeadlineControl DeadlineFact): plenty of time, the last stretch,
+    // and over time on a limit the agent set — `&font=sans` for the measured reading.
+    case "deadline": {
+      const at = (leftMin: number, budgetMin: number, setBy: "human" | "worker" = "human") => ({
+        deadline: { at: new Date(Date.now() + leftMin * 60_000).toISOString(), setAt: new Date(Date.now() + (leftMin - budgetMin) * 60_000).toISOString(), setBy },
+        lastAssistantAt: new Date(Date.now() - 4 * 60_000).toISOString(),
+      })
+      return {
+        threads: [
+          thread("deadline-plenty", "Rotate the signing key without downtime", { ...at(42, 120), context: { tokens: 148_000, window: 200_000 } }),
+          thread("deadline-closing", "Deflake the auth integration suite", at(4, 60)),
+          thread("deadline-over", "Port the parser to the new grammar", at(-8, 30, "worker")),
+        ],
+        text: () => "Both regions verified; the old key is retired.",
+      }
+    }
     case "many": {
       const count = Number(params.get("n") ?? 60)
       const threads = Array.from({ length: count }, (_, i) => thread(`card-${i}`, `Queue card ${i}`))

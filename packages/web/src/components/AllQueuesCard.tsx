@@ -76,6 +76,7 @@ import { trackQueueDock } from "../lib/queueDockInset.ts"
 import { ThreadLifecycleActions } from "./ThreadLifecycle.tsx"
 import { RecurringPromptControl } from "./RecurringPromptControl.tsx"
 import { ContextFact, FACTS_LINE_CLASS, Fact, FactSep, GoalLoopFact } from "./ThreadHeaderFacts.tsx"
+import { DeadlineFact } from "./DeadlineControl.tsx"
 import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, ThreadProcessStrip } from "./ThreadTerminals.tsx"
 import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
@@ -463,6 +464,8 @@ function CardArticle({
             {/* The thread-header facts the lifecycle footer used to carry (ThreadHeaderFacts): the context
                 reading — its Compact sent into the CARD's project — and the Goal's loop. */}
             <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+              {/* The time limit, its extend / remove sent into the CARD's project (DeadlineControl). */}
+              <Fact><DeadlineFact thread={thread} lead={<FactSep />} /></Fact>
               <Fact><ContextFact thread={thread} lead={<FactSep />} /></Fact>
               <Fact><GoalLoopFact thread={thread} lead={<FactSep />} /></Fact>
             </ThreadProjectScope>

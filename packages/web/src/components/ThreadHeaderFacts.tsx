@@ -6,6 +6,7 @@ import { useNowMs } from "../lib/liveClock.ts"
 import { LastActive } from "./LastActive.tsx"
 import { ContextMeter, hasContextReading } from "./ContextMeter.tsx"
 import { GoalMark } from "./RecurringPromptControl.tsx"
+import { DeadlineFact } from "./DeadlineControl.tsx"
 
 // A THREAD HEADER'S SECOND LINE: the facts about the thread as a whole, in words — "Last active 2m ago ·
 // ◔ 74% context · ◎ run 7 of 20". The thread header (drawer and /full) renders it; the context reading
@@ -48,6 +49,8 @@ export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadVi
           className="min-w-0 truncate"
         />
       </Fact>
+      {/* The time limit, right after the time: over time, it is the most urgent thing the line says. */}
+      <Fact><DeadlineFact thread={thread} lead={<FactSep />} /></Fact>
       <Fact><ContextFact thread={thread} lead={<FactSep />} /></Fact>
       <Fact><GoalLoopFact thread={thread} lead={<FactSep />} /></Fact>
       {children}

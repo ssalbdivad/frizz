@@ -32,6 +32,8 @@ import { aboveDrawersZ } from "../lib/overlaySurface.ts"
 import { phoneLayout } from "../lib/mobile.ts"
 import { useLiveSchedule } from "./ScheduleComposer.tsx"
 import { joinComposerValue, splitComposerValue } from "../lib/imagePaths.ts"
+import { resolveDraftDeadline } from "../lib/threadDeadline.ts"
+import { DispatchTimeLimit } from "./DeadlineControl.tsx"
 
 /** The directories of the project a prompt box dispatches into, named by its caller (DispatchForm `dirs`). */
 export interface DispatchDirs {
@@ -130,6 +132,14 @@ function PromptForm({
   // (lib/scheduleDraftState.ts): a submit that fails puts it back with the words.
   const scheduleKey = draftKey.dispatchSchedule(projectDir)
   const submittedScheduleRef = useRef("")
+  // THE TIME LIMIT typed for this prompt (DeadlineControl DispatchTimeLimit): raw text in the draft, beside
+  // the pick, resolved to an instant only at the Enter that starts the thread (startNow). It leaves the box
+  // with the dispatch and comes back with a failed one, on the pick's terms.
+  const limitKey = draftKey.dispatchDeadline(projectDir)
+  const submittedLimitRef = useRef("")
+  const restoreLimit = () => {
+    if (submittedLimitRef.current && !draftStore.get(limitKey)) draftStore.set(limitKey, submittedLimitRef.current)
+  }
   /** A failed submit's words back into a still-empty box — and, in the same commit, what was said about their
    *  schedule. Without it the strip and ↻ came back over words the human had said were not a schedule (or had
    *  just undone), and the retry Enter created it (fix round 2026-10-06, H). */
@@ -178,6 +188,7 @@ function PromptForm({
       // The pick comes back with its prompt, on the same terms: a retry must not quietly run on the
       // default, and a pick made during the failed request is not overwritten.
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
+      restoreLimit()
       setPendingDispatch(null)
       // Server-side auth preflight rejection (the client gate can miss on a stale snapshot): open the
       // same sign-in modal with the dispatch stashed, instead of a dead-end failure toast. The server
@@ -210,6 +221,7 @@ function PromptForm({
       restoreContextItems(promptKey, submittedContextRef.current)
       submittedContextRef.current = []
       if (!draftStore.get(pickKey)) setPick(submittedPickRef.current)
+      restoreLimit()
       showToast(`Could not add the lazy thread: ${(e as Error).message.slice(0, 80)}`)
     },
   })
@@ -236,6 +248,9 @@ function PromptForm({
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
     submittedScheduleRef.current = draftStore.get(scheduleKey)
+    // A lazy thread takes no limit — nothing runs until it is launched — but the limit leaves with the
+    // draft it was typed for, and a failed save puts it back.
+    submittedLimitRef.current = draftStore.get(limitKey)
     submittedContextRef.current = takeContextItems(promptKey)
     clearDispatchDraft(projectDir)
     saveLazy.mutate(input)
@@ -248,6 +263,7 @@ function PromptForm({
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
     submittedScheduleRef.current = draftStore.get(scheduleKey)
+    submittedLimitRef.current = draftStore.get(limitKey)
     // Taken here, not in submit: a submit the sign-in gate holds keeps its draft, and so its chips.
     submittedContextRef.current = takeContextItems(promptKey)
     // The prompt, its pick and what was said about its schedule in ONE commit (lib/scheduleDraftState.ts):
@@ -289,6 +305,7 @@ function PromptForm({
       const taken = joinComposerValue(submittedProse, attachments.map((a) => a.path))
       const items = takeContextItems(promptKey)
       const pickRaw = draftStore.get(pickKey)
+      const limitRaw = draftStore.get(limitKey)
       clearDispatchDraft(projectDir)
       if (after.trim()) draftStore.set(promptKey, after)
       onDispatched?.()
@@ -296,6 +313,7 @@ function PromptForm({
         mergeIntoDraft(promptKey, taken)
         restoreContextItems(promptKey, items)
         if (pickRaw && !draftStore.get(pickKey)) draftStore.set(pickKey, pickRaw)
+        if (limitRaw && !draftStore.get(limitKey)) draftStore.set(limitKey, limitRaw)
       }
     },
     focus: () => {
@@ -369,6 +387,14 @@ function PromptForm({
       showToast("Saved reasoning level is unavailable for this model — choose another level")
       return
     }
+    // The limit resolves HERE, at the Enter that starts the thread: "2h" is two hours of the thread's
+    // own, not two hours from when it was typed. Text that no longer parses — a clock time now under a
+    // minute away — stops the submit and says why, with the draft and the limit left as they were.
+    const limit = resolveDraftDeadline(draftStore.get(limitKey), Date.now())
+    if (!limit.ok) {
+      showToast(`Time limit: ${limit.error}`)
+      return
+    }
     const expanded = expandedPrompt(prompt)
     const input: DispatchInput = {
       // The chips, and in an editor's sidebar what the editor has in front at THIS Enter
@@ -386,6 +412,7 @@ function PromptForm({
       // An ACP profile resolves to effort "" (no effort axis); the RPC's enum takes that as ABSENT.
       // Sending "" failed every ACP dispatch from the composer with "Invalid enum value" (2026-09-16).
       effort: (resolved.effort || undefined) as DispatchInput["effort"],
+      ...(limit.deadline ? { deadline: limit.deadline } : {}),
     }
     // Auth gate: block ONLY on a positive "signed-out" for this dispatch's backend. Loading/unknown/
     // authed all fall through (fail open) so a flaky or slow read never blocks a logged-in user. An ACP
@@ -457,9 +484,11 @@ function PromptForm({
         {picked && defaultResolved && (
           <MakeDefaultButton groups={profileGroups} pick={resolved} defaultProfile={defaultResolved} onClick={makeDefault} />
         )}
+        {/* The thread's time limit, another setting of the thread about to start (DeadlineControl). */}
+        <DispatchTimeLimit draftKey={limitKey} />
       </div>
     )
-  }, [resolved, defaultResolved, picked, codexList, claudeList, acpList, profileLoadError, choose, chooseAcpModel, makeDefault, target])
+  }, [resolved, defaultResolved, picked, codexList, claudeList, acpList, profileLoadError, choose, chooseAcpModel, makeDefault, target, limitKey])
 
   return (
     <div ref={rootRef} className="w-full flex flex-col gap-3">

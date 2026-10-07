@@ -124,6 +124,10 @@ export const draftKey = {
   // the draft: across a remount and a same-tab reload, and cleared in the same commit as the prompt
   // (clearDispatchDraft). Absent means nothing dismissed.
   dispatchSchedule: (projectDir: string | undefined) => `dispatch-schedule:${projectDraftScope(projectDir)}:new`,
+  // The TIME LIMIT typed for that same prompt (lib/threadDeadline.ts): the human's raw text (`2h`, `15:30`),
+  // resolved to an instant only at the Enter that starts the thread. Kept and cleared with the prompt, like
+  // the profile pick, and absent means no limit.
+  dispatchDeadline: (projectDir: string | undefined) => `dispatch-deadline:${projectDraftScope(projectDir)}:new`,
   // A thread's "Spinoff" dialog (SpinoffDialog) — the instructions for the new thread, one per thread.
   spinoff: (projectDir: string | undefined, slug: string) => `spinoff:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}`,
   // A finished terminal's next line (TerminalFollowUp) — one per terminal.

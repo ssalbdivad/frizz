@@ -78,12 +78,13 @@ export function useScheduleDraftState(key: string): readonly [ScheduleDraftState
   return [state, set] as const
 }
 
-/** Every key a new thread's draft spans: its prompt, its schedule dismissal and its profile pick. */
+/** Every key a new thread's draft spans: its prompt, its schedule dismissal, its profile pick and its time
+ *  limit. `keepPick` keeps the limit with the pick: both are settings of the thread about to start. */
 export function dispatchDraftKeys(projectDir: string | undefined, { keepPick = false }: { keepPick?: boolean } = {}): string[] {
   return [
     draftKey.dispatch(projectDir),
     draftKey.dispatchSchedule(projectDir),
-    ...(keepPick ? [] : [draftKey.dispatchProfile(projectDir)]),
+    ...(keepPick ? [] : [draftKey.dispatchProfile(projectDir), draftKey.dispatchDeadline(projectDir)]),
   ]
 }
 

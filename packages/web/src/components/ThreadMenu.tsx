@@ -1,6 +1,6 @@
 import { useRef, useState, type KeyboardEvent } from "react"
 import { useMutation, useQueryClient } from "@tanstack/react-query"
-import { ChartColumn, Code, Copy, Ellipsis, FileDiff, FileText, Folder, Loader2, Plug, RefreshCw, SquareTerminal, Trash2 } from "lucide-react"
+import { ChartColumn, Code, Copy, Ellipsis, FileDiff, FileText, Folder, Loader2, Plug, RefreshCw, SquareTerminal, Timer, Trash2 } from "lucide-react"
 import { useSnapshot } from "valtio"
 import type { ThreadView } from "@frizz/shared"
 import type { Api, ThreadFolderChoice } from "../api/contract.ts"
@@ -16,6 +16,7 @@ import { Dialog } from "./ui/Dialog.tsx"
 import { displayName, displayTitle } from "../groups.ts"
 import { startComposerTerminal } from "./ThreadTerminals.tsx"
 import { ThreadInfoDialog } from "./ThreadInfoDialog.tsx"
+import { TimeLimitDialog } from "./DeadlineControl.tsx"
 import { useThreadApi, useThreadProjectId } from "../api/threadApi.tsx"
 import { Tooltip } from "./Tooltip.tsx"
 import { useTerminalCommandMenuItem } from "./ExternalTerminalCommand.tsx"
@@ -192,6 +193,11 @@ export function ThreadMenu({ thread, onDoc, restart = true, card = false, classN
   const menuKeys = useShortcutLabel("thread.menu")
   const [deleting, setDeleting] = useState(false)
   const [info, setInfo] = useState(false)
+  // THE TIME LIMIT (DeadlineControl): set one on a thread that has none, or change the one it has. A thread
+  // with a limit also wears it as a chip on the header's facts line, which opens the same panel. Not on a
+  // Done thread, whose clock is history, nor a lazy one, which has no agent to tell.
+  const [timeLimit, setTimeLimit] = useState(false)
+  const offersTimeLimit = ownSession && thread.state !== "archived" && thread.lazyPrompt === undefined
   // Review changes: in the editor's sidebar always, in a browser while an editor that can show them is
   // connected (lib/reviewChanges.ts says why only there).
   const { editorWindows } = useSnapshot(store)
@@ -224,6 +230,11 @@ export function ThreadMenu({ thread, onDoc, restart = true, card = false, classN
         {ownSession && (
           <MenuItem value="thread-info" onSelect={() => setInfo(true)} icon={<ChartColumn size={12} aria-hidden />}>
             Thread info
+          </MenuItem>
+        )}
+        {offersTimeLimit && (
+          <MenuItem value="time-limit" onSelect={() => setTimeLimit(true)} icon={<Timer size={12} aria-hidden />}>
+            Time limit…
           </MenuItem>
         )}
         {ownSession && (
@@ -273,6 +284,7 @@ export function ThreadMenu({ thread, onDoc, restart = true, card = false, classN
     )}
     {deleting && <DeleteThreadDialog thread={thread} onClose={() => setDeleting(false)} />}
     {info && <ThreadInfoDialog thread={thread} onClose={() => setInfo(false)} />}
+    {timeLimit && <TimeLimitDialog thread={thread} onClose={() => setTimeLimit(false)} />}
     </>
   )
 }

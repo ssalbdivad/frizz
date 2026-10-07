@@ -25,6 +25,7 @@ import { awaitingProse, awaitingWaitClause } from "../lib/awaitingPresentation.t
 import { clearArchived } from "../lib/optimisticArchive.ts"
 import { clearPinned, markPinned } from "../lib/optimisticPin.ts"
 import type { ReactElement, ReactNode } from "react"
+import { RailDeadline } from "./DeadlineControl.tsx"
 
 // THE THREAD ROW — one thread as a line of a list, with its indicator, its title and trailers, and the
 // verbs it offers on hover (pin, Retry, reopen). Everything's project list draws
@@ -330,6 +331,9 @@ export const ThreadRow = memo(function ThreadRow({
                 </span>
               )}
             </span>
+            {/* The time limit's countdown, first in the column: over time it is the loudest thing on the row
+                (DeadlineControl RailDeadline). Nothing on a Done row. */}
+            <RailDeadline thread={t} yieldsToRetry={hoverActions} />
             <SubAgentCount t={t} yieldsToRetry={hoverActions} />
             {working && <WorkingAge elapsed={working.elapsed} yieldsToRetry={hoverActions} />}
             {/* The Retry verb is an OVERLAY pinned to this same right edge, so on the rows that offer
