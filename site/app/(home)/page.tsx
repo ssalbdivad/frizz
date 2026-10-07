@@ -30,10 +30,14 @@ const features = [
   { icon: Smartphone, title: "Your phone", text: "The same queue, answered with a tap.", href: "/docs/phone" },
 ];
 
-const nots = [
-  { title: "Not a model.", text: "Frizz drives the CLIs you already have signed in, on your subscription." },
-  { title: "Not a cloud.", text: "No account, no telemetry. The server binds localhost, and its state stays out of your repo." },
-  { title: "Not a workflow.", text: "No worktrees, branches or build steps behind your back. A thread is a session you could have started." },
+// the commitments every feature is held to, one line each; /docs/principles says the rest
+const principles = [
+  { title: "The agent decides.", text: "A thread's state is its agent's own last word. Frizz only checks that it holds up." },
+  { title: "Frizz never answers for it.", text: "Nothing is answered, parked or withdrawn on an agent's behalf, outside a short, listed set." },
+  { title: "Every card is yours to act on.", text: "Nothing enters the queue just to be dismissed, and a running thread never does." },
+  { title: "Five bands, never lost.", text: "Pinned, Queue, Running, Snoozed, Done. Every thread is in exactly one." },
+  { title: "One project at a time.", text: "A project's board is the default. All projects is one click away." },
+  { title: "Nothing of its own.", text: "No model, no cloud, no workflow: your CLIs on your sign-in, on localhost." },
 ];
 
 const agents = ["Claude Code", "Codex", "OpenCode", "Gemini CLI", "Copilot CLI", "Cursor", "goose", "Qwen Code"];
@@ -112,7 +116,7 @@ export default function Home() {
       </Split>
 
       <Split
-        title="Every project, one page."
+        title="One server, every project."
         flip
         link={{ href: "/docs/projects", text: "Projects" }}
         media={
@@ -120,13 +124,13 @@ export default function Home() {
             src="/img/projects.png"
             width={1760}
             height={1100}
-            alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the ready cards from every project are queued on the right."
+            alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the cards from every project are queued on the right."
           />
         }
       >
         <p>
-          One server serves every repo on your machine. Run <Code>npx frizz</Code> in a second one and it joins the
-          page, with its own threads and settings.
+          One server serves every repo on your machine, and each gets its own board. Run <Code>npx frizz</Code> in a
+          second one and it joins. All projects shows every board&rsquo;s work at once, one click away.
         </p>
         <p>
           Each agent runs in its own background process. Close the tab or stop Frizz, and it keeps working; relaunch,
@@ -205,15 +209,16 @@ export default function Home() {
       </section>
 
       <section className="py-16">
-        <Heading title="What it is not." />
-        <div className="mt-10 grid gap-4 md:grid-cols-3">
-          {nots.map(({ title, text }) => (
+        <Heading title="Principles." subtitle="What every feature is held to." />
+        <div className="mt-10 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {principles.map(({ title, text }) => (
             <div key={title} className="rounded-2xl border border-dashed border-fd-border p-5">
               <span className="font-semibold">{title}</span>
               <p className="mt-1 text-sm text-fd-muted-foreground">{text}</p>
             </div>
           ))}
         </div>
+        <More href="/docs/principles">All the principles</More>
       </section>
 
       <section className="flex flex-col items-center py-24 text-center">

@@ -7,7 +7,7 @@ description: What leaves your machine, what lands in your repo, and the rest.
 
 <Accordion title="Does Frizz run its own agent or model?">
 
-No. It drives Claude Code, Codex or an ACP agent under the account you are signed in to on your machine: your subscription, your rate limits, your settings. Frizz runs its own pinned copy of Claude Code and Codex — the exact build it was tested against — rather than whichever version is on your PATH. Set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another one.
+No. It drives Claude Code, Codex or an ACP agent under the account you are signed in to on your machine: your subscription, your rate limits, your settings. Its own small jobs — naming a thread, its status line, choosing an effort for auto, reading a schedule from a prompt — are short calls on that same Claude sign-in, and **Settings → Background summaries** turns them all off. Frizz runs its own pinned copy of Claude Code and Codex — the exact build it was tested against — rather than whichever version is on your PATH. Set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another one.
 
 </Accordion>
 
@@ -25,19 +25,19 @@ Nothing. Each thread's agent runs in its own detached background process, indepe
 
 <Accordion title="Does it put junk in my repo?">
 
-Barely. Starting a thread writes no thread file into your repo. All Frizz adds is a `.frizz/` directory holding a scratch folder per thread (empty unless the agent writes something) and a couple of small state files. Everything durable lives outside your checkout — under `~/.frizz/` if you already have one, and otherwise in your platform's data directory (`~/Library/Application Support/Frizz` on macOS, `$XDG_DATA_HOME/frizz` on Linux, LocalAppData on Windows) — so you can delete `.frizz/` and keep every thread and setting. Frizz doesn't touch your `.gitignore`; add `.frizz/` yourself if you don't want it in `git status`.
+Barely. Starting a thread writes no thread file into your repo. All Frizz adds is a `.frizz/` directory holding a scratch folder per thread (empty unless the agent writes something) and a couple of small state files. Everything durable lives outside your checkout — under `~/.frizz/` if you already have one, and otherwise in your platform's data directory (`~/Library/Application Support/Frizz` on macOS, `$XDG_DATA_HOME/frizz` on Linux, LocalAppData on Windows) — so you can delete `.frizz/` and keep every thread and setting. Frizz never touches your `.gitignore`: `.frizz/` ignores itself with a `.gitignore` of its own, so it stays out of `git status`.
 
 </Accordion>
 
 <Accordion title="Do I have to use worktrees?">
 
-No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back; tell your agents what you want in [`FRIZZ.md`](/docs/frizz-md). When an agent does make a worktree, Frizz keeps it in one folder (`.frizz/worktrees` by default, set under **Settings**) and refuses any other path. When you mark the thread done, it removes the worktrees that thread made, unless one still holds uncommitted or unmerged work.
+No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back; tell your agents what you want in [`FRIZZ.md`](/docs/frizz-md). When an agent does make a worktree, Frizz keeps it in one folder (`.frizz/worktrees` by default, set under **Settings → Worktree folder**) and refuses any other path. When you mark the thread done, it removes the worktrees that thread made, unless one still holds uncommitted or unmerged work; **Settings → Remove worktrees when done** turns that off.
 
 </Accordion>
 
 <Accordion title="Can I run it on several repos at once?">
 
-Yes. One Frizz server serves every project on your machine. Run `npx frizz` in any of them and they all appear on the one page, each with its own threads, settings and state.
+Yes. One Frizz server serves every project on your machine. Run `npx frizz` in any of them and each gets its own board, with its own threads, settings and state; **All projects** shows them together.
 
 </Accordion>
 

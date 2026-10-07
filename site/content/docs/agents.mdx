@@ -34,6 +34,10 @@ An ACP agent's models show in the model picker beside it, grouped by provider.
 
 The picker beside the prompt box sets the model and effort for the next thread; **Make default** keeps it. Effort defaults to **auto**: a quick model reads each prompt and picks the level it needs, from low up to max. A running thread's model can be changed from its own prompt box.
 
+## Frizz's own model calls
+
+Frizz brings no model of its own, but it asks one for four small jobs: naming each new thread, a one-line status of what each thread is doing, choosing an effort for **auto**, and reading a schedule out of a prompt. Each is a short call on your own Claude sign-in. **Settings → Background summaries** turns all four off at once: threads are named from your prompt, show no status line, start on a fixed effort, and a prompt is never read for a schedule.
+
 ## Permissions
 
 New Claude Code threads launch in **Auto** permission mode: safe actions run, and risky ones ask you to approve them in the thread. **Bypass** never asks, so nothing waits on you and nothing is checked either. Set it under **Settings**, or per thread beside its model.

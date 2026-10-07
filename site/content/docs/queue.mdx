@@ -15,12 +15,13 @@ The queue is strict about what earns a card, which keeps it a real to-do list. A
 
 ## The bands
 
-Threads sit in four bands down the page:
+Every thread is in exactly one of five bands. A project's board names them, and Pinned, Queue and Running never fold.
 
 | Band | What is in it |
 | --- | --- |
-| **Queue** | Threads at rest that need you. Each card shows how long it has waited. |
-| **Running** | Threads whose agents are working right now. |
+| **Pinned** | Threads you pinned, whatever they are doing, until you unpin them. |
+| **Queue** | Threads at rest that need you, or stopped on a permission prompt. One row per card, each with how long it has waited. |
+| **Running** | Threads whose agents are working right now, however long they go quiet. |
 | **Snoozed** | Threads you parked, and threads waiting on something outside — a PR, an issue, a timer, the next run of a [schedule](/docs/schedules). |
 | **Done** | Threads you marked done. Reply to one to pick it back up. |
 
@@ -31,7 +32,3 @@ The queue runs oldest first by default, so you cycle through everything; **Setti
 ## Working it
 
 <kbd>j</kbd> and <kbd>k</kbd> walk the cards, <kbd>r</kbd> replies, <kbd>d</kbd> marks done and opens the next, and <kbd>s</kbd> snoozes. See [keyboard shortcuts](/docs/keyboard) for the rest.
-
-## Todos
-
-Not ready to start something? Press <kbd>⌘</kbd><kbd>Shift</kbd><kbd>Enter</kbd> in the new-thread box, or the button beside Send, to save the prompt as a todo. It waits in the queue with no agent behind it until you send it, on the model you picked when you wrote it.

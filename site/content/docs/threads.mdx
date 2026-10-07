@@ -19,7 +19,11 @@ While an agent is working, Frizz keeps the machine from idle-sleeping, so an ove
 
 ## Sub-agents
 
-A worker can dispatch **sub-agents** for independent prongs of its task. Frizz binds each one back to its parent, so the fan-out shows under the parent's card, and a queued parent can be snoozed until all of them return.
+A worker can dispatch **sub-agents** for independent prongs of its task. Frizz binds each one back to its parent, so the fan-out lists under the parent on its board and its card. A parent waiting on them wakes as each one returns, and a queued parent can be [snoozed](/docs/snooze#until-its-sub-agents-return) until all of them are back.
+
+## Names and status lines
+
+Each new thread gets a short name, its [handle](/docs/handles), which never changes once shown. While a thread works, a one-line status says what it is doing; on a board it shows when you point at the row. Both are written by a quick model on your Claude sign-in, and **Settings → Background summaries** turns them off: threads are then named from your prompt or by their agent, with no status line.
 
 ## Scratch directory
 

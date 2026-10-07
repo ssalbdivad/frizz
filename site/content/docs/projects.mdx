@@ -1,17 +1,27 @@
 ---
 title: Projects
-description: Every directory you run Frizz in, served by one server on one page.
+description: Every directory you run Frizz in, each with its own board, served by one server.
 ---
 
-Every directory you run `npx frizz` in becomes a **project**. Frizz is a single server: one on your machine serves every project, on one page at `http://127.0.0.1:9393/`. Running it in a second repo adds that project to the server already running rather than starting another.
+Every directory you run `npx frizz` in becomes a **project**. Frizz is a single server: one on your machine serves every project, and running it in a second repo adds that project to the server already running rather than starting another.
 
-<Shot src="/img/projects.png" width={1760} height={1100} alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the ready cards from every project are queued on the right." />
+## A board per project
 
-## All projects, or one
+Each project has its own **board** at `/project/<name>`: its threads under the five named [bands](/docs/queue#the-bands), its cards beside them, and a prompt box that starts threads in it. A working thread's status shows when you point at it, and a thread's sub-agents list under it. `npx frizz` in a project opens its board, and a bare `http://127.0.0.1:9393/` opens whichever view this browser showed last.
 
-The page's title, top-left above the prompt box, switches between **All projects** and a single project. Focused on one, the list, the queue and new threads are all that project's. <kbd>⌥</kbd><kbd>↑</kbd> and <kbd>⌥</kbd><kbd>↓</kbd> step between projects from anywhere.
+The switcher above the prompt box moves between projects and counts each one's queued and running threads. <kbd>⌥</kbd><kbd>↑</kbd> and <kbd>⌥</kbd><kbd>↓</kbd> step between projects from anywhere, and <kbd>⌘</kbd><kbd>K</kbd> jumps to any of them.
 
-A project's snoozed and done threads show as small counts on its row; click the row to list them in place. Drag rows to reorder projects.
+## All projects
+
+**All projects**, at `/all`, is the switcher's first choice. It lists every project with the threads in flight under each, and every waiting card beside them, never interleaved. Each row still says its band by its mark: a pin, a rest time, a spinner.
+
+<Shot src="/img/projects.png" width={1760} height={1100} alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the cards from every project are queued on the right." />
+
+A project's snoozed and done threads are small counts on its row; click one to list them in place. Click the row to fold the project away, and drag rows to reorder projects.
+
+## Project sidebar
+
+To keep every project in view, switch on **Settings → Project sidebar**: a column of project icons down the left edge, each with its queue and running counts. Click an icon to open that project's board. It is off by default.
 
 ## What becomes a project
 
@@ -19,7 +29,7 @@ A repository (`.git`, `.jj`, `.hg`, `.svn`), or a folder with a `package.json`, 
 
 ## Home
 
-Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the prompt box's project picker. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**.
+Work that belongs to no project yet — cloning a repository, a question about your machine — starts in **Home**, the last choice in the project switcher. Its agents run in your home folder, or in the folder you set under **Settings → Home folder**.
 
 ## Project instructions
 
