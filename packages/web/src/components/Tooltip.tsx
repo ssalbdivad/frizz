@@ -27,9 +27,10 @@ export function Tooltip({
   label: string
   children: ReactNode
   side?: "top" | "right" | "bottom" | "left"
-  /** Force it shut without unmounting the trigger — for a trigger being dragged, where the pointer is
-   *  necessarily inside the thing it is moving and a delayDuration-0 tooltip would open on grab and
-   *  chase it. Unmounting the wrapper instead would destroy the element holding pointer capture. */
+  /** Force it shut without unmounting the trigger — the project rail uses this while a square is
+   *  being dragged, where the pointer is necessarily inside the thing it is moving and a
+   *  delayDuration-0 tooltip would open on grab and then chase the square. Unmounting the wrapper
+   *  instead would destroy the element holding pointer capture, mid-drag. */
   disabled?: boolean
   /** Lets help controls remain available on touch-only, narrow viewports. */
   clickable?: boolean

@@ -4847,10 +4847,21 @@ export const Settings = z.object({
   // thread's row records the concrete level that call chose, so no runtime ever sees "auto".
   effort: z.enum(["auto", "low", "medium", "high", "xhigh", "max", "ultra", "ultracode"]).optional(),
   notifications: z.boolean(),
-  // There is no `projectRail` key any more. It toggled a permanent column of project icons down the
-  // left edge until 2026-09-30, when the All projects view and per-tab notifications superseded it.
-  // Settings is a non-strict object, so a stored `projectRail` is stripped the moment an old blob
-  // parses — no migration (server/settings.test.ts pins that).
+  /**
+   * The permanent column of project icons. OFF by default, on purpose.
+   *
+   * A rail of every project on the machine is a standing invitation to leave the thread you are in —
+   * "just too tempting" (upstream maintainer 2026-08-06). Frizz's home is one board; All projects is a
+   * page you go to, not furniture you sit beside. Hidden, the way back is a breadcrumb in the status bar,
+   * which costs a click exactly when you meant to switch and nothing when you did not.
+   *
+   * Machine-level: which chrome you want is a property of the person, not the repo.
+   *
+   * The fork removed it on 2026-09-30, when All projects was the home and the rail a third door onto
+   * it, and restored upstream's on 2026-10-06, when a project's board became the default view again
+   * (web components/ProjectRail.tsx). A blob saved in between has no key, and loads as the default.
+   */
+  projectRail: z.boolean(),
   /**
    * Where a prompt that belongs to NO project runs — the prompt box's "Home" target, for work like
    * cloning a repository that has no project yet. A folder path as the operator typed it (`~` and
@@ -4971,7 +4982,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "homeFolder", "worktreeDir", "removeWorktreesOnDone", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
 
 /** Whether Frizz asks Claude for names, status lines, auto effort and schedule readings (Settings
  *  `backgroundSummaries`). On unless the human turned it off: an absent key, an older server's
@@ -7405,6 +7416,24 @@ export const ProjectCard = z.object({
   home: z.literal(true).optional(),
 })
 export type ProjectCard = z.infer<typeof ProjectCard>
+
+/**
+ * One project's rail badge: its queue (`queuedThread`) and its Active band (`activeBandThread`).
+ *
+ * Two numbers rather than their sum because the tooltip splits them, and the spinner reads `running`
+ * alone. A project absent from the map has no board open on this server — no badge, not a zero.
+ *
+ * `asks` is the phone's number, not the rail's: the threads waiting on a human ANSWER (`boardAskThread`,
+ * the board header's "N need you"), a subset of `queued` that leaves out rested handoffs. Upstream's
+ * phone projects list drew it in the accent; the desktop rail does not read it. (The fork's phone list
+ * reads `projectsQueues`, which it already has; the field is kept so the RPC is upstream's.)
+ */
+export const ProjectRailCounts = z.object({
+  queued: z.number().int().nonnegative(),
+  running: z.number().int().nonnegative(),
+  asks: z.number().int().nonnegative(),
+})
+export type ProjectRailCounts = z.infer<typeof ProjectRailCounts>
 
 /** Formats the icon route will serve — a browser renders each of these in an `<img>`. */
 export const PROJECT_ICON_EXTENSIONS = ["png", "svg", "ico", "webp", "jpg", "jpeg", "gif"] as const

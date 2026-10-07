@@ -501,6 +501,37 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .frizz-rail-heartbeat { animation: none; opacity: 1; }
 }
+/* The PROJECT rail's badge ring (ProjectRail.tsx RunningRing) — the sidebar spinner's faint outline and
+   travelling segment, drawn by the moat's own box so it cannot drift off the badge's centre (the SVG it
+   replaced painted 0.375px off; see the component). The background is the ring: a full-strength arc a
+   quarter of the way round over a 35% base of the same ink (the component sets it to the badge's
+   accent), rotated by `--frizz-rail-lap`, over a solid page-colour base so the faint part reads the same
+   over any icon. The badge and its gap shadow, painted above it, cover all but the outer 1.25px, which
+   follows the badge's shape — a circle for one digit, a pill for two. No mask and no inner box: both
+   snapped to whole pixels in Chrome (see the component for the measurements). 1.1s is BoxSpinner's lap, so the rail's badge
+   and the sidebar's rows spin at one tempo. Under reduced motion the segment holds still on its outline:
+   the ring is the signal, the motion only emphasises it. */
+@property --frizz-rail-lap {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+.frizz-rail-badge-ring {
+  background:
+    conic-gradient(
+      from var(--frizz-rail-lap),
+      currentColor 0 24%,
+      color-mix(in srgb, currentColor 35%, transparent) 24% 100%
+    ),
+    var(--color-bg);
+  animation: frizz-rail-badge-lap 1.1s linear infinite;
+}
+@keyframes frizz-rail-badge-lap {
+  to { --frizz-rail-lap: 360deg; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .frizz-rail-badge-ring { animation: none; }
+}
 @keyframes frizz-live-pulse {
   50% { opacity: 0.62; box-shadow: 0 0 0 2px color-mix(in srgb, var(--live-dot) 14%, transparent); }
 }
@@ -1739,6 +1770,30 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
     transition: transform 200ms cubic-bezier(0.4, 0, 0.2, 1),
                 filter 200ms cubic-bezier(0.4, 0, 0.2, 1);
   }
+}
+
+/* The project rail's scrolling band. A 57px column cannot spend 8-15px of itself on a scrollbar
+   track, so the track is hidden and a FADE says what it would have said. Without the mask a rail of
+   29 projects clips hard against the divider and reads as the end of the list rather than the middle
+   of it. The mask is unconditional — at the top of the scroll the first 10px fade into the rule above
+   them, which costs nothing, and a JS-driven conditional mask would repaint on every scroll frame. */
+.frizz-rail-scroll {
+  scrollbar-width: none;
+  /* BOTTOM ONLY. A symmetric fade dimmed the top of the FIRST square permanently — it sits flush
+     against the band's top edge — and a gradient darkening the top of a tile reads as a shadow
+     falling on it, which is exactly what it was mistaken for. Nothing is needed up there anyway: the
+     divider rule above already says where the list begins, so a hard clip there reads as an edge
+     rather than as truncation. The bottom genuinely runs under the add button and still fades. */
+  --rail-fade: 14px;
+}
+/* Only while there is genuinely more below. Against the true end of the list a fade is not a hint,
+   it is a dimmed square — the same artifact, at the other end, as the top fade that read as a shadow
+   falling on the first icon. ProjectRail sets the attribute from the band's own scroll geometry. */
+.frizz-rail-scroll[data-overflowing] {
+  mask-image: linear-gradient(to bottom, #000 calc(100% - var(--rail-fade)), transparent 100%);
+}
+.frizz-rail-scroll::-webkit-scrollbar {
+  display: none;
 }
 
 /* THE FULLSCREEN DOOR'S VIEW TRANSITION, both directions. Both halves of the door — the drawer menu's

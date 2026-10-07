@@ -5,11 +5,11 @@ import { log as frizzLog } from "./logging.ts"
 //
 // Tenants activate LAZILY: `routeToTenant` opens a project the first time a request addresses it, so
 // a project nobody has visited since boot has no board. That is cheap and it was the right default —
-// but a project's queue is a BOARD FACT (All projects, `projectsQueues`, reads it off each open
-// project's snapshot), so the consequence the operator actually experienced was having to click into
-// every project before it would say how many threads were waiting (2026-08-26: "I currently need to
-// click into every project before the badge shows up with the number of rested threads!"). A cue you
-// have to visit each project to see is not a cue.
+// but a project's queue is a BOARD FACT (All projects, `projectsQueues`, and the rail's badges,
+// `projectsRailCounts`, read it off each open project's snapshot), so the consequence the operator
+// actually experienced was having to click into every project before it would say how many threads
+// were waiting (2026-08-26: "I currently need to click into every project before the badge shows up
+// with the number of rested threads!"). A cue you have to visit each project to see is not a cue.
 //
 // So the server opens the rest of them itself, once, shortly after it starts serving. Three facts make
 // that affordable rather than reckless, and they are the whole argument for doing it this way:

@@ -50,6 +50,7 @@ const root = path.dirname(here);
 const NEEDS_REAL_STACK = [
   "packages/web/src/components/filePanelStack.e2e.test.ts",
   "packages/web/src/lib/projectSwitch.e2e.test.ts",
+  "packages/web/src/lib/projectRail.e2e.test.ts",
   "packages/web/src/App.firstPaint.e2e.test.ts",
   "packages/web/src/components/overlayAccessibility.e2e.test.ts",
   "packages/web/src/components/ui/Menu.e2e.test.ts",

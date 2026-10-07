@@ -28,6 +28,20 @@ async function launch(query = "") {
 const readWrites = (page: import("puppeteer").Page) =>
   page.evaluate(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.map((w) => ({ ...w })))
 
+// The Off of the Desktop notifications row, found by its field's label: other rows have an Off|On pair
+// too, and the first of them (Project sidebar) already starts Off, so its click writes nothing.
+function clickNotificationsOff() {
+  const off = [...document.querySelectorAll("button")].find((b) => {
+    if (b.textContent?.trim() !== "Off") return false
+    for (let el = b.parentElement; el; el = el.parentElement) {
+      if (el.textContent?.trimStart().startsWith("Desktop notifications")) return true
+    }
+    return false
+  })
+  if (!off) throw new Error("no Off button in the Desktop notifications row")
+  off.click()
+}
+
 test("the drawer offers no Save or Cancel — a toggle writes on the click", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
@@ -36,12 +50,9 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
     )
     assert.ok(!buttons.some((label) => /^(Save|Saving…|Cancel)$/.test(label)), `no Save/Cancel button: ${buttons.join("|")}`)
 
-    // Desktop notifications: Off (the first Off|On pair; the fixture starts it On, and turning it off asks
-    // the browser for nothing). One discrete intent, so it must be on the wire without a debounce to wait out.
-    await page.evaluate(() => {
-      const off = [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Off")!
-      off.click()
-    })
+    // Desktop notifications: Off (the fixture starts it On, and turning it off asks the browser for
+    // nothing). One discrete intent, so it must be on the wire without a debounce to wait out.
+    await page.evaluate(clickNotificationsOff)
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
 
     const writes = await readWrites(page)
@@ -65,9 +76,7 @@ test("the drawer offers no Save or Cancel — a toggle writes on the click", { s
 test("a replayable refusal is replayed until it lands, and says so meanwhile", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch("?retryableFailures=1")
   try {
-    await page.evaluate(() => {
-      [...document.querySelectorAll("button")].find((b) => b.textContent?.trim() === "Off")!.click()
-    })
+    await page.evaluate(clickNotificationsOff)
     await page.waitForFunction(() => (window as unknown as { __settingsWrites: Write[] }).__settingsWrites.length === 1, { timeout: 2000 })
     // While the retry is pending the header owns up to it rather than implying the change was stored.
     assert.match(await page.evaluate(() => document.querySelector("header")!.textContent ?? ""), /Couldn't save/)
