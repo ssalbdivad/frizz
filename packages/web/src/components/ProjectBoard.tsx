@@ -37,6 +37,11 @@
 //
 // A THREAD'S SUB-AGENTS ARE ROWS under it here (Sidebar.tsx SubAgentRows), as upstream drew them; All
 // projects keeps the count on the row.
+//
+// A WORKING ROW'S STATUS IS A HOVER here (Sidebar.tsx RowStatusTip: the title, after a short rest, and
+// the state glyph's tip), with only its task clock on the line; All projects keeps it inline. Colin's
+// call (standup 2026-10-01: always-visible status lines are too dense for a sidebar), taken for the board
+// when it became the default view (2026-10-06).
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Ellipsis } from "lucide-react"
 import { useNavigate } from "react-router"
@@ -163,6 +168,8 @@ export function ProjectBoard({
           band={band as BandKey | undefined}
           held={slot.held}
           subAgentRows
+          // A working row's status is a hover here, inline on All projects (Sidebar.tsx RowStatusTip).
+          statusOnHover
         />
         {band !== "external" && <SubAgentRows t={t} scope={scope} />}
       </Fragment>

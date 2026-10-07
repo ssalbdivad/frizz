@@ -23,6 +23,7 @@ export function Tooltip({
   clickable = false,
   multiline = false,
   disabled = false,
+  delay,
 }: {
   label: string
   children: ReactNode
@@ -37,6 +38,9 @@ export function Tooltip({
   /** Preserve `\n` in the label as real line breaks (whitespace-pre-line) — for multi-row labels like
    *  the quota breakdown. Default (whitespace-normal) collapses newlines to spaces, as before. */
   multiline?: boolean
+  /** Open only after the pointer RESTS this long (ms), over the provider's instant default — for a tip on
+   *  a large target the pointer crosses on its way elsewhere, like a whole row's title. */
+  delay?: number
 }) {
   const whitespace = multiline ? "whitespace-pre-line" : "whitespace-normal"
   const [open, setOpen] = useState(false)
@@ -102,7 +106,7 @@ export function Tooltip({
   }
 
   return (
-    <RT.Root open={open && !disabled} onOpenChange={setOpen}>
+    <RT.Root open={open && !disabled} onOpenChange={setOpen} delayDuration={delay}>
       <RT.Trigger asChild>{trigger}</RT.Trigger>
       <RT.Portal>
         <RT.Content

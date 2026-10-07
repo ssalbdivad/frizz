@@ -107,8 +107,8 @@ export interface RowScope {
 // board passes `subAgentRows` so the count is not said twice. Its TERMINALS get no row and no mark
 // (ThreadTerminals.tsx): the status dot, the queue and the thread's own strip already say everything one
 // could (a title-trailing terminal glyph was dropped 2026-09-30 as noise).
-export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false, subAgentRows = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean; subAgentRows?: boolean }) {
-  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} subAgentRows={subAgentRows} />
+export function RailRow({ t, active, open = false, restedAge = false, scope, cardKey, band, held = false, subAgentRows = false, statusOnHover = false }: { t: ThreadView; active: boolean; open?: boolean; restedAge?: boolean; scope: RowScope; cardKey?: string; band?: BandKey; held?: boolean; subAgentRows?: boolean; statusOnHover?: boolean }) {
+  return <ThreadRow t={t} active={active} open={open} restedAge={restedAge} scope={scope} cardKey={cardKey} band={band} held={held} subAgentRows={subAgentRows} statusOnHover={statusOnHover} />
 }
 
 // A BAND'S HEADER — its glyph, its NAME and its count, over its rows. ONE source of truth for every band
@@ -299,6 +299,7 @@ export const ThreadRow = memo(function ThreadRow({
   band,
   held = false,
   subAgentRows = false,
+  statusOnHover = false,
 }: {
   t: ThreadView
   active?: boolean
@@ -320,6 +321,9 @@ export const ThreadRow = memo(function ThreadRow({
   /** Its sub-agents are rows of their own under it (a project's board, SubAgentRows), so it draws no
    *  count of them. */
   subAgentRows?: boolean
+  /** A working thread's status shows on HOVER, not inline after its name (a project's board; see
+   *  RowStatusTip). Its task clock stays at the right edge either way. */
+  statusOnHover?: boolean
 }) {
   const foreign = t.foreign === true
   // Snoozed rows are uniformly grayed as a whole; provisional titles retain their local dim treatment.
@@ -344,6 +348,9 @@ export const ThreadRow = memo(function ThreadRow({
   const nowMs = useNowMs()
   const elapsed = statusElapsed(t, nowMs)
   const working = elapsed && t.statusLine ? { status: t.statusLine.trim(), elapsed } : undefined
+  // Inline on All projects; on a project's board, a hover (statusOnHover, RowStatusTip).
+  const inlineStatus = working && !statusOnHover ? working.status : undefined
+  const hoverStatus = working && statusOnHover ? working.status : undefined
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
   // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
@@ -366,7 +373,11 @@ export const ThreadRow = memo(function ThreadRow({
   // ONE EXCEPTION, ON THE SAME LINE: a WORKING thread's status, in grey after its name, with its task clock
   // at the right edge (maintainer 2026-09-29: "it shouldn't show on hover — it should display in grey text
   // next to the name of the thread inline", short enough to fit). It costs no line, only rows that are
-  // spinning carry it, and it truncates before the name gives up a character.
+  // spinning carry it, and it truncates before the name gives up a character. That is ALL PROJECTS. On a
+  // PROJECT'S BOARD (`statusOnHover`) the status is a hover again and only the clock stays on the line:
+  // Colin's call (standup 2026-10-01: always-visible status lines are too dense for the sidebar, put them
+  // in hover states, and the status symbol's hover is wasted on bare labels), taken for the board when it
+  // became the default view (2026-10-06). See RowStatusTip.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
@@ -409,7 +420,7 @@ export const ThreadRow = memo(function ThreadRow({
         <span data-xq-indicator className="w-4 h-[19px] shrink-0 flex items-center justify-center">
           {/* An uncheckable row draws its check in the overlay button below instead — a button cannot
               nest inside this one — so the column is held empty here to keep the title where it is. */}
-          {!uncheckable && <ThreadIndicator t={t} />}
+          {!uncheckable && <ThreadIndicator t={t} status={hoverStatus} />}
         </span>
         <span className="min-w-0 flex-1 flex flex-col">
           {/* items-BASELINE, not items-center: the rest time is a smaller type size sitting beside the
@@ -424,17 +435,19 @@ export const ThreadRow = memo(function ThreadRow({
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
               {/* With a working status beside it the title keeps its whole width (and wraps if it must)
                   and the status truncates into what is left; without one the title fills the line. */}
-              <span className={`min-w-0 break-words text-[13px] leading-[19px] ${working ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
-                <TitleWithTrailers title={displayTitle(t)}>
-                  {/* A schedule's run, or its next run: the repeat glyph, before the provider (ScheduleMark). */}
-                  {t.schedule && <ScheduleMark schedule={t.schedule} className="ml-1" />}
-                  <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                </TitleWithTrailers>
-              </span>
-              {working && (
-                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-none text-muted-70" title={working.status}>
+              <RowStatusTip status={hoverStatus}>
+                <span data-rail-status-hover={hoverStatus === undefined ? undefined : ""} className={`min-w-0 break-words text-[13px] leading-[19px] ${inlineStatus ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
+                  <TitleWithTrailers title={displayTitle(t)}>
+                    {/* A schedule's run, or its next run: the repeat glyph, before the provider (ScheduleMark). */}
+                    {t.schedule && <ScheduleMark schedule={t.schedule} className="ml-1" />}
+                    <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
+                  </TitleWithTrailers>
+                </span>
+              </RowStatusTip>
+              {inlineStatus && (
+                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-none text-muted-70" title={inlineStatus}>
                   <TitleStrut />
-                  {working.status}
+                  {inlineStatus}
                 </span>
               )}
             </span>
@@ -847,19 +860,40 @@ function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry
   )
 }
 
+// ── the status hover (a board's working rows) ────────────────────────────────────────────────────
+
+// A WORKING THREAD'S STATUS, ON HOVER — a project's board only (ThreadRow `statusOnHover`); All projects
+// keeps it inline. Pointing at the TITLE shows it after a short rest, and so does the state glyph's own
+// tip, under the state (ThreadIndicator `status`): Colin's suggestion was the glyph, whose hover "is
+// currently wasted on simple labels like 'done' or 'needs your input'" (standup 2026-10-01), and the fork
+// learned on 2026-09-29 (6dbe4e27) that a 16px glyph alone is a target almost nobody finds, so the title,
+// a target the size of the row, carries it too. The delay keeps a pointer sweeping down the list from
+// flashing a tip per row it crosses. The task clock is not in the tip: it stays on the line.
+const ROW_STATUS_TIP_DELAY_MS = 350
+
+function RowStatusTip({ status, children }: { status: string | undefined; children: ReactElement }) {
+  if (!status) return children
+  return (
+    <Tooltip label={status} side="right" delay={ROW_STATUS_TIP_DELAY_MS}>
+      {children}
+    </Tooltip>
+  )
+}
+
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
 // Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
 // the tooltip trigger (a real DOM node Radix can ref).
-export function ThreadIndicator({ t }: { t: ThreadView }) {
+export function ThreadIndicator({ t, status }: { t: ThreadView; status?: string }) {
   // No steer special-case here: the glyph is derived from `t` alone, by the same decision that bands the
   // row. The project list overlays a just-sent steer onto the thread before it gets here (lib/listBands.ts
   // listOverlay), so `t` already reads as running and the ordinary derivation returns the spinner. When this
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's STATUS is not here: a working row shows it inline after its name (ThreadRow).
-  const tip = stateTip
+  // The thread's STATUS is here only where the row does not show it inline (a project's board, ThreadRow
+  // `statusOnHover`): under the state, as the 2026-09-29 version had it. On All projects it is inline.
+  const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
   // weight band) instead of against a reconstruction that can drift from the real thing.
