@@ -2,6 +2,7 @@ import { parse as parseYaml } from "yaml"
 import { z } from "zod"
 import { InteractionLifecycle, InteractionOpaqueId, InteractionRevision, InteractionThreadSlug } from "./interactions.ts"
 import { ThreadSlug } from "./thread-slug.ts"
+import { insideCodeFence } from "./code-fences.ts"
 import { ProjectSchedules, ThreadScheduleRef } from "./schedules.ts"
 import { formatDeadlineLeft, ThreadDeadlineView } from "./deadline.ts"
 import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorReviewTarget, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
@@ -5767,8 +5768,6 @@ export function expandUserCommand(command: Pick<UserCommand, "name" | "body">, a
 // A `/name` token at a word boundary, ending before whitespace or trailing sentence punctuation — the
 // composer's tint rule (web lib/slashCommands.ts SLASH_TOKEN), so what is tinted is what expands.
 const USER_COMMAND_TOKEN = /(^|\s)\/([^\s/@]+?)(?=[.,;!?)]*(?:\s|$))/gu
-// Code the human quoted is not an invocation: fenced blocks and inline spans are blanked before the scan.
-const QUOTED_CODE = /```[\s\S]*?(?:```|$)|`[^`\n]*`/g
 // A command referenced MID-PROMPT rides after the prose as a block of its own. The leading wrapper
 // opens the text; these never do, so a reader tells the two apart by position.
 const USER_COMMAND_REFERENCE = /\n\n<slash-command name="[^"]+">\n[\s\S]*?\n<\/slash-command>/g
@@ -5783,11 +5782,13 @@ export function expandUserCommandDraft(draft: string, commands: readonly Pick<Us
   const byName = new Map(commands.map((c) => [c.name, c]))
   const lead = /^\s*\/([^\s/]+)(?:[ \t]+([\s\S]*))?$/.exec(draft)
   const leading = lead ? byName.get(lead[1]!) : undefined
-  const scanned = draft.replace(QUOTED_CODE, (code) => " ".repeat(code.length))
+  // A name in a fenced code block is quoted, not invoked — the same blocks the composer paints as code
+  // and never tints. (Inline `code` needs no rule: a backtick before the `/` is not a word boundary.)
+  const quoted = insideCodeFence(draft)
   const inline: Pick<UserCommand, "name" | "body">[] = []
-  for (const m of scanned.matchAll(USER_COMMAND_TOKEN)) {
+  for (const m of draft.matchAll(USER_COMMAND_TOKEN)) {
     const command = byName.get(m[2]!)
-    if (!command || command === leading || inline.includes(command)) continue
+    if (!command || command === leading || inline.includes(command) || quoted(m.index! + m[1]!.length)) continue
     inline.push(command)
   }
   if (!leading && inline.length === 0) return undefined

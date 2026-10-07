@@ -10,18 +10,20 @@
 // any boundary — the tint never promises something the send will not do. A USER command
 // (`~/.agents/commands/armstrong.md`) is Frizz's to expand, and it expands anywhere, so it rides as a skill.
 
-import type { ThreadSkill } from "@frizz/shared"
+import { insideCodeFence, type ThreadSkill } from "@frizz/shared"
 
 // A `/` after the start of the draft or whitespace, then the token typed so far, up to the caret. A
 // second `/` or an `@` ends it: `/tmp/foo` is a path and `/a@b` is not a name either.
 const SLASH_BEFORE_CARET = /(?:^|\s)\/([^\s/@]*)$/u
 
-/** The `/` token the caret sits in, if any: where its slash is and what was typed after it. */
+/** The `/` token the caret sits in, if any: where its slash is and what was typed after it. Never in a
+ *  fenced code block, which the box paints as code and nothing in it runs. */
 export function slashQueryAt(prose: string, caret: number | null): { start: number; query: string } | undefined {
   if (caret === null || caret > prose.length) return undefined
   const m = SLASH_BEFORE_CARET.exec(prose.slice(0, caret))
   if (!m) return undefined
-  return { start: caret - m[1]!.length - 1, query: m[1]! }
+  const start = caret - m[1]!.length - 1
+  return insideCodeFence(prose)(start) ? undefined : { start, query: m[1]! }
 }
 
 /** Where the draft's first token starts — the one place a built-in command runs. */

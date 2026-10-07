@@ -40,6 +40,10 @@ test("a command mid-prompt keeps the prose and rides after it", () => {
   assert.equal(both.match(/<slash-command name="commit">/g)!.length, 1)
   assert.equal(userCommandDisplayText(both), "/fix the build, then /commit and /commit")
   assert.equal(expandUserCommandDraft("see /tmp/commit and a/commit and /commits", [commit]), undefined)
-  // Quoted code is not an invocation.
+  // Quoted code is not an invocation: inline code, and every fence the composer paints as code.
   assert.equal(expandUserCommandDraft("the file says `/commit` and\n```\n/commit\n```", [commit]), undefined)
+  assert.equal(expandUserCommandDraft("~~~\nrun /commit\n~~~", [commit]), undefined)
+  assert.equal(expandUserCommandDraft("````md\n```\n/commit\n```\n````", [commit]), undefined)
+  assert.equal(expandUserCommandDraft("``` /commit\nx\n```", [commit]), undefined)
+  assert.ok(expandUserCommandDraft("```\nx\n```\nthen /commit", [commit])?.includes("one-line message"), "after the fence closes it counts")
 })

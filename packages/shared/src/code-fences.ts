@@ -50,3 +50,16 @@ export function insideFence(text: string): (index: number) => boolean {
   if (ranges.length === 0) return () => false
   return (index: number) => ranges.some(([start, end]) => index >= start && index < end)
 }
+
+// The same, counting the fence LINES as well as their interiors — everything a composer paints as code
+// rather than prose. A `/name` on an opener's info string is part of the fence, not an invocation.
+export function insideCodeFence(text: string): (index: number) => boolean {
+  const inside = insideFence(text)
+  return (index: number) => {
+    if (inside(index)) return true
+    const lineStart = text.lastIndexOf("\n", index - 1) + 1
+    const lineEnd = text.indexOf("\n", index)
+    const m = text.slice(lineStart, lineEnd < 0 ? text.length : lineEnd).replace(/\r$/, "").match(FENCE_LINE)
+    return m !== null && !(m[1]![0] === "`" && m[2]!.includes("`"))
+  }
+}

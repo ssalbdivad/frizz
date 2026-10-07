@@ -24,6 +24,8 @@ test("a path, a URL or a slash inside a word never opens it", () => {
   assert.equal(slashQueryAt("https://x", 9), undefined)
   assert.equal(slashQueryAt("/con", null), undefined, "a blurred box has no caret, so no menu")
   assert.equal(slashQueryAt("/con done", 9), undefined, "the caret has left the token")
+  assert.equal(slashQueryAt("```\n/fri", 8), undefined, "a fenced block is code, where nothing runs")
+  assert.deepEqual(slashQueryAt("```\nx\n```\n/fri", 14), { start: 10, query: "fri" })
 })
 
 test("a built-in command is offered only where it runs — as the draft's first token", () => {
