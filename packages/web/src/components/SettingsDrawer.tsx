@@ -29,6 +29,8 @@ import { SlashCommandsField } from "./SlashCommandsField.tsx"
 
 // The periods "Delete done threads" offers, in days — the house duration grammar spells them.
 const RETENTION_DAYS = [1, 7, 30, 90] as const
+// The idle periods "Remove idle worktrees after" offers, in days.
+const IDLE_WORKTREE_DAYS = [1, 3, 7, 14, 30] as const
 
 type NotifPerm = "default" | "granted" | "denied" | "unsupported"
 function currentPerm(): NotifPerm {
@@ -198,6 +200,19 @@ export function SettingsDrawer() {
 
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
             <SlashCommandsField />
+
+            {/* Machine-wide, on by default at 7d (shared Settings `removeIdleWorktreesDays`, server
+                worktree-sweep.ts). */}
+            <SettingsField label="Remove idle worktrees after" help={SETTINGS_HELP.removeIdleWorktreesDays}>
+              <Select
+                variant="bordered"
+                value={String(draft.removeIdleWorktreesDays ?? 7)}
+                onValueChange={(v) => update({ ...draft, removeIdleWorktreesDays: Number(v) })}
+                options={[{ value: "0", label: "Never" }, ...IDLE_WORKTREE_DAYS.map((days) => ({ value: String(days), label: `${days}d` }))]}
+                indicatorPosition="right"
+                ariaLabel="Remove idle worktrees after"
+              />
+            </SettingsField>
 
             <SettingsField label="Delete done threads" help={SETTINGS_HELP.deleteDoneThreadsUntouchedDays}>
               <Select
