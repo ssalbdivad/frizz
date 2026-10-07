@@ -23,6 +23,7 @@ export type PickerThread = Pick<
   | "backend"
   | "runtime"
   | "foreign"
+  | "held"
   | "kind"
   | "state"
   | "needsYou"
@@ -44,7 +45,7 @@ const SPIN_UP_MS = 60_000
 const CODEX_TITLE_SIGNAL_GRACE_MS = 15_000
 const HANDLE_MAX_WORDS = 5
 
-type TitleFields = Pick<PickerThread, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "foreign">
+type TitleFields = Pick<PickerThread, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "foreign" | "held">
 
 /** @frizz/shared thread-handle.ts `threadHandle`: the words lowercased and joined by `-`; none past five words. */
 export function threadHandle(name: string): string | undefined {
@@ -63,6 +64,7 @@ function readableMachineTitle(raw: string): string {
 }
 
 function titleIsProvisional(t: TitleFields, now: number): boolean {
+  if (t.held !== undefined) return false
   if (!t.titleAuto || (t.titleNamed ?? Boolean(t.aiTitle))) return false
   const spawned = Date.parse(t.spawnedAt ?? "")
   if (t.backend === "codex") {

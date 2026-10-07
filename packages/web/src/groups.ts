@@ -31,7 +31,7 @@ import { canRetry } from "./lib/status.ts"
 // Shared listing logic: the queue definition (needsAction), the sidebar's status-keyed sections
 // (sectionThreads), and the interaction-recency ordering both surfaces use.
 
-type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "foreign">
+type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "titleLocked" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "foreign" | "held">
 
 // The title to SHOW for a thread: its HANDLE. A real name ("Shell budgets") renders as the kebab-case
 // handle it makes (`shell-budgets`, @frizz/shared thread-handle.ts), so what the operator reads on the
@@ -186,7 +186,15 @@ const CODEX_TITLE_SIGNAL_GRACE_MS = 15_000
 // pinned id) loses the transcript and never sees an aiTitle — without the bound the row would stick on
 // "Spinning up…" forever (maintainer 2026-07-10). After the window it falls back to the dispatch title.
 // Root cause of the lost transcript is tracked separately ([[session-transcript-drift]]).
-export function titleIsProvisional(t: Pick<ThreadView, "aiTitle" | "titleAuto" | "titleNamed" | "spawnedAt" | "backend" | "runtime">): boolean {
+export function titleIsProvisional(t: Pick<ThreadView, "aiTitle" | "titleAuto" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "held">): boolean {
+  // A HELD thread is not spinning up. No agent has run for it and none is starting: it waits for a message
+  // to start it — its holder's (the `lazy` plugin's box, a schedule's run time) or, for an orphan whose
+  // holder is gone, base's. Its spawn time is when it was WRITTEN DOWN, so the window below read a lazy
+  // thread as "Spinning up a thread…" for its first minute, on the queue card, the drawer, the rail and
+  // the phone, while the drawer under that title said "Not started yet." (QA 2026-10-06). `held` alone is
+  // the test, whoever the holder: the row reads from its first render as it reads after the minute — its
+  // prompt's guess, as plain text, until a message starts it and the window applies to the real start.
+  if (t.held !== undefined) return false
   // A live session title that is not a name yet does not end the placeholder: the minted name is seconds
   // behind it, and showing the session title first would put one text on the card and then another.
   if (!t.titleAuto || (t.titleNamed ?? Boolean(t.aiTitle))) return false
