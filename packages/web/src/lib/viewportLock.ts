@@ -42,7 +42,7 @@
 // whenever the document's size changes (a ResizeObserver: a card that fetched its transcript, an image
 // that loaded — also before paint). A human's own scroll is never fought: it re-takes the anchor.
 import { useEffect, useLayoutEffect, useRef, type RefObject } from "react"
-import { isPageScrollLocked, pageScrollY } from "./pageScrollLock.ts"
+import { isPageScrollLocked, pageScrollY, pinPageAt } from "./pageScrollLock.ts"
 
 // ---- native anchoring: one owner ------------------------------------------------------------------
 
@@ -190,7 +190,7 @@ function scrollPage(delta: number): void {
     // top, and App's unlock restores whatever it reads there — so the correction lands after the drawer
     // closes too, instead of the unlock returning to an offset the content has since moved away from.
     const top = Number.parseFloat(document.body.style.top) || 0
-    document.body.style.top = `${top - delta}px`
+    pinPageAt(top - delta)
     return
   }
   window.scrollBy({ top: delta, left: 0, behavior: "instant" })

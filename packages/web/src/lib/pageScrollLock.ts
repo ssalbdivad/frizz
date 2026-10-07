@@ -23,6 +23,28 @@ export function pageScrollY(): number {
   return Number.isNaN(top) ? window.scrollY : -top
 }
 
+// THE ONE WRITER OF THE PINNED OFFSET (null unpins). It also publishes the offset as
+// `--page-lock-offset`, which the desktop page adds to its `min-height` (AllQueues.tsx), and that is what
+// keeps the left column on screen. The column is `position: sticky`, and sticky can never carry a box
+// past the bottom of its container. Unlocked, the browser clamps scrollY whenever the document shrinks,
+// so the container always reaches the fold; pinned, nothing clamps `top`. Dismiss cards under an open
+// drawer (or let viewportLock move the pin) until the page is shorter than `-top + 100vh`, and the
+// container ends above the fold and drags the column up with it — half the sidebar, or all of it, gone
+// until the drawer closed (reproduced 2026-10-07: scrolled 1200px, shrink the queue under a drawer,
+// aside at top -1200). With the page held at least that tall the container always reaches the fold;
+// the unlock's own scrollTo clamps the offset back to the real document.
+export function pinPageAt(top: number | null): void {
+  const body = document.body
+  const root = document.documentElement
+  if (top === null) {
+    body.style.top = ""
+    root.style.removeProperty("--page-lock-offset")
+    return
+  }
+  body.style.top = `${top}px`
+  root.style.setProperty("--page-lock-offset", `${Math.max(0, -top)}px`)
+}
+
 export function isPageScrollLocked(): boolean {
   return typeof document !== "undefined" && document.body?.style.position === "fixed"
 }

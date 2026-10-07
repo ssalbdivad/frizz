@@ -485,7 +485,9 @@ export function AllQueuesPage() {
   }
 
   return (
-    <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] bg-bg px-5 text-sm text-fg max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
+    // `--page-lock-offset`: under a drawer the page is pinned, and the sticky column needs this box to reach
+    // the fold at any pinned offset, or it rides up out of view (lib/pageScrollLock.ts pinPageAt).
+    <div className="flex min-h-[calc(100vh+var(--page-lock-offset,0px))] justify-center gap-[clamp(28px,3.4vw,52px)] bg-bg px-5 text-sm text-fg max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
       {/* TOP-anchored, where the project board centred its column: a click here changes the list's height (narrowing
           folds every other project to one line), and a centred column moved the prompt box and the row just
           clicked out from under the pointer — by 110-200px with five projects. 48px sets the status row's middle
