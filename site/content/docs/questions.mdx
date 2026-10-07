@@ -7,7 +7,7 @@ When a worker reaches something only you can settle, it asks a question with let
 
 <Shot src="/img/question.png" width={1600} height={558} alt="A question card asking whether the settings store should use SQLite or a JSON file, with option A marked recommended, a row for typing something else, and below it a countdown to the recommended pick." />
 
-There is always a row for writing something else instead. A typed reply sets the open questions aside, and the agent decides whether they still matter.
+There is always a row for writing something else instead. A typed reply leaves the questions open: the agent is told which ones still are, and withdraws any it no longer needs.
 
 ## Several at once
 
@@ -15,7 +15,7 @@ When the answer isn't one thing, a card can take several: check any combination 
 
 ## Nothing stalls on you
 
-A question you leave alone doesn't hold the thread forever. Ten minutes after the agent comes to rest on it, Frizz answers with the recommended option. A countdown under the card shows when, and its <kbd>×</kbd> turns it off for that question.
+A question you leave alone doesn't hold the thread forever. Ten minutes after the agent comes to rest on it, Frizz answers with the recommended option. A countdown under the card shows when, and its <kbd>×</kbd> turns it off for that question. A question you typed a reply past waits for you.
 
 An option that acts outside your machine — posting a comment, merging, publishing, spending — is never picked for you. If every option does, the question waits.
 

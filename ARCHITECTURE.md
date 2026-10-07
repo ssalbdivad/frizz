@@ -166,18 +166,113 @@ shows less without scrolling than upstream's board does, with the project rail o
   agent (sub-agents each get their own), remembered in `claude-broker/<key>.perm-hint` so a restart does not
   repeat it. Never for an ask rule, a hook's ask, or a restrictive mode the operator chose. Codex never asks
   (`approvalPolicy: "never"`); an ACP permission reply cannot carry text, so it has no note.
-- **Human questions are REGISTERED rows (`mcp__frizz__ask`, a `thread_question` row, since 2026-08-27). The free-form ```question fence — a question written into a fence body — is RETIRED for every thread dispatched at or after `QUESTION_FENCE_RETIRED_AT` (2026-09-11, `packages/shared`): there it is prose, never `pendingQuestion`, never a card, never a sign-off; a thread dispatched before it keeps the fence as an ask, because a running worker keeps the contract it was dispatched under (`questionFencesLive`). A registered card renders at the BOTTOM of the rest it belongs to, under every word of the handoff (a placement marker, below, is the one exception), and only the HUMAN'S turn ends that rest — a frizz wake does not, so an ask rides down under the worker's newer handoff until the human replies past it (web/src/lib/questionAnchor.ts `isHumanTurn`, web/src/lib/questionShadow.ts `questionStacks`). The empty PLACEMENT MARKER `` ```question qst_… `` still draws its card where it sits — upstream's rendering, kept (`plans/upstream-superset.md` §3; web/src/lib/questionShadow.ts PLACEMENT) — so the worker contract tells a worker to write none (2026-09-28: "questions should always appear at the bottom of the thread not in the middle any explanation should occur beforehand"). A marker picks which rest its card belongs to: the drawer draws the card in the marker's slot, and a queue card at that rest's end, since its handoff is clamped behind "Show more" (web/src/lib/queueCardQuestions.ts).** The fence was the only medium until 2026-08-27 (two earlier designs — a BLOCKING MCP tool and a frizz-ask CLI + .questions/ sidecars — were built and rejected: fragile timeouts / redundant state); `ask` is non-blocking, and the row outlives the message, a compaction and a restart, which is what the fence could not do (`plans/rest-by-registration.md`). Both reach the same card. A fence that RESTATES a question registered at the same rest draws nothing — the registered card wins, because answering it is what settles the row (web/src/lib/questionShadow.ts; 2026-08-28, one question drawn twice back to back). The fence body is plain
-  markdown; a TRAILING `- A. …` option list + optional `Recommendation:` line are convention-parsed
-  into choice chips (web/src/lib/questionBlocks.ts). A go/no-go is just a two-option question — the
-  old ` ```question approval ` gate (one Approve button that sent on click) was dropped 2026-07-26;
-  its token now degrades to a plain question so legacy transcripts still render.
-  Answers compose into one follow-up numbered by ORIGINAL block position ("Answers:\n2. …"), a ONE-block ask included — the numbering is what the renderer keys on to card the reply up instead of dropping it into a flat bubble. The
-  contract lives in packages/server/src/workerPrompt.ts + cc-worker's SKILL/deny-ask hook — keep all three aligned.
-- **The worker decides where a rest sits — `status:` in the ```awaiting fence, since 2026-10-05 (`needs_input: true|false` from 2026-10-01, still read as an alias).** For a thread dispatched at or after `NEEDS_INPUT_REQUIRED_AT` (`packages/shared`), every rest on running work ends with the fence answering `status: working|watching|needs_input`: `working` and `watching` keep the thread out of the queue while the park is one frizz can honour (every named item live, `for:` not run out — `awaiting.needsInputParkHolds`), `needs_input` queues it while the work keeps running, and no answer queues it and draws a SOURCE 12 correction naming the missing line. That replaced frizz's per-wait guesses — a live sub-agent, a registered `watch`, CI still running on a watched PR each used to excuse the thread on inference — which still apply to threads dispatched before the cut (`board.needsInputQueues` vs the legacy tail of `deriveNeedsYou`). An explicit answer is honoured from ANY thread, because a cold resume re-applies the current worker prompt. A `watch` registration is no longer a sign-off on its own under the new contract: it keeps the wake, the fence carries the answer. A `working` or `watching` rest owes no write-up (worker contract § A QUIET PARK NEEDS NO WRITE-UP).
-- **Out of the queue, the band is a second verdict — `ThreadView.waitStatus` (`board.deriveWaitStatus`, 2026-10-05).** "Not needed" used to mean Active: the client read `awaitingBackground` as motion, so a thread parked for a day on a watcher spun among the running rows and counted on the project rail. Now `working` puts a resting row in Active with a spinner, but only while something it names is MOVING — a live direct sub-agent, a shell the fence names or a `watch` registers, CI running and not held at the approval gate (`ciInMotion`) — and otherwise it reads as `watching`; `watching` parks the row in Snoozed, still, EVEN beside a live sub-agent (the contract hands a long wait to a sub-agent, and the child keeps its own spinner on its own row; this reverses the 2026-07-10 rule for that one case). A fence answering `needs_input: false`, and a legacy fence with neither line, read as `working` while a live sub-agent or moving CI is out and `watching` otherwise — shells included, which is what moved the pre-cut shell watchers out of Active. The field is absent on every other rest, so a queued row never spins (`groups.restIsWorking` is the list's one spin test for an at-rest mark), and a message on its way to the worker keeps its row where it was. `activeBandThread` follows it, and so does every Running count (the switcher's, the phone header's).
-- **Steps only the human can perform ride the ```awaiting fence — `steps:`, since 2026-10-03.** Each `- ` item under the key is read VERBATIM, as `title:` is (YAML cannot hold a step: a backtick cannot open a plain scalar, `: ` starts a mapping, ` #` a comment), and becomes a `{kind: "step"}` hint after every other hint, capped on its own (`AWAITING_STEPS_MAX`, `AWAITING_STEP_VALUE_MAX` in `packages/shared`). Steps NAME THE HUMAN as the wait, so a fence carrying them is a park with no other item and no `for:` (`awaiting.parkIsHonoured`; a `for:` beside steps alone runs to `PR_WATCH_FOR_MAX_MS` and wakes the worker to re-check), and it always queues — `awaitingStatus` reads `needs_input` beside any step, whatever the fence's own `status:` says. The board keeps the resting card on it (`board.hasHumanSteps`, inside `hasDeclaredWait` and the `deriveAwaitingBackground` exceptions). The card (`AwaitingSteps.tsx`, a stratum of `AwaitingBackgroundCard`) is headed by a "To do" kind chip with the worker's `title:`, if any, under it and a rule before the body (`TranscriptCard`'s chip head, 2026-10-05), and draws the steps over one Done button — drawn only while the board's `lastFence` still carries exactly those steps at `turn-idle` (`restingOnSteps`). Done sends an ORDINARY follow-up, the word `Done` (`STEPS_DONE`), through the composer's eager send, and the tailer clears `lastFence` on that user record as on any reply. There is no second verb and no note box: anything else the human has to say goes through the prompt box like any steer (maintainer 2026-10-03: "The user can just send a new steer message in the prompt box if they want."). Nothing is registered, so nothing needs a dispatch cutover: the fence is parsed by whichever server is live. A first cut stored each set as a `thread_question` row behind an `instruct` MCP verb; the maintainer had it moved into the fence (2026-10-03: "I don't think this requires persistently registering it").
-- **A registered question is a sign-off only at the rest that asked it; a later ```awaiting fence names each one still needed under `questions:` (since 2026-10-05).** The ids are lookups (`awaitingQuestions` in `packages/shared`, capped by `AWAITING_QUESTIONS_MAX`), and like `steps:` they name the human: a fence on questions alone is a park with no other item and no `for:`, and `awaitingNeedsInput` is true beside them. The scheduler refuses a fence that leaves an open question unnamed, or names one that is not open (`evalParkIntegrity`, `park:question:` fence ids), and a bare rest carrying a question from an EARLIER rest — one asked before the last user record, which a wake is too — draws `carriedQuestionsNudgeMessage` instead of the generic sign-off nudge (`evalSignoffNudges`). The web never pulls an open card to the newest rest: it stays at the bottom of the rest that asked it until a later fence names it, and then renders at the end of that rest (`questionClaims` / `questionsByAnchor` in `web/src/lib/questionAnchor.ts`). From 2026-08-31 every open card was redrawn at the current rest and any open question refused every park, so an old card superseded whatever the worker had signed off with (maintainer 2026-10-05: "the pending questions that may or may not be relevant kind of supersede how the agent actually signed off"). A question stays open until the human answers or dismisses it or the worker withdraws it with `unask`; Frizz never withdraws one. A message the human types instead of answering changes nothing about it: the router appends a note to the worker's copy naming every open question (`openQuestionsNote`), and the next rest names each one or withdraws it like any later rest. The one thing a typed message does change is Frizz's default answer, which skips a question the human typed past (`questionRepliedPast`).
-- **A wait on another thread's answer takes the ```awaiting fence like every other wait: `threads: [@handle]`.** `message_thread` with `await_reply: true` only REGISTERS the wait — a one-off timer on the asker whose prompt names the thread (`replyWaitPrompt` / `replyWaitOf` in `packages/shared` thread-handle.ts), armed for `AWAITING_FOR_MAX_MS` so it lapses on its own, and cancelled by the answer the instant that thread messages back. The rest that follows ends with a fence naming the thread, whose `for:` is the timeout and whose `status:` answers as for any wait; a rest without one is a bare rest and gets the sign-off nudge, with the `threads:` fence written out (`signoffWaitingNudgeMessage`). The `threads:` list is read verbatim rather than as YAML, because YAML reserves `@`. A name is checked against the asker's armed timers (`thread-mentions.armedTimerKeys`, folded like every handle, slug accepted too): one matching no live await is refused like any dead name, and one whose await the answer cancelled after the rest draws no correction, since the answer is its own wake. The resting card and the full-screen rail row an awaited thread under Threads, by its handle.
+
+## How a thread hands off its state
+
+The worker's final message is the interface. Its last fenced block is the thread's state: the fence
+language (```` ```done ```` or ```` ```awaiting ````) is the state, and the body is the card the human reads
+(`tailer.parseSignalFence`: the last fence wins, and only as the message's final content). A
+registration — `done`, `ask`, `watch` — is a row that outlives the message, a compaction and a restart.
+A wait always takes the awaiting fence, because where the thread sits meanwhile is a fact about this rest.
+Frizz only CHECKS what the worker declared:
+
+- **Park integrity** (scheduler SOURCE 12, `evalParkIntegrity`). An awaiting fence must answer
+  `status:`, name only live items the thread owns, and name every open question. One that does not
+  queues the thread and draws a correction naming the fault, at most `PARK_BUMP_MAX` (3) in a row. An
+  expired `for:` wakes the worker to re-check, uncapped.
+- **The sign-off nudge** (SOURCE 9, `evalSignoffNudges`, `board.signoffNudgeVerdict`). A rest with no
+  fence and no `done` or `ask` of its own gets the protocol back, at most `SIGNOFF_NUDGE_MAX` (2) in a
+  row; a `watch` alone is not a sign-off, and a rest behind a running direct sub-agent waits for the rest
+  its return brings. A bare rest carrying a question from an earlier rest gets
+  `carriedQuestionsNudgeMessage` instead.
+
+**The worker, not Frizz, decides where a rest sits: `status:`** (`awaitingStatus`, `packages/shared`).
+`working` keeps the thread in Running, spinning only while something it names is moving — a live
+sub-agent, a named or watched shell, CI not held at the approval gate (`board.deriveWaitStatus` →
+`ThreadView.waitStatus`). `watching` parks it in Snoozed. `needs_input` queues it while the work runs.
+Either quiet answer holds only while every named item is live and `for:` has not run out
+(`awaiting.needsInputParkHolds`), and owes no write-up. Threads dispatched before
+`NEEDS_INPUT_REQUIRED_AT` keep the older per-wait inferences (the legacy tail of `board.deriveNeedsYou`),
+and `needs_input: true|false` is still read.
+
+The fence's other keys name what it waits on:
+
+- `shells:`, `agents:`, `timers:`, `prs:`, `issues:` — runtime or registration ids. `for:` is capped at a
+  day, at a year on a park naming only PRs and issues, and at 30 minutes on any park naming `agents:`
+  (`awaiting.parkForMaxMs`).
+- `steps:` — acts only the human can perform, read verbatim (`awaitingSteps`). Steps name the human, so
+  the fence needs no other item and no `for:`, and it always queues. The card (`AwaitingSteps.tsx`) draws
+  them over one Done button, which sends the ordinary follow-up `Done`. Nothing is registered.
+- `questions:` — the open questions a later rest still needs (`awaitingQuestions`). They name the human
+  too.
+- `threads:` — threads asked with `message_thread` and `await_reply: true`, read verbatim because YAML
+  reserves `@`. The call only registers the wait: a one-off timer on the asker (`replyWaitPrompt`,
+  `shared/src/thread-handle.ts`), armed for `AWAITING_FOR_MAX_MS` and cancelled the instant the other
+  thread answers. A name that matches no armed wait is refused like any dead name.
+
+**A question is a row with a lifecycle** (`mcp__frizz__ask`, `thread_question`). It is open until the
+human answers or dismisses it or the worker withdraws it with `unask`; Frizz never retracts one by
+omission. A question is the sign-off of the rest that asked it, and every later rest names it under
+`questions:` or withdraws it. A message the human types instead of answering changes nothing: the router
+appends a note to the worker's copy naming every open question (`openQuestionsNote`). `ask` refuses to
+re-ask a question the human dismissed, or one the worker withdrew after the human's newest message. On
+the page a card stays at the bottom of the rest that asked it until a later fence claims it, then moves
+to the end of that rest (`questionClaims`, `web/src/lib/questionAnchor.ts`); a wake never moves it. An
+empty placement marker, ```` ```question qst_… ````, draws its card where the marker sits instead
+(`questionShadow.placeQuestions`); the contract tells workers to write none. The free-form question fence
+is prose for every thread dispatched since `QUESTION_FENCE_RETIRED_AT`; an older thread keeps it as an
+ask, its trailing `- A. …` list parsed into choices (`questionBlocks.ts`), and a fence that restates a
+registered question draws nothing.
+
+**Other threads, by handle.** `read_thread` returns another thread's request, status, newest messages
+and edited files, and reaches a sub-agent at `@thread.agent`, returned ones included; it wakes nobody.
+`message_thread` puts a signed message into another open thread's conversation, joining its turn or
+waking it; it never reaches the human, and messages between two threads are capped per hour.
+
+The contract that teaches all of this is `packages/server/src/workerPrompt.ts`, the tool descriptions in
+`cc-worker/bin/frizz-mcp.mjs`, and `cc-worker/hooks/deny-ask.mjs`; keep them aligned.
+
+### Where Frizz acts on a clock or with a model
+
+Each of these departs from "Frizz only checks" on purpose.
+
+- **The 10-minute default answer** (`QUESTION_DEFAULT_AFTER_MS`, scheduler `evalQuestionDefaults`). A
+  question unanswered 10 minutes after its thread rests takes its `recommended` option, delivered marked
+  as Frizz's default. An `external` recommendation (it posts, merges, pushes, publishes or spends) is
+  never taken: the first option that is not is, and with none the question waits. So does a `danger`,
+  `multi` or free-text question, one with no recommendation, and one the human typed past
+  (`questionRepliedPast`). Why: a call the worker could have made should not hold a thread for hours.
+  Off: the countdown's × on the card, per question (`default_off`); a pick or keystroke on the card
+  holds it off for 2 minutes.
+- **The 30-minute check-in on sub-agent parks** (`AGENT_PARK_FOR_MAX_MS`). A park naming `agents:`
+  expires at 30 minutes, and the wake (`parkExpiredWakeMessage`) asks the parent to read and steer its
+  children, ask any decision they surfaced, and re-park with a progress note under the band its last
+  park chose. Why: a long orchestration otherwise shows one stale line for hours. The resting card's
+  "Ask for update" sends it early (`requestParkCheckIn`). Not configurable.
+- **Model-written names and status lines.** A thread is named at dispatch (`thread-names.ts`), and the
+  name, its `@handle`, never changes once shown, so `mcp__frizz__title` lands only on an unnamed thread.
+  Its status line is written at each rest where the conversation moved (`periodic-status.ts`) and,
+  while a turn runs, whenever the work changes task (the live status line, `live-status.ts`), into
+  `ThreadView.statusLine`. Why: a stable name before the worker has oriented, and a current line beside
+  the worker's own sign-off. Off: Settings → Background summaries (see Invariants), or
+  `FRIZZ_THREAD_NAMER=0` and `FRIZZ_LIVE_STATUS=0`.
+- **Per-question answer delivery** (scheduler `evalQuestionAnswers`). Each card is sent the moment the
+  human completes it and delivered mid-turn like a steer; every undelivered answer a pass finds for one
+  thread goes as one message (`mergeAnswerMessages`). Why: the worker starts on the first answer while
+  the human reads the rest. Not configurable.
+
+### Background shells
+
+- **Budgets** (`server/src/shell-budget.ts`, SOURCE 13). A shell ends on a clock only when one was
+  declared: its Bash `timeout`, or `mcp__frizz__extend_shell`, the only way a Codex exec gets one. Past
+  it the worker gets one wake, mid-turn if busy, and the shell is stopped `SHELL_BUDGET_GRACE_MS` (10
+  minutes) later unless extended. With no budget a shell runs until it exits or is stopped; the
+  PreToolUse hook (`cc-worker/hooks/bash-background.mjs`) adds one line of context to an unbudgeted
+  background call.
+- **Stray shells behind a question** (SOURCE 14, `strayShellsMessage`). A question's card hides the
+  thread's live shells, so a rest on a question with shells still running gets one message listing them,
+  once per set of shells. Shells under an armed `watch` are left out, nothing is killed, and it is Claude
+  only, since the remedy is `TaskStop`.
 
 ## Board nomenclature (the maintainer's words — write code, comments and copy in them)
 

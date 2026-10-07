@@ -37,8 +37,8 @@ not a narrative. Open with one of these four tokens, bolded, then the outcome in
 | token | means | sign-off |
 | --- | --- | --- |
 | **Fixed** | done and landed on local `main` | ` ```done ` |
-| **Fixed, except** | landed, but something named is still open | bare rest |
-| **Not fixed** | investigated, nothing landed — say what's next | bare rest |
+| **Fixed, except** | landed, but something named is still open | `mcp__frizz__ask` about it, or ` ```awaiting ` on what is still running |
+| **Not fixed** | investigated, nothing landed — say what's next | `mcp__frizz__ask` about the next step |
 | **Needs you** | blocked on a human-owned call, or on an act only the human can perform | `mcp__frizz__ask` for a call, then rest normally; an ` ```awaiting ` fence with `steps:` for an act |
 
 **None of these apply while the instruction still has parts left — then you do not write up at all,
