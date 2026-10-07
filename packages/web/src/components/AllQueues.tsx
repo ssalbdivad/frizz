@@ -44,7 +44,7 @@ import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
-import { readProjectsQueues, readStartedAt } from "../lib/projectsQueuesRead.ts"
+import { projectsQueuesQuery, readStartedAt } from "../lib/projectsQueuesRead.ts"
 import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
@@ -159,8 +159,7 @@ export function AllQueuesPage() {
   // project's alone and the prompt box is its; showing All projects, they are every project's.
   const view = usePageView()
   const queues = useQuery({
-    queryKey: ["projectsQueues"],
-    queryFn: readProjectsQueues,
+    ...projectsQueuesQuery,
     // Only All projects polls every project every few seconds (OTHER_PROJECTS_POLL_MS says why). Another
     // observer of the same query can still ask for more: Settings' cross-project notifications keep their
     // own 3s cadence (lib/crossProjectNotify.ts), because a notification is the one reading of other

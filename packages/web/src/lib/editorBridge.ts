@@ -20,7 +20,7 @@ import { phoneLayout } from "./mobile.ts"
 import { homeHref, projectViewHref, viewAt } from "./pageView.ts"
 import { basename } from "./paths.ts"
 import { prefs } from "./prefs.ts"
-import { readProjectsQueues } from "./projectsQueuesRead.ts"
+import { projectsQueuesQuery, readProjectsQueues } from "./projectsQueuesRead.ts"
 import { spaNavigate } from "./router.ts"
 import { addContextItem, stagedItems } from "./stagedContext.ts"
 import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
@@ -436,7 +436,7 @@ async function readComposeProjects(): Promise<ComposeProject[] | null> {
         ? queryClient.fetchQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList(), staleTime: 5_000 })
         : rpc.projectsList(),
       queryClient
-        ? queryClient.fetchQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues, staleTime: 5_000 })
+        ? queryClient.fetchQuery({ ...projectsQueuesQuery, staleTime: 5_000 })
         : readProjectsQueues(),
     ])
     return composeProjectsOf(cards as ProjectCard[], queues)

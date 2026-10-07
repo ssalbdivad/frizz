@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 import { useSnapshot } from "valtio"
 import type { ProjectQueue, ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { readProjectsQueues } from "../lib/projectsQueuesRead.ts"
+import { projectsQueuesQuery } from "../lib/projectsQueuesRead.ts"
 import { store } from "../store.ts"
 import { viewAt } from "../lib/pageView.ts"
 import { crossProjectMentionCandidates, mentionCandidates, type MentionCandidate } from "../lib/threadMentions.ts"
@@ -16,7 +16,7 @@ function useCrossProjectQueues(live: boolean): readonly ProjectQueue[] | undefin
   const allProjects = typeof window !== "undefined" && viewAt(window.location.pathname).kind === "all"
   // Not live: subscribed to nothing. An observer that reads no field re-renders on EVERY change to the
   // entry (react-query's tracked props start empty and an empty set means "all"); `[]` means none.
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues, enabled: allProjects && live, staleTime: 5_000, notifyOnChangeProps: live ? undefined : [] })
+  const queues = useQuery({ ...projectsQueuesQuery, enabled: allProjects && live, staleTime: 5_000, notifyOnChangeProps: live ? undefined : [] })
   return allProjects && live ? queues.data : undefined
 }
 

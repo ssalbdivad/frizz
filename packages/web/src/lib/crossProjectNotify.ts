@@ -2,7 +2,7 @@ import { useEffect, useRef, useSyncExternalStore } from "react"
 import { useQuery } from "@tanstack/react-query"
 import { queueUrgency, queuedThread, type ProjectQueue, type ThreadView } from "@frizz/shared"
 import { rpc } from "../api/rpc.ts"
-import { readProjectsQueues } from "./projectsQueuesRead.ts"
+import { projectsQueuesQuery } from "./projectsQueuesRead.ts"
 import { notify } from "../api/board-stream.ts"
 import { store } from "../store.ts"
 
@@ -119,8 +119,7 @@ function useTabHidden(): boolean {
 export function useCrossProjectNotifications(enabled: boolean): void {
   const hidden = useTabHidden()
   const queues = useQuery({
-    queryKey: ["projectsQueues"],
-    queryFn: readProjectsQueues,
+    ...projectsQueuesQuery,
     refetchInterval: hidden ? POLL_MS : false,
     refetchIntervalInBackground: enabled,
     enabled,

@@ -1,4 +1,5 @@
 import type { ProjectQueue } from "@frizz/shared"
+import { queryOptions, replaceEqualDeep } from "@tanstack/react-query"
 import { rpc } from "../api/rpc.ts"
 
 // THE ONE READ of every project's queue, shared by every `["projectsQueues"]` query so the cache entry
@@ -21,3 +22,35 @@ export async function readProjectsQueues(): Promise<ProjectQueue[]> {
 export function readStartedAt(queues: readonly ProjectQueue[] | undefined): number | undefined {
   return queues && startedAt.get(queues)
 }
+
+/**
+ * react-query's STRUCTURAL SHARING, carrying the read's start across it. The cache never holds the array
+ * a read returned: it holds `replaceEqualDeep(previous, next)` — the PREVIOUS array when nothing changed,
+ * and a fresh copy when anything did. Neither is the array `readProjectsQueues` stamped, so from the
+ * second read that changed anything on, `readStartedAt(queues.data)` answered undefined, for good. Both
+ * of its readers then waited forever for a read they could never see (AllQueues.tsx): a project's queue
+ * the page left — a drawer opened in place on another project's thread, then closed — stayed frozen at
+ * that moment (useDepartedQueue), so a thread woken from anywhere else never drew its card again until a
+ * reload (found 2026-10-06 by scripts/verify-all-queues.mjs, on main too); and a card acted on whose
+ * thread stayed queued stayed hidden instead of coming back after REAPPEAR_MS (useLeavingCards). The
+ * shared result is stamped with the read that produced it. When nothing changed that is the previous
+ * array, re-stamped with the newer start, which is right: the cache now holds what a read that started
+ * then saw.
+ */
+function shareRead(previous: unknown, next: unknown): unknown {
+  const shared = replaceEqualDeep(previous, next)
+  const at = startedAt.get(next as readonly ProjectQueue[])
+  if (at !== undefined && shared !== null && typeof shared === "object") startedAt.set(shared as readonly ProjectQueue[], at)
+  return shared
+}
+
+/**
+ * The options every `["projectsQueues"]` observer and fetch spreads, so the cache entry is always written
+ * through `shareRead`. react-query takes the structural-sharing function from whichever observer's fetch
+ * lands, so one site left on the default would drop the stamp again for everyone.
+ */
+export const projectsQueuesQuery = queryOptions({
+  queryKey: ["projectsQueues"],
+  queryFn: readProjectsQueues,
+  structuralSharing: shareRead,
+})

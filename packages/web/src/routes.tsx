@@ -18,7 +18,7 @@ import { embedded } from "./lib/embed.ts"
 import { useProjectRailVisible } from "./lib/projectRail.ts"
 import type { ProjectCard } from "@frizz/shared"
 import { rpc } from "./api/rpc.ts"
-import { readProjectsQueues } from "./lib/projectsQueuesRead.ts"
+import { projectsQueuesQuery } from "./lib/projectsQueuesRead.ts"
 import { LightboxHost } from "./components/Lightbox.tsx"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
@@ -265,7 +265,7 @@ function usePageResolution(routeSlug: string | undefined): PageResolution {
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   // Which projects this server has open, so All projects binds one that can take a thread. Shared with
   // the page itself (same key), so the page it lands on paints from this read.
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues })
+  const queues = useQuery(projectsQueuesQuery)
   const pickId = useCrossProjectPick()
   useState(() => {
     if (atHome) answerArrival(search)
