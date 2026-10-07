@@ -56,10 +56,10 @@ Work in VS Code, Cursor or Windsurf? [The extension](packages/vscode/README.md) 
 
 <h2 align="center">Features</h2>
 
-Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brings no model of its own, automates none of your workflow, and keeps every opinion it does have in a text file you can edit.
+Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brings no model of its own, automates none of your workflow, and keeps every opinion it does have in a text file you can edit. The only model calls it makes itself — naming threads, a one-line status for each, picking an effort for Auto, reading a schedule out of a prompt — run on your own Claude sign-in, and **Settings → Background summaries** turns all of them off.
 
 - 🗂️ **A task queue, not a sidebar.** Every agent that comes to rest needing you becomes a card. Work the queue top to bottom instead of polling ten terminals.
-- 📁 **Projects.** Every directory you run it in becomes a project, all on one server and one page: every project down the left with its threads, and every card waiting on you beside them.
+- 📁 **Projects.** Every directory you run it in becomes a project, all on one server: one page lists every project with its threads and every card waiting on you, and each project has its own board a click away.
 - 🔌 **Headless.** Every thread's agent runs in its own detached background process. Close the tab, quit the browser, ctrl-c the server, reboot — your threads are all still there when you come back, and Frizz reconnects to the ones still running rather than replaying them from disk.
 - 🤖 **Claude Code, Codex, and any ACP agent.** Pick the agent per thread and run several against the same repo at once. Frizz supports Claude Code and Codex subscriptions — your sign-in, your settings, your skills, driven by a copy of each CLI that Frizz pins and provisions itself — and any agent that speaks the Agent Client Protocol.
 - ⏰ **Schedules.** Type "every weekday at 9am triage new issues" into the prompt box and Frizz reads the schedule out of the words as you type. Each run starts a fresh thread that lands in the queue like any other.
@@ -76,7 +76,7 @@ Frizz is a browser tab, a queue, and the agent CLIs you already pay for. It brin
 
 ### Projects
 
-Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Frizz is one page, at `http://127.0.0.1:9393/`: your projects down the left with the threads in flight under each, and every card waiting on you beside them. A project's snoozed and done threads show as small counts on its row; click the row to list them in place, and drag rows to reorder them. The page's title, top-left above the prompt box, switches between **All projects** and a single project. Focused on one, the list, the queue and new threads are all that project's. ⌥↑/⌥↓ step between projects. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
+Every directory you run `npx frizz` in becomes a project, all served by the one Frizz on your machine. Its home, **All projects** at `http://127.0.0.1:9393/`, lists your projects down the left with the threads in flight under each, and every card waiting on you beside them. A project's snoozed and done threads show as small counts on its row; click one to list them in place, or click the row to fold the project away. To work through one project, open its **board** at `/project/<name>` from the switcher above the prompt box, or with **Focus on this project** in the project's ⋯ menu: its threads under named Pinned, Queue, Running, Snoozed and Done bands, its cards, and a prompt box that starts threads in it. The switcher also shows every other project's queue, running and waiting-on-you counts. A thread opens in a drawer beside the page, and its ⋯ menu can take it fullscreen.
 
 <p align="center">
   <img src="assets/projects.png" alt="The All projects page: billing-worker, marketing-site and acme-api each list their threads on the left, and the ready cards from every project are queued on the right." width="100%">
@@ -110,7 +110,7 @@ When the answer isn't one thing, the same card takes several: check any combinat
 
 When the agent needs you to *do* something it can't — sign in, approve a prompt, press a button — the card lists the steps and a **Done** button that tells it you finished.
 
-Not ready to start something? Press ⌘/Ctrl-Shift-Enter in the new-thread box, or the button beside Send, to save the prompt as a todo instead. It waits in the queue with no agent behind it until you send it.
+Not ready to start something? With the `lazy` Frizz plugin installed (see *Can I add features of my own?* below), press ⌘/Ctrl-Shift-Enter in the new-thread box, or the snail beside Send, to save the prompt as a lazy thread instead. It waits in the queue with no agent behind it until you send it.
 
 ### GitHub
 
@@ -224,7 +224,7 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 <details>
 <summary><b>Does Frizz run its own agent or model?</b></summary>
 
-> No. It drives Claude Code or Codex under the account you are signed in to on your machine. Your subscription, your rate limits, your settings. Frizz runs its own pinned copy of each CLI — the exact build it was tested against — rather than whichever version happens to be on your PATH; set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another one.
+> No. It drives Claude Code or Codex under the account you are signed in to on your machine. Your subscription, your rate limits, your settings. Its own small jobs — naming a thread, its status line, choosing an effort for Auto, reading a schedule from a prompt — are short calls on that same Claude sign-in; switch them all off under **Settings → Background summaries**, and each falls back to doing without. Frizz runs its own pinned copy of each CLI — the exact build it was tested against — rather than whichever version happens to be on your PATH; set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another one.
 
 </details>
 
@@ -245,14 +245,14 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 <details>
 <summary><b>Does it put junk in my repo?</b></summary>
 
-> Barely. Dispatching a thread writes no thread file into your repo — the agent session *is* the thread. All Frizz adds to your working tree is a `.frizz/` directory holding a scratch directory per thread (empty unless the agent writes something in it) plus a couple of tiny hook state files. Everything durable lives outside your checkout, under `~/.frizz/` if you already have one and otherwise in your platform's own data directory (`~/Library/Application Support/Frizz` on macOS, `$XDG_DATA_HOME/frizz` on Linux, LocalAppData on Windows), so you can delete `.frizz/` and keep every thread and setting. Frizz does not touch your `.gitignore`, so add `.frizz/` yourself if you don't want it in `git status`.
+> Barely. Dispatching a thread writes no thread file into your repo — the agent session *is* the thread. All Frizz adds to your working tree is a `.frizz/` directory holding a scratch directory per thread (empty unless the agent writes something in it), a couple of tiny hook state files, and `.frizz/worktrees` once an agent makes a git worktree. Everything durable lives outside your checkout, under `~/.frizz/` if you already have one and otherwise in your platform's own data directory (`~/Library/Application Support/Frizz` on macOS, `$XDG_DATA_HOME/frizz` on Linux, LocalAppData on Windows), so you can delete `.frizz/` and keep every thread and setting. Frizz does not touch your `.gitignore`; `.frizz/` ignores itself with a one-line `.gitignore` of its own, so it stays out of `git status`.
 
 </details>
 
 <details>
 <summary><b>Do I have to use worktrees?</b></summary>
 
-> No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back. Tell your agents what you want in `FRIZZ.md`. When an agent does make a worktree, Frizz keeps it in one folder (`.frizz/worktrees` by default, set under **Settings**) and refuses any other path. When you mark the thread done, Frizz removes the worktrees that thread made, unless one still holds uncommitted or unmerged work. If you run Frizz inside a linked worktree yourself, it keeps that worktree's state separate from its siblings automatically.
+> No. Frizz doesn't own your git workflow and won't create branches or worktrees behind your back. Tell your agents what you want in `FRIZZ.md`. When an agent does make a worktree, Frizz keeps it in one folder — `.frizz/worktrees` in the repository unless you change **Settings → Worktree folder** — and refuses any other path. Marking the thread done removes the ones it made that hold nothing you'd lose (no uncommitted changes, no commits found only on its own branch, no `.env`), unless you switch off **Settings → Remove worktrees when done**. If you run Frizz inside a linked worktree yourself, it keeps that worktree's state separate from its siblings automatically.
 
 </details>
 
@@ -284,6 +284,13 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 </details>
 
 <details>
+<summary><b>Can I add features of my own?</b></summary>
+
+> Yes, as **Frizz plugins**: a folder in Frizz's data directory, `<data>/user-plugins/<id>/`, whose `package.json` carries a `frizzPlugin` manifest. Plugins are your own code with no sandbox, so **Settings → Frizz plugins** lists every one and what it adds, and `FRIZZ_PLUGINS_OFF=1` starts Frizz with none. Lazy threads — a thread written down now and started later, from the snail beside Send — are the first; from a source checkout, `nub plugins/install.ts lazy` installs them at the next restart. A plugin's `.ts` server half needs Node 22.18 or newer.
+
+</details>
+
+<details>
 <summary><b>What platforms does it run on?</b></summary>
 
 > macOS, Linux, and Windows. Windows support landed once the last dependency that had no native Windows build was removed.
@@ -305,7 +312,7 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 
 | Term | What it means |
 | --- | --- |
-| **Project** | A directory you ran Frizz in. One server holds all of them, and one page shows them all; a thread's address names its project, `/all/<name>/thread/<thread>`. |
+| **Project** | A directory you ran Frizz in. One server holds all of them: **All projects** at `/` shows every one, and each has its own board at `/project/<name>`. |
 | **Thread** | One effort, start to finish. Not a chat tab and not a branch. The session *is* the thread — there's no sidecar document to keep in sync, and dispatching doesn't write a file into your repo. |
 | **Worker** | The agent driving a thread: a real Claude Code, Codex or ACP agent process, running as *you*, with your credentials and your CLI config. |
 | **Handle** | A thread's short name, `@port-the-parser`. You and the agents use it to mention, read and message a thread. |
@@ -316,7 +323,7 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 | **Goal** | A standing prompt a thread receives on its own — every time it rests, on a clock, or both — until you switch it off, it reaches its limit, or the agent says it's done. |
 | **Schedule** | A prompt plus a recurrence, in plain words. Each run starts a fresh thread. |
 | **Time limit** | A deadline on a thread that the agent plans around and the card counts down to. It never cuts a turn off. |
-| **Todo** | A prompt saved as a thread with no agent behind it yet. Sending it starts one. |
+| **Lazy thread** | A prompt saved as a thread with no agent behind it yet, from the `lazy` Frizz plugin. Sending it starts one. |
 | **Spinoff** | A new thread started from another, carrying its context. |
 | **Scratch directory** | A thread's own folder, `.frizz/threads/<id>/`, where its agent can keep notes and files. Empty unless the agent writes something. |
 | **`FRIZZ.md`** | An optional file at your repo root whose contents are injected into every thread, for when you want agents to follow your repo's own norms. |
