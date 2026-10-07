@@ -1,5 +1,5 @@
 // SCHEDULED THREADS (plans/scheduled-threads.md): the schedule service against the REAL dispatcher, the REAL
-// lazy-thread starter, the REAL router and real SQLite. Only the Claude broker is a recorder (what Frizz
+// held-thread starter, the REAL router and real SQLite. Only the Claude broker is a recorder (what Frizz
 // asks it to start, and when) and the clock is injected, so every case below is the scheduler pass exactly
 // as production runs it, at an instant the test chooses.
 import { test } from "node:test"
@@ -110,8 +110,8 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
   } as unknown as AppContext
   return {
     storage, service, router: createRouter(ctx), spawned, readings,
-    // A thread written down unstarted, as the lazy plugin writes one (plugins/lazy/server.ts create).
-    writeDown: async (input: { prompt: string; title?: string }) => dispatcher.createHeldThread(input, { holder: "lazy" }),
+    // A thread written down unstarted, as a Frizz plugin's `threads.create` writes one.
+    writeDown: async (input: { prompt: string; title?: string }) => dispatcher.createHeldThread(input, { holder: "a-plugin" }),
     at: (ms: number) => { clock = ms },
     now: () => clock,
     tick: async () => { service.evalDue(clock); await service.drain() },
@@ -124,7 +124,7 @@ function harness(opts: Partial<Pick<ScheduleServiceDeps, "bootAtMs" | "postBootG
 
 const running = (slug: string): ThreadView => ({ id: slug, title: "x", status: "active", runtime: "running" } as unknown as ThreadView)
 
-test("a new schedule's next run is a lazy thread snoozed until the occurrence, parked in Snoozed even once due", async () => {
+test("a new schedule's next run is a held thread snoozed until the occurrence, parked in Snoozed even once due", async () => {
   const h = harness()
   try {
     const view = h.service.create(WEEKLY)
@@ -162,7 +162,7 @@ test("at its time the scheduler starts the run with the header, records it, and 
     h.at(MON_9AM + 5_000)
     await h.tick()
     assert.equal(h.spawned.length, 1)
-    assert.equal(h.spawned[0]!.threadSlug, firstSlug, "it starts on the lazy row's own slug")
+    assert.equal(h.spawned[0]!.threadSlug, firstSlug, "it starts on the held row's own slug")
     assert.equal(h.spawned[0]!.model, "haiku")
     const prompt = h.spawned[0]!.prompt
     assert.match(prompt, /<scheduled-run schedule="sch_[0-9a-f]{12}">/)
@@ -230,9 +230,9 @@ test("a claim a dead process left behind is settled by what its thread shows", a
     assert.equal(ha.history[0]!.label, "Didn't start: Frizz stopped")
     assert.equal(ha.schedule.nextRun!.occurrenceAt, new Date(NEXT_MON_9AM).toISOString(), "the next occurrence is materialized")
     // The dead process may have handed that session id to a daemon before it died, so the next run is a
-    // fresh lazy row under a fresh session id, never the same one re-snoozed.
+    // fresh held row under a fresh session id, never the same one re-snoozed.
     assert.notEqual(ha.schedule.nextRun!.sessionId, a.nextRun!.sessionId, "a fresh session id for the next run")
-    assert.equal(h.storage.getSession(a.nextRun!.slug)?.session_id === a.nextRun!.sessionId, false, "the cut-off lazy row is gone")
+    assert.equal(h.storage.getSession(a.nextRun!.slug)?.session_id === a.nextRun!.sessionId, false, "the cut-off held row is gone")
     const hb = h.service.get(b.id)
     assert.equal(hb.history[0]!.state, "started", "its thread started, so the claim got through")
     assert.notEqual(hb.schedule.nextRun!.slug, b.nextRun!.slug)
@@ -352,7 +352,7 @@ test("failed starts are recorded, retried never, and pause the schedule after th
   const h = harness()
   try {
     const view = h.service.create({ ...WEEKLY, rrule: "FREQ=DAILY;BYHOUR=9;BYMINUTE=0" })
-    const lazySlug = view.nextRun!.slug
+    const heldSlug = view.nextRun!.slug
     h.signOut()
     for (let day = 0; day < 3; day++) {
       h.at(MON_9AM + day * 86_400_000 + 1000)
@@ -364,7 +364,7 @@ test("failed starts are recorded, retried never, and pause the schedule after th
     assert.deepEqual(got.history.map((r) => r.label), Array(3).fill("Didn't start: Claude is signed out"))
     assert.equal(got.schedule.state, "paused")
     assert.equal(got.schedule.pausedText, "Paused: couldn't start 3 times. Sign in to Claude, then resume.")
-    assert.equal(h.storage.getSession(lazySlug), undefined, "the pause removes the unstarted next run")
+    assert.equal(h.storage.getSession(heldSlug), undefined, "the pause removes the unstarted next run")
   } finally {
     h.close()
   }
@@ -472,7 +472,7 @@ test("a quiet done files a scheduled run under Done with its summary; on any oth
     assert.equal(got.history[0]!.summary, "Nothing new — no issues since Oct 5.")
     assert.equal(got.history[0]!.label, "Nothing new — no issues since Oct 5.")
     assert.equal(got.schedule.counts.unreviewed, 0)
-    // An ordinary thread: one written down unstarted (as the lazy plugin does), then started.
+    // An ordinary thread: one written down unstarted (as a plugin might), then started.
     const plain = await h.writeDown({ prompt: "plain work", title: "Plain work" })
     await h.router.startHeldThread.handler({ input: { slug: plain.slug, sessionId: plain.sessionId, prompt: "plain work" } })
     await assert.rejects(
@@ -544,7 +544,7 @@ test("an edit re-points the next run: a new rule re-snoozes it, a new prompt rea
     const view = h.service.create(WEEKLY)
     const slug = view.nextRun!.slug
     const edited = h.service.update({ id: view.id, rrule: "FREQ=WEEKLY;BYDAY=TU;BYHOUR=10;BYMINUTE=0", whenText: "every Tuesday at 10am", prompt: "New prompt." })
-    assert.equal(edited.nextRun!.slug, slug, "the same lazy row")
+    assert.equal(edited.nextRun!.slug, slug, "the same held row")
     assert.equal(edited.nextRun!.at, "2026-10-06T10:00:00.000Z")
     assert.equal(h.storage.getSession(slug)!.lazy_prompt, "New prompt.")
     // The human edits this run's note; a later prompt change leaves it alone.
@@ -560,7 +560,7 @@ test("an edit re-points the next run: a new rule re-snoozes it, a new prompt rea
   }
 })
 
-test("a failure that is not auth reads plainly, and the lazy row survives for the next occurrence", async () => {
+test("a failure that is not auth reads plainly, and the held row survives for the next occurrence", async () => {
   const h = harness()
   try {
     const view = h.service.create(WEEKLY)

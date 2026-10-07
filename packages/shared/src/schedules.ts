@@ -210,7 +210,7 @@ export const ThreadScheduleRef = z.object({
   id: z.string(),
   title: z.string(),
   describe: z.string(),
-  /** True on the schedule's pending next run (a lazy row in Snoozed), false on a run that started. */
+  /** True on the schedule's pending next run (a held row in Snoozed), false on a run that started. */
   pending: z.boolean(),
 })
 export type ThreadScheduleRef = z.infer<typeof ThreadScheduleRef>
@@ -239,11 +239,11 @@ export const ScheduleRunView = z.object({
 })
 export type ScheduleRunView = z.infer<typeof ScheduleRunView>
 
-/** The materialized next run: a lazy thread in the project's Snoozed band. */
+/** The materialized next run: a held thread in the project's Snoozed band. */
 export const ScheduleNextRun = z.object({
   slug: ThreadSlug,
   sessionId: z.string(),
-  /** When it starts — the lazy row's snooze instant, which the human may have moved. ISO. */
+  /** When it starts — the held row's snooze instant, which the human may have moved. ISO. */
   at: z.string(),
   /** The rule occurrence it stands for. ISO. */
   occurrenceAt: z.string(),

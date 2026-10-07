@@ -37,7 +37,7 @@ import { contentVersion, readPluginWebAsset, type WebAssetResult } from "./web-a
 
 export const PLUGINS_OFF_ENV = "FRIZZ_PLUGINS_OFF"
 export const PLUGIN_SETUP_TIMEOUT_MS = 5_000
-/** The machine-config record: `{ "disabled": ["lazy"] }` turns a plugin off where it stands. */
+/** The machine-config record: `{ "disabled": ["<id>"] }` turns a plugin off where it stands. */
 export const PLUGINS_CONFIG_KEY = "plugins"
 const PluginsConfig = z.object({ disabled: z.array(z.string()).default([]) }).passthrough()
 const PROCEDURE_NAME = /^[a-zA-Z][a-zA-Z0-9]{0,63}$/

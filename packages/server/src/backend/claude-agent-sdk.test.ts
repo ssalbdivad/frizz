@@ -1630,9 +1630,9 @@ test("strictMcpConfig hands the CLI --strict-mcp-config, and the mounted servers
 test("sdkPlugins: the cc-worker plugin first, then each Frizz plugin's Claude Code directory, once each", () => {
   assert.deepEqual(sdkPlugins({}), [], "none is left out, never passed as []")
   assert.deepEqual(sdkPlugins({ pluginDir: "/cc-worker" }), [{ type: "local", path: "/cc-worker" }])
-  assert.deepEqual(sdkPlugins({ pluginDir: "/cc-worker", extraPluginDirs: ["/p/lazy/claude", "/cc-worker", "/p/lazy/claude"] }), [
+  assert.deepEqual(sdkPlugins({ pluginDir: "/cc-worker", extraPluginDirs: ["/p/example/claude", "/cc-worker", "/p/example/claude"] }), [
     { type: "local", path: "/cc-worker" },
-    { type: "local", path: "/p/lazy/claude" },
+    { type: "local", path: "/p/example/claude" },
   ])
-  assert.deepEqual(sdkPlugins({ extraPluginDirs: ["/p/lazy/claude"] }), [{ type: "local", path: "/p/lazy/claude" }])
+  assert.deepEqual(sdkPlugins({ extraPluginDirs: ["/p/example/claude"] }), [{ type: "local", path: "/p/example/claude" }])
 })

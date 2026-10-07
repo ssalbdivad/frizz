@@ -79,7 +79,7 @@ export function pluginThreadRow(row: SessionRow): PluginThreadRow {
  * What BASE threw while doing what a plugin asked — a double click on Start ("already starting"), a signed-out
  * provider, a broker that would not come up. It reaches the human exactly as it would from base's own verb,
  * but as a refusal: it is not the plugin's fault, so it must not count toward the strikes that fail it (three
- * double clicks would otherwise turn the lazy plugin off). The original rides along as `cause`.
+ * double clicks would otherwise turn the plugin off). The original rides along as `cause`.
  */
 function baseRefusal(error: unknown): Error {
   if (isPluginRefusal(error)) return error as Error

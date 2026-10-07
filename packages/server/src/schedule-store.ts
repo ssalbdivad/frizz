@@ -8,7 +8,7 @@ import type { ProjectScope } from "./project-scope.ts"
 // names `@project_id` and can only ever see this project's rows.
 //
 // `thread_schedule` is a saved prompt plus a recurrence. `next_slug` is its ONE materialized next run —
-// a lazy thread row carrying `schedule_id`, snoozed until `next_occurrence_at` (§4) — and `revision`
+// a held thread row carrying `schedule_id`, snoozed until `next_occurrence_at` (§4) — and `revision`
 // is the optimistic-concurrency guard every writer bumps: the scheduler's claim and every RPC edit race
 // on it, and a write that read a stale revision changes nothing.
 //

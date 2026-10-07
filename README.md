@@ -114,8 +114,6 @@ When the answer isn't one thing, the same card takes several: check any combinat
 
 When the agent needs you to *do* something it can't — sign in, approve a prompt, press a button — the card lists the steps and a **Done** button that tells it you finished.
 
-Not ready to start something? With the `lazy` Frizz plugin installed (see *Can I add features of my own?* below), press ⌘/Ctrl-Shift-Enter in the new-thread box, or the snail beside Send, to save the prompt as a lazy thread instead. It waits in the queue with no agent behind it until you send it.
-
 ### GitHub
 
 Browse the repo's issues and pull requests from the composer, select any number of them, and each becomes its own thread.
@@ -290,7 +288,7 @@ shows a single-use sign-in link as a QR; press L for a fresh one, or run --link 
 <details>
 <summary><b>Can I add features of my own?</b></summary>
 
-> Yes, as **Frizz plugins**: a folder in Frizz's data directory, `<data>/user-plugins/<id>/`, whose `package.json` carries a `frizzPlugin` manifest. Plugins are your own code with no sandbox, so **Settings → Frizz plugins** lists every one and what it adds, and `FRIZZ_PLUGINS_OFF=1` starts Frizz with none. Lazy threads — a thread written down now and started later, from the snail beside Send — are the first; from a source checkout, `nub plugins/install.ts lazy` installs them at the next restart. A plugin's `.ts` server half needs Node 22.18 or newer.
+> Yes, as **Frizz plugins**: a folder in Frizz's data directory, `<data>/user-plugins/<id>/`, whose `package.json` carries a `frizzPlugin` manifest. Plugins are your own code with no sandbox, so **Settings → Frizz plugins** lists every one and what it adds, and `FRIZZ_PLUGINS_OFF=1` starts Frizz with none. None ships with Frizz: you put the folder there yourself, and Frizz loads it at the next restart. A plugin's `.ts` server half needs Node 22.18 or newer.
 
 </details>
 
@@ -327,7 +325,6 @@ Frizz has its own small vocabulary. Most of it names a feature, so this doubles 
 | **Goal** | A standing prompt a thread receives on its own — every time it rests, on a clock, or both — until you switch it off, it reaches its limit, or the agent says it's done. |
 | **Schedule** | A prompt plus a recurrence, in plain words. Each run starts a fresh thread. |
 | **Time limit** | A deadline on a thread that the agent plans around and the card counts down to. It never cuts a turn off. |
-| **Lazy thread** | A prompt saved as a thread with no agent behind it yet, from the `lazy` Frizz plugin. Sending it starts one. |
 | **Spinoff** | A new thread started from another, carrying its context. |
 | **Scratch directory** | A thread's own folder, `.frizz/threads/<id>/`, where its agent can keep notes and files. Empty unless the agent writes something. |
 | **`FRIZZ.md`** | An optional file at your repo root whose contents are injected into every thread, for when you want agents to follow your repo's own norms. |

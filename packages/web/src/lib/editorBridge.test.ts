@@ -118,11 +118,11 @@ async function onPage<T>(pathname: string, draft: () => string, run: () => Promi
 
 const item = { path: "/repo/src/a.ts", app: "Visual Studio Code", text: "export const a = 1", startLine: 4, endLine: 6 }
 
-// A lazy thread's box is its note, held by the server: a chip "added" to its follow-up draft never showed,
+// A held thread's box is kept by its holder: a chip "added" to its follow-up draft never showed,
 // and surfaced in the reply box once the thread had started (sweep 2026-10-01).
-test("an editor's insert refuses a lazy thread in front, and writes no draft", async () => {
+test("an editor's insert refuses a held thread in front, and writes no draft", async () => {
   resetProjectState()
-  store.board = { projectDir: "/repo", projectSlug: "acme", threads: [{ id: "later", sessionId: "s9", held: "lazy", heldPrompt: "Refactor the limiter" }] } as unknown as BoardSnapshot
+  store.board = { projectDir: "/repo", projectSlug: "acme", threads: [{ id: "later", sessionId: "s9", held: "a-plugin", heldPrompt: "Refactor the limiter" }] } as unknown as BoardSnapshot
   store.drawers = [{ id: 1, kind: "thread", slug: "later" }] as typeof store.drawers
   const key = draftKey.followUp("/repo", "later", "s9")
   try {

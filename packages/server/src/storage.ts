@@ -284,7 +284,8 @@ export interface SessionRow {
   // the record; minted at dispatch, so no copied record can carry it. NULL on every other row.
   fork_anchor?: string | null
   // The OPENING PROMPT of a held row (held_by, below) — and, on a database from before held rows existed,
-  // the column that meant "unstarted" on its own: a lazy thread's note (plans/lazy-threads.md, 2026-10-01).
+  // the column that meant "unstarted" on its own: a lazy thread's note (2026-10-01; the feature was removed
+// on 2026-10-07, and its rows are held threads whose holder is gone).
   // Two readers remain, and nothing else may read it as a state:
   //   · base's own holder, a schedule's next run (`held_by = 'schedules'`): the run's prompt, which the
   //     human may edit for this run alone (plans/scheduled-threads.md §4);
@@ -297,7 +298,7 @@ export interface SessionRow {
   // is the one that ends the held state. Never dropped or emptied by a migration.
   lazy_prompt?: string | null
   // A HELD THREAD: a thread written down with no agent behind it yet, held by whoever wrote it — base's
-  // `schedules` (a schedule's next run) or a Frizz plugin's id (`lazy`). Non-NULL means UNSTARTED. The row is
+  // `schedules` (a schedule's next run) or a Frizz plugin's id. Non-NULL means UNSTARTED. The row is
   // otherwise an ordinary thread — it snoozes, is marked done, renamed, pinned and linked like any other —
   // but its session id names a session no provider has ever heard of, so nothing may tail, resume, nudge or
   // wake it (isHeldRow). Base never QUEUES a held row: whether it does is its holder's call (a plugin's
@@ -1676,7 +1677,7 @@ export const STORAGE_SCHEMA = `
     -- state: 'proposed' (a worker made it; waits for a human's Turn on) | 'active' | 'paused' | 'ended'
     -- (the rule ran out). paused_reason: 'human' | 'review' (too many unreviewed runs; resumes itself
     -- when the human clears them) | 'failures' | 'stuck' (the last run kept overlapping the next).
-    -- next_slug is the one materialized next run — a lazy session row carrying schedule_id.
+    -- next_slug is the one materialized next run — a held session row carrying schedule_id.
     CREATE TABLE IF NOT EXISTS thread_schedule (
       project_id  TEXT NOT NULL,
       id          TEXT NOT NULL,
@@ -1776,7 +1777,7 @@ export function ensureStorageSchema(db: Database): void {
   }
   // A LAZY THREAD'S PROMPT lived in a column named `todo` for its first hours on 2026-10-01, before the
   // feature was renamed. A file that ran that build carries the old column; move what it holds, so a
-  // lazy thread written down then is still one, and empty the old column so this runs at most once.
+  // thread written down then stays unstarted, and empty the old column so this runs at most once.
   try {
     db.exec("UPDATE session SET lazy_prompt = todo, todo = NULL WHERE todo IS NOT NULL AND lazy_prompt IS NULL")
   } catch {
@@ -1786,9 +1787,9 @@ export function ensureStorageSchema(db: Database): void {
   // statements, both idempotent, both run on every open — so they also repair a database an OLDER server
   // generation wrote to after a rollback, which knows only `lazy_prompt`:
   //   · a row with a prompt and no holder is unstarted: a schedule's next run (it has `schedule_id`) is held
-  //     by `schedules`, any other by the `lazy` plugin, which imports its note from this column. Nothing is
-  //     copied out or cleared — the note stays where it was, and a lazy row with no plugin to read it still
-  //     starts on its next message;
+  //     by `schedules`, any other by `lazy`, the holder id of lazy threads (removed 2026-10-07). Nothing is
+  //     copied out or cleared — the note stays where it was, and with no plugin by that id the row waits as
+  //     "Not started" and starts on its next message, on this column;
   //   · a held row with no prompt was STARTED by an older server, whose dispatch upsert cleared the one
   //     column it knew. It is an ordinary thread now, and must not read as unstarted.
   db.exec(`UPDATE session SET held_by = CASE WHEN schedule_id IS NOT NULL AND schedule_id <> '' THEN '${SCHEDULES_HOLDER}' ELSE 'lazy' END
@@ -2088,7 +2089,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
       -- ordinary thread.
       lazy_prompt = excluded.lazy_prompt,
       held_by = excluded.held_by,
-      -- \`schedule_id\` is deliberately ABSENT from this list: the INSERT carries it (a schedule's lazy
+      -- \`schedule_id\` is deliberately ABSENT from this list: the INSERT carries it (a schedule's held
       -- next run is born with it), and no later write over the slug — the dispatch that starts that run,
       -- a re-dispatch, an adopt — may clear which schedule the thread belongs to.
       archived = 0,

@@ -32,7 +32,7 @@ import { DeadlineFact } from "./DeadlineControl.tsx"
 // "acme-api · Ready 37m ago · ◔ 74% context" read "s · L. · ◔ 74% context", and narrower still the time went
 // to nothing and the line opened on a bare "·" (2026-10-06).
 export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadView; lead?: ReactNode; children?: ReactNode }) {
-  const lazy = thread.held !== undefined
+  const held = thread.held !== undefined
   return (
     <div data-thread-header-facts data-facts-line className={`mt-0.5 ${FACTS_LINE_CLASS} text-[11px] leading-tight text-muted-75 [&:not(:has(>[data-fact]:not(:empty)))]:hidden`}>
       {/* `self-center`: the band stamp (BandLabel) is an `items-center` inline-flex whose baseline is its
@@ -43,9 +43,9 @@ export function ThreadHeaderFacts({ thread, lead, children }: { thread: ThreadVi
       <Fact><DeadlineFact thread={thread} slot="urgent" lead={<FactSep />} /></Fact>
       <Fact>
         <LastActive
-          // A lazy thread has never been active: its time is when it was written down (the queue card's word too).
-          at={lazy ? thread.spawnedAt : lastActiveLabelAt(thread)}
-          {...(lazy ? { label: "Added" } : {})}
+          // A held thread has never been active: its time is when it was written down (the queue card's word too).
+          at={held ? thread.spawnedAt : lastActiveLabelAt(thread)}
+          {...(held ? { label: "Added" } : {})}
           fallbackAt={thread.spawnedAt}
           lead={<FactSep />}
           className="min-w-0 truncate"

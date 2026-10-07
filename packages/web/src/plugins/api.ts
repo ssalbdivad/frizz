@@ -71,12 +71,12 @@ export interface NewThreadDraft {
  * a dispatch does, puts the words back if `submit` throws, and toasts the result with a link to the thread.
  */
 export interface SubmitAltSlot {
-  /** The button's accessible name — "Add as lazy thread". */
+  /** The button's accessible name, in sentence case. */
   label: string
   /** Its tooltip; base appends the chord. */
   title: string
   Icon: React.ComponentType<{ size: number; strokeWidth: number }>
-  /** The toast after it lands — "Lazy thread added". */
+  /** The toast after it lands. */
   done: string
   submit(draft: NewThreadDraft): Promise<{ slug: string }>
 }

@@ -521,5 +521,12 @@ the default". So:
 - An orphaned held row (its plugin missing or failed) is not queued; it sits in Running's place as "Not started",
   with no band stamp, and starts on its next message with base's copy of the latest note.
 - `plugins` is a reserved project slug (the `/_frizz/plugins/<id>/…` asset route).
-- Lazy threads ship in the repo as `plugins/lazy`, installed with `nub plugins/install.ts lazy`. Until it is
-  installed, existing lazy threads leave the queue and wait in Running's place as "Not started".
+- Lazy threads shipped in the repo as `plugins/lazy` until 2026-10-07 (below). Existing lazy threads are held
+  by `lazy`, a holder that no longer exists, so they wait in Running's place as "Not started".
+
+**2026-10-07: lazy threads removed at David's request**
+- `plugins/lazy/`, its installer `plugins/install.ts`, its tests and `plans/lazy-threads.md` are gone; no plugin
+  ships in the repo. The plugin system itself (loader, slots, RPC, settings, `FRIZZ_PLUGINS_OFF`) stays.
+- The held-thread primitive stays, because a schedule's next run is one (`held_by = 'schedules'`). So do the
+  `lazy_prompt` column and every migration that maps old lazy rows, so old databases still open: a legacy lazy
+  row is an orphaned held row and starts on its next message, on the note base kept.

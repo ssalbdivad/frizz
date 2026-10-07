@@ -22,10 +22,9 @@ import { Composer } from "./Composer.tsx"
 // own save is told apart from an edit made somewhere else (the other surface, another tab).
 //
 // WHO DRAWS IT (HeldThreadComposer below): the HOLDER's `thread.composer` slot when its Frizz plugin is
-// loaded — the lazy plugin binds this same box to its own note (plugins/lazy/web.ts, through host.ui) — and
-// base's binding otherwise: a schedule's next run (base holds it), or a thread whose plugin is gone, whose
-// box starts it on what base kept (ThreadView.heldPrompt). Lazy threads drew this as LazyThreadBox until
-// 2026-10-06, when they moved into the `lazy` plugin.
+// loaded — a plugin may bind this same box to its own record, through host.ui — and base's binding
+// otherwise: a schedule's next run (base holds it), or a thread whose plugin is gone, whose box starts it on
+// what base kept (ThreadView.heldPrompt).
 const SAVE_DELAY_MS = 500
 
 export function HeldThreadBox({ thread, surface, className, id, note, save, start, placeholder, footer }: HeldThreadBoxProps): ReactElement {

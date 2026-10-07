@@ -246,7 +246,7 @@ export interface Api {
   followUp(input: FollowUpInput, opts?: RpcCallOpts): Promise<void>
   spinoff(input: SpinoffInput): Promise<SpinoffResult>
   // Held threads (ThreadView.held): a thread written down without an agent — a schedule's next run, a Frizz plugin's
-  // (the lazy plugin's note) — its opening prompt edited, and its agent started. Lazy threads' own verbs are the plugin's.
+  // — its opening prompt edited, and its agent started. A plugin's own verbs are the plugin's.
   updateHeldPrompt(input: UpdateHeldPromptInput): Promise<void>
   startHeldThread(input: StartHeldThreadInput): Promise<{ slug: string; sessionId: string }>
   unqueueFollowUp(input: UnqueueFollowUpInput): Promise<UnqueueFollowUpResult>

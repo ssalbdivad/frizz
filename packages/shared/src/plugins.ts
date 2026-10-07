@@ -4,9 +4,9 @@ import { z } from "zod"
 //
 // A plugin is a directory under `<data>/user-plugins/<id>/` whose `package.json` carries a `frizzPlugin`
 // manifest. It is the operator's own code, loaded machine-wide and never from a project checkout, for the
-// features that will not make the product (lazy threads is the first). "Plugin" in this module means a
-// FRIZZ plugin; Claude Code plugins (the cc-worker directory, "Reload plugins") are a different thing,
-// and user-visible copy says "Frizz plugins" to keep them apart.
+// features that will not make the product. "Plugin" in this module means a FRIZZ plugin; Claude Code
+// plugins (the cc-worker directory, "Reload plugins") are a different thing, and user-visible copy says
+// "Frizz plugins" to keep them apart.
 //
 // Only the version and the shapes that cross the wire live here. The API a plugin's server half is
 // written against is `packages/server/src/plugins/api.ts`, and its web half's is

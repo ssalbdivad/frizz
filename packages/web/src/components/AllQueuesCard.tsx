@@ -593,11 +593,11 @@ function CardArticle({
       <RegisteredAnsweringProvider thread={thread} scope={answeringScope}>
       <ProjectLinkScope project={project}>
         {/* Everything between the header and the dock, in ONE block whose negative bottom margin hands back
-            the dock's header-height top margin (see `--queue-card-header-h` above). Empty for a lazy
+            the dock's header-height top margin (see `--queue-card-header-h` above). Empty for a held
             thread, which still needs the hand-back. */}
         {!collapsed && (
         <div className="flex min-w-0 flex-col mb-[calc(-1*var(--queue-card-header-h,0px))]">
-        {/* A lazy thread has no conversation, handoff or process to show: its note is the box below. */}
+        {/* A held thread has no conversation, handoff or process to show: what it will start with is the box below. */}
         {thread.held === undefined && (
         <div className="flex min-w-0 flex-col gap-4 px-5 pt-5 pb-4">
           {/* EARLIER MESSAGES OPEN THE DRAWER, never the card. History drawn into the card grew it
@@ -758,7 +758,7 @@ function CardArticle({
         <div
           ref={dockRef}
           data-queue-dock={thread.id}
-          // A lazy card has nothing between its header and the dock, so the dock can never leave the header's
+          // A held thread's card has nothing between its header and the dock, so the dock can never leave the header's
           // bottom edge — and the header's own rule is already there; a second would draw a 2px line.
           className={`sticky bottom-0 z-10 mt-[var(--queue-card-header-h,0px)] shrink-0 ${BLOCK_RADIUS_INNER_BOTTOM} ${thread.held !== undefined ? "" : "border-t border-border/60"} bg-panel px-5 pb-3 pt-3 shadow-[0_-12px_18px_-14px_var(--dock-shadow)]`}
         >

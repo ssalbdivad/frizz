@@ -128,7 +128,7 @@ test("the forced chord on an empty box pushes the queued message; anything else 
   assert.equal(shouldInterruptSubmitComposerEnter(key({ metaKey: true }), false), false)
 })
 
-test("⌘/Ctrl-Shift-Enter saves a lazy thread, and claims no other Enter", () => {
+test("⌘/Ctrl-Shift-Enter is the alternate submit, and claims no other Enter", () => {
   assert.equal(shouldSubmitAltComposerEnter(key({ metaKey: true, shiftKey: true }), true), true)
   assert.equal(shouldSubmitAltComposerEnter(key({ ctrlKey: true, shiftKey: true }), true), true)
   assert.equal(shouldSubmitAltComposerEnter(key({ metaKey: true, shiftKey: true }), false), false)
@@ -140,7 +140,7 @@ test("⌘/Ctrl-Shift-Enter saves a lazy thread, and claims no other Enter", () =
 })
 
 // There is no schedule chord (plans/schedule-live-reading.md): the new-thread box reads its words for a schedule,
-// and Enter is the one submit. ⌘/Ctrl-Option-Enter is no send, no lazy save and no newline repair.
+// and Enter is the one submit. ⌘/Ctrl-Option-Enter is no send, no alternate submit and no newline repair.
 test("⌘/Ctrl-Option-Enter claims nothing", () => {
   for (const chord of [key({ metaKey: true, altKey: true }), key({ ctrlKey: true, altKey: true })]) {
     assert.equal(shouldSubmitComposerEnter(chord, true), false)

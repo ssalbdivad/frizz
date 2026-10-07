@@ -188,10 +188,10 @@ const CODEX_TITLE_SIGNAL_GRACE_MS = 15_000
 // Root cause of the lost transcript is tracked separately ([[session-transcript-drift]]).
 export function titleIsProvisional(t: Pick<ThreadView, "aiTitle" | "titleAuto" | "titleNamed" | "spawnedAt" | "backend" | "runtime" | "held">): boolean {
   // A HELD thread is not spinning up. No agent has run for it and none is starting: it waits for a message
-  // to start it — its holder's (the `lazy` plugin's box, a schedule's run time) or, for an orphan whose
-  // holder is gone, base's. Its spawn time is when it was WRITTEN DOWN, so the window below read a lazy
-  // thread as "Spinning up a thread…" for its first minute, on the queue card, the drawer, the rail and
-  // the phone, while the drawer under that title said "Not started yet." (QA 2026-10-06). `held` alone is
+  // to start it — its holder's (a plugin's box, a schedule's run time) or, for an orphan whose holder is
+  // gone, base's. Its spawn time is when it was WRITTEN DOWN, so the window below read a held thread as
+  // "Spinning up a thread…" for its first minute, on the queue card, the drawer, the rail and the phone,
+  // while the drawer under that title said "Not started yet." (QA 2026-10-06). `held` alone is
   // the test, whoever the holder: the row reads from its first render as it reads after the minute — its
   // prompt's guess, as plain text, until a message starts it and the window applies to the real start.
   if (t.held !== undefined) return false

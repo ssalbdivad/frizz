@@ -52,6 +52,8 @@ test("the migration holds every legacy unstarted row, leaves its note where it w
   try {
     const before = columns(file, true)
     assert.equal(before.length, 6)
+    // `lazy` is legacy data: the holder id the migration gives a plain unstarted row, from lazy threads
+    // (removed 2026-10-07). No plugin answers to it now, so those rows wait unstarted until a message.
     const expected = [
       { slug: "a-note", lazy_prompt: "Look into the flaky resume test", held_by: "lazy", schedule_id: null },
       { slug: "b-empty-note", lazy_prompt: "", held_by: "lazy", schedule_id: null },
@@ -79,8 +81,8 @@ test("a held row an OLDER server started after a rollback reads as started on th
   try {
     const file = join(dir, "ui.db")
     const storage = createStorage(file, "p")
-    storage.upsertSession(row("note", { lazy_prompt: "draft", held_by: "lazy" }))
-    storage.upsertSession(row("still-held", { lazy_prompt: "draft two", held_by: "lazy" }))
+    storage.upsertSession(row("note", { lazy_prompt: "draft", held_by: "a-plugin" }))
+    storage.upsertSession(row("still-held", { lazy_prompt: "draft two", held_by: "a-plugin" }))
     storage.close()
     // The older build's dispatch upsert names only the column it knows: it clears lazy_prompt and never
     // touches held_by, which it has never heard of.
@@ -90,7 +92,7 @@ test("a held row an OLDER server started after a rollback reads as started on th
     const reopened = createStorage(file, "p")
     assert.equal(reopened.getSession("note")?.held_by, null, "started, so no longer held")
     assert.equal(isHeldRow(reopened.getSession("note")), false)
-    assert.equal(reopened.getSession("still-held")?.held_by, "lazy", "an untouched held row stays held")
+    assert.equal(reopened.getSession("still-held")?.held_by, "a-plugin", "an untouched held row stays held")
     assert.equal(reopened.getSession("still-held")?.lazy_prompt, "draft two")
     reopened.close()
   } finally { rmSync(dir, { recursive: true, force: true }) }
@@ -100,7 +102,7 @@ test("setHeldPrompt rewrites only a held row's prompt", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-held-prompt-"))
   const storage = createStorage(join(dir, "ui.db"), "p")
   try {
-    storage.upsertSession(row("held", { lazy_prompt: "first", held_by: "lazy" }))
+    storage.upsertSession(row("held", { lazy_prompt: "first", held_by: "a-plugin" }))
     storage.upsertSession(row("live"))
     assert.equal(storage.setHeldPrompt("held", "sid-held", "second"), true)
     assert.equal(storage.getSession("held")?.lazy_prompt, "second")
@@ -124,10 +126,10 @@ test("base never queues a held thread whose holder has not said so", () => {
   assert.equal(view.crashed, false, "never reads as a worker that died")
 })
 
-// From lazy-threads.test.ts (2026-10-01), kept with the migration it now feeds: the build that called the
-// column `todo` left its lazy threads there, ensureStorageSchema moves them to `lazy_prompt`, and the held
-// migration then hands each to the `lazy` plugin.
-test("a database from the build that named the column `todo` keeps its lazy threads", () => {
+// Legacy data, kept with the migration it feeds: the build that called the column `todo` (2026-10-01) left
+// its unstarted threads there, ensureStorageSchema moves them to `lazy_prompt`, and the held migration then
+// holds each under `lazy`, the id of the lazy-threads feature removed on 2026-10-07.
+test("a database from the build that named the column `todo` keeps its unstarted threads", () => {
   const dir = mkdtempSync(join(tmpdir(), "frizz-lazy-migrate-"))
   try {
     const file = join(dir, "ui.db")

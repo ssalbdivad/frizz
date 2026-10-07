@@ -170,7 +170,7 @@ function Banner({ tone, text, children }: { tone: "attention" | "quiet"; text: s
   )
 }
 
-/** The echo the human confirmed, the next few runs, and the next run itself — the lazy thread that stands
+/** The echo the human confirmed, the next few runs, and the next run itself — the held thread that stands
  *  for it, a tap away. */
 function Echo({ schedule, openRun }: { schedule: ScheduleView; openRun: (slug: string, title?: string) => void }) {
   const now = useNowMs()

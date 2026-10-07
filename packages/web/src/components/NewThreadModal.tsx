@@ -208,9 +208,8 @@ function PromptForm({
     },
   })
 
-  // THE ALTERNATE SUBMIT (a Frizz plugin's `newThread.submitAlt`; the first in id order). The lazy plugin's
-  // writes the same prompt down as a thread with no agent behind it — "Add as lazy thread" was hard-wired here
-  // (submitLazy, createLazyThread) until 2026-10-06. No auth gate: nothing is started, so no provider is
+  // THE ALTERNATE SUBMIT (a Frizz plugin's `newThread.submitAlt`; the first in id order): the same prompt,
+  // handed to the plugin instead of starting an agent. No auth gate: base starts nothing, so no provider is
   // contacted; the sign-in, if one is needed, comes when the thread is launched. The draft clears like a
   // dispatch's and comes back on failure the same way.
   const altSlot = usePluginSlots("newThread.submitAlt")[0]
@@ -241,14 +240,14 @@ function PromptForm({
     if (!prompt.trim() || !resolved || savingSettings || parseAccountAlias(prompt)) return
     const input: NewThreadDraft = {
       // The chips — which the human placed, on purpose — and NOT the editor block, at saving or at launch.
-      // A lazy thread is written down for later. The block says what the editor showed "when they sent
+      // A thread the plugin writes down is for later. The block says what the editor showed "when they sent
       // this"; baked into the note it would be read hours later as the moment of launch, and it sat in an
       // editable note the human never typed. Attached at launch instead, it would describe whatever the
       // editor happens to show then — unrelated to a note written earlier, more often than not — from a box
       // (HeldThreadBox) that shows no context bar, so the human could neither see it go nor turn it off.
       // If the note means the editor ("fix this"), the agent reads it then through its editor tool.
       prompt: outgoingMessage(expandedPrompt(prompt), stagedItems(promptKey), projectDir, false).trim(),
-      // The pick rides along: it is what the lazy thread starts on when it is launched, unless changed then.
+      // The pick rides along: it is what the thread starts on when it is launched, unless changed then.
       model: resolved.model,
       backend: resolved.backend,
       effort: (resolved.effort || undefined) as NewThreadDraft["effort"],
@@ -256,7 +255,7 @@ function PromptForm({
     submittedDraftRef.current = prompt
     submittedPickRef.current = pick
     submittedScheduleRef.current = draftStore.get(scheduleKey)
-    // A lazy thread takes no limit — nothing runs until it is launched — but the limit leaves with the
+    // The alternate submit takes no limit — nothing runs until it is launched — but the limit leaves with the
     // draft it was typed for, and a failed save puts it back.
     submittedLimitRef.current = draftStore.get(limitKey)
     submittedContextRef.current = takeContextItems(promptKey)
@@ -298,8 +297,8 @@ function PromptForm({
   // and no mode. A prompt with a schedule word in it is read by the model as it is typed; when the words ask for
   // the work to repeat, a strip under the box says what will run when, the send wears ↻, and Enter creates the
   // schedule instead of starting the thread. It reads the PROSE the box shows (what every span indexes), never
-  // the code, chips, mentions or commands in it; what it would save is the prompt as a lazy save writes it — the
-  // chips, never the editor block — because a schedule's prompt is sent hours or weeks later, like a lazy thread's.
+  // the code, chips, mentions or commands in it; what it would save is the prompt as the alternate submit writes
+  // it — the chips, never the editor block — because a schedule's prompt is sent hours or weeks later.
   const rootRef = useRef<HTMLDivElement>(null)
   const { prose: promptProse, attachments: promptAttachments } = useMemo(() => splitComposerValue(prompt), [prompt])
   const scheduleExclude = useMemo(() => composerExcludeRuns(promptProse, contextTokens), [promptProse, contextTokens])

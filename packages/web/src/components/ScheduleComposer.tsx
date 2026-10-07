@@ -73,7 +73,7 @@ export interface LiveScheduleInput {
    *  `composerExcludeRuns`). */
   exclude: readonly Span[]
   /** The prompt a schedule would save for a CUT prose — chips serialized, user commands expanded, attachments
-   *  rejoined — exactly as a lazy save writes it. "" when nothing is left. */
+   *  rejoined — exactly as the alternate submit writes it. "" when nothing is left. */
   promptOf: (cutProse: string) => string
   /** The model/effort the box would dispatch on. Undefined while the profile is loading. */
   profile: { model: string; backend: CreateScheduleInput["backend"]; effort: CreateScheduleInput["effort"] } | undefined
@@ -116,7 +116,7 @@ export interface LiveSchedule {
   sendTitle: string | undefined
   /** A create is in flight: the button spins, the text stays live. */
   sendPending: boolean
-  /** A schedule is being created from the draft's words: nothing else may take them (a lazy save). */
+  /** A schedule is being created from the draft's words: nothing else may take them (the alternate submit). */
   creating: boolean
   /** Enter, the send button, the phone's send. */
   submit: () => void

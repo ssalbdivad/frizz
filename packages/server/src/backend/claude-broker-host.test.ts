@@ -191,9 +191,9 @@ test("forkBroker: Frizz plugins' Claude Code directories reach the daemon beside
       "writeFileSync(config.recordPath, JSON.stringify({ daemonPid: process.pid, socketPath: config.socketPath, sessionId: config.sessionId, generation: config.generation, createdAt: new Date().toISOString() }))",
       "setInterval(() => {}, 1000)",
     ].join("\n"))
-    const record = await forkBroker({ ...forkOptions(dir, entry), pluginDir: "/cc-worker", extraPluginDirs: ["/data/user-plugins/lazy/claude"] })
+    const record = await forkBroker({ ...forkOptions(dir, entry), pluginDir: "/cc-worker", extraPluginDirs: ["/data/user-plugins/example/claude"] })
     daemonPid = record.daemonPid
-    assert.deepEqual(JSON.parse(readFileSync(reportPath, "utf8")), { pluginDir: "/cc-worker", extraPluginDirs: ["/data/user-plugins/lazy/claude"] })
+    assert.deepEqual(JSON.parse(readFileSync(reportPath, "utf8")), { pluginDir: "/cc-worker", extraPluginDirs: ["/data/user-plugins/example/claude"] })
   } finally {
     if (daemonPid) { try { process.kill(daemonPid, "SIGKILL") } catch {} }
     rmSync(dir, { recursive: true, force: true })

@@ -98,8 +98,8 @@ Both creation paths end in the same server validation and the same echo, built b
 
 ## 4. The next run IS a lazy thread (rev)
 
-Each active schedule keeps exactly ONE materialized next run: a **lazy thread** (plans/lazy-threads.md —
-a thread row with `lazy_prompt` and no agent yet) carrying `schedule_id`, with `snoozed_until` = the
+Each active schedule keeps exactly ONE materialized next run: a **held thread** (`session.held_by = 'schedules'`;
+a lazy thread when this was written — a thread row with `lazy_prompt` and no agent yet) carrying `schedule_id`, with `snoozed_until` = the
 occurrence. The board shows a lazy row with a `schedule_id` in **Snoozed** with its wake time, whether or
 not the time has passed, until the scheduler starts it or the human acts on it. So the upcoming run sits
 where the human already looks, and every per-occurrence act is one they already know:

@@ -775,7 +775,7 @@ export async function deleteOwnedThread(
       // A scratch directory that will not go is litter, not a failed delete.
     }
   }
-  // A plugin keeping records about the thread (the lazy plugin's note) drops them.
+  // A plugin keeping records about the thread drops them.
   ctx.plugins?.threadDeleted(row)
   return true
 }
@@ -2851,8 +2851,7 @@ export function createRouter(ctx: AppContext) {
     }),
 
     // HELD THREADS (SessionRow.held_by) — base's two verbs on a thread written down with no agent, whoever holds
-    // it. Creating one is the holder's (a schedule, a Frizz plugin's `threads.create`); lazy threads, which
-    // had createLazyThread / updateLazyPrompt / startLazyThread here until 2026-10-06, are the `lazy` plugin's.
+    // it. Creating one is the holder's (a schedule, a Frizz plugin's `threads.create`).
     //
     // Rewrite a held thread's opening prompt — a schedule's next run's, edited for that run alone, or the text
     // base would start an orphaned plugin thread on. Refused once it has started: it was the first message.
@@ -2958,8 +2957,8 @@ export function createRouter(ctx: AppContext) {
         // session no provider has heard of. A side request is the exception: it asks this thread's worker
         // for an errand, and there is no worker to ask.
         //
-        // A HOLDER may want the message first (plugins/project.ts `send`): the lazy plugin starts the thread on
-        // it and drops its note. With no holder by that id — the plugin removed, turned off or failed — or one
+        // A HOLDER may want the message first (plugins/project.ts `send`): it may start the thread on it and
+        // drop whatever it kept. With no holder by that id — the plugin removed, turned off or failed — or one
         // whose onSend throws, base starts the thread on the message itself, so no held thread is stranded.
         if (isHeldRow(row)) {
           if (side) throw new Error("This thread has not started yet; send it a message to start it")

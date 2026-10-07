@@ -2542,9 +2542,9 @@ function sessionThreadView(
 //
 // BASE NEVER QUEUES IT. With no agent there is nothing in it waiting on the human — upstream's own rule,
 // "with no agent it makes no sense for a thread to ever show up inside the queue" (shared deriveNeedsYou) —
-// so whether a held thread queues is its HOLDER's call: the lazy plugin's threadView queues its own unless
-// done or snoozed (plugins/lazy/server.ts), and a thread whose holder is gone stays out of the queue, in
-// Active with a "Not started" box, until a message starts it.
+// so whether a held thread queues is its HOLDER's call: a Frizz plugin's threadView may queue its own, and a
+// thread whose holder is gone stays out of the queue, in Active with a "Not started" box, until a message
+// starts it.
 //
 // A SCHEDULE'S NEXT RUN (`view.schedule.pending`, plans/scheduled-threads.md §4) is parked: it keeps its
 // wake time even once that has passed — the scheduler, not the clock, starts it, and the seconds between

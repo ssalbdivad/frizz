@@ -11,8 +11,7 @@ import { isHeldRow, type SessionRow } from "./storage.ts"
 // next run IS a held row the SCHEDULER starts, so it is built once per project in context.ts and shared,
 // and the one-launch-at-a-time guard below sees every launch, whoever makes it. A second launch while the
 // first is still spawning would start a second agent on the SAME session id; it is refused here rather
-// than raced in the broker. (lazy-start.ts until 2026-10-06, when lazy threads moved into a plugin and
-// the held thread became the one primitive base keeps.)
+// than raced in the broker.
 
 export interface HeldStartProfile {
   model?: string

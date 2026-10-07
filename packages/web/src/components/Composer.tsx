@@ -369,9 +369,7 @@ export function Composer({
   // queued it returns false and the keypress keeps its default.
   onPushQueued?: () => boolean
   // THE ALTERNATE SUBMIT — the new-thread box only, offered by a Frizz plugin (`newThread.submitAlt`): a glyph
-  // beside Send and ⌘/Ctrl-Shift-Enter. The lazy plugin's snail writes the prompt down as a thread with no
-  // agent behind it instead of starting one (`onSaveLazy` until 2026-10-06, when lazy threads became a plugin;
-  // a footer text hint did this job until 2026-10-01, and the maintainer wanted it gone).
+  // beside Send and ⌘/Ctrl-Shift-Enter, which does what the plugin says with the prompt instead of starting it.
   submitAlt?: ComposerSubmitAlt
   // Runs of the PROSE marked behind the text (ComposerMark): the schedule the box read in it, so the human sees
   // which words are WHEN and that the rest is the prompt, verbatim. Offsets into the prose the box shows; a mark
@@ -1636,7 +1634,7 @@ export function Composer({
       >
         {uploading ? <Loader2 size={15} strokeWidth={2} className="animate-spin" /> : <Paperclip size={15} strokeWidth={2} />}
       </button>
-      {/* THE ALTERNATE SUBMIT (a Frizz plugin's — the lazy plugin's snail), beside Send so the act is
+      {/* THE ALTERNATE SUBMIT (a Frizz plugin's), beside Send so the act is
           discoverable without its chord. Muted like the paperclip: it is the secondary submit, and Send stays
           the one filled button. */}
       {submitAlt && (

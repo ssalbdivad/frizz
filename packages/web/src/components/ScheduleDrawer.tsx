@@ -212,7 +212,7 @@ function Banner({ tone, text, children }: { tone: "attention" | "quiet"; text: s
   )
 }
 
-/** The echo the human confirmed, from the rule Frizz fires, and the next run — the lazy thread that
+/** The echo the human confirmed, from the rule Frizz fires, and the next run — the held thread that
  *  stands for it, a click away (Mark as done on it skips it; snoozing it moves it). */
 function Echo({ schedule }: { schedule: ScheduleView }) {
   const now = useNowMs()

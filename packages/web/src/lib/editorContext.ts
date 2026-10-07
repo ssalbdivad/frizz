@@ -294,7 +294,7 @@ export function sentEditorFront(state: Pick<EditorContextState, "active" | "shar
 /**
  * THE message a box with a context bar sends — the one helper behind both of the sidebar's send paths, a
  * thread's reply box (ThreadComposerBox) and the new-thread box (NewThreadModal: dispatch, a dispatch held
- * for sign-in, and a lazy thread): the chips' definitions (`buildMessageWithContext`), then, when `editor`
+ * for sign-in, and the alternate submit): the chips' definitions (`buildMessageWithContext`), then, when `editor`
  * says this box shows the bar and the human has not turned it off, the editor block
  * (composerContext.ts `serializeEditorContext`) — read NOW, at send, which is the moment its header
  * describes. Nothing is taken from any store, so a send the server refuses loses nothing: the draft
