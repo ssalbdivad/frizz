@@ -521,7 +521,7 @@ every worker the editor through the `editor` MCP tool.
   the server sends it files to open, folders to raise, and every project with its Queue and Running counts (`ready`/`working` on the wire).
   Frames are pinned in `shared/src/editor-protocol.ts` (plain types the extension bundles) and validated
   by their zod twins in the shared index. Ask and Send use the ordinary RPCs, addressed by project id.
-- **`openLocalFile` tries a connected window first** when the External app names its editor family
+- **`openLocalFile` tries a connected window first** when the Local file links app names its editor family
   (`vscode`, `cursor`, or `$EDITOR`'s), choosing the window whose folder contains the file, then the
   most recently focused one on the same machine; otherwise it spawns the CLI as before, now with
   `-g path:line:col`. Positions travel as `line`/`column`/`endLine` beside the path, parsed by the one

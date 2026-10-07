@@ -1782,7 +1782,7 @@ export async function run(): Promise<void> {
   assert.ok(project, `a project holds ${workspace}: ${JSON.stringify(api.projects())}`)
   const rpc = new FrizzRpc(origin)
 
-  // REAL mode: file links reach an editor only when Frizz's External app setting is VS Code.
+  // REAL mode: file links reach an editor only when Frizz's Local file links setting is VS Code.
   let restoreSettings: (() => Promise<unknown>) | undefined
   if (mode === "real" && process.env.FRIZZ_E2E_SET_OPENER === "1") {
     const settings = await rpc.query(project.id, "settingsGet")

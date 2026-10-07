@@ -9,7 +9,6 @@ import { mdToHtml } from "./lib/markdown.ts"
 import { installLocalFileLinkInterceptor } from "./lib/local-file-links.ts"
 import { useLocalFileCodeLinks } from "./lib/localFileCode.ts"
 import { useInnerHtml } from "./lib/innerHtml.ts"
-import { prefs, type CodeFiles } from "./lib/prefs.ts"
 import { store } from "./store.ts"
 
 // Every destination a local-file link can have, on one page. A file Frizz can show opens in Frizz: a
@@ -31,9 +30,8 @@ type FixtureWindow = Window & {
   __localFileFixtureOpened?: string[]
   // Every `openLocalFile` body whole — the line, column and range a link carried to the RPC.
   __localFileFixtureOpenBodies?: OpenBody[]
-  __localFileFixtureCodeFiles?: (to: CodeFiles) => void
-  // What an "auto" browser's click is settled by (lib/editorWindows.ts codeFilesDestination): the
-  // connected editor windows, the External app `settingsGet` answers, and whether the supervisor calls
+  // What a code file's click is settled by (lib/editorWindows.ts codeFilesDestination): the connected
+  // editor windows, the Local file links value `settingsGet` answers, and whether the supervisor calls
   // this a remote session. The page reads the last two over the wire, so they are answered below.
   __localFileFixtureEditor?: (state: { windows?: EditorWindowSummary[]; opener?: LocalFileOpener; remote?: boolean }) => void
   __localFileFixtureResetOpens?: () => void
@@ -76,7 +74,6 @@ window.fetch = async (input, init) => {
   return nativeFetch(input, init)
 }
 
-;(window as FixtureWindow).__localFileFixtureCodeFiles = (to) => { prefs.codeFiles = to }
 ;(window as FixtureWindow).__localFileFixtureEditor = ({ windows, opener, remote }) => {
   if (windows) store.editorWindows = windows
   if (opener) fixtureOpener = opener

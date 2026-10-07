@@ -94,7 +94,7 @@ export const EDITOR_CLOSE = {
   helloRequired: 4402,
 } as const
 
-/** Which editor family a window is — what the "External app" setting's choices name. */
+/** Which editor family a window is — what the "Local file links" setting's choices name. */
 export type EditorKind = "vscode" | "cursor" | "windsurf" | "other"
 
 /** `vscode.env.appName` → the family. "Visual Studio Code", "Visual Studio Code - Insiders", "Cursor", "Windsurf", "VSCodium"… */

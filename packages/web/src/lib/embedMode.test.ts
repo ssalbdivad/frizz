@@ -39,7 +39,6 @@ const { phoneLayout } = await import("./mobile.ts")
 const { openLocalPath } = await import("./local-file-links.ts")
 const { openExternalUrl } = await import("./external-links.ts")
 const { getThemeSnapshot, initTheme, setHostTheme } = await import("./theme.ts")
-const { prefs } = await import("./prefs.ts")
 const { store } = await import("../store.ts")
 const { composePending } = await import("./editorBridge.ts")
 const { runHostCommand } = await import("./embedCommand.ts")
@@ -136,12 +135,9 @@ test("the title row hears the view only when it changes, and again after ready",
 })
 
 test("a code file goes to the editor with its place, never to the reader or the server", async () => {
-  for (const codeFiles of ["auto", "frizz", "editor"] as const) {
-    prefs.codeFiles = codeFiles
-    posted.length = 0
-    openLocalPath("/repo/src/a.ts", null, null, { line: 12, column: 3, endLine: 20 })
-    assert.deepEqual(posted, [{ type: "frizz:open-file", path: "/repo/src/a.ts", line: 12, column: 3, endLine: 20 }], codeFiles)
-  }
+  posted.length = 0
+  openLocalPath("/repo/src/a.ts", null, null, { line: 12, column: 3, endLine: 20 })
+  assert.deepEqual(posted, [{ type: "frizz:open-file", path: "/repo/src/a.ts", line: 12, column: 3, endLine: 20 }])
   posted.length = 0
   openLocalPath("/repo/Makefile")
   assert.deepEqual(posted, [{ type: "frizz:open-file", path: "/repo/Makefile" }])

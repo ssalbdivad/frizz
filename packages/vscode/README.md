@@ -80,7 +80,7 @@ in it. Works in VS Code, Cursor and Windsurf.
   worked in the project folder shows its own files' uncommitted changes. The left side is where it
   started; the right side is the file itself, to fix in place.
 - **File links from Frizz** open here — in the window that has the file's folder open, at the line the
-  link names, and that window comes to the front — when Frizz's External app setting is this editor
+  link names, and that window comes to the front — when Frizz's Local file links setting is this editor
   (Frizz offers to switch it the first time a window connects).
 - **The status bar** shows how many of this workspace's threads are ready for you. Click it to show
   the sidebar.

@@ -21,7 +21,7 @@ export const SIDEBAR_KEY_HINTS: Partial<Record<ActionId, string>> = {
   // Every thread opens in its drawer here, so there is no card to open one from.
   "thread.open": "Every thread opens in one here",
   // `e` on a thread: the sidebar is inside the editor already, so its folder shows there (the extension
-  // reveals it, or opens a folder outside the workspace in a new window) rather than in the External app.
+  // reveals it, or opens a folder outside the workspace in a new window) rather than in the Local file links app.
   "thread.editor": "Shows its folder in VS Code",
   // ⌘I adds the editor's selection to the prompt box — bound by the extension in the editor, and pressed in
   // a sidebar prompt box too, the way Cursor's ⌘L works from its chat.

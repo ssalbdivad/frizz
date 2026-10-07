@@ -242,7 +242,7 @@ export function AllQueuesPage() {
   }, [])
   // `e` WITH NO THREAD IN FRONT OF THE HUMAN — no drawer, no card being read — opens the project's own
   // folder in the editor: the page's project, or showing All projects, the one the box would start in.
-  // In an editor's sidebar that editor is the one around it, whatever External app says: the extension
+  // In an editor's sidebar that editor is the one around it, whatever Local file links says: the extension
   // shows the folder (and opens one outside the window's folders in a window of its own).
   useShortcut("thread.editor", () => {
     if (runThreadCommand("editor")) return

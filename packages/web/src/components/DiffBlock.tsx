@@ -12,7 +12,7 @@ import { ToolDisclosureHeader } from "./ToolDisclosureHeader.ts"
 // underlines on hover. Used by the tool-call one-liners and the diff header.
 //
 // It opens through `openLocalPath`, the same route every other local-path click in the app takes, so it
-// honours the "External app" setting. It used to render `<a href="cursor://file/Users/…">` and let
+// honours the "Local file links" setting. It used to render `<a href="cursor://file/Users/…">` and let
 // the OS resolve the scheme — which meant it ALWAYS landed in Cursor, whatever the setting said.
 export function PathLink({ path, className = "", children }: { path: string; className?: string; children?: React.ReactNode }) {
   return (

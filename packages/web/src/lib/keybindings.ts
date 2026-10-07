@@ -86,7 +86,7 @@ export const ACTIONS: readonly ActionDef[] = [
   // A terminal belongs to a thread (ThreadTerminals.tsx), so `t` opens one on the thread being read. It
   // was "New terminal thread", from anywhere, until the Terminal tab went on 2026-09-29.
   { id: "thread.terminal", label: "Open terminal", group: "queue", defaultChord: "t" },
-  // The same folder in the External app — the step `t` then `code .` took (ThreadMenu.tsx openInEditor).
+  // The same folder in the Local file links app — the step `t` then `code .` took (ThreadMenu.tsx openInEditor).
   // With no thread in front of the human, the project's own folder (AllQueues.tsx).
   { id: "thread.editor", label: "Open in editor", group: "queue", defaultChord: "e" },
   // Vim's and GitHub's `y` for copy ("yank"): each initial of "Copy terminal command" is already bound

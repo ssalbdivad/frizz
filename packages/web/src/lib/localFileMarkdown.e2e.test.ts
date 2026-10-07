@@ -67,7 +67,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
         "/fixture/.frizz/threads/6d56ea2f/HANDOFF.md",
         "/fixture/home/.claude/CLAUDE.md",
         // The editor deep links: a `cursor://file/…` anchor used to be handed to the OS, which opened
-        // Cursor no matter what "External app" said. Both slash forms arrive as the path they name.
+        // Cursor no matter what "Local file links" said. Both slash forms arrive as the path they name.
         "/fixture/plan.md",
         "/fixture/trace.json",
         // Windows destinations carry a path too. The file URL's leading slash stays until the
@@ -139,7 +139,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
 
     // A tool card's header path (PathLink) is the OTHER producer of a local-file link, and it used to
     // be an `<a href="cursor://file/…">` handed straight to the OS — which meant it opened Cursor no
-    // matter what "External app" said. Nothing on this page may carry an editor-scheme href.
+    // matter what "Local file links" said. Nothing on this page may carry an editor-scheme href.
     assert.deepEqual(await page.$$eval('a[href]', (nodes) => nodes.map((n) => n.getAttribute("href"))), [])
 
     // It routes by the same rules as the markdown links, and — because the header it sits in is also
@@ -195,7 +195,7 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     ])
     assert.equal(await page.$eval('[data-positioned] button[data-local-path="/fixture/src/raw.ts"]', (n) => n.hasAttribute("data-bogus")), false)
 
-    // With no editor connected (the default, automatic, reads as In Frizz), a code file with a line opens
+    // With no editor connected, a code file with a line opens
     // the reader on the BARE path — the editor deep link `vscode://file/…:3:2` used to hand the reader
     // `b.ts:3:2`, which it reported not found.
     await page.click('[data-positioned] [data-local-path="/fixture/src/b.ts"]')
@@ -203,10 +203,16 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     const readerPaths = await page.evaluate(() => (window as unknown as { __localFileFixtureDrawers: () => { path?: string }[] }).__localFileFixtureDrawers().map((d) => d.path))
     assert.deepEqual(readerPaths.slice(-2), ["/fixture/src/b.ts", "/fixture/guide.md"])
 
-    // Code files to the external app: each click reaches `openLocalFile` with its line beside the path.
-    // The two links into a.ts at different lines are clicked back to back, inside the opener's cooldown:
-    // the second is a new place to go, not a double-click to swallow.
-    await page.evaluate(() => (window as unknown as { __localFileFixtureCodeFiles: (to: string) => void }).__localFileFixtureCodeFiles("editor"))
+    // Code files to the editor (Local file links is VS Code, and a VS Code window is connected): each click
+    // reaches `openLocalFile` with its line beside the path. The two links into a.ts at different lines are
+    // clicked back to back, inside the opener's cooldown: the second is a new place to go, not a
+    // double-click to swallow.
+    await page.evaluate(() => (window as unknown as { __localFileFixtureEditor: (state: unknown) => void }).__localFileFixtureEditor({
+      windows: [{ app: "Visual Studio Code", kind: "vscode", acceptsOpens: true }],
+      opener: "vscode",
+      remote: false,
+    }))
+    const opensBefore = await page.evaluate(() => ((window as unknown as { __localFileFixtureOpenBodies?: unknown[] }).__localFileFixtureOpenBodies ?? []).length)
     for (const selector of [
       '[data-positioned] button[data-local-path="/fixture/src/a.ts"][data-local-line="5"]',
       '[data-positioned] button[data-local-path="/fixture/src/a.ts"][data-local-line="30"]',
@@ -222,6 +228,9 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       '[data-positioned] [data-local-path="/fixture/src/raw.ts"]',
       '[data-codex-finding] [data-local-path="/fixture/src/h.ts"]',
     ]) await page.click(selector)
+    // A code file's destination is settled asynchronously (a fresh settings read), so the last opens may
+    // land a beat after the last click.
+    await page.waitForFunction((n) => ((window as unknown as { __localFileFixtureOpenBodies?: unknown[] }).__localFileFixtureOpenBodies ?? []).length >= n, { timeout: 10_000 }, opensBefore + 11)
     const bodies = await page.evaluate(() => (window as unknown as { __localFileFixtureOpenBodies?: unknown[] }).__localFileFixtureOpenBodies ?? [])
     assert.deepEqual(bodies.slice(-11), [
       { path: "/fixture/src/a.ts", line: 5, endLine: 9 },
@@ -237,13 +246,11 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       { path: "/fixture/src/h.ts", line: 30, endLine: 34 },
     ])
 
-    // AUTOMATIC — a browser that chose neither (lib/editorWindows.ts codeFilesDestination). A click goes
-    // to the External app exactly while that app is an editor with a window connected that takes opens,
-    // and the page is not a remote session; the reader otherwise. It used to need a one-time toast, and a
-    // human who missed it clicked a link with VS Code connected and got the reader. Each step clicks one
-    // link and reads back where it went: an `openLocalFile` body, or a reader drawer — never both.
+    // WHERE A CODE FILE GOES (lib/editorWindows.ts codeFilesDestination). A click goes to the Local file
+    // links app exactly while that app is an editor with a window connected that takes opens, and the
+    // page is not a remote session; the reader otherwise. Each step clicks one link and reads back where
+    // it went: an `openLocalFile` body, or a reader drawer — never both.
     type Fixture = {
-      __localFileFixtureCodeFiles: (to: string) => void
       __localFileFixtureEditor: (state: unknown) => void
       __localFileFixtureResetOpens: () => void
       __localFileFixtureCloseDrawers: () => void
@@ -255,14 +262,13 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
       const w = window as unknown as Fixture
       return { opens: (w.__localFileFixtureOpenBodies ?? []).length, drawers: w.__localFileFixtureDrawers().length }
     })
-    const clickAuto = async (selector: string, state: Record<string, unknown>, codeFiles = "auto") => {
-      await page.evaluate((s, c) => {
+    const clickAuto = async (selector: string, state: Record<string, unknown>) => {
+      await page.evaluate((s) => {
         const w = window as unknown as Fixture
-        w.__localFileFixtureCodeFiles(c)
         w.__localFileFixtureEditor(s)
         w.__localFileFixtureResetOpens()
         w.__localFileFixtureCloseDrawers()
-      }, state, codeFiles)
+      }, state)
       const before = await where()
       await page.click(selector)
       await page.waitForFunction((b) => {
@@ -281,14 +287,12 @@ test("Markdown local image syntax uses the gated image proxy and local files rem
     const a5 = '[data-positioned] button[data-local-path="/fixture/src/a.ts"][data-local-line="5"]'
     assert.deepEqual(await clickAuto(a5, { windows: [vscodeWindow], opener: "vscode", remote: false }),
       { to: "editor", body: { path: "/fixture/src/a.ts", line: 5, endLine: 9 }, alsoReader: false })
-    // The External app is not the connected editor: the reader, as before any editor connected.
+    // Local file links is not the connected editor: the reader, as before any editor connected.
     assert.deepEqual(await clickAuto(a5, { opener: "system" }), { to: "reader", path: "/fixture/src/a.ts", alsoEditor: false })
     // The connected window turned file opens off.
     assert.deepEqual(await clickAuto(a5, { windows: [{ ...vscodeWindow, acceptsOpens: false }], opener: "vscode" }), { to: "reader", path: "/fixture/src/a.ts", alsoEditor: false })
     // A remote session: an open would land in a window on the desk nobody there can see.
     assert.deepEqual(await clickAuto(a5, { windows: [vscodeWindow], remote: true }), { to: "reader", path: "/fixture/src/a.ts", alsoEditor: false })
-    // A browser that CHOSE In Frizz keeps the reader with the editor connected.
-    assert.deepEqual(await clickAuto(a5, { remote: false }, "frizz"), { to: "reader", path: "/fixture/src/a.ts", alsoEditor: false })
     // And Markdown always opens in Frizz, editor or not.
     assert.deepEqual(await clickAuto('[data-positioned] [data-local-path="/fixture/guide.md"]', {}), { to: "reader", path: "/fixture/guide.md", alsoEditor: false })
 

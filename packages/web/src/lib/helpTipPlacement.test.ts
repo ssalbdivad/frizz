@@ -3,7 +3,7 @@ import test from "node:test"
 import { placeHelpTip } from "./helpTipPlacement.ts"
 
 // A (?) beside a Settings label, 16px square. Sizes measured in the running page (2026-10-01): the widest
-// help tooltip is 352px (its max), the tallest — External app's — 197px.
+// help tooltip is 352px (its max), the tallest — Local file links' — 197px.
 const trigger = (left: number, top: number) => ({ left, right: left + 16, top, bottom: top + 16 })
 const inside = (p: { left: number; top: number }, tip: { width: number; height: number }, vp: { width: number; height: number }) =>
   p.left >= 12 && p.top >= 12 && p.left + tip.width <= vp.width - 12 && p.top + tip.height <= vp.height - 12

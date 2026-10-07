@@ -5,7 +5,6 @@ import { resetProjectState, store } from "../store.ts"
 import { draftKey, draftStore } from "./drafts.ts"
 import { composeInto, sendCodeFilesTo, threadInFront } from "./editorBridge.ts"
 import { splitComposerValue } from "./imagePaths.ts"
-import { prefs } from "./prefs.ts"
 import { stagedItems } from "./stagedContext.ts"
 
 function at<T>(pathname: string, run: () => T): T {
@@ -39,15 +38,15 @@ test("the /full page's thread is in front whatever the window's width", () => {
 
 const settings = { localFileOpener: "system" }
 
-async function withFetch(answer: (url: string) => Response | Promise<Response>, run: () => Promise<void>): Promise<string[]> {
+async function withFetch(answer: (url: string, init?: RequestInit) => Response | Promise<Response>, run: () => Promise<void>): Promise<string[]> {
   const original = globalThis.fetch
   const previous = globalThis.location
   const calls: string[] = []
   globalThis.location = { pathname: "/", search: "", origin: "http://127.0.0.1:4100" } as unknown as Location
-  globalThis.fetch = (async (input: unknown) => {
+  globalThis.fetch = (async (input: unknown, init?: RequestInit) => {
     const url = String(input)
     calls.push(url)
-    return answer(url)
+    return answer(url, init)
   }) as typeof fetch
   try {
     await run()
@@ -64,31 +63,33 @@ const procedure = (url: string) => url.replace(/[?#].*$/u, "").split("/").pop()
 
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } })
 
-// "Use VS Code" switches this browser's code files only once the External app has landed. Switched first,
-// a failed write left every code-file click going to the OLD External app instead of the reader (review C7).
-test("the offer's action leaves this browser's code files alone when the settings write fails", async () => {
-  prefs.codeFiles = "frizz"
+// "Use VS Code" sets Local file links to that editor; a failed write says so and changes nothing.
+test("the offer's action reports a failed settings write", async () => {
   for (const fail of ["settingsGet", "settingsSet"]) {
     const calls = await withFetch((url) => {
       if (procedure(url) === fail) return json({ error: "Frizz is restarting" }, 500)
       return json({ result: settings })
     }, () => sendCodeFilesTo("vscode"))
     assert.equal(calls.map(procedure).at(-1), fail, "the failure is the one this case meant")
-    assert.equal(prefs.codeFiles, "frizz", `${fail} failed: the browser half stays as it was`)
-    assert.equal(store.toast?.text, "Couldn't set the External app to VS Code")
+    assert.equal(store.toast?.text, "Couldn't set local file links to VS Code")
   }
   // A network failure, not an answer: the same.
   await withFetch(() => Promise.reject(new TypeError("fetch failed")), () => sendCodeFilesTo("vscode"))
-  assert.equal(prefs.codeFiles, "frizz")
+  assert.equal(store.toast?.text, "Couldn't set local file links to VS Code")
 })
 
-test("the offer's action switches both halves once the write lands", async () => {
-  prefs.codeFiles = "frizz"
-  const calls = await withFetch((url) => json({ result: procedure(url) === "settingsSet" ? { localFileOpener: "vscode" } : settings }), () => sendCodeFilesTo("vscode"))
+test("the offer's action writes Local file links once the write lands", async () => {
+  let written: unknown
+  const calls = await withFetch((url, init) => {
+    if (procedure(url) === "settingsSet") {
+      written = JSON.parse(String(init?.body ?? "{}"))
+      return json({ result: { localFileOpener: "vscode" } })
+    }
+    return json({ result: settings })
+  }, () => sendCodeFilesTo("vscode"))
   assert.ok(calls.some((url) => procedure(url) === "settingsSet"))
-  assert.equal(prefs.codeFiles, "editor")
+  assert.equal((written as { localFileOpener?: string } | undefined)?.localFileOpener, "vscode")
   assert.equal(store.toast?.text, "Code files open in VS Code")
-  prefs.codeFiles = "frizz"
 })
 
 // The page as composeInto sees it: an address, and a DOM whose only textarea is the one `selector` asks for,

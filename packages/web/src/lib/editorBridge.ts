@@ -19,7 +19,6 @@ import { splitComposerValue } from "./imagePaths.ts"
 import { phoneLayout } from "./mobile.ts"
 import { homeHref, projectViewHref, viewAt } from "./pageView.ts"
 import { basename } from "./paths.ts"
-import { prefs } from "./prefs.ts"
 import { projectsQueuesQuery, readProjectsQueues } from "./projectsQueuesRead.ts"
 import { spaNavigate } from "./router.ts"
 import { addContextItem, stagedItems } from "./stagedContext.ts"
@@ -29,7 +28,7 @@ import { parseStandaloneThreadPath } from "./standaloneThreadRoute.ts"
 // machine-wide, so this module is set up once per page (main.tsx) rather than per project:
 //
 //  1. WHICH EDITOR WINDOWS ARE CONNECTED — store.editorWindows, read at boot and replaced by every
-//     `editors` event. The settings drawer marks the External app that has a window behind it.
+//     `editors` event. The settings drawer marks the Local file links editor that has a window behind it.
 //  2. THE FIRST-CONNECTION OFFER — the first time this browser sees an accepting VS Code or Cursor window
 //     while its code files go elsewhere, a toast offers to send them there. Once per editor per browser.
 //  3. PROMPT-BOX INSERTS — "Add to Frizz prompt" in an editor leaves an item on the server and pings every
@@ -103,11 +102,11 @@ async function considerEditorOffer(): Promise<void> {
   const phone = phoneLayout()
   // Could anything be offered at all, whatever the settings say? Asked first so an `editors` event that
   // changes nothing worth offering costs no settings or supervisor read.
-  if (!editorOffer({ windows: store.editorWindows, codeFiles: "frizz", opener: undefined, offered: readOffered(), phone, remote: false })) return
+  if (!editorOffer({ windows: store.editorWindows, opener: undefined, offered: readOffered(), phone, remote: false })) return
   considering = true
   try {
     const [settings, remote] = await Promise.all([readSettings(), readRemoteSession()])
-    const kind = editorOffer({ windows: store.editorWindows, codeFiles: prefs.codeFiles, opener: settings.localFileOpener, offered: readOffered(), phone, remote })
+    const kind = editorOffer({ windows: store.editorWindows, opener: settings.localFileOpener, offered: readOffered(), phone, remote })
     if (!kind) return
     rememberOffered(kind)
     const label = EDITOR_OPENER_LABEL[kind]
@@ -138,30 +137,30 @@ function rememberOffered(kind: EditorOpener): void {
   }
 }
 
-// ── 2b. where an automatic browser's code files go ─────────────────────────────────────────────────
+// ── 2b. where a code file goes ─────────────────────────────────────────────────────────────────────
 
 /**
- * Whether a code-file click on an "auto" browser goes to the External app (editorWindows.ts
- * codeFilesDestination), for lib/local-file-links.ts. Only asked while an editor window that takes opens
- * is connected, so a page with none never reads anything. The External app is read FRESH (fetchQuery),
- * because the server opens with its own current setting: nothing refreshes this page's cached copy when
- * another tab or browser changes it, so a click trusting the cache after External app moved to Copy path
- * copied the path instead of opening the reader. Whether this is a remote session comes from the shared
+ * Whether a code-file click goes to the Local file links editor (editorWindows.ts codeFilesDestination),
+ * for lib/local-file-links.ts. Only asked while an editor window that takes opens is connected, so a
+ * page with none never reads anything. The setting is read FRESH (fetchQuery), because the server opens
+ * with its own current setting: nothing refreshes this page's cached copy when another tab or browser
+ * changes it, so a click trusting the cache after it moved to Copy path copied the path instead of
+ * opening the reader. Whether this is a remote session comes from the shared
  * supervisor poll's cache. A failed read is the reader, which always works.
  */
-export function autoCodeFilesMayGoToEditor(): boolean {
-  return prefs.codeFiles === "auto" && connectedOpeners(store.editorWindows).size > 0
+export function codeFilesMayGoToEditor(): boolean {
+  return connectedOpeners(store.editorWindows).size > 0
 }
 
-export async function autoCodeFilesGoToEditor(): Promise<boolean> {
-  if (!autoCodeFilesMayGoToEditor()) return false
+export async function codeFilesGoToEditor(): Promise<boolean> {
+  if (!codeFilesMayGoToEditor()) return false
   try {
     const [settings, remote] = await Promise.all([
       queryClient ? queryClient.fetchQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() }) : rpc.settingsGet(),
       queryClient ? queryClient.ensureQueryData(supervisorStatusQueryOptions).then(isRemoteSession) : getFrizzSupervisorStatus().then(isRemoteSession),
     ])
     const phone = typeof window !== "undefined" && phoneLayout()
-    return codeFilesDestination({ codeFiles: prefs.codeFiles, windows: store.editorWindows, opener: settings.localFileOpener, phone, remote }) === "editor"
+    return codeFilesDestination({ windows: store.editorWindows, opener: settings.localFileOpener, phone, remote }) === "editor"
   } catch {
     return false
   }
@@ -180,29 +179,24 @@ async function readSettings(): Promise<Settings> {
   return queryClient.fetchQuery({ queryKey: ["settingsGet"], queryFn: () => rpc.settingsGet() })
 }
 
-// Both halves of "code files go to the editor": this browser's "Open code files" (prefs) and the
-// machine's External app. The settings write carries the WHOLE object (useSettingsAutosave), so it is
-// built on a fresh read rather than whatever this page cached, and published to every project's cached
-// copy the way the drawer's own save is — which is also how a Settings drawer open under the toast
-// learns of it rather than writing its old External app back (useSettingsAutosave adoptPublishedSettings).
-//
-// The browser half is switched only once the machine half has landed. It was switched first until
-// review C7, so a failed write left this browser sending every code-file click to the OLD External app
-// (System, say) instead of the reader — a change nobody asked for, under a toast that said only that
-// the External app could not be set. Exported for its test.
+// "Code files go to the editor" is the machine's Local file links setting naming it (while it is
+// connected, codeFilesDestination). The settings write carries the WHOLE object (useSettingsAutosave), so
+// it is built on a fresh read rather than whatever this page cached, and published to every project's
+// cached copy the way the drawer's own save is — which is also how a Settings drawer open under the
+// toast learns of it rather than writing its old value back (useSettingsAutosave adoptPublishedSettings).
+// Exported for its test.
 export async function sendCodeFilesTo(kind: EditorOpener): Promise<void> {
   const label = EDITOR_OPENER_LABEL[kind]
   try {
     const current = await rpc.settingsGet()
     const saved = await rpc.settingsSet({ ...current, localFileOpener: kind })
-    prefs.codeFiles = "editor"
     if (queryClient) {
       queryClient.setQueryData(["settingsGet"], saved)
       publishMachineSettings(queryClient, saved)
     }
     showToast(`Code files open in ${label}`)
   } catch (error) {
-    showToast(`Couldn't set the External app to ${label}`, { detail: error instanceof Error ? error.message.slice(0, 100) : undefined })
+    showToast(`Couldn't set local file links to ${label}`, { detail: error instanceof Error ? error.message.slice(0, 100) : undefined })
   }
 }
 

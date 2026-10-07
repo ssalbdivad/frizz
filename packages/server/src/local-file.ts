@@ -344,7 +344,7 @@ function envEditorTarget(command: string, path: string, position: FilePosition |
 
 /**
  * The editor families a connected editor window must belong to before the editor bridge may take an
- * open the External app setting would otherwise hand to a spawn (editor-bridge.ts): the family that
+ * open the Local file links setting would otherwise hand to a spawn (editor-bridge.ts): the family that
  * spawn would have launched, and nothing else. `system`, `finder` and `copy` are never an editor; for
  * `editor` it is whatever `$VISUAL`/`$EDITOR` runs, and only the families an extension can live in.
  */
@@ -463,7 +463,7 @@ export async function openLocalFile(
 
 /**
  * Which editor a FOLDER opens in — a thread's working directory, the "Open in editor" action. The
- * External app setting when it names an editor; otherwise `$VISUAL`/`$EDITOR`, because the other
+ * Local file links setting when it names an editor; otherwise `$VISUAL`/`$EDITOR`, because the other
  * settings mean nothing for a folder (the system opener and Reveal hand it to a file manager, Copy
  * path is not an editor). Throws a reason for the toast when neither gives an editor.
  */
@@ -473,7 +473,7 @@ export function folderEditor(opener: LocalFileOpener, env: NodeJS.ProcessEnv): "
     envEditorCommand(env)
     return "editor"
   } catch {
-    throw new Error("Set External app to an editor in Settings")
+    throw new Error("Set Local file links to an editor in Settings")
   }
 }
 

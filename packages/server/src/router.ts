@@ -1346,7 +1346,7 @@ export function createRouter(ctx: AppContext) {
 
   // "Open in editor" on a folder: raise the editor window that already has it open (editor-bridge.ts),
   // else spawn the editor on it. The bridge is asked only for the family the spawn would launch —
-  // folderEditor's choice, which is `$EDITOR` when the External app is not an editor at all.
+  // folderEditor's choice, which is `$EDITOR` when the Local file links app is not an editor at all.
   async function openFolderInEditor(dir: string): Promise<{ path: string }> {
     const opener = ctx.getSettings().localFileOpener ?? "system"
     if (ctx.editors) {
@@ -4692,7 +4692,7 @@ export function createRouter(ctx: AppContext) {
     // (home-and-below + temp + project). The HTTP layer already rejects non-local/mismatched origins;
     // this gate means the endpoint never becomes arbitrary remote-origin or whole-filesystem access.
     //
-    // When the External app is an editor and a window of it is connected over the editor bridge, the
+    // When the Local file links app is an editor and a window of it is connected over the editor bridge, the
     // window whose folder holds the file opens it at the position, in-process — no CLI round trip, no
     // guessed window. Otherwise, or when no window answers in time, the opener is spawned with the
     // position (`code -g path:12:3`). A window that answers that it could NOT open the file is the
@@ -4720,7 +4720,7 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
-    // "Open in editor": the thread's working folder, in the External app when that is an editor and
+    // "Open in editor": the thread's working folder, in the Local file links app when that is an editor and
     // `$EDITOR` otherwise. The folder is the one a terminal on the thread starts in, resolved here.
     //
     // When the thread's recent SUB-AGENTS work in another checkout (thread-cwd.ts subAgentFolders — an

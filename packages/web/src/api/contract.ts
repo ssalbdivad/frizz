@@ -363,10 +363,10 @@ export interface Api {
   // A live Frizz-owned runtime is deliberately unavailable: a second provider client is uncoordinated.
   threadTerminalCommand(input: { slug: string }): Promise<{ command: string | null; mode: "attach" | "resume" | "unavailable"; reason: string | null }>
   openExternal(input: { url: string }): Promise<void>
-  // `line`/`column`/`endLine` land the External app on a place in the file: through a connected editor
+  // `line`/`column`/`endLine` land the Local file links app on a place in the file: through a connected editor
   // window (the editor bridge, packages/vscode) when the app is one, else its CLI's `-g path:line:col`.
   openLocalFile(input: { path: string; image?: boolean; line?: number; column?: number; endLine?: number }): Promise<{ action: "opened" | "copy"; path: string }>
-  // "Open in editor": the thread's working folder, in the External app when it is an editor, else $EDITOR.
+  // "Open in editor": the thread's working folder, in the Local file links app when it is an editor, else $EDITOR.
   // When its sub-agents work in other checkouts it opens nothing and answers `choices`; the pick comes
   // back as `path`, which must be one of them.
   openThreadFolder(input: { slug: string; path?: string }): Promise<{ path?: string; choices?: ThreadFolderChoice[] }>

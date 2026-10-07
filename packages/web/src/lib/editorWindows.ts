@@ -1,18 +1,17 @@
 import type { EditorWindowSummary, LocalFileOpener } from "@frizz/shared"
-import type { CodeFiles } from "./prefs.ts"
 
 // WHAT THE PAGE MAKES OF THE CONNECTED EDITOR WINDOWS (store.editorWindows; packages/vscode is the
-// extension, design in ARCHITECTURE.md § VS Code extension) — the pure half: which External app choices have a
-// window behind them, where this browser's code files go, and whether it should be offered an editor.
+// extension, design in ARCHITECTURE.md § VS Code extension) — the pure half: which Local file links choices
+// have a window behind them, where a code file goes, and whether this browser should be offered an editor.
 // lib/editorBridge.ts acts on it.
 
-/** The External app choices an editor window can stand behind. Windsurf runs the extension, but the setting has no Windsurf. */
+/** The Local file links choices an editor window can stand behind. Windsurf runs the extension, but the setting has no Windsurf. */
 export type EditorOpener = Extract<LocalFileOpener, "vscode" | "cursor">
 
 export const EDITOR_OPENER_LABEL: Record<EditorOpener, string> = { vscode: "VS Code", cursor: "Cursor" }
 
 /**
- * The External app choices a connected window would take a file for. Only a window that ACCEPTS opens
+ * The Local file links choices a connected window would take a file for. Only a window that ACCEPTS opens
  * counts: one whose `frizz.openFileLinks` is off is connected, but a file sent to that app would go to
  * its CLI exactly as if no window were there, so marking it connected would promise what it will not do.
  */
@@ -25,39 +24,35 @@ export function connectedOpeners(windows: readonly EditorWindowSummary[]): Set<E
 }
 
 /**
- * Where a click on a code file goes in this browser: the External app ("editor") or the reader
- * ("frizz"). A choice this browser made — in Settings, or by taking the offer below — is final. One that
- * has not chosen ("auto", prefs.ts) sends it to the External app exactly while that app is an editor with
- * a window connected that takes opens (connectedOpeners), and never from the phone layout or a
- * remote-access session, whose click would open in a window on the desk nobody there can see: the same
- * two gates as the offer.
+ * Where a click on a code file goes: the Local file links app ("editor") or Frizz's reader ("frizz").
+ * The app exactly while it is VS Code or Cursor with a window connected that takes opens
+ * (connectedOpeners) — a connected editor is proof the app is there, on this machine, and that its owner
+ * installed something whose whole job is to take these clicks — and the reader otherwise. Never the app
+ * from the phone layout or a remote-access session, whose click would open in a window on the desk
+ * nobody there can see: the same two gates as the offer. (A per-browser "Open code files" choice that
+ * could pin either answer was dropped 2026-10-07, folding back into upstream's one setting.)
  */
-export function codeFilesDestination({ codeFiles, windows, opener, phone, remote }: {
-  codeFiles: CodeFiles
+export function codeFilesDestination({ windows, opener, phone, remote }: {
   windows: readonly EditorWindowSummary[]
   opener: LocalFileOpener | undefined
   phone: boolean
   remote: boolean
 }): "frizz" | "editor" {
-  if (codeFiles !== "auto") return codeFiles
   if (phone || remote || (opener !== "vscode" && opener !== "cursor")) return "frizz"
   return connectedOpeners(windows).has(opener) ? "editor" : "frizz"
 }
 
 /**
- * The editor to offer this browser's code files to, or null. Offered when a window of that editor is
- * connected and accepting, this browser's code files do not already go there (External app is that
- * editor AND "Open code files" did not choose the reader — automatic sends them to a connected External
- * app, codeFilesDestination), it has never been offered here before,
- * and the page is neither the phone layout nor a remote-access session: a device reaching this Frizz
- * over a tunnel should not be asked to send its clicks to an editor on the desk (prefs.ts `codeFiles`),
- * where an open lands in a window it cannot see and the reader never opens. Phone width alone stood in
+ * The editor to offer code files to, or null. Offered when a window of that editor is connected and
+ * accepting, code files do not already go there (Local file links is not that editor —
+ * codeFilesDestination), it has never been offered here before, and the page is neither the phone
+ * layout nor a remote-access session: a device reaching this Frizz over a tunnel should not be asked to
+ * send its clicks to an editor on the desk, where an open lands in a window it cannot see. Phone width alone stood in
  * for "remote" until review C8, so a laptop on the tunnel was asked. Windows are taken in the order the
  * server lists them, so two editors connecting at once are offered one at a time.
  */
-export function editorOffer({ windows, codeFiles, opener, offered, phone, remote }: {
+export function editorOffer({ windows, opener, offered, phone, remote }: {
   windows: readonly EditorWindowSummary[]
-  codeFiles: CodeFiles
   opener: LocalFileOpener | undefined
   offered: ReadonlySet<string>
   phone: boolean
@@ -69,7 +64,7 @@ export function editorOffer({ windows, codeFiles, opener, offered, phone, remote
     if (!window.acceptsOpens || (window.kind !== "vscode" && window.kind !== "cursor")) continue
     const kind: EditorOpener = window.kind
     if (offered.has(kind)) continue
-    if (codeFiles !== "frizz" && opener === kind) continue
+    if (opener === kind) continue
     return kind
   }
   return null

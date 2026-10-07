@@ -2,10 +2,9 @@ import type { FilePosition } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { openImageViewer, pushFileReader, showToast } from "../store.ts"
 import { copyTextToClipboard } from "./clipboard.ts"
-import { autoCodeFilesGoToEditor, autoCodeFilesMayGoToEditor } from "./editorBridge.ts"
+import { codeFilesGoToEditor, codeFilesMayGoToEditor } from "./editorBridge.ts"
 import { embedded, postToHost } from "./embed.ts"
 import { baseName, runExternalOpen } from "./externalOpen.ts"
-import { prefs } from "./prefs.ts"
 import { localViewerFor } from "./localViewer.ts"
 import { localPositionOf } from "./localFilePosition.ts"
 import type { MarkdownScope } from "./useMarkdown.ts"
@@ -95,9 +94,9 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
     openImageViewer(path, from ? imageGalleryFor(from) : [], scope?.projectId)
     return
   }
-  // IN AN EDITOR'S SIDEBAR a code file opens in that editor, at the place the link names, whatever this
-  // browser's "Open code files" or the machine's External app say: the human is sitting in the editor
-  // they want it in (embed-protocol.ts `frizz:open-file`). Not through the server, whose opener would
+  // IN AN EDITOR'S SIDEBAR a code file opens in that editor, at the place the link names, whatever the
+  // Local file links setting says: the human is sitting in the editor they want it in
+  // (embed-protocol.ts `frizz:open-file`). Not through the server, whose opener would
   // pick a window by its own rules, and not into the reader, which a sidebar has no room beside.
   if (viewer === "text" && embedded()) {
     openInHostEditor(path, at)
@@ -110,17 +109,12 @@ export function openLocalPath(path: string, from?: Element | null, scope?: Markd
     pushFileReader(path, scope)
     return
   }
-  // A code file goes straight to the external app when this browser asked for that (prefs.codeFiles),
-  // and lands in the reader anyway when the app cannot start — the reader is the one that always works.
-  if (viewer === "text" && prefs.codeFiles === "editor") {
-    void openExternally(path, scope?.projectId, () => pushFileReader(path, scope), at)
-    return
-  }
-  // A browser that chose neither, with an editor connected: there when the External app is that editor
-  // (lib/editorWindows.ts codeFilesDestination), the reader otherwise. Settled before anything opens, so
-  // one click never shows both. With no editor connected this is the reader, synchronously, as always.
-  if (viewer === "text" && autoCodeFilesMayGoToEditor()) {
-    void autoCodeFilesGoToEditor().then((toEditor) => {
+  // With an editor connected, a code file goes there when Local file links names that editor
+  // (lib/editorWindows.ts codeFilesDestination), and to the reader otherwise — or when the app cannot
+  // start. Settled before anything opens, so one click never shows both. With no editor connected this is
+  // the reader, synchronously, as always.
+  if (viewer === "text" && codeFilesMayGoToEditor()) {
+    void codeFilesGoToEditor().then((toEditor) => {
       if (toEditor) void openExternally(path, scope?.projectId, () => pushFileReader(path, scope), at)
       else pushFileReader(path, scope)
     })

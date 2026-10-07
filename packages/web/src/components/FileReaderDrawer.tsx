@@ -134,7 +134,7 @@ export function FileReaderDrawer({ scope, ...props }: ReaderProps & { scope?: Ma
 function FileReader({ id, path, title, depth, widthDepth }: ReaderProps) {
   const scope = useContext(MarkdownScopeContext)
   // ON A PHONE THERE IS NO OPEN (upstream db0e7568, "the reader's Open footer is not shown on the phone").
-  // Its Open launches the file on the machine Frizz runs on — the desktop opener, or the External app —
+  // Its Open launches the file on the machine Frizz runs on — the desktop opener, or the Local file links app —
   // which from a phone is somewhere else entirely: the tap did nothing anyone holding the phone could
   // see. The phone routes every file here for exactly that reason (lib/local-file-links.ts openLocalPath),
   // so the reader is the end of the line there, and a button that leads off it is a dead end.

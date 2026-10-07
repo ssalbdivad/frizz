@@ -88,7 +88,7 @@ function CodeCommentCard({ directive }: { directive: CodexHostDirective }) {
   const end = number(attrs, "end") ?? start
   const priority = number(attrs, "priority")
   const location = file ? `${file}${start ? `:${start}${end && end !== start ? `-${end}` : ""}` : ""}` : "Code location unavailable"
-  // The finding's lines ride beside the path, so the External app opens the file AT the finding rather
+  // The finding's lines ride beside the path, so the Local file links app opens the file AT the finding rather
   // than at its top; the reader is handed the bare file (lib/localFilePosition.ts).
   const position = start !== undefined && Number.isInteger(start) && start >= 1
     ? { line: start, ...(end !== undefined && Number.isInteger(end) && end > start ? { endLine: end } : {}) }

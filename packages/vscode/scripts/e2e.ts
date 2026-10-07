@@ -21,7 +21,7 @@
 //   FRIZZ_E2E_ORIGIN=http://127.0.0.1:<port> FRIZZ_E2E_PROJECT_DIR=<a registered project's folder> \
 //     nub packages/vscode/scripts/e2e.ts
 //       REAL mode against a Frizz you started — a disposable one, since it writes a sample file into the
-//       project folder and, with FRIZZ_E2E_SET_OPENER=1, sets External app to VS Code for the run.
+//       project folder and, with FRIZZ_E2E_SET_OPENER=1, sets Local file links to VS Code for the run.
 //       FRIZZ_E2E_DISPATCH=1 (+ FRIZZ_E2E_THREAD=<slug>) also runs the steps that start or message a
 //       real agent. FRIZZ_E2E_PAGE_CLAIMS=1 leaves the prompt-box insert for a real page open on that
 //       Frizz to claim, instead of taking it itself.

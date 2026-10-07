@@ -38,7 +38,7 @@ function fixture(t: TestContext) {
       else process.env[key] = value
     }
   })
-  // `$EDITOR` names the stand-in, so the External app "editor" maps to the VS Code family and spawns it.
+  // `$EDITOR` names the stand-in, so the Local file links value "editor" maps to the VS Code family and spawns it.
   process.env.VISUAL = code
   delete process.env.EDITOR
   const spawned = () => (existsSync(log) ? readFileSync(log, "utf8").trim().split("\n") : null)
@@ -135,7 +135,7 @@ test("Open in editor raises the window that has the folder open, else spawns the
   assert.deepEqual(f.spawned(), [f.project])
   // No editor to open a folder in at all: the reason, and the bridge is never asked.
   process.env.VISUAL = "nvim"
-  await assert.rejects(router(f.project, "system", bridge(true, calls)).openProjectFolder.handler({ input: {} }), /Set External app to an editor/)
+  await assert.rejects(router(f.project, "system", bridge(true, calls)).openProjectFolder.handler({ input: {} }), /Set Local file links to an editor/)
   assert.equal(calls.focus.length, 2)
 })
 

@@ -170,7 +170,7 @@ test("an opener counts as open when its launcher EXITS: non-zero is its error, e
   await awaitOpenerHandoff(launched((c) => c.emit("spawn")), "vim", 20)
 })
 
-test("Open in editor: a folder opens in the External app's editor, else $EDITOR, else a reason", async (t) => {
+test("Open in editor: a folder opens in the Local file links editor, else $EDITOR, else a reason", async (t) => {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "frizz-local-folder-")))
   t.after(() => rmSync(dir, { recursive: true, force: true }))
   const open = async (opener: LocalFileOpener, env: NodeJS.ProcessEnv) => {
@@ -183,7 +183,7 @@ test("Open in editor: a folder opens in the External app's editor, else $EDITOR,
   // System default, Reveal and Copy path would hand a folder to a file manager or to nothing.
   for (const opener of ["system", "finder", "copy"] as const) {
     assert.deepEqual(await open(opener, { VISUAL: "nvim", EDITOR: "subl -n" }), ["subl", "-n", dir], opener)
-    await assert.rejects(open(opener, { EDITOR: "vim" }), /^Error: Set External app to an editor in Settings$/u)
+    await assert.rejects(open(opener, { EDITOR: "vim" }), /^Error: Set Local file links to an editor in Settings$/u)
   }
   await assert.rejects(open("vscode", {}).then(() => openLocalFolder(join(dir, "gone"), "vscode", { spawn: fakeSpawn([]) })), /is not a folder/)
 })
@@ -454,7 +454,7 @@ test("$EDITOR is told the position in its own dialect, and an editor with none g
   assert.deepEqual(argv({ EDITOR: "code" }, "win32"), ["cmd.exe", "/d", "/s", "/c", `""code" "-g" "/p/a.ts:12:3""`])
 })
 
-test("the editor families the bridge may route to are the ones the External app would have spawned", () => {
+test("the editor families the bridge may route to are the ones the Local file links app would have spawned", () => {
   assert.deepEqual(editorKindsForOpener("vscode", {}), ["vscode"])
   assert.deepEqual(editorKindsForOpener("cursor", { EDITOR: "windsurf" }), ["cursor"], "the setting outranks $EDITOR")
   for (const opener of ["system", "finder", "copy"] as const) assert.deepEqual(editorKindsForOpener(opener, { EDITOR: "code" }), [], opener)

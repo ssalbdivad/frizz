@@ -30,20 +30,6 @@ export interface Prefs {
   // map: an action still on its default has no entry, so a default that changes in a later release
   // reaches everyone who never touched it. Per browser on purpose — a keyboard belongs to a machine.
   keybindings: Overrides
-  // Where a click on a CODE file (anything the reader shows as source — not Markdown, not a picture)
-  // goes. "frizz" is the reader, which always works: it needs no app installed and no desktop on the far
-  // end. "editor" hands it straight to the external app the machine-wide `localFileOpener` setting
-  // names, and falls back to the reader when that app cannot start. Per browser on purpose: a phone
-  // reaching this Frizz over a tunnel should not launch Cursor on the desk.
-  //
-  // "auto" is a browser that has chosen neither, and it is the default: the external app exactly while
-  // that app is an editor with the Frizz extension connected and taking opens, and the page is not a
-  // phone or a remote session (lib/editorWindows.ts codeFilesDestination) — the reader otherwise, as
-  // before. A connected editor is proof the app is there, on this machine, and that its owner installed
-  // something whose whole job is to take these clicks; the reader default existed for when neither was
-  // known. Until 2026-10-01 the default was "frizz" and only a one-time 12s toast switched it, so a
-  // human who missed the toast clicked a link with VS Code connected and got the reader.
-  codeFiles: CodeFiles
   // A working thread's status line written out after its name on every thread row, instead of shown when
   // you point at the row (Sidebar.tsx ThreadRow). Off by default (2026-10-07): Colin's standup call of
   // 2026-10-01, always-visible status lines are too dense for a list of names, taken from the project
@@ -54,8 +40,6 @@ export interface Prefs {
   // setShareEditor), the one switch that also keeps the agents' tool out of the editor. A stored value is
   // ignored: the eye had not reached anyone's installed extension.)
 }
-
-export type CodeFiles = "auto" | "frizz" | "editor"
 
 function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection {
   return v === "fifo" || v === "lifo" ? v : fallback
@@ -68,7 +52,6 @@ function coerceQueueOrder(v: unknown, fallback: QueueDirection): QueueDirection 
 interface RedefaultMarkers {
   diffsRedefaulted?: boolean
   snoozeRedefaulted?: boolean
-  codeFilesRedefaulted?: boolean
 }
 
 export function parseStoredPrefs(raw: string | null): Prefs {
@@ -79,11 +62,9 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     queueOrder: "fifo",
     railFilesCollapsed: false,
     keybindings: {},
-    codeFiles: "auto",
     alwaysShowStatusLines: false,
     diffsRedefaulted: true,
     snoozeRedefaulted: true,
-    codeFilesRedefaulted: true,
   }
   try {
     if (!raw) return fallback
@@ -91,6 +72,10 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     // The context bar's eye was a pref here for a day (2026-10-01); it is the extension's setting now
     // (lib/editorContext.ts setShareEditor). Dropped, so a stored value never rides the blob again.
     delete (stored as Record<string, unknown>).sendEditorContext
+    // "Open code files" was a per-browser pref from 2026-09-30 to 2026-10-07; code files follow the one
+    // Local file links setting now (lib/editorWindows.ts codeFilesDestination). Dropped the same way.
+    delete (stored as Record<string, unknown>).codeFiles
+    delete (stored as Record<string, unknown>).codeFilesRedefaulted
     // ONE-TIME migration (2026-07-09): the maintainer settled diffs as collapsed-by-default for
     // card-family consistency. A stored `compactDiffs: false` predating that decision was the OLD
     // default, not a choice — re-default it once. The marker makes a subsequent deliberate
@@ -106,13 +91,6 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       if (stored.snoozePreset === "1d") stored.snoozePreset = "tomorrow"
       stored.snoozeRedefaulted = true
     }
-    // ONE-TIME migration (2026-10-01): the default moved from "frizz" to "auto". The same reasoning as
-    // the snooze preset: every pref write persists the whole blob, and the setting is one day old, so a
-    // stored "frizz" is the old default riding along, not a pick. A later deliberate "In Frizz" sticks.
-    if (!stored.codeFilesRedefaulted) {
-      if (stored.codeFiles === "frizz") stored.codeFiles = "auto"
-      stored.codeFilesRedefaulted = true
-    }
     return {
       ...fallback,
       ...stored,
@@ -120,7 +98,6 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       queueOrder: coerceQueueOrder(stored.queueOrder, fallback.queueOrder),
       railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
       keybindings: sanitizeOverrides(stored.keybindings),
-      codeFiles: stored.codeFiles === "editor" || stored.codeFiles === "frizz" ? stored.codeFiles : "auto",
       alwaysShowStatusLines: stored.alwaysShowStatusLines === true,
     }
   } catch {

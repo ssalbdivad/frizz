@@ -14,7 +14,7 @@ const base = {
 
 const with_ = (over: Record<string, unknown>) => ({ ...base, ...over }) as unknown as Settings
 
-// The editor offer's "Use VS Code" writes the External app while a Settings drawer may be open over a
+// The editor offer's "Use VS Code" writes the Local file links app while a Settings drawer may be open over a
 // draft seeded with System; the drawer's next save of ANY field carried the whole draft and wrote System
 // back (review C6). The drawer adopts what the cache now says for a machine key it has not touched.
 test("an open draft adopts a machine setting another surface wrote", () => {

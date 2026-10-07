@@ -173,7 +173,7 @@ export const store = proxy({
   // The EDITOR WINDOWS connected over the editor bridge (packages/vscode): which app each is and whether
   // it takes file opens. MACHINE-WIDE — one Frizz, every project — so a project switch leaves it alone.
   // Read at boot (`editorWindows`) and replaced whole by every `editors` event (lib/editorBridge.ts);
-  // the settings drawer marks the External app that is connected, and the first connection offers it.
+  // the settings drawer marks the Local file links app that is connected, and the first connection offers it.
   editorWindows: [] as EditorWindowSummary[],
   // The in-app PICTURE VIEWER (components/ImageViewer), over every page and drawer. `paths` is what
   // ←/→ step through: the pictures rendered in the same card, drawer or page as the one clicked, in

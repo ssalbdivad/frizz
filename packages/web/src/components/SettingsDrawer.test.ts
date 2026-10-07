@@ -75,7 +75,7 @@ test("the drawer is one untabbed list of interface preferences, with no project 
   // (The note above the component NAMES the retired tab in prose; what must be gone is the markup.)
   assert.doesNotMatch(source, /role="tab(?:list)?"|SettingsTabs|label: "(?:Project|Frizz) settings"/)
   const fields = [...source.matchAll(/<SettingsField label="([^"]+)"/g)].map((m) => m[1])
-  assert.deepEqual(fields, ["Appearance", "Project sidebar", "Density", "Queue order", "Desktop notifications", "Background summaries", "Always show status lines", "Delete done threads", "Open code files", "External app"])
+  assert.deepEqual(fields, ["Appearance", "Project sidebar", "Density", "Queue order", "Desktop notifications", "Background summaries", "Always show status lines", "Delete done threads", "Local file links"])
   // The triage prompt has exactly one editor, and it is the picker's.
   assert.doesNotMatch(source, /GithubPromptEditor|githubPrompt|<textarea/)
   assert.match(promptPopoverSource, /<GithubPromptEditor draft=\{draft\} onChange=\{update\} rows=\{14\} \/>/)

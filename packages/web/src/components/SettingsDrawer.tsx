@@ -12,7 +12,7 @@ import { SHEET_CLOSE_MS, SHEET_PANEL_CLASS, SHEET_SCRIM_CLASS, prefersReducedMot
 import { SaveStatus, useSettingsDraft, type SaveState } from "../hooks/useSettingsAutosave.tsx"
 import { useIsMobile } from "../lib/mobile.ts"
 import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
-import { EDITOR_OPENER_LABEL, codeFilesDestination, connectedOpeners } from "../lib/editorWindows.ts"
+import { EDITOR_OPENER_LABEL, connectedOpeners } from "../lib/editorWindows.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { isRemoteSession } from "../api/signOut.ts"
 import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
@@ -47,7 +47,7 @@ export function SettingsDrawer() {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const isMobile = useIsMobile()
   // AN EDITOR'S SIDEBAR GETS THIS DRAWER, the desktop's, the frame's full width (lib/mobile.ts: a sidebar is
-  // never the phone). Four rows behave differently there, and each says so in the field's own hint type
+  // never the phone). Several rows behave differently there, and each says so in the field's own hint type
   // rather than offering a control that would not do what it says.
   const inEditor = embedded()
   // ABOVE AN OPEN THREAD, as Escape already ranks it (DrawerStack): at a fixed z-50 it slid in UNDER the
@@ -214,17 +214,12 @@ export function SettingsDrawer() {
                 over loopback only (RemoteAccessField.tsx). */}
             <RemoteAccessField />
 
-            {/* LAST, on purpose: where a vetted local path opens is the one power-user pair in the
-                drawer, so it sits below everything an ordinary operator adjusts. */}
-            {/* Client-only (prefs): where a click on a code file goes, in this browser. The app it
-                goes to is the machine-wide select just below, which it reads as a pair with. */}
-            <SettingsField label="Open code files" help={SETTINGS_HELP.codeFiles}>
-              {/* From the sidebar a code file opens in the editor around it, whatever this says
-                  (lib/local-file-links.ts); the choice is a browser's. */}
-              {inEditor ? <EditorFixed name="code-files">In this window</EditorFixed> : <CodeFilesControl opener={draft.localFileOpener} />}
-            </SettingsField>
-
-            <SettingsField label="External app" help={SETTINGS_HELP.localFileOpener}>
+            {/* LAST, on purpose: which app a vetted local path opens in is the one power-user knob in the
+                drawer, so it sits below everything an ordinary operator adjusts. Upstream's row; the
+                fork's per-browser "Open code files" beside it folded back into it 2026-10-07 — a code
+                file goes to the editor named here while its Frizz extension is connected, and to the
+                reader otherwise (lib/editorWindows.ts codeFilesDestination). */}
+            <SettingsField label="Local file links" help={SETTINGS_HELP.localFileOpener}>
               <Select
                 variant="bordered"
                 value={draft.localFileOpener ?? "system"}
@@ -543,41 +538,6 @@ function AlwaysShowStatusLinesToggle() {
 
 // Queue/rested-band direction: client-only (localStorage prefs proxy), applies live to the Needs-you
 // queue and the sidebar's rested rows the instant it flips. FIFO by default (longest in the queue first).
-// Pressed is where a click goes NOW: a browser that has chosen neither ("auto", lib/prefs.ts) shows the
-// External app while it is an editor with a window connected, and the reader otherwise — so the control
-// moves as the editor comes and goes. Pressing the OTHER button makes that the choice; pressing the one
-// already pressed changes nothing, so a click that looks like a no-op cannot quietly fix automatic in
-// place (it did, and the browser then ignored the editor coming and going for good).
-function CodeFilesControl({ opener }: { opener: Settings["localFileOpener"] }) {
-  const { codeFiles } = useSnapshot(prefs)
-  const { editorWindows } = useSnapshot(store)
-  const phone = useIsMobile()
-  const remote = isRemoteSession(useSupervisorStatus().data)
-  const current = codeFilesDestination({ codeFiles, windows: editorWindows, opener, phone, remote })
-  const opts: { v: "frizz" | "editor"; label: string }[] = [
-    { v: "frizz", label: "In Frizz" },
-    { v: "editor", label: "In external app" },
-  ]
-  return (
-    <div className="inline-flex w-fit rounded-md border border-border bg-bg p-0.5">
-      {opts.map((o) => (
-        <button
-          key={o.v}
-          onClick={() => {
-            if (current !== o.v) prefs.codeFiles = o.v
-          }}
-          aria-pressed={current === o.v}
-          className={`rounded px-3 py-1 text-[12px] transition-colors ${
-            current === o.v ? "bg-fg text-bg" : "text-muted hover:text-fg"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function QueueOrderControl() {
   const { queueOrder } = useSnapshot(prefs)
   const opts: { v: "fifo" | "lifo"; label: string }[] = [
@@ -602,7 +562,7 @@ function QueueOrderControl() {
   )
 }
 
-// A row's value where an editor's sidebar fixes it (the theme, where code files open): the reading in the
+// A row's value where an editor's sidebar fixes it (the theme): the reading in the
 // controls' own 12px, muted as a value no click changes.
 function EditorFixed({ name, children }: { name: string; children: React.ReactNode }) {
   return <span data-settings-editor={name} className="py-1 text-[12px] text-muted">{children}</span>
@@ -613,7 +573,7 @@ function EditorHint({ children }: { children: React.ReactNode }) {
   return <span data-settings-editor-hint className="text-[11px] text-muted-70">{children}</span>
 }
 
-// Which of the External app's editors has a window connected right now (the editor bridge,
+// Which of the Local file links editors has a window connected right now (the editor bridge,
 // packages/vscode): a file sent to one opens in the window that has its folder, at the line the link
 // names. The notification field's hint type (PermHint), at the field's 6px from its control; absent
 // when nothing is connected, so the field reads exactly as it always did for everyone without the

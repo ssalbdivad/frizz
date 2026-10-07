@@ -99,7 +99,7 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
   )
 }
 
-/** Open the thread's working folder in the External app (or `$EDITOR`) — the step `t` then `code .` took.
+/** Open the thread's working folder in the Local file links app (or `$EDITOR`) — the step `t` then `code .` took.
  *  The server resolves the folder, the same one a terminal on the thread starts in. When the thread's
  *  sub-agents work in another checkout it opens nothing and hands back the folders, and `choose` puts
  *  them in front of the human (FolderChoiceDialog, or on a queue card the card's project folder); the
@@ -107,8 +107,8 @@ export function ThreadTerminalButton({ slug }: { slug: string }) {
  *
  *  IN AN EDITOR'S SIDEBAR the editor is the one the human is sitting in, so the folder goes there, as a
  *  code-file link does (lib/local-file-links.ts openInHostEditor): the extension reveals it in this
- *  window's Explorer. Through the External app it opened a file manager or another window, or — with
- *  System default, or Copy path and no $EDITOR — said "Set External app to an editor in Settings" to a
+ *  window's Explorer. Through the Local file links app it opened a file manager or another window, or — with
+ *  System default, or Copy path and no $EDITOR — said "Set Local file links to an editor in Settings" to a
  *  human already in one (sweep 2026-10-01). A folder picked from the choices goes the same way. */
 function openInEditor(api: Api, slug: string, choose: (choices: ThreadFolderChoice[]) => void, path?: string): void {
   if (embedded()) {

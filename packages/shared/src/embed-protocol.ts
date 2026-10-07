@@ -298,7 +298,7 @@ export interface EmbedComposedMessage {
 /**
  * A code file the human clicked in the sidebar (anything Frizz's reader would show as source — not
  * Markdown, not a picture, which still open in Frizz). It opens in THIS editor window, at the position,
- * whatever the External app setting says: the sidebar is inside the editor the human wants it in. The
+ * whatever the Local file links setting says: the sidebar is inside the editor the human wants it in. The
  * path is absolute in the server's filesystem terms, which are the extension's (it runs where the files
  * are). The extension says so itself when the file is not there; the page shows nothing.
  */
