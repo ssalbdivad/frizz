@@ -107,6 +107,14 @@ export function spanLabel(ms) {
   return hours % 24 ? `${days}d ${hours % 24}h` : `${days}d`;
 }
 
+/** The worker's reading (shared `preciseSpanLabel`): exact and rounded down under ten minutes, where a
+ *  rounded-up minute is a large share of what is left. @param {number} ms */
+export function preciseSpanLabel(ms) {
+  if (ms >= 10 * 60_000) return spanLabel(ms);
+  const s = Math.max(0, Math.floor(ms / 1_000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${String(s % 60).padStart(2, '0')}s`;
+}
+
 /** Local `15:30` — the clock the worker's own wake header and the human's transcript are on. @param {number} ms */
 function clock(ms) {
   const at = new Date(ms);
@@ -260,11 +268,12 @@ function claimStage(sessionDir, agentId, stage) {
 
 /** @param {Stage} stage @param {number} atMs @param {number} nowMs */
 export function childCheckIn(stage, atMs, nowMs) {
-  const left = spanLabel(Math.max(0, atMs - nowMs));
+  const left = preciseSpanLabel(Math.max(0, atMs - nowMs));
   switch (stage) {
     case 'half':
-      return `⏰ Time check: half your time is gone — ${left} left until your deadline at ${clock(atMs)}. If you are still exploring, ` +
-        'commit now to the approach you can finish and report by then.';
+      return `⏰ Time check: half your time is gone — ${left} left until your deadline at ${clock(atMs)}. This is not a signal to ` +
+        'stop: the other half is yours, so keep working. If you are still exploring, commit now to the approach you can finish ' +
+        'and report by then.';
     case 'converge':
       return `⏰ Time check: ${left} left until your deadline at ${clock(atMs)}. Start nothing new: finish what is open and get your ` +
         'final message ready — what you found, what is done, what is not.';

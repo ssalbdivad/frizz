@@ -11,6 +11,7 @@ export function stageDue(setAtMs: number, deadlineMs: number, nowMs: number): St
 export function childDeadlineMs(input: { nowMs: number; parentDeadlineMs?: number | null; declaredMs?: number | null }): number | undefined
 export function parseSpan(raw: string): number | undefined
 export function spanLabel(ms: number): string
+export function preciseSpanLabel(ms: number): string
 export function deadlineParagraph(atMs: number, setAtMs: number): string
 export function shareIntoPrompt(prompt: string, at: { nowMs: number; parentDeadlineMs?: number | null }): { prompt: string; atMs?: number }
 export function threadDeadlineMs(env?: Record<string, string | undefined>): Promise<number | undefined>

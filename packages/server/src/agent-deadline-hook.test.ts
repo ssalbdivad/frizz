@@ -12,7 +12,7 @@ import type { AddressInfo } from "node:net"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
-import { childDeadlineMs as sharedChild, DEADLINE_STAGES, deadlineStageAtMs, parseDeadlineInput, spanLabel as sharedSpan, TIME_LIMIT_LINE as SHARED_LINE } from "@frizz/shared"
+import { childDeadlineMs as sharedChild, DEADLINE_STAGES, deadlineStageAtMs, parseDeadlineInput, preciseSpanLabel as sharedPrecise, spanLabel as sharedSpan, TIME_LIMIT_LINE as SHARED_LINE } from "@frizz/shared"
 import * as twin from "../../../cc-worker/hooks/agent-deadline.mjs"
 
 const HOOKS = join(dirname(fileURLToPath(import.meta.url)), "../../../cc-worker/hooks")
@@ -91,7 +91,10 @@ test("the hook's arithmetic is the shared module's, over a grid of budgets and l
     const shared = parseDeadlineInput(span, 0)
     assert.equal(twin.parseSpan(span), shared.ok ? shared.atMs : undefined, span)
   }
-  for (const ms of [5_000, 59_000, 61_000, 42 * M, 72 * M, 26 * 60 * M]) assert.equal(twin.spanLabel(ms), sharedSpan(ms))
+  for (const ms of [0, 5_000, 59_000, 61_000, 80_500, 9 * M + 59_999, 42 * M, 72 * M, 26 * 60 * M]) {
+    assert.equal(twin.spanLabel(ms), sharedSpan(ms))
+    assert.equal(twin.preciseSpanLabel(ms), sharedPrecise(ms))
+  }
 })
 
 test("a thread with a deadline: its child gets the remaining time minus a reserve, stated above the epilogue", async () => {
@@ -174,7 +177,8 @@ test("a child's check-ins arrive after its tool calls: the latest stage due, onc
   ])
   try {
     const half = contextOf(await runHook("agent-inbox.mjs", childTool(s.transcript, "ahalf00000000001")))
-    assert.match(half!, /^⏰ Time check: half your time is gone — 9m left/)
+    assert.match(half!, /^⏰ Time check: half your time is gone — (8m 59s|9m 00s) left/)
+    assert.match(half!, /not a signal to stop/)
     assert.equal(contextOf(await runHook("agent-inbox.mjs", childTool(s.transcript, "ahalf00000000001"))), undefined, "once")
     assert.match(contextOf(await runHook("agent-inbox.mjs", childTool(s.transcript, "aconv00000000001")))!, /Start nothing new/)
     const over = contextOf(await runHook("agent-inbox.mjs", childTool(s.transcript, "aover00000000001")))!

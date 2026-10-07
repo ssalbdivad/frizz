@@ -262,6 +262,7 @@ test("the human's notice joins a running turn, and a later change supersedes an 
     await s.tick()
     const notices = h.resumes.filter((r) => r.message.includes("notice"))
     assert.deepEqual(notices.map((r) => r.message.split("\n")[0]), ["⏱ notice two"], "mid-turn, and only the standing change")
+    assert.match(notices[0]!.message, /\n\n⏱ \d{4}-\d\d-\d\d \d\d:\d\d — you last spoke [^\n]+ ago · 1h 30m left\.$/, "with the clock line, re-read at send")
     await s.stop()
   } finally {
     h.cleanup()

@@ -1033,13 +1033,16 @@ export function enqueueDeadlineNoticeWake(
 ): void {
   const nowMs = input.nowMs ?? Date.now()
   const fenceId = `${DEADLINE_NOTICE_FENCE_PREFIX}:${input.setAt ? `set:${input.setAt}` : `clear:${nowMs}`}`
+  // Every frizz wake carries the clock line, and send re-reads it (restampedWakeMessage) — but only on a
+  // message that already has one, so it is stamped here, with the deadline as it now stands.
+  const clock = wakeTimeHeader(nowMs, null, rowDeadline(storage.getSession(input.slug))?.atMs)
   createWakeDeliveryStore(storage.scope).enqueue({
     id: wakeDeliveryId(input.slug, input.sessionId, fenceId),
     slug: input.slug,
     sessionId: input.sessionId,
     fenceId,
     hintKey: fenceId,
-    message: input.message,
+    message: `${input.message}\n\n${clock}`,
     reason: input.setAt ? `the human set the time limit (${input.setAt})` : "the human removed the time limit",
   }, nowMs)
 }
