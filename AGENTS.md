@@ -1,3 +1,51 @@
+# Principles: never break one without explicit confirmation
+
+Colin McDonnell designed Frizz, and David Blass maintains this fork. Each line below is a decision one of them made on
+purpose and has said matters most. **Do not write code, copy, docs or worker-contract text that breaks one unless the
+maintainer has explicitly confirmed it in the current conversation.** If a task seems to need it, that is a question to ask
+first, not a call to make. An approval given for one case does not carry over to the next. Detail lives where each line
+points.
+
+**How a thread hands off (Colin; ARCHITECTURE.md § How a thread hands off its state)**
+- The worker's own last word decides its thread's state, and Frizz only checks it. There is no status field: the final
+  message is the interface, and its fence language is the state.
+- Frizz never answers, withdraws, parks or queues on a worker's behalf. The few deliberate exceptions are listed in
+  § Where Frizz acts on a clock or with a model, and adding one needs confirmation.
+- A row beats a sentence. What must outlive a message is registered (`done`, `ask`, `watch`), and a wait always takes the
+  awaiting fence.
+- A gate can refuse, and it has no bypass. A parameter on the gated call that skips the gate is not a gate.
+- A question is a row with a lifecycle. It stays open until it is answered, dismissed or withdrawn with `unask`; Frizz
+  never retracts one by omission.
+- Every queue item can be answered or archived. Nothing enters the queue just to be dismissed, and a running thread never
+  enters it.
+- The worker contract states rules, not rationale. A new rule earns its tokens only if a worker measurably gets it wrong
+  without it (header of `packages/server/src/workerPrompt.ts`).
+
+**The board (Colin; § Board nomenclature)**
+- Every thread is in exactly one of five rails (Pinned, Queue, Running, Snoozed, Done), and no view may lose that
+  distinction. On a board, Pinned, Queue and Running never fold.
+- Projects stay separate. The default view is one project's board at `/project/<slug>`; All projects lives at `/all`.
+- The default view shows at least as much as upstream's board at heavy load (17 projects, ~70 threads).
+  `packages/web/src/capacityParity.e2e.test.ts` is the bar.
+- Density over decoration, and few settings.
+- One server serves every project. Nothing Frizz runs on its own uses a pty or tmux.
+- Frizz brings no model of its own: every model call it makes sits behind Settings → Background summaries
+  (`background-summaries.ts`).
+- Upstream takes changes in pieces: soundness fixes first, never a wholesale structural change.
+
+**Working here (David)**
+- Copy says what the human can do, never how Frizz works. It is sentence case, and durations use one grammar.
+- Never run unmerged code against the maintainer's live Frizz data (`~/.local/share/frizz`). Use a disposable stack (the
+  `frizz-stack` skill).
+- Preserve evidence: never delete or rewrite a stored measurement. Experiments are temporary: record the conclusion and
+  its numbers, then delete the harness. Keep benchmarks few.
+- Report honest effect sizes. Treat the maintainer's pushback as a bug report on the measurement before defending a
+  result.
+- Be terse with the human: lead with what changed or what is true. The why goes in commit messages and code comments.
+- Size work by scope, never in days. "Shipped" means merged.
+- Use `nub` for the toolchain, and write every new script as `.ts`.
+- Never interrupt a running agent (§ Agent completion invariant).
+
 # Git: how work lands here
 
 **Contributing from a fork.** Frizz takes pull requests. Fork the repo, branch, open a PR against `main`, and CI runs on it — see [Contributing](README.md). Nothing else in this section concerns you.
