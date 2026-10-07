@@ -239,7 +239,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const ids = new Set(pairs.map((pair) => pair.q.id))
     // Local truth FIRST, then the network — the ordering every other send on this card obeys, and the
     // whole of what "the card goes away when I answer it" means on a machine under load. But a card that
-    // still asks something HOLDS (maintainer 2026-09-29: "the remaining questions … should stay there"):
+    // still asks something HOLDS (David 2026-09-29: "the remaining questions … should stay there"):
     // the worker starts on this answer and leaves the queue for it, and the card stays in its place, live,
     // with the answered question greyed and the rest answerable, until the last one is sent.
     const stillOpen = questions.some((q) => !ids.has(q.id) && !sent.has(q.id))
@@ -271,7 +271,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   const commit = (q: RegisteredQuestionView) => sendPairs(stagedPairs.filter((pair) => pair.q.id === q.id))
   const submit = (then?: () => void) => sendPairs(stagedPairs, then)
 
-  // A PICK THAT COMPLETES ITS QUESTION SENDS IT (maintainer 2026-09-29: "the agent should receive the
+  // A PICK THAT COMPLETES ITS QUESTION SENDS IT (David 2026-09-29: "the agent should receive the
   // answer to one question at a time so it can start working"). Before 2026-09-29 a pick sent only once
   // EVERY owed question was answered, and before that only Send answers sent at all — so the worker sat
   // idle while the human read the rest.

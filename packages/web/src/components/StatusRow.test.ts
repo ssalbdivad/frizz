@@ -57,7 +57,7 @@ test("the buttons lead and the readouts follow", () => {
   assert.ok(settings < quota, "the buttons precede the readouts")
 })
 
-// NO DOOR AND NO NAME (maintainer 2026-09-28: "there should no longer be an everything or an infinity
+// NO DOOR AND NO NAME (David 2026-09-28: "there should no longer be an everything or an infinity
 // button on the threads view on the left"). The row led with ∞, the door to Everything, and ended on the
 // page's name; before that, atop a project's board, on the project's owner/repo.
 test("the row has no door and names nothing — not the page, not a project", () => {

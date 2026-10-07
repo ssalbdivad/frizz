@@ -1,7 +1,7 @@
 // The composer's `/` typeahead, on the same footing as its `@` one (lib/threadMentions.ts): a `/` at a
 // word boundary with the caret inside its token opens the menu, choosing a row completes that token in
 // place, and a finished `/name` the thread can actually run is TINTED in the prompt box — in its own
-// colour, so a skill never reads as a thread (maintainer 2026-10-02: "autocomplete that works with the
+// colour, so a skill never reads as a thread (David 2026-10-02: "autocomplete that works with the
 // same mechanism as tagging other threads but uses a different highlight color").
 //
 // One asymmetry is the harness's, not ours. Claude runs a built-in COMMAND (`/context`, `/usage`) only

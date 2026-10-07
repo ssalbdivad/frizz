@@ -7,7 +7,7 @@ import { rpc } from "../api/rpc.ts"
 // a loaded server the two are far apart: one poll took 25s while workers were starting. A read that
 // started before Mark as done reached the server and landed after it describes the queue BEFORE the done,
 // however new its arrival stamp — and the page brought the card back on it, for as long as the next read
-// took (maintainer 2026-09-30: "I mark a thread as done and it suddenly pops back up … it reopened for a
+// took (David 2026-09-30: "I mark a thread as done and it suddenly pops back up … it reopened for a
 // long time"). Only a read that started after an action was acknowledged can speak to that action.
 const startedAt = new WeakMap<readonly ProjectQueue[], number>()
 

@@ -28,7 +28,7 @@ export function showsRegisteredDoneCard(
 
 // The body that card draws. Once the human has written past the done and the worker answered in prose,
 // the done still stands but its ledger is history the human already read; redrawn in full it sat under
-// every follow-up answer as the biggest thing on screen (maintainer 2026-10-01: "don't keep showing a
+// every follow-up answer as the biggest thing on screen (David 2026-10-01: "don't keep showing a
 // giant done message like this when I'm asking questions"). The card shrinks to its header and its
 // Mark-as-done button, which is all the sign-off still has to say.
 export function registeredDoneBody(fence: Pick<NonNullable<ThreadView["lastFence"]>, "body" | "spokenPast">): string {

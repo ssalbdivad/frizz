@@ -191,7 +191,7 @@ test("Escape dismisses without blurring and stays dismissed until the draft chan
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
-// THE SAME MECHANISM AS `@` (maintainer 2026-10-02): a `/` at any word boundary opens the menu with the
+// THE SAME MECHANISM AS `@` (David 2026-10-02): a `/` at any word boundary opens the menu with the
 // caret in its token, a row completes that token IN PLACE, and a finished name the thread can run is
 // tinted in the prompt box — in its own colour, never the mention accent. A built-in command runs only
 // as the draft's first token, so mid-sentence it is neither offered nor tinted.

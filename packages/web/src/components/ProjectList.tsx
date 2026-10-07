@@ -2,7 +2,7 @@
 // the one project the page is focused on, or every project on the machine — each with its work in flight
 // listed under its name, and the rest of it one click away, in place.
 //
-// It is the project view's rail, folded into the one page (maintainer 2026-09-28: "does there need to be a
+// It is the project view's rail, folded into the one page (David 2026-09-28: "does there need to be a
 // project specific view at all or can we do enough with the main project view to just focus on what
 // people are currently working on and make things expandable?", and then "ensure detailed drill down like
 // `done` or other statuses for each project is still visible somehow just deemphasize it creatively all
@@ -12,12 +12,12 @@
 //   LOUD  — Pinned, Ready and Working: the work in flight, listed under its project unless it is folded,
 //           with no name over any of them. Colin's sidebar named all three ("sidebar labels for pinned,
 //           queue, and running … should not be collapsible"); here each row says its band itself — a pin,
-//           a rest time, a spinner — so the names were dropped (maintainer 2026-09-29).
+//           a rest time, a spinner — so the names were dropped (David 2026-09-29).
 //   QUIET — Snoozed, Done and External: a muted count per band under the work in flight, in the band's own
 //           glyph (the rail's legend, BandLabel.tsx), never louder than the names. Each count is its own
 //           toggle on the project's row, collapsed to start (Colin's sidebar had the same three as
 //           separate collapsible sections), and an open band lists its rows under the work in flight,
-//           with no name or caret of its own (maintainer 2026-10-01, of a caret row closing every project:
+//           with no name or caret of its own (David 2026-10-01, of a caret row closing every project:
 //           "find some way to have it expand just from the title bar so we don't need anything at the
 //           bottom of the list"). The same day the counts alone proved too hidden ("the click done on the
 //           top being the only way to view is too confusing"), so an unfolded project also says "N more" in
@@ -206,7 +206,7 @@ export function ProjectList({
       moved={entry.moved}
       // A FOCUSED project never folds, whatever the list remembers: its row there has no fold button
       // (ProjectRow), so a fold set from All projects hid every thread on the project's own page with
-      // nothing to bring them back but the yellow count (maintainer 2026-09-30).
+      // nothing to bring them back but the yellow count (David 2026-09-30).
       collapsed={collapsed.has(entry.project.id) && !(view.kind === "project" && view.slug === entry.project.slug)}
       open={openBands}
       spaced={spaced}
@@ -778,10 +778,10 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
 /**
  * A project's own row — the same for a busy project heading its threads and a quiet one alone.
  *
- * ITS CLICK FOLDS THE PROJECT (maintainer 2026-09-28: "we need a primary collapse button that would easily
+ * ITS CLICK FOLDS THE PROJECT (David 2026-09-28: "we need a primary collapse button that would easily
  * allow you to visually filter which projects you're looking at"). A busy project folds away EVERYTHING
  * under its row — its work in flight and, if any is open, the rest — and a second click brings it all
- * back; each quiet band opens from its own count on the row (QuietToggles). Unfolding a project with nothing Ready opens the rest too (maintainer 2026-10-01: "if a project has
+ * back; each quiet band opens from its own count on the row (QuietToggles). Unfolding a project with nothing Ready opens the rest too (David 2026-10-01: "if a project has
  * nothing ready, clicking expand should probably expand done/snoozed etc. as well") — its work in flight is
  * all it would show, and none of it wants you. A quiet project has nothing under it but the rest, so its
  * click opens every quiet band it has, and folds them away again.
@@ -797,7 +797,7 @@ function useRowScope(project: QueuesProject, page: boolean, onQueuedRow: (key: s
  * three more; the card's facts are reference, read when wanted, never chrome on a busy list.
  *
  * Its right edge carries, in order: the quiet bands' counts — each ITS OWN toggle, always here, folded or
- * not, so opening one never moves the rest (maintainer 2026-09-29, reversing a morning's move of them under
+ * not, so opening one never moves the rest (David 2026-09-29, reversing a morning's move of them under
  * the threads: "don't move the done/snooze/external buttons when expanding just always leave them at the
  * top") — then its Ready count: the accent
  * badge, the one number in the list that wants you, which stays when the project is folded so a folded
@@ -842,7 +842,7 @@ function ProjectRow({
   const note = project.stale ? "Directory is missing" : !project.open ? "Not open" : null
   const quietBandsHere = QUIET_BANDS.filter((band) => quietCount(quiet, band) > 0)
   // A project with nothing Ready and nothing Working — at most its pins — opens the rest like a quiet one
-  // rather than folding its pins away (maintainer 2026-10-01: "if a project has no ready/working threads,
+  // rather than folding its pins away (David 2026-10-01: "if a project has no ready/working threads,
   // the expand button should open done"). Its pins stay listed either way.
   const folds = busy && count + working > 0
   // Whether anything is listed under the row: the fold's own state, on either kind of project.
@@ -873,7 +873,7 @@ function ProjectRow({
     >
       {/* FOCUSED, THE PAGE'S TITLE NAMES THE PROJECT (StatusRow.tsx, the switcher), so its row here keeps
           only its counts and "…": the name drawn twice, 180px apart, was the page's one duplicate
-          (maintainer 2026-09-29). Nor does it fold — putting away every thread of the only project on the
+          (David 2026-09-29). Nor does it fold — putting away every thread of the only project on the
           page leaves nothing to look at. With no square the cord starts at the first band name instead
           (ThreadConnector ties only rows that carry an indicator). */}
       {focused ? (
@@ -953,7 +953,7 @@ function ProjectRow({
       {/* THE RIGHT EDGE, flush with every thread row's readings under it, and filled from the right: the
           Ready badge when there is one, then the counts, then — on hover — the "…". Each mark that
           appears takes its place on the LEFT of the ones already there, so nothing already drawn moves
-          and the column lines up down the whole list (maintainer 2026-10-01: "everything has to be right
+          and the column lines up down the whole list (David 2026-10-01: "everything has to be right
           aligned so it all lines up and new icons appear as needed moving left"). It used to hold a
           19px slot for the badge on every row, so a project with no badge stood its counts 27px in from
           the thread clocks beneath it, and the "…" overlaid that slot on hover. Beside the fold rather

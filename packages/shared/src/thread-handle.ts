@@ -1,4 +1,4 @@
-// A THREAD'S NAME IS ALSO ITS HANDLE (maintainer 2026-09-29: "I want the displayed names to also be
+// A THREAD'S NAME IS ALSO ITS HANDLE (David 2026-09-29: "I want the displayed names to also be
 // camelCase so its obvious how to refer to them and that they represent ids"). The handle was camelCase
 // until 2026-09-30, when the maintainer switched it to KEBAB-case: it is how the names developers already
 // type after `#`/`@` are spelled (Slack channels, repos, branches, npm packages, URL slugs — and this
@@ -45,7 +45,7 @@ export function threadHandle(name: string): string | undefined {
   return parts.map((w) => w.toLowerCase()).join("-")
 }
 
-// A SUB-AGENT IS ADDRESSED UNDER ITS THREAD (maintainer 2026-09-30: "subagents accessible as
+// A SUB-AGENT IS ADDRESSED UNDER ITS THREAD (David 2026-09-30: "subagents accessible as
 // `topLevel.subagent` and given name ids with the same prompting as the top-level threads"). A child's
 // name is its dispatch `description` (a Workflow agent's, its `label`), and the worker is prompted to
 // write it the way a thread's name is written — one or two words naming its subject — so it becomes a

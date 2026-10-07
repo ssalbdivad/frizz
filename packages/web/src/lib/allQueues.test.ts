@@ -212,7 +212,7 @@ test("the focused project is drawn from its live board, never another project's"
   assert.equal(liveQueue(polled, { projectSlug: "alpha", threads: [thread("ext", { foreign: true })] }, "alpha")!.threads.length, 0)
 })
 
-// THE PAGE'S ONE QUEUE (maintainer 2026-09-28: "One queue across all projects").
+// THE PAGE'S ONE QUEUE (David 2026-09-28: "One queue across all projects").
 test("every project's ready threads merge into one queue, in the order each entered it", () => {
   const ready = (id: string, queuedAt: string) => thread(id, { needsYou: true, queuedAt: `2026-09-23T${queuedAt}:00.000Z`, lastAssistantAt: "2026-09-23T08:00:00.000Z" })
   // `app` is listed ABOVE `frizz` in the rail. Its first ready thread arrives at 10:30, after both of

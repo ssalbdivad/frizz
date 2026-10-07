@@ -4412,7 +4412,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     return remember(subtrees)
   }
 
-  // EVERY SUB-AGENT THIS THREAD EVER DISPATCHED (maintainer 2026-09-30: "some subagents are transient so
+  // EVERY SUB-AGENT THIS THREAD EVER DISPATCHED (David 2026-09-30: "some subagents are transient so
   // probably we want to maintain some history of completed subagents so we can reference the thread if
   // needed"). The board lists only LIVE children; this is what `@thread.subAgent` resolves against, in
   // the prompt box's completion and in `read_thread`, once a child has returned as well as while it runs.

@@ -49,7 +49,7 @@ export function fetchSubAgentDirectory(queryClient: QueryClient, api: Api, proje
  * OPEN WHAT A `@thread.child` MENTION NAMES — the one click path behind a human's mention link
  * (MentionLinks.tsx) and an agent's (lib/thread-links.ts, for prose rendered through markdown). The
  * child is found by its folded address in the thread's directory, which keeps the children that have
- * already returned (maintainer 2026-09-30: "some subagents are transient so probably we want to maintain
+ * already returned (David 2026-09-30: "some subagents are transient so probably we want to maintain
  * some history of completed subagents so we can reference the thread if needed"), and opens in its
  * sub-agent drawer. A child the directory does not know — a typo, a name since changed, a server that
  * cannot answer — opens its thread instead, which is where it would have been.

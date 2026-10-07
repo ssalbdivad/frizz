@@ -4,7 +4,7 @@
 // offers interrupt-and-send (⌘/Ctrl-Enter), and that is the verb this card points at.
 //
 // It NAMES THE CALL (thread.quietTurnCall) — "no activity" alone leaves the operator guessing what is
-// running before they can decide whether to interrupt it (maintainer 2026-09-29: "it needs to always be
+// running before they can decide whether to interrupt it (David 2026-09-29: "it needs to always be
 // transparent in these cases what is actually running").
 import { Hourglass } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"

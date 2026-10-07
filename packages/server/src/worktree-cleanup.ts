@@ -7,7 +7,7 @@ import { isInside, mainCheckoutOf, worktreeAddTargets, worktreeRootFor } from ".
 
 // WHEN A THREAD IS MARKED DONE, ITS WORKTREES GO WITH IT (the `removeWorktreesOnDone` setting, on by
 // default). A worktree is scratch space for one effort; left behind, every finished thread was one more
-// sibling checkout nobody would ever open again (maintainer 2026-09-30: "frizz should clean up its own
+// sibling checkout nobody would ever open again (David 2026-09-30: "frizz should clean up its own
 // work trees by default once the thread is done").
 //
 // WHICH ones: the `git worktree add` targets in the thread's own Bash calls — read with the same parser

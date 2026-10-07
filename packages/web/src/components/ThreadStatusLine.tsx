@@ -4,7 +4,7 @@ import { formatFixedDuration } from "../lib/durationLabels.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 
 // THE THREAD'S LIVE STATUS — what is happening in it NOW (server periodic-status.ts), set beside a NAME
-// that stays put (maintainer 2026-09-29: the name is one or two words for the subject; what the thread is
+// that stays put (David 2026-09-29: the name is one or two words for the subject; what the thread is
 // doing moves separately). Rendered at the END of a header's metadata line — the queue card's
 // "project · Ready 9m ago" and the drawer's "READY · Last active 9m ago" — so it costs the header no
 // height and the card nothing under it moves when the first status lands.

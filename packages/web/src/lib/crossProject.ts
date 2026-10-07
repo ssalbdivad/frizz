@@ -6,7 +6,7 @@ import type { ProjectCard } from "@frizz/shared"
 // The page is always bound to one project — the page project, for every "which project" question (see
 // base-path.ts). Focused on a project (lib/pageView.ts), that is the project the page shows. Showing All
 // projects — the home, and where every launch lands — it is the prompt box's own setting, like its model
-// (maintainer 2026-09-28), resolved by defaultCrossProjectFocus below: the operator's own pick in this
+// (David 2026-09-28), resolved by defaultCrossProjectFocus below: the operator's own pick in this
 // browser, else the project they last focused here, else the one `frizz` was last run in, else the one
 // opened most recently.
 //

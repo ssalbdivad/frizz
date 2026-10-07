@@ -125,7 +125,7 @@ function ThreadMentionLink({ segment, href, onOpen, title, className = "underlin
 // parent (Spinoff.tsx). It is the mention link above with the name filled in from the board rather than
 // scanned out of prose, so a thread Frizz points at reads and clicks exactly like one the human typed:
 // `@handle`, a plain click opens its drawer, a modified click follows the address. One link style, not
-// a third (maintainer 2026-09-30: "link and mention the spinoff by name with the new @ feature").
+// a third (David 2026-09-30: "link and mention the spinoff by name with the new @ feature").
 //
 // The name is the thread's handle when it has one; else what the board shows for it (a placeholder or
 // a sentence-length title, which has no handle); else the bare slug, for a thread this board does not

@@ -2,7 +2,7 @@ import { useSyncExternalStore } from "react"
 import type { ProjectCard } from "@frizz/shared"
 import { humpStarts } from "./threadMentions.ts"
 
-// `#slug` NAMES A PROJECT (maintainer 2026-10-06: "add # syntax for referring to projects like #home and
+// `#slug` NAMES A PROJECT (David 2026-10-06: "add # syntax for referring to projects like #home and
 // #arktype that autocompletes and is styled similarly to @thread-name"). The sibling of the `@handle`
 // grammar (threadMentions.ts): the prompt box offers the projects on this machine as `#` is typed and
 // tints a finished one, a human's bubble links it, and agent prose links it the same way

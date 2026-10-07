@@ -6,7 +6,7 @@ import { crossProjectMentionCandidates, mentionCandidates, scanMentions, type Me
 import { projectMentionIndex, scanProjectMentions, subscribeProjectMentions } from "./projectMentions.ts"
 import { projectViewHref } from "./pageView.ts"
 
-// `@handle` AND `@thread.child` IN AGENT PROSE ARE LINKS (maintainer 2026-09-30: "ensure that in cases
+// `@handle` AND `@thread.child` IN AGENT PROSE ARE LINKS (David 2026-09-30: "ensure that in cases
 // where agents refer to each other, it doesn't refer to 'another agent' but refers to the fully
 // qualified name so you can easily click to view that agent"). The worker is prompted to write the
 // address; this is what makes it a click. A human's bubble already did it (MentionLinks.tsx); every

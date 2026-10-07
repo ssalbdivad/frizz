@@ -1,4 +1,4 @@
-// THE QUEUE NEVER MOVES A CARD THE HUMAN IS LOOKING AT (maintainer 2026-09-28: "it needs to be guaranteed
+// THE QUEUE NEVER MOVES A CARD THE HUMAN IS LOOKING AT (David 2026-09-28: "it needs to be guaranteed
 // that cards that I'm currently viewing on the screen don't move in their position"). This is the ORDER
 // half of that guarantee; lib/viewportLock.ts is the SCROLL half, and neither is enough alone.
 //

@@ -326,7 +326,7 @@ export interface SidebarReadiness {
  * "Add to Frizz prompt", and every other way a piece of the editor gets into a prompt (a file from a tab
  * or the explorer, a problem's quick fix, a terminal selection): into the sidebar's front composer, with
  * the view revealed — opened, the first time in a window — and the caret after the chip. The sidebar is
- * where the human looks now (maintainer, 2026-10-01: a Cursor-style shortcut that inlines the highlighted
+ * where the human looks now (David, 2026-10-01: a Cursor-style shortcut that inlines the highlighted
  * code into the current prompt), so the first cut's rule — the browser until the sidebar had been opened
  * in this window — is gone. Off, or with no Frizz to frame, the server holds the item for a browser page,
  * as before the sidebar; a sidebar that never loads or refuses falls back to the same (app.ts).

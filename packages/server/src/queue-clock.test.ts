@@ -310,7 +310,7 @@ test("a withheld entry whose reading turns unknown stays withheld, and its passe
   assert.equal(clock.nextEntryAt(ms("10:00:14")), ms("10:00:17"))
 })
 
-// ---- A THREAD ONLY LOSES ITS PLACE WHEN A PERSON ACTS ON IT (maintainer 2026-09-28: "Keep its place") ----
+// ---- A THREAD ONLY LOSES ITS PLACE WHEN A PERSON ACTS ON IT (David 2026-09-28: "Keep its place") ----
 
 const asking = (id: string, queued: boolean, rested: string, ...questionIds: string[]) =>
   ({ ...thread(id, queued, rested), questions: questionIds.map((qid) => ({ id: qid })) }) as unknown as ThreadView

@@ -798,7 +798,7 @@ export function useAddProject(): { start: () => void; pending: boolean } {
  * Adding a project is only ever a step towards working in it, so it lands there — WITHOUT changing the
  * view. Focused on a project, the page moves to the new one's board (`/project/<slug>`, lib/pageView.ts).
  * Showing All projects, it stays on All projects and aims the prompt box at the new project, the way a
- * pick in the box's own picker does (maintainer 2026-10-01: adding `local` from All projects dropped
+ * pick in the box's own picker does (David 2026-10-01: adding `local` from All projects dropped
  * the page into `local`'s own view).
  *
  * The new project's board is READ before anything moves. A project is not open on the server until a

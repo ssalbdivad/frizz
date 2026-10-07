@@ -278,7 +278,7 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
 - **What the bar shows goes with the message.** Every send from a box with a bar carries an "Editor
   context (attached automatically … it may or may not be related)" block after the human's words: the
   selection, quoted up to 16 Ki characters, or with nothing selected the file and the caret's line — as
-  Claude Code's extension and Cursor do (maintainer 2026-10-02: *"the only reason this is useful is if it
+  Claude Code's extension and Cursor do (David 2026-10-02: *"the only reason this is useful is if it
   has full context on the editor"*). A chip is still how the human points at code mid-sentence; the block
   is what happened to be in front, and its header says so. The reading says what the agent can and cannot
   do with it: `(unsaved changes)` quotes the buffer, not the disk; past the ceiling an unsaved buffer says
@@ -313,7 +313,7 @@ must match the core app, with a hint wherever the sidebar differs; and no Frizz 
   go with your message · Ctrl+L puts one at the caret", "Goes with your message" over a selection, "Lines
   only: the file may hold secrets", "Not shared" with the eye off — the longest that fits. It said "Select
   code and press Ctrl+L" until the block made that step unnecessary for a plain question.
-- **The chords people already know, in the editor** (maintainer 2026-10-02: *"there is a standard
+- **The chords people already know, in the editor** (David 2026-10-02: *"there is a standard
   shortcut for adding a pill for highlighted snippet to a message … look at cursor, claude code vscode
   extension and take the best parts of each"*). Each adds a chip to the sidebar's front prompt box and
   puts the caret after it:

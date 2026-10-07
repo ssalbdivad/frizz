@@ -12,7 +12,7 @@
 // 720px queue, until 2026-09-28 when this page replaced it. The list on the left is the view's PROJECTS,
 // each with its own queue rows and running rows beneath it, in the operator's own rail order
 // (ProjectList.tsx). The queue on the right is a column of cards in the order each card entered it; showing
-// All projects it is ONE queue across every project (maintainer 2026-09-28: "One queue across all
+// All projects it is ONE queue across every project (David 2026-09-28: "One queue across all
 // projects"), each card wearing its project's chip (AllQueuesCard.tsx ProjectChip). It was one LANE per
 // project, in rail order, until then, and a project listed above the one being read put its whole lane
 // on top of the card the operator was reading the moment its first thread came to rest.
@@ -268,7 +268,7 @@ export function AllQueuesPage() {
   // questions and reply box under the sheet would take keys and clicks meant for the drawer (store.ts
   // slugsInThreadDrawers). Drawers belong to the page project, so only the focus's cards can be. It
   // STAYS IN THE QUEUE: drawn where it was, and counted in READY and the filter, because opening a
-  // thread to read it is not taking it off the queue (maintainer 2026-09-29: "it shouldn't move it out
+  // thread to read it is not taking it off the queue (David 2026-09-29: "it shouldn't move it out
   // of the queue though it should be displayed on below and non interactable and ready should still
   // include it"). It was hidden and uncounted until then.
   const focusId = focusProject?.id
@@ -288,7 +288,7 @@ export function AllQueuesPage() {
   const lock = useViewportLock("[data-xq-card]", xqCardKey, useCallback(() => repaint((n) => n + 1), []))
   const steeredAt = useSteeredAt()
   // The ONE queue in lib/stableQueue.ts's STABLE order: the queue's own order off screen; on screen
-  // exactly as last drawn (maintainer 2026-09-28: "it needs to be guaranteed that cards that I'm
+  // exactly as last drawn (David 2026-09-28: "it needs to be guaranteed that cards that I'm
   // currently viewing on the screen don't move in their position"). A card whose thread left the queue
   // by any hand but the human's in THIS tab (lib/humanActs.ts) — its agent woke itself, it was answered
   // from the phone, its project closed — is held there as a ghost; one the human put away from here —
@@ -305,7 +305,7 @@ export function AllQueuesPage() {
   // mid-sentence (a shell finishing, a child returning), and as a ghost the card is an empty gap: the
   // focused box unmounted under the caret, and every key after it fell through to the page's shortcuts —
   // `j`/`k` gliding between cards, others opening drawers — so the page jumped around while they typed
-  // (maintainer 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Drawn as it was
+  // (David 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Drawn as it was
   // while the focus stays in it; the draft is the thread's either way, and a reply still reaches it. Read
   // off the DOM at render, which is when the thread's leaving is drawn.
   // Never a card the human just sent away: useLeavingCards `leave` takes the caret out of it.
@@ -326,7 +326,7 @@ export function AllQueuesPage() {
     keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key) || key === typingKey)),
   })
   prevSlots.current = queue
-  // A GHOST IS AN EMPTY GAP, and the human's next move closes it (maintainer 2026-09-29, of the quiet card
+  // A GHOST IS AN EMPTY GAP, and the human's next move closes it (David 2026-09-29, of the quiet card
   // it replaced: "maybe just make the space above empty in this scenario until you scroll"). Scrolling off
   // is how a gap otherwise ends, but the one at the top of a short page never scrolls off, so a wheel, a
   // touch or a key closes every gap on the page — the human is moving, so the lock (lib/viewportLock.ts)
@@ -1046,7 +1046,7 @@ const allEmptyLine = (unopened: number) => (unopened > 0 ? "No threads awaiting 
 
 /**
  * RESUME EVERY THREAD A USAGE LIMIT PAUSED, in one click — the inbox header's verb whenever any card below
- * is one (maintainer 2026-10-02: "a builtin way to resume all threads at once that were paused because of
+ * is one (David 2026-10-02: "a builtin way to resume all threads at once that were paused because of
  * hitting a session limit"). A session limit stops every thread on the account at once, so the fleet comes
  * back as a run of identical cards, and continuing them one by one was the only way back before the window
  * reset. Each gets the very message its own card's "Continue now" and Retry send (STALLED_RETRY_MESSAGE),
@@ -1128,7 +1128,7 @@ interface LeavingCards {
  *
  * "STILL IN ITS QUEUE" MEANS ACCORDING TO A READ THAT STARTED AFTER THE ACTION. A card came back on a poll
  * that had left before Mark as done reached the server and landed after REAPPEAR_MS — one took 25s on a
- * loaded server — and it then stayed until the next read landed (maintainer 2026-09-30: "it reopened for
+ * loaded server — and it then stayed until the next read landed (David 2026-09-30: "it reopened for
  * a long time"). Such a read cannot know about the action, so it cannot overrule it: the card stays gone
  * until a read that started after the action (after it LANDED, for a send) has come back, and only that
  * read's verdict brings it back. `readAt` is when the newest read STARTED (lib/projectsQueuesRead.ts).
@@ -1137,7 +1137,7 @@ interface LeavingCards {
  * contention retry (lib/eagerComposerSubmission.ts withDeliveryRetry, ~6s of backoff on its own) or a
  * slow provider can hold the request for longer than REAPPEAR_MS, and a clock started at the click then
  * brought the card back — the handoff, with no sign of the reply — while the message was still on its
- * way, only for it to leave again seconds later once the worker picked it up (maintainer 2026-09-30: "I
+ * way, only for it to leave again seconds later once the worker picked it up (David 2026-09-30: "I
  * see the same card reappear without the response, then it goes away again a few seconds later and
  * starts working"). So a sent card stays gone while its request is open, and the reappear window opens
  * when it lands: from there, the thread still resting after REAPPEAR_MS is real news. A failed send
@@ -1206,7 +1206,7 @@ export function useLeavingCards(projects: QueuesProject[], readAt: number | unde
         // leaving did not hold: the moment the worker picks the reply up its thread leaves the queue,
         // which ends the leaving, so mid-fade the card snapped back to full opacity — the old handoff,
         // no sign of the reply — and stayed for the worker's whole turn, until a click took the focus
-        // (maintainer 2026-10-01: "it just shows up in the old state"; measured: back 170ms into the
+        // (David 2026-10-01: "it just shows up in the old state"; measured: back 170ms into the
         // fade). Blurring ends it at the source, for every way a card is put away.
         const typed = document.activeElement
         if (typed instanceof HTMLElement && typed.closest(`[data-xq-card="${CSS.escape(key)}"]`)) typed.blur()

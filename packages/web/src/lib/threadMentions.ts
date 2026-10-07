@@ -82,7 +82,7 @@ function computeMentionCandidates(threads: readonly ThreadView[], excludeSlug: s
   return [...open, ...done.slice(0, doneLimit)]
 }
 
-// ACROSS PROJECTS (maintainer 2026-09-30: "tagging threads with @ should work cross project in cross
+// ACROSS PROJECTS (David 2026-09-30: "tagging threads with @ should work cross project in cross
 // project mode"). Showing All projects, a prompt box offers every open project's threads, not only its
 // own: the worker resolves a handle its own project does not carry in the other projects Frizz has open
 // (server router resolveElsewhere). Its OWN project still wins there — names are unique only within a
@@ -215,7 +215,7 @@ export function matchMentions(candidates: readonly MentionCandidate[], query: st
   return ranked.flat().slice(0, limit)
 }
 
-// SUB-AGENTS AFTER THE DOT (maintainer 2026-09-30: "autocomplete should still work for subagents after
+// SUB-AGENTS AFTER THE DOT (David 2026-09-30: "autocomplete should still work for subagents after
 // ."). `@port-the-parser.` resolves its head to a thread by the same fold a plain mention uses, and the
 // menu turns into that thread's sub-agents, read from the server's directory of every child it ever
 // dispatched — "some subagents are transient so probably we want to maintain some history of completed

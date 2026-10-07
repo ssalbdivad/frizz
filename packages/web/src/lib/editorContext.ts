@@ -136,7 +136,7 @@ export function contextBarReading(active: EditorContextState["active"]): Context
 
 /**
  * The editor's chord for the sidebar's prompt, as the page advertises it: ⌘L on a Mac, Ctrl+L elsewhere —
- * Cursor's, both halves of it (maintainer 2026-10-02: "take the best parts of [Cursor and the Claude Code
+ * Cursor's, both halves of it (David 2026-10-02: "take the best parts of [Cursor and the Claude Code
  * VS Code extension]"). In the editor WITH a selection it adds the selection as a chip at the prompt box's
  * caret; with NOTHING selected it moves to the prompt box; pressed in the sidebar it goes back to the
  * editor (lib/embedHost.ts forwards it; packages/vscode embed.ts CHORDS runs it). The extension binds it

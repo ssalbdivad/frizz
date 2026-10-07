@@ -515,7 +515,7 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /open PR\s+is work still ahead of the merge/)
     assert.match(c, /`done` waits for the MERGE/)
     // …but WHETHER to land is the human's call: a worker asked for one PR opened a second, unasked, for
-    // the next change (maintainer 2026-10-06). Unasked, finished code is `done` where it sits, and an
+    // the next change (David 2026-10-06). Unasked, finished code is `done` where it sits, and an
     // earlier PR request is no standing mandate.
     assert.match(c, /COMMIT, PUSH OR OPEN A PULL REQUEST ONLY WHEN THEIR CURRENT\s+REQUEST ASKS FOR IT, OR THE PROJECT'S DOCS TELL WORKERS TO/)
     assert.match(c, /PR they asked for earlier is no mandate to open one for the\s+next request/)

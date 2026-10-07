@@ -343,7 +343,7 @@ export function Composer({
   // crowds out the threads a message usually means: `@itself.cache-keys` is how the human points the
   // worker at one of its OWN sub-agents ("what did @port-the-parser.cache-keys find?"), the commonest
   // sub-agent mention there is, and a bare `@itself` still has uses — naming its branch, quoting it to
-  // another thread (maintainer 2026-09-30: "@ mentioning the current thread should still autocomplete").
+  // another thread (David 2026-09-30: "@ mentioning the current thread should still autocomplete").
   // Absent on a box that writes into no thread (the dispatch box).
   ownMention?: MentionCandidate
   // THE EDITOR'S FILES, in a prompt box in VS Code's sidebar (lib/editorReach.ts embedFileMentions): the

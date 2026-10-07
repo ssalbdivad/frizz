@@ -148,7 +148,7 @@ function folderWorkers(choice: ThreadFolderChoice): string {
 //
 // `card`: drawn on a queue card. There "Open in editor" never asks which checkout — a card stands for its
 // project, so when the thread and its sub-agents work in different folders the card's PROJECT folder opens
-// (maintainer 2026-10-06: "when … a card is focused default to opening the editor for the project
+// (David 2026-10-06: "when … a card is focused default to opening the editor for the project
 // associated with the card"). The scoped client is the card's project's (ThreadProjectScope).
 export function ThreadMenu({ thread, onDoc, restart = true, card = false, className = HEADER_ICON_CLASS }: { thread: ThreadView; onDoc?: () => void; restart?: boolean; card?: boolean; className?: string }) {
   const slug = thread.id

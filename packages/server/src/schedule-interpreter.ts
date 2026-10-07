@@ -20,7 +20,7 @@ import { cleanThreadName, threadNameProblem } from "./thread-names.ts"
 // everything the human then sees (the echo, the next runs) is built from that rule by schedule-rule.ts, so
 // a mistranslated "9am" shows before it ever runs.
 //
-// It reads ORDINARY prompts. There is no schedule button and no mode (maintainer 2026-10-06): the box asks
+// It reads ORDINARY prompts. There is no schedule button and no mode (David 2026-10-06): the box asks
 // whenever a prompt holds one of the trigger words (@frizz/shared schedule-trigger.ts), and most such
 // prompts are not schedules — "fix the bug from this morning", "why did the nightly build fail?",
 // "summarize every PR merged this week". So the first thing the prompt teaches is INTENT: only a request

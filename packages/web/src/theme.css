@@ -612,7 +612,7 @@
 
 /* THE EDITOR'S COLOURS — the page framed by VS Code (html[data-embed]) wears the editor theme's own
    colours rather than Frizz's palette, so the sidebar reads as part of the editor instead of a foreign
-   panel set into it (maintainer 2026-10-02: "match the theme as closely as possible"). The relay reads
+   panel set into it (David 2026-10-02: "match the theme as closely as possible"). The relay reads
    them off its webview document and the page sets each on its root under VS Code's own name
    (`--vscode-sideBar-background`; packages/shared embed-protocol.ts EMBED_THEME_COLORS, lib/theme.ts),
    marking the root `data-host-colors="<surface>"`. `frizz.matchEditorTheme` off, or a browser tab: no

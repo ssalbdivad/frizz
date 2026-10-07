@@ -100,7 +100,7 @@ function stepCard(step: 1 | -1): boolean {
  * A card a key lands on is a card you mean to READ, so the landing presses the card's own "Show more" —
  * the real control, per the rule above. It does NOT focus the reply box: that was tried (e11f7f6d) and
  * every triage key then cost an Escape first. Triage is the common case, so it keeps the single keys,
- * and `r` is the one extra key to answer (maintainer 2026-09-28).
+ * and `r` is the one extra key to answer (David 2026-09-28).
  */
 function openCard(key: string, root: HTMLElement | null): void {
   pendingOpen?.stop()

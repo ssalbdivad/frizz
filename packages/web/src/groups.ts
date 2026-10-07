@@ -35,7 +35,7 @@ type TitleFields = Pick<ThreadView, "title" | "aiTitle" | "id" | "titleAuto" | "
 
 // The title to SHOW for a thread: its HANDLE. A real name ("Shell budgets") renders as the kebab-case
 // handle it makes (`shell-budgets`, @frizz/shared thread-handle.ts), so what the operator reads on the
-// board is exactly what they type after `@` to point one thread at another (maintainer 2026-09-29: "I
+// board is exactly what they type after `@` to point one thread at another (David 2026-09-29: "I
 // want the displayed names to also be camelCase so its obvious how to refer to them and that they
 // represent ids"; kebab-case since 2026-09-30). Everything that is NOT a name renders as it always did: the "Spinning up…" and
 // "Untitled thread" placeholders, a legacy row's bare id, an external terminal session's resolved
@@ -65,7 +65,7 @@ export function threadHandleOf(t: TitleFields): string | undefined {
   return source.name ? threadHandle(source.text) : undefined
 }
 
-// A SUB-AGENT'S NAME, SHOWN AS ITS HANDLE — the same rule as a thread's (maintainer 2026-09-30:
+// A SUB-AGENT'S NAME, SHOWN AS ITS HANDLE — the same rule as a thread's (David 2026-09-30:
 // "subagents accessible as `topLevel.subagent` and given name ids with the same prompting as the
 // top-level threads"). Its dispatch name ("Cache keys") reads as `cache-keys` on every row that shows a
 // child as ITSELF — the rail, the queue card, the ops strip, the wait rail, a Workflow's tree, the

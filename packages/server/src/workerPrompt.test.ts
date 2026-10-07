@@ -135,7 +135,7 @@ test("the contract puts a question's answer in the prose, and the card below it"
 
 // A worker drafted an issue in its handoff and asked whether to post "the draft (above)"; the queue card
 // showed that prose clipped to a few lines, so the human was asked to approve something they could not
-// see (maintainer 2026-10-06). The draft belongs inside the option that posts it.
+// see (David 2026-10-06). The draft belongs inside the option that posts it.
 test("the contract puts a draft being approved inside the option that sends it", () => {
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend).replace(/\s+/g, " ")

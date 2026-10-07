@@ -374,7 +374,7 @@ function useFarEnd(projectId: string | undefined, slug: string | null | undefine
 
 // ── The two ends of a spinoff, as cards ────────────────────────────────────────────────────────────
 //
-// A DEDICATED CARD, NOT THE HUMAN'S BUBBLE (maintainer 2026-09-30, on both ends at once: "there needs to
+// A DEDICATED CARD, NOT THE HUMAN'S BUBBLE (David 2026-09-30, on both ends at once: "there needs to
 // be a special UI affordance for referencing spinoff context … Make a dedicated spinoff header UI", and
 // of the parent, "dedicated UI and link to the spinoff, much cleaner"). The request drew as the human's
 // filled bubble with a small caption under it, and the child's first turn as one giant bubble holding

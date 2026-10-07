@@ -111,7 +111,7 @@ test("a sent @handle opens the thread it names; an unknown one stays text", {
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
-// ── SUB-AGENTS AFTER THE DOT (maintainer 2026-09-30: "autocomplete should still work for subagents
+// ── SUB-AGENTS AFTER THE DOT (David 2026-09-30: "autocomplete should still work for subagents
 // after .") — the fixture stubs `shell-budgets`'s subAgentDirectory.
 const menuRowText = (): Promise<string[]> => page!.evaluate((sel) =>
   [...document.querySelectorAll(`${sel} button`)].map((row) => [...row.querySelectorAll("span")].map((s) => s.textContent).join(" | ")), MENU)
@@ -181,7 +181,7 @@ test("a sent @thread.child opens that sub-agent's drawer; an unknown child opens
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
-// AGENT PROSE (maintainer 2026-09-30: agents referring to each other name "the fully qualified name so
+// AGENT PROSE (David 2026-09-30: agents referring to each other name "the fully qualified name so
 // you can easily click to view that agent"): the real markdown pipeline, the real sanitizer, and the
 // app's own delegated `/thread/` listener.
 test("an agent's @thread and @thread.child in rendered markdown are links that open what they name", {
@@ -240,7 +240,7 @@ test("a typed @handle that names a thread is highlighted in the box; a partial o
   assert.deepEqual(errors, [], `no page errors: ${errors.join(" | ")}`)
 })
 
-// `#` NAMES A PROJECT (maintainer 2026-10-06: "add # syntax for referring to projects like #home and
+// `#` NAMES A PROJECT (David 2026-10-06: "add # syntax for referring to projects like #home and
 // #arktype that autocompletes and is styled similarly to @thread-name"): the same menu, keyboard and tint
 // as `@`, over the machine's projects (lib/projectMentions.ts), and the same link treatment once sent.
 test("`#` offers the projects, completes one, and tints it like a thread mention", {

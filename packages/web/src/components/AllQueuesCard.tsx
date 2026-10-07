@@ -132,7 +132,7 @@ export function ProjectChip({ project, onChoose, square = true }: { project: Que
  * monogram tile, small (ProjectSquare.tsx). The 12px square on
  * the meta line said whose a card was only to someone reading that line; a column of cards is scanned
  * down its left edge, so that is where the mark sits, big enough to pick one project's cards out of a
- * page of them without reading a word (maintainer 2026-09-29: "a more visible indicator of the project
+ * page of them without reading a word (David 2026-09-29: "a more visible indicator of the project
  * name/logo … so users can easily visually filter through"). Given `onChoose` it focuses the page on the
  * project, as the chip beside it does; it is out of the tab order because that chip is the same control.
  */

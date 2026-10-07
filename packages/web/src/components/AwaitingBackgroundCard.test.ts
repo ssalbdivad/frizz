@@ -467,7 +467,7 @@ test("hasAwaitingWaitRows agrees with the table", () => {
   assert.equal(hasAwaitingWaitRows({ ...thread([], [shell("running")]), watches: [] } as Parameters<typeof AwaitingWaitTable>[0]["thread"], { hints: [{ kind: "shell", value: "vite dev" }] }), true, "…a declared one is")
 })
 
-// THE STOP (maintainer 2026-09-29: "there also needs to be a cancel button for background shell,
+// THE STOP (David 2026-09-29: "there also needs to be a cancel button for background shell,
 // currently only snooze"). What can silently go wrong: the button offering a stop the server said it
 // cannot deliver, counting a shell the card never showed, or vanishing on a thread that has no rest to
 // park but still has shells to end.

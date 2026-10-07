@@ -327,7 +327,7 @@ test("a server that cannot report capabilities keeps every tool listed", async (
   }
 })
 
-// A thread names another by its `@handle` (maintainer 2026-10-06), so the result hands the new thread's
+// A thread names another by its `@handle` (David 2026-10-06), so the result hands the new thread's
 // back; a thread the server could not name in time has none, and gets the drawer link instead.
 test("`spawn_thread` POSTs the real dispatch RPC and names the new thread by its @handle, else links it", async () => {
   const seen: Array<{ url: string; body: unknown }> = []

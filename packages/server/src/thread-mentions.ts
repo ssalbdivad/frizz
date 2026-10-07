@@ -2,7 +2,7 @@ import { subAgentAddress, subAgentChain, subAgentHandle, threadHandle } from "@f
 import { foldThreadName, type NamedThread } from "./thread-names.ts"
 
 // ONE THREAD POINTING AT ANOTHER BY HANDLE — "ask @shell-budgets about this", "reconcile with
-// @focus-mode" (maintainer 2026-09-29). The handle is the kebab-case form of the thread's name (shared
+// @focus-mode" (David 2026-09-29). The handle is the kebab-case form of the thread's name (shared
 // thread-handle.ts), which is what the board SHOWS, so the operator and the worker type the same thing.
 //
 // Both sides are folded from the HANDLE with its punctuation squeezed out first, never from the stored

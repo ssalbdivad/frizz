@@ -2760,7 +2760,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
   )
   // Gated on `title_auto = 1` as well as the lock: a caller-supplied dispatch title (a spinoff's name, a
   // parent's `spawn_thread` title) is already a NAME the board shows as a handle, and a handle never
-  // changes once shown (maintainer 2026-09-30: "once someone sees the id, it cannot change"). title_auto
+  // changes once shown (David 2026-09-30: "once someone sees the id, it cannot change"). title_auto
   // is left alone — the row's DISPLAY provenance is unchanged by which machine produced the current text.
   // `title_agent` IS moved, because it describes the text this statement is writing: the worker's own
   // name. It is what lets the display trust a persisted codex title once the live telemetry is gone.

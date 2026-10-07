@@ -1,4 +1,4 @@
-// THE LIST NEVER SWAPS A ROW OUT FROM UNDER THE POINTER (maintainer 2026-09-30: "very important we avoid
+// THE LIST NEVER SWAPS A ROW OUT FROM UNDER THE POINTER (David 2026-09-30: "very important we avoid
 // unintuitive scenarios like this and randomly aggressively hiding or swapping threads"). A parked thread
 // flickered out of Snoozed and back while the operator was aiming at it; they clicked where it had been,
 // opened a DIFFERENT thread, and the message meant for the first one closed a PR on the second. The queue
@@ -15,7 +15,7 @@
 //     that was there is exactly what the human was aiming at — a click on it still opens THAT thread.
 //   - A thread that ARRIVES new is appended at its band's END at once. It used to wait for the hold to
 //     end, so nothing below it moved — but a thread that was in no band drawn was then on no band at all
-//     (maintainer 2026-10-06: "it should never be the case that a thread should be totally invisible for
+//     (David 2026-10-06: "it should never be the case that a thread should be totally invisible for
 //     any circumstances"; then chose appending, accepting the shift below it). A thread that MOVED bands
 //     is already drawn, so it stays in its old place, once, until the hold ends.
 //   - A thread the HUMAN moved (`moved`: pinned, reopened, replied to, finished, dispatched — anything this

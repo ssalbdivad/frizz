@@ -2,14 +2,14 @@ import { THREAD_HANDLE_MAX_CHARS, threadHandle } from "@frizz/shared"
 import { sessionTitleLocked, type SessionRow, type Storage } from "./storage.ts"
 import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
 
-// A THREAD'S NAME AND ITS STATUS ARE TWO DIFFERENT THINGS (maintainer 2026-09-29).
+// A THREAD'S NAME AND ITS STATUS ARE TWO DIFFERENT THINGS (David 2026-09-29).
 //
 // The NAME is one or two words: the SUBJECT of the thread — "Shell budgets", "Focus mode", "ArkType
 // perf" — never the action taken ("Fix the shell budget default"). In his words: "choose ideal two words
 // to differentiate not necessarily based on prompt but best 1 or 2 word summary of intent - the sort of
 // subject of the prompt rather than exactly what was done".
 //
-// A NAME IS THE THREAD'S ID, SO IT IS FINAL THE MOMENT IT EXISTS (maintainer 2026-09-30: "once someone
+// A NAME IS THE THREAD'S ID, SO IT IS FINAL THE MOMENT IT EXISTS (David 2026-09-30: "once someone
 // sees the id, it cannot change"). The board shows a name as its `@handle`, and the operator types that
 // handle into other threads' prompts, so a name that moves strands every mention of it. The first name to
 // land stands: a caller's title (a spinoff, `spawn_thread`), else Frizz's mint, else the Codex marker,

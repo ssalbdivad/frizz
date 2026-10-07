@@ -4,7 +4,7 @@ import type { WorkCheckout } from "@frizz/shared"
 import { abbreviateHome } from "../lib/paths.ts"
 
 // WHERE THE AGENT IS WORKING, WHEN THAT IS NOT THE PROJECT ROOT — one quiet token on a thread's meta line
-// (maintainer 2026-09-29: the agent's cwd should be "subtle but visible so its clear where the terminal
+// (David 2026-09-29: the agent's cwd should be "subtle but visible so its clear where the terminal
 // will open and when the agent chooses to use a worktree instead of main").
 //
 // It renders NOTHING in the ordinary case. `thread.checkout` is absent while the agent works in the

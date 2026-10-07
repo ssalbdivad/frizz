@@ -1095,7 +1095,7 @@ export function handoffOf(messages: readonly TranscriptMessage[]): ThreadHandoff
   // nudge tells the worker not to repeat itself — "the human reads both together" — so its answer is
   // routinely a fence alone or "Nothing to add; my previous message has the full answer". Taken on its
   // own, that line WAS the card: the real answer sat one message up, reachable only by opening the
-  // thread (maintainer 2026-09-30). So walk back over every nudge-and-reply pair and carry the earlier
+  // thread (David 2026-09-30). So walk back over every nudge-and-reply pair and carry the earlier
   // text too, oldest first. Only the nudge bridges: any other wake is new input with its own answer.
   const restEndingAt = (end: number): { texts: string[]; start: number } => {
     const texts = [messages[end]!.text]
@@ -1224,7 +1224,7 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
-  // THE NEW THREAD'S `@handle`, for `spawn_thread` (maintainer 2026-10-06: "threads should refer to other
+  // THE NEW THREAD'S `@handle`, for `spawn_thread` (David 2026-10-06: "threads should refer to other
   // threads using the standard @ syntax"). The caller is told how to name what it spawned, and a link to
   // a slug is not that: the board shows the thread by its handle, and the human and every other thread
   // type that. A dispatch with no caller title is named by the mint, a short model call off the dispatch
@@ -1283,7 +1283,7 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
-  // ANOTHER PROJECT'S THREAD, BY HANDLE (maintainer 2026-09-30: "tagging threads with @ should work cross
+  // ANOTHER PROJECT'S THREAD, BY HANDLE (David 2026-09-30: "tagging threads with @ should work cross
   // project in cross project mode"). All projects' prompt box offers every open project's threads, so a
   // handle this project's threads do not answer is looked for in every OTHER project this server has open
   // — never by opening one. This project always wins: names are unique only within a project, so a handle
@@ -2298,7 +2298,7 @@ export function createRouter(ctx: AppContext) {
     }
   }
 
-  // THE CLAUDE SPINOFF ROUTE: FORK THE PARENT (maintainer 2026-09-30). The brief route below hands the
+  // THE CLAUDE SPINOFF ROUTE: FORK THE PARENT (David 2026-09-30). The brief route below hands the
   // request to the parent's own worker, which writes a cold start for the new thread and dispatches it —
   // an errand run INSIDE the parent's conversation, which is why ~800 lines exist to keep that side turn
   // out of the parent's chat, rest and queue place (spinoff-side-turn.ts, spinoff-edge-recovery.ts). On a
@@ -2534,7 +2534,7 @@ export function createRouter(ctx: AppContext) {
     // The address a sub-agent this thread is dispatching will answer to — `port-the-parser.spelling` for
     // `description: "Spelling"` — for the worker's post-dispatch hook (cc-worker/hooks/agent-address.mjs),
     // which puts it in front of the worker the moment the child starts, so the handoff names it by the
-    // address the board links rather than as "a sub-agent" (maintainer 2026-09-30). Computed HERE so the
+    // address the board links rather than as "a sub-agent" (David 2026-09-30). Computed HERE so the
     // one naming rule (shared thread-handle.ts) has one implementation; the hook knows only the words.
     subAgentAddressFor: query({
       input: z.object({ slug: ThreadSlug, label: z.string().trim().min(1).max(500) }).strict(),
@@ -4076,7 +4076,7 @@ export function createRouter(ctx: AppContext) {
           if (id) activity.push({ kind: "shell", id, label: sh.label, since: sh.startedAt, ...watchFor("shell", [sh.taskId, sh.id, sh.label]), ...budgetEndsAt })
         }
         // Each sub-agent with its `thread.subAgent` address, and the thread's own handle on the result, so a
-        // worker writes the names the board links (maintainer 2026-09-30: agents refer to each other "by the
+        // worker writes the names the board links (David 2026-09-30: agents refer to each other "by the
         // fully qualified name so you can easily click to view that agent", never as "another agent").
         const directory = subAgentDirectoryOf(input.slug)
         const addressOf = new Map(directory.agents.flatMap((row) => (row.address ? [[row.id, row.address] as const] : [])))
@@ -4485,7 +4485,7 @@ export function createRouter(ctx: AppContext) {
         // free-text box, silently).
         const faults = input.questions.flatMap((q) => askedQuestionFaults(q))
         if (faults.length > 0) throw new Error(faults.join("\n"))
-        // A PIVOT STICKS: a question set aside is never asked again (maintainer 2026-09-28, after a worker
+        // A PIVOT STICKS: a question set aside is never asked again (David 2026-09-28, after a worker
         // `unask`ed both of its stale cards and re-registered them word for word under the human's
         // unrelated next request). "Set aside" is an act since 2026-09-29 — the human's ×, or the worker's
         // own `unask` after the human's newest typed message — never a timestamp (see pivotTwin).
@@ -4929,7 +4929,7 @@ export function createRouter(ctx: AppContext) {
     //
     // When the thread's recent SUB-AGENTS work in another checkout (thread-cwd.ts subAgentFolders — an
     // orchestrator that stays in the root while its agents build in a sibling worktree), nothing opens:
-    // the answer is the CHOICES, and the page asks which (maintainer 2026-10-01: "the open editor should
+    // the answer is the CHOICES, and the page asks which (David 2026-10-01: "the open editor should
     // give a dropdown choice"). The pick comes back as `path`, which must be one of the choices — the
     // page still names only folders the server chose.
     openThreadFolder: mutation({

@@ -235,7 +235,7 @@ card of three names plus "keep the current one", and the other seven were never 
 
   **A CARD IS READ AT A GLANCE — KEEP EVERY CARD SHORT, \`done\` and \`awaiting\` alike.** A handful of
   lines, never a page: no sub-bullets, no plan, no narrative. Anything longer belongs in the prose above
-  it, or nowhere (maintainer 2026-10-01: "a waiting box or probably a conclusion box in general should
+  it, or nowhere (David 2026-10-01: "a waiting box or probably a conclusion box in general should
   never be this verbose").
 
   \`\`\`done
@@ -269,7 +269,7 @@ card of three names plus "keep the current one", and the other seven were never 
     and the card says where, and that it is ready to land: "Uncommitted in \`src/\`; ready to commit or
     open a PR." Nothing is lost by that dismissal: the change is in the human's tree, and one reply
     resumes the thread to land it. (A worker asked for one PR opened a second, unasked, for the next
-    change and kept pushing to it — maintainer 2026-10-06: "I didn't ask you to open a pr is that
+    change and kept pushing to it — David 2026-10-06: "I didn't ask you to open a pr is that
     typical behavior?")
   - Code the human DID ask to land is not done until it lands: a commit, a pushed branch or an open PR
     is work still ahead of the merge — where the project uses PRs, \`done\` waits for the MERGE, so park
@@ -699,7 +699,7 @@ maintainer's own terminal"):
 **THE HUMAN SEES THE CARD, NOT YOUR MESSAGE — SO WHAT THEY DECIDE ON GOES IN THE CARD.** In the queue,
 your handoff prose is cut to its first few lines behind a "Show more", and the question card is drawn under that. A draft, diff or plan written into the prose and
 then asked about as "the draft (above)" is, at the moment of choosing, a few cut lines and a question
-about something nobody can see (maintainer 2026-10-06, of an issue draft asked about that way: "makes no
+about something nobody can see (David 2026-10-06, of an issue draft asked about that way: "makes no
 sense"). So the thing being approved rides INSIDE the option that acts on it — the full comment, issue
 body or diff in that option's \`description\`, which renders as Markdown and holds 20,000 characters. Never write "above" or "below" in a
 question.
@@ -854,7 +854,7 @@ body is one line ("Answered inline — conversational prompt, nothing to ship.")
 needs a reply, register it with \`mcp__frizz__ask\` instead. Do not manufacture scope, restate the "task", or ask
 clarifying questions to seem busy.`
 
-// A THREAD'S NAME IS NOT THE WORKER'S TO CHANGE (maintainer 2026-09-30: "once someone sees the id, it
+// A THREAD'S NAME IS NOT THE WORKER'S TO CHANGE (David 2026-09-30: "once someone sees the id, it
 // cannot change"). This section used to tell the worker to rename its thread once it had oriented; the
 // name it replaced was already on the board as an `@handle`, so every rename moved an id the operator
 // had seen. Frizz names the thread at dispatch and that name stands (thread-names.ts), so what is left to
@@ -1048,7 +1048,7 @@ gets asked:** one the work has surfaced that is the human's to make goes to \`mc
 never into a note or a design file "for the human", where nothing prompts anyone to answer it. The
 children keep running while it waits; rest on the question, with no fence. (A worker's notes said "two
 decisions for David" for hours while its design file listed seven, and none was ever asked —
-maintainer 2026-10-06: "it says 2 questions for david but I never got them".)
+David 2026-10-06: "it says 2 questions for david but I never got them".)
 
 **A CRITIQUE LOOP STOPS WHEN ITS FINDINGS STOP FALLING.** "Review until a round is clean" has no
 exit: an adversarial critic always finds something, and a fix round breeds the next round's findings.

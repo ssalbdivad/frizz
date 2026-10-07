@@ -2424,7 +2424,7 @@ test("a repeat of a deliveryId already delivered is a no-op even after the ledge
   h.storage.close()
 })
 
-// `spawn_thread` asks for the new thread's `@handle` (maintainer 2026-10-06: "threads should refer to other
+// `spawn_thread` asks for the new thread's `@handle` (David 2026-10-06: "threads should refer to other
 // threads using the standard @ syntax"), so the dispatch holds its answer until the mint has named the
 // thread. The board's own dispatch does not ask and is never held; a thread nothing names gets no handle.
 test("dispatch with awaitHandle answers with the minted @handle; without it, at once and with none", async () => {

@@ -6,7 +6,7 @@
 // drew it as a bare "Awaiting" fence over the worker's prose and a wall-clock Snooze, so nothing said
 // which children were still out, which had come back, or why the card was back at all.
 //
-// This card is that fence, stated plainly (maintainer 2026-09-29):
+// This card is that fence, stated plainly (David 2026-09-29):
 //   • the heading counts the batch — "2 of 3 sub-agents returned" — rather than naming the state;
 //   • the rows are the batch: the ones still out (QueueSubAgentLines, the rows the project board's
 //     queue card drew under its prompt box until 2026-09-28) and the ones that came back since the wait

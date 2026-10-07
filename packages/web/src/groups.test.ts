@@ -954,7 +954,7 @@ test("displayTitle: a machine-generated session slug is never presented as a suc
   )
 })
 
-// A THREAD'S NAME SHOWS AS ITS HANDLE (maintainer 2026-09-29): the words a name is stored as render as
+// A THREAD'S NAME SHOWS AS ITS HANDLE (David 2026-09-29): the words a name is stored as render as
 // the kebab-case handle an operator types after `@`, and everything that is not a name renders as before.
 test("displayTitle: a real name shows as its kebab-case handle; placeholders, ids and external rows do not", () => {
   const named = thread({ titleAuto: false, title: "Shell budgets" })
@@ -1319,7 +1319,7 @@ test("isSnoozed: the event-snooze yields to a live sub-agent, a queue reason, an
 })
 
 // SNOOZED UNTIL ALL SUB-AGENTS RETURN — the one park a live sub-agent does not outrank, because the live
-// sub-agents are what it parks on (maintainer 2026-09-29). The server sets the flag only while it is what
+// sub-agents are what it parks on (David 2026-09-29). The server sets the flag only while it is what
 // keeps the thread out of the queue, and only at rest.
 test("isSnoozed: 'until all sub-agents return' parks a parent with children still out, and nothing else", () => {
   const parked = thread({
@@ -1382,7 +1382,7 @@ test("bandOf: a pin moves the row, never the band — a pinned thread still says
   assert.equal(bandOf(thread({ kind: "session", state: "open", runtime: "turn-idle", needsYou: true, pinnedAt })), "ready")
 })
 
-// A SUB-AGENT IS NAMED BY ITS HANDLE UNDER ITS THREAD (maintainer 2026-09-30: "subagents accessible as
+// A SUB-AGENT IS NAMED BY ITS HANDLE UNDER ITS THREAD (David 2026-09-30: "subagents accessible as
 // `topLevel.subagent`"): the dispatch name becomes a handle by the thread rule, and the drawer header reads the
 // whole address down the live dispatch tree.
 test("subAgentName: a dispatch name shows as its handle; a sentence shows as written", () => {

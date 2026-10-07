@@ -1,4 +1,4 @@
-// THE SCROLL HALF of "the queue never moves a card the human is looking at" (maintainer 2026-09-28:
+// THE SCROLL HALF of "the queue never moves a card the human is looking at" (David 2026-09-28:
 // "it needs to be guaranteed that cards that I'm currently viewing on the screen don't move in their
 // position"). lib/stableQueue.ts decides the ORDER — nothing is inserted between the cards on screen and
 // none of them leaves on its own — which leaves every change either BELOW them, where it moves nothing,

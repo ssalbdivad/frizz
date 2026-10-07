@@ -210,7 +210,7 @@ const SCHEDULES_BAND = { label: "Schedules", Icon: Repeat }
 // through the row's own project's client. The liveness policy is the rail's (lib/childOps.ts
 // visibleChildOps). All projects keeps the COUNT on the thread's row instead (SubAgentCount): there every
 // project's threads share one column, and a branch of rows under each would push the next project's work
-// off the screen (maintainer 2026-10-01: "usually people won't want to click on it from that view").
+// off the screen (David 2026-10-01: "usually people won't want to click on it from that view").
 export function SubAgentRows({ t, scope }: { t: ThreadView; scope: RowScope }) {
   const api = useThreadApi()
   const subs = visibleChildOps(t.subAgents ?? [], "rail")
@@ -371,7 +371,7 @@ export const ThreadRow = memo(function ThreadRow({
   // of NAMES you scan, and each caption added there made the next one harder to find.
   //
   // ONE EXCEPTION, ON THE SAME LINE: a WORKING thread's status, in grey after its name, with its task clock
-  // at the right edge (maintainer 2026-09-29: "it shouldn't show on hover — it should display in grey text
+  // at the right edge (David 2026-09-29: "it shouldn't show on hover — it should display in grey text
   // next to the name of the thread inline", short enough to fit). It costs no line, only rows that are
   // spinning carry it, and it truncates before the name gives up a character. That is ALL PROJECTS. On a
   // PROJECT'S BOARD (`statusOnHover`) the status is a hover again and only the clock stays on the line:
@@ -465,7 +465,7 @@ export const ThreadRow = memo(function ThreadRow({
                 rest-time spot — the approved mockup's variant A), and yields to the hover actions the
                 same way the rest time does. Never both: the pinned band passes no restedAge. A WORKING
                 pinned row keeps it too, rightmost after its task clock, where the unpin appears on
-                hover (maintainer 2026-09-30: "i shouldnt have to mouse over a thread to see that it is
+                hover (David 2026-09-30: "i shouldnt have to mouse over a thread to see that it is
                 pinned" — gating the mark on `!working` hid it on every spinning pinned row). */}
             {pinned && !restedAge && <PinnedMark besideClock={!!working} />}
           </span>
@@ -805,7 +805,7 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 // A THREAD'S LIVE SUB-AGENTS, AS A COUNT IN THE RIGHT-EDGE COLUMN — a robot and `5`, left of the clock.
 // They were rows of their own under the thread until 2026-10-01, then one folded "5 sub-agents" line;
 // either way every busy thread took two lines of a rail that is meant to be a column of names, for a
-// list nobody opened from there (maintainer 2026-10-01: "usually people won't want to click on it from
+// list nobody opened from there (David 2026-10-01: "usually people won't want to click on it from
 // that view"). The count is every child the drawer would list, at every depth — a workflow and each
 // agent it fanned out — under the rail's liveness policy (lib/childOps.ts visibleChildOps). The names
 // ride the tooltip; the children themselves are one click away on the card and in the drawer, which is
@@ -817,7 +817,7 @@ export function awaitingReason(t: Pick<ThreadView, "lastFence">): string | null 
 //
 // THE BOT'S FACE SITS ON THE DIGITS' CAP BAND, NOT ITS INK BOX: the antenna is a hairline and the eye
 // reads the face, so centring the whole ink (antenna included) left the face riding low beside the
-// number (maintainer 2026-10-01: "alignment super needs to be fixed"). In lucide's 24-unit box the
+// number (David 2026-10-01: "alignment super needs to be fixed"). In lucide's 24-unit box the
 // face's ink (rect y 8–20 plus its stroke) centres at y 14, which is 4.17px above the bottom of a 10px
 // box; `self-baseline` puts that bottom on the baseline, and the translate lifts the face's centre to
 // half the cap height. Measured residual ~0 (sans, 10.5px); `cap` keeps it right in any font.

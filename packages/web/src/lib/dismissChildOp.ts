@@ -96,7 +96,7 @@ export function childOpDismisser(
 }
 
 // THE RESTING CARD'S "Stop shell" — the same stop as the × above, applied to every shell the card rows
-// at once (maintainer 2026-09-29: "there also needs to be a cancel button for background shell,
+// at once (David 2026-09-29: "there also needs to be a cancel button for background shell,
 // currently only snooze"). One click can end several shells, so it reports as ONE toast: N toasts
 // stacked for one gesture read as N separate events, and the partial-failure case — the one the
 // operator must not miss — would scroll out between two successes.

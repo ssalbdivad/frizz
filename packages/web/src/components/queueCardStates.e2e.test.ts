@@ -13,13 +13,13 @@ import test, { after, before } from "node:test"
 //   4    a reply that steers the card away dissolves it, and its neighbour survives the thread then dropping
 //        out of the queue — what queueSteerDissolve.e2e.test.ts pinned on the board's queue until 098de26d.
 //   4b   a reply still on the wire past REAPPEAR_MS keeps its card gone: the card came back without the
-//        reply, then left again once the worker picked it up (maintainer 2026-09-30).
+//        reply, then left again once the worker picked it up (David 2026-09-30).
 //   4c   a poll that started before Mark as done cannot bring the card back however late it lands, and a
-//        fresh one that still lists the thread does (maintainer 2026-09-30).
+//        fresh one that still lists the thread does (David 2026-09-30).
 //   5-6  a done the worker REGISTERED (`mcp__frizz__done`) draws its Done card on the queue card, and one
 //        both fenced and registered draws exactly one (B1, restored 2026-09-29).
 //   10   a park queued only for its unread reply reads "Replied", and Mark as read records it seen and
-//        takes the card out (maintainer 2026-10-01 on @expand-defaults).
+//        takes the card out (David 2026-10-01 on @expand-defaults).
 //   11   a rest handing the human `steps:` draws the drawer's steps card ON THE QUEUE CARD — numbered steps
 //        under the worker's title, one Done — and Done replies "Done" into the CARD's project and takes
 //        the card out at once (upstream fe668a8d; the card drew the fence as bare prose until 2026-10-06).
@@ -224,7 +224,7 @@ const reappearsWithin = (sel: string, ms: number) => page!.evaluate((s, wait) =>
 
 test("a poll that started before Mark as done cannot bring the card back, however late it lands", { skip: !baseUrl, timeout: 60_000 }, async () => {
   // The read landing at 9s started before the click and still lists the thread; it used to restore the
-  // card at REAPPEAR_MS and leave it up until the next read (maintainer 2026-09-30: "reopened for a long time").
+  // card at REAPPEAR_MS and leave it up until the next read (David 2026-09-30: "reopened for a long time").
   await open("case=exit&delay=300&stalePoll=1")
   await clickDone()
   await page!.waitForFunction((sel) => !document.querySelector(sel), { timeout: 2_000 }, FIRST)

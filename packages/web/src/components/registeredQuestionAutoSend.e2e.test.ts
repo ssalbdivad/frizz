@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 
-// Runtime coverage for ONE QUESTION AT A TIME on a REGISTERED ask (maintainer 2026-09-29: "the agent
+// Runtime coverage for ONE QUESTION AT A TIME on a REGISTERED ask (David 2026-09-29: "the agent
 // should receive the answer to one question at a time so it can start working but the remaining
 // questions … should stay there"). What RegisteredQuestionCards useRegisteredAnswering promises:
 //   · a question is SENT the moment it is complete, ALONE — a single-choice pick that opens no follow-up,

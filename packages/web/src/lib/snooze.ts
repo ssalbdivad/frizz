@@ -1,7 +1,7 @@
 export type SnoozePreset = "1h" | "tomorrow" | "1d" | "3d" | "1w"
 // "Until tomorrow" is the default because it is what a human deferring a card almost always means: pick it
 // up at the start of the next working day. "1d" re-surfaces at this same hour tomorrow, so a card snoozed
-// at 11pm comes back at 11pm (maintainer 2026-09-29).
+// at 11pm comes back at 11pm (David 2026-09-29).
 export const DEFAULT_SNOOZE_PRESET: SnoozePreset = "tomorrow"
 
 const HOUR = 60 * 60 * 1000

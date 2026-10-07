@@ -10,7 +10,7 @@ import { ThreadHandleLink } from "./MentionLinks.tsx"
 import { SpinoffCard, SpinoffOf, SpinoffOriginCard, spinoffCardState } from "./Spinoff.tsx"
 import { ThreadSlugContext } from "./threadSlugContext.ts"
 
-// The spinoff's two dedicated cards (maintainer 2026-09-30: "a special UI affordance for referencing
+// The spinoff's two dedicated cards (David 2026-09-30: "a special UI affordance for referencing
 // spinoff context", "dedicated UI and link to the spinoff … mention the spinoff by name with the new @
 // feature"), rendered against a stubbed board. ChatView itself cannot load under node (it imports CSS),
 // so its routing is pinned over its source at the bottom and driven for real in Spinoff.e2e.test.ts.

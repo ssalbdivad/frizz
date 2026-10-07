@@ -5,7 +5,7 @@
 //
 // A LETTER IS ITS ACTION'S INITIAL: `r` reply, `d` mark as done, `s` snooze, `f` fullscreen, `o` open in
 // a drawer, `t` a terminal on the thread, `n` new project. One rule is worth more than any single well-chosen key, because it predicts the
-// keys nobody has looked up yet, including ones added later (maintainer 2026-09-28: "establish the
+// keys nobody has looked up yet, including ones added later (David 2026-09-28: "establish the
 // convention in general that each action is associated with its first letter"). Until then Done and
 // Snooze were `e` and `h`, borrowed from keyboard-first inboxes: `e` is Gmail's archive and
 // Superhuman's and GitHub notifications' Done, `h` is Superhuman's and Linear's snooze. Those help only
@@ -96,7 +96,7 @@ export const ACTIONS: readonly ActionDef[] = [
   // without each needing a letter of its own.
   { id: "thread.menu", label: "More actions", group: "queue", defaultChord: "m" },
   // → sends the thread off to the side, the way its dialog's footer reads "from → into". Not `s`, which
-  // is Snooze, and not ⇧S, which the rule below would have given it (maintainer 2026-09-30: "i dont like
+  // is Snooze, and not ⇧S, which the rule below would have given it (David 2026-09-30: "i dont like
   // shift"). Free on a card: ↑/↓ scroll it, and the browser claims → only with a modifier held.
   { id: "thread.spinoff", label: "Spinoff", group: "queue", defaultChord: "arrowright" },
   { id: "app.newThread", label: "New thread", group: "anywhere", defaultChord: "c" },

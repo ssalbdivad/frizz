@@ -37,7 +37,7 @@ export function subAgentWait(thread: Pick<ThreadView, "subAgents" | "returnedSub
   return { out, returned, running, total: out.length + returned.length }
 }
 
-/** THE HEADING, in place of the bare "Awaiting" (maintainer 2026-09-29: the card's header "says it
+/** THE HEADING, in place of the bare "Awaiting" (David 2026-09-29: the card's header "says it
  *  plainly"). Nothing back yet reads as a wait on a count; anything back reads as progress through it. */
 export function subAgentWaitHeading(wait: Pick<SubAgentWait, "returned" | "total">): string {
   if (wait.returned.length === 0) return `Waiting on ${wait.total} sub-agent${wait.total === 1 ? "" : "s"}`

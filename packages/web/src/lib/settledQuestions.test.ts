@@ -47,7 +47,7 @@ test("a question a later fence claimed and the human then answered stays at the 
 
 test("a question the worker KEPT after the human typed past it stays at the rest that kept it", () => {
   // The worker's `keep` re-asks it at its next rest — the open card moved there, so the answered card
-  // must not snap back above the human's message (maintainer 2026-10-06: "these responses are appearing
+  // must not snap back above the human's message (David 2026-10-06: "these responses are appearing
   // out of order- I typed before I answered the question").
   const messages = [
     msg("user", "2026-09-25T10:00:00Z"),

@@ -28,7 +28,7 @@ const EMPTY = "flex flex-1 items-center justify-center px-8 text-center text-[13
 /** Whose terminal a drawer shows: yours (a pty over /term/<id>), or the agent's (its log, read-only). */
 export type TerminalSource = { owner: "human"; terminalId: string } | { owner: "agent"; shellId: string }
 
-// THE ONE TERMINAL DRAWER, for both owners (maintainer 2026-09-29: an agent's terminal "introspectable the
+// THE ONE TERMINAL DRAWER, for both owners (David 2026-09-29: an agent's terminal "introspectable the
 // same way" as yours). Stacked over the thread it belongs to; the same header anatomy either way — the
 // owner's glyph, what it runs, the folder it started in (with `· worktree` when that is a linked worktree),
 // how it stands — and an xterm body. What differs is what is honest for each:

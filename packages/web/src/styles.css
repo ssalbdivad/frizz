@@ -1219,7 +1219,7 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
 /* The fence's copy button is the `pre`'s SIBLING, absolutely positioned over its corner at z-index auto
    — so the rule above lifted the `pre` OVER it: the button showed through the `pre`'s translucent fill
    but every click landed on the `pre`, which picked the option on an open card and did nothing on an
-   answered one (maintainer 2026-10-01: "once a question is answered the copy button doesnt work"). It
+   answered one (David 2026-10-01: "once a question is answered the copy button doesnt work"). It
    rides one layer above the `pre`; lib/copy-code.ts's document listener then takes the click, and the
    chip's own onClick skips it because the target is a button. */
 [data-question-option] .md-body .md-code-copy {

@@ -5,7 +5,7 @@ import { isBrokerClaudeRow, type SessionRow, type Storage } from "./storage.ts"
 import { cleanThreadStatus } from "./thread-names.ts"
 
 // THE WORKING STATUS: while a thread's turn runs, keep its status line naming the TASK it is on, and
-// change it only when the work fundamentally moves (maintainer 2026-09-29: "have each thread always
+// change it only when the work fundamentally moves (David 2026-09-29: "have each thread always
 // display a brief status message of what it's working on when it's working and how long it has been
 // working on that specific task — it should update status every time it fundamentally shifts what it
 // is doing"). The elapsed half is `session.status_at`, which storage stamps only when the TEXT changes,

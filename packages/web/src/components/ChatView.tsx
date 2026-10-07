@@ -1563,7 +1563,7 @@ function VirtualizedThreadTranscript({
   // EAGER HISTORY. Once the opening window has landed and the tail is placed, page the rest of the thread
   // in behind the reader, one bounded page at a time, until there is nothing earlier. Waiting for the
   // reader to reach the top first made every page a visible stall at exactly the moment they wanted to keep
-  // reading (maintainer 2026-10-01: "too much lag when clicking show earlier messages … eagerly load
+  // reading (David 2026-10-01: "too much lag when clicking show earlier messages … eagerly load
   // everything incrementally"). Each step goes through requestEarlier, so the row under the reader's eye
   // stays put exactly as a near-top load keeps it; a step is deferred while the reader is mid-gesture or
   // an anchor restore owns the scroller, and an error stops the chain where the Retry row can pick it up.

@@ -22,7 +22,7 @@ import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 //   ⌂ │ ▣ acme-api ▾  acme/api …      settings · shortcuts · reload │ Claude 83% · Codex 59%
 //
 // THE TITLE is the project switcher (ProjectSwitcher.tsx), handed in as `title` — the page's one name for
-// what it shows, where a workspace switcher sits in Linear, Slack or Vercel (maintainer 2026-09-29). It
+// what it shows, where a workspace switcher sits in Linear, Slack or Vercel (David 2026-09-29). It
 // sat over the queue until then, muted, and read as a filter on the cards rather than the scope of the
 // whole page; the list's own project header repeated the name 180px away.
 //
@@ -39,7 +39,7 @@ import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 // THE DOOR HOME, ON A BOARD ONLY (`crumb`). It goes to All projects, at `/all`: the board is the default
 // view, but All projects is the level above it, the one that holds every board (2026-10-06; it was the
 // bare `/` until then, and `/` now only goes back to the last view, which from a board is the board). All
-// projects has no door: there is nowhere above it to go (maintainer 2026-09-28: "there should no longer be
+// projects has no door: there is nowhere above it to go (David 2026-09-28: "there should no longer be
 // an everything or an infinity button on the threads view on the left"). Upstream led its board's row
 // with ⌂, the way out to its projects page at `/` (colinhacks/frizz 0a3b9139 StatusRow.tsx) — a router
 // Link, so leaving keeps the socket and the query cache. A divider follows it: home LEAVES the board, the

@@ -1,5 +1,5 @@
 // ---- THE SCHEDULE TRIGGER -------------------------------------------------------------------------------------
-// The prompt box has no schedule button and no mode (maintainer 2026-10-06: "it should determine intent from
+// The prompt box has no schedule button and no mode (David 2026-10-06: "it should determine intent from
 // the standard prompt submission … look for certain common scheduling words (every, morning etc.) and if they
 // appear, run a lightweight agent to extract a schedule from the text"). This is that look: a closed list of
 // words, matched whole and case-insensitively. Text without one of them never reaches the model and the box

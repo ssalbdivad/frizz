@@ -11,7 +11,7 @@ import type { ShellBudgetRow, Storage } from "./storage.ts"
 // real arktype shell at 17h that its worker had registered under a 20h `watch`: the clock was
 // universal, and a universal clock is exactly the rule Colin had rejected.
 //
-// So the budget is OPT-IN (maintainer 2026-09-29), and the question is asked of the one party that CAN
+// So the budget is OPT-IN (David 2026-09-29), and the question is asked of the one party that CAN
 // tell a poller from a server — the worker, at the moment it launches the shell:
 //
 //  · AT SPAWN. A Claude worker sizes a shell with the Bash tool's own `timeout` on its

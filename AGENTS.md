@@ -111,7 +111,7 @@ card", "registered wait", "sign-off", "handoff", "fence"), no scheduler behaviou
 mechanics ("the process exited"). Pick the message that is most USEFUL at that moment and stop; the
 mechanism belongs in a code comment. Before: "The worker stopped without a done card, a question or a
 registered wait. Frizz nudges it for one; a reply here also wakes it." After: a one-line card,
-"Reply to continue." (maintainer 2026-09-29.)
+"Reply to continue." (David 2026-09-29.)
 
 # Copy capitalization: sentence case, never title case
 
@@ -196,7 +196,7 @@ bullets.
 
 Never estimate work in human time ("~1 day", "2–3 days", "a week"). Agents build here, so the build
 itself is minutes to hours, and the wall clock is set by review, verification and the maintainer's
-decisions. A day count borrowed from human engineering means nothing (maintainer 2026-10-01). Say what
+decisions. A day count borrowed from human engineering means nothing (David 2026-10-01). Say what
 the cost actually is: the surfaces and files it touches, which existing code paths change, the risk, and
 what needs the maintainer's review or a decision.
 
@@ -231,7 +231,7 @@ TypeScript but does not typecheck it, so keep `tsc --noEmit` and project typeche
 
 Every new script, seed, verifier, harness or tool in this repo is a `.ts` file — never `.mjs`, `.js` or
 `.cjs`, even though most of `scripts/` is still `.mjs` and even when you copy one of those as a template
-(maintainer 2026-10-01: "always use .ts never .mjs"). `nub` runs `.ts` directly, so there is no build step
+(David 2026-10-01: "always use .ts never .mjs"). `nub` runs `.ts` directly, so there is no build step
 to save. The existing `.mjs` files are legacy: run them as they are, but do not add to them by example.
 
 # Agent completion invariant

@@ -1,6 +1,6 @@
 // WHO TOOK THE CARD AWAY. lib/stableQueue.ts holds a card that leaves the queue while it is on screen in
 // its place as a GHOST, because a card the human is reading must not vanish and pull the ones below it
-// up (maintainer 2026-09-28: "it needs to be guaranteed that cards that I'm currently viewing on the
+// up (David 2026-09-28: "it needs to be guaranteed that cards that I'm currently viewing on the
 // screen don't move in their position") — unless the human took it away, which is a move they asked for.
 // The board cannot say which: a thread back at work reads the same whether its agent woke itself or the
 // human replied, and a card marked done reads the same from this tab as from a phone. This tab can,

@@ -95,7 +95,7 @@ test("a pinned row wears the solid mark and offers the solid unpin RIGHTMOST", (
 })
 
 // A pinned row that is WORKING shows its task clock in the right-edge column, and the mark must survive
-// beside it, rightmost where the unpin appears on hover (maintainer 2026-09-30: "i shouldnt have to mouse
+// beside it, rightmost where the unpin appears on hover (David 2026-09-30: "i shouldnt have to mouse
 // over a thread to see that it is pinned" — the mark was gated off every spinning row).
 test("a pinned row that is working still wears the mark, after its task clock", () => {
   const html = row({

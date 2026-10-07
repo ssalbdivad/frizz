@@ -82,7 +82,7 @@ import { questionsOwed, type ThreadView } from "@frizz/shared"
 // carry fires at the deadline, not when it is lifted. And an URGENT reading enters at once whatever held
 // it: a permission prompt, a question, a crash, a limit pause.
 //
-// A THREAD ONLY LOSES ITS PLACE WHEN A PERSON ACTS ON IT (maintainer 2026-09-28, choosing it: "Keep its
+// A THREAD ONLY LOSES ITS PLACE WHEN A PERSON ACTS ON IT (David 2026-09-28, choosing it: "Keep its
 // place"). A thread already waiting in line is often re-woken by its own work — a shell finishing, a PR
 // watcher, a child's report — and rests again with nobody having touched it. By the rules above that was a
 // departure and a fresh arrival, so the card being read (a 2FA question, on 2026-09-24) vanished and came

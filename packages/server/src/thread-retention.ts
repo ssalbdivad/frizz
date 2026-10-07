@@ -16,7 +16,7 @@ export const RETENTION_SWEEP_INTERVAL_MS = 60 * 60_000
 export const RETENTION_FIRST_SWEEP_MS = 60_000
 
 /**
- * When the HUMAN last touched the thread — "last interacted with" (maintainer 2026-09-30), never the
+ * When the HUMAN last touched the thread — "last interacted with" (David 2026-09-30), never the
  * agent's own activity: a thread a worker kept busy for a month is still one nobody has looked at.
  * `interacted_at` is every human verb (router.ts HUMAN_THREAD_ACTS); opening and reading stamp their own
  * columns too, which carry the history of rows older than `interacted_at`; and the dispatch itself is the

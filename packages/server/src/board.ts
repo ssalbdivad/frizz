@@ -822,7 +822,7 @@ export const SIGNOFF_NUDGE_EXCUSAL_MS = 60_000
 /** Is the sign-off nudge on its way to this rest? Without this a fenceless rest entered the queue the
  *  instant it happened, the nudge pulled it back to the running rail two seconds later, and the worker's
  *  sign-off put it back — a card that blinked in and out of the queue for no reason the human could see
- *  (maintainer 2026-10-01: "threads randomly appear and disappear off the queue quickly"). Once the cap
+ *  (David 2026-10-01: "threads randomly appear and disappear off the queue quickly"). Once the cap
  *  is spent the verdict is `"ineligible"` and the rest queues at once, as it always did. */
 export function signoffNudgeDue(verdict: SignoffNudgeVerdict, tele: SessionTelemetry | undefined, nowMs = Date.now()): boolean {
   if (verdict !== "nudge") return false
@@ -1093,7 +1093,7 @@ export function replyUnseen(
  *  exact way — the same derivation with the reply marked seen would leave the queue — so it holds only
  *  when the reply is the SOLE reason, never beside a question, a done or a crash. The card names it and
  *  offers "Mark as read"; before, it showed an Awaiting fence in the queue with nothing to act on, and
- *  only opening the drawer cleared it (maintainer 2026-10-01 on @expand-defaults: "unclear what I am
+ *  only opening the drawer cleared it (David 2026-10-01 on @expand-defaults: "unclear what I am
  *  supposed to be doing"). `needsYouFor` is the caller's deriveNeedsYou with every other input fixed. */
 export function queuedOnlyForReply(
   row: SessionRow,

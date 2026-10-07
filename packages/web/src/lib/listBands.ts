@@ -62,7 +62,7 @@ export function loudBands(project: QueuesProject, hidden: (key: string) => boole
   pinned.sort((a, b) => (a.pinnedAt ?? "").localeCompare(b.pinnedAt ?? "") || a.id.localeCompare(b.id))
   const flight = [...project.queued, ...project.running].filter((t) => !isPinned(t)).map(overlay)
   const ready = flight.filter((t) => queued(t) && !hidden(threadKey(project.id, t.id)))
-  // NO OPEN THREAD IS EVER ROWLESS (maintainer 2026-10-06: "it should never be the case that a thread
+  // NO OPEN THREAD IS EVER ROWLESS (David 2026-10-06: "it should never be the case that a thread
   // should be totally invisible for any circumstances"). A Ready card the operator just acted on is hidden
   // until the server agrees, and its row used to leave with it — so a card whose hide outlived the act
   // (a permission approved on a resting thread's card left @3-0 queued server-side, cardless and rowless)

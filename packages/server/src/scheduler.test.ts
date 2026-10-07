@@ -448,7 +448,7 @@ test("question: a rested thread's unanswered question takes its recommended opti
   h.storage.close()
 })
 
-// An option that acts outside this machine is never taken by the default (maintainer 2026-10-06: an
+// An option that acts outside this machine is never taken by the default (David 2026-10-06: an
 // upstream issue must not be filed under their account unless they answer). It falls back to the first
 // local option; with none, the question waits.
 test("question: the default never takes an external option", async () => {

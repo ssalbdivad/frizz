@@ -1183,7 +1183,7 @@ export const AWAITING_FOR_MAX_MS = 24 * 60 * 60 * 1000
 /** The ceiling for a park that names a SUB-AGENT, and it is a check-in cadence rather than a timeout.
  *  An orchestrator parked on its children for the full day reports nothing for the whole run: @3-0 rested
  *  `for: 8h` on five lanes of fixers and the board showed one stale line while they landed work
- *  (maintainer 2026-10-03: "the top level thread should regularly be reporting back feedback and
+ *  (David 2026-10-03: "the top level thread should regularly be reporting back feedback and
  *  communicating with sub agents … avoid long periods of top level no updates"). Expiry wakes the parent
  *  with parkExpiredWakeMessage's check-in steps, and re-parking stays unlimited. Shipped at an hour, cut
  *  to 20 minutes and settled at 30 the same day: each check-in re-reads the orchestrator's whole
@@ -3078,7 +3078,7 @@ export interface AskedOption {
   recommended?: boolean
   /** Taking this option acts OUTSIDE this machine — files an issue, posts a comment, merges, pushes,
    *  publishes, spends — usually under the human's name. Frizz's unanswered-question default never takes
-   *  such an option (recommendedDefaultAnswer): the maintainer, 2026-10-06, after a TS 7 migration
+   *  such an option (recommendedDefaultAnswer): the David, 2026-10-06, after a TS 7 migration
    *  thread asked whether to file an upstream issue under their account and the 10m default was on
    *  course to file it — "an issue shouldn't be opened from me unless I actually answer". */
   external?: boolean
@@ -3229,7 +3229,7 @@ export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
  *  from the queue card, so a side question lost seven the human still meant to answer. 2026-09-29 made
  *  every open question stay owed and ride to the newest handoff until the worker `unask`ed it — and the
  *  card then sat under handoffs about something else, asking a question the conversation had moved past
- *  (maintainer 2026-09-30: "it often leads to weird scenarios like this where the questions feel out of
+ *  (David 2026-09-30: "it often leads to weird scenarios like this where the questions feel out of
  *  date"). Since then the card stays where it was asked, and the worker opts a question back in — `keep`,
  *  with new wording when the direction changed — when it is directly relevant to the message
  *  (openQuestionsNote tells it which are open). One it does not keep is WITHDRAWN at the worker's next
@@ -3416,7 +3416,7 @@ export const AnswerQuestionsInput = z.object({
   slug: ThreadSlug,
   /** ONE QUESTION'S ANSWER, USUALLY — sent the moment that question is complete (a pick, an Enter in its
    *  own box, a multi's confirm), so the worker starts on it while the human is still reading the rest
-   *  (maintainer 2026-09-29: "the agent should receive the answer to one question at a time so it can
+   *  (David 2026-09-29: "the agent should receive the answer to one question at a time so it can
    *  start working"). Several when the human sends what they have staged on purpose, or when a typed reply
    *  carries the staged answers ahead of itself. The contract already requires the questions of one `ask`
    *  to be independent — dependent ones are `followUps` — which is what makes one answer actionable
@@ -3931,7 +3931,7 @@ export const ThreadView = z.object({
   titleLocked: z.boolean().optional(),
   // True when the row carries a persisted NAME — a human's, a caller's dispatch title, or a machine name
   // that landed (server thread-names.ts `rowThreadName`). Only a name is shown as an `@handle`, and a
-  // name never changes once shown (maintainer 2026-09-30: "once someone sees the id, it cannot
+  // name never changes once shown (David 2026-09-30: "once someone sees the id, it cannot
   // change"), so while this is false `aiTitle` is the live session title and displays as plain text.
   // Optional (absent ⇒ legacy/slim row): the display then keeps the pre-2026-09-30 aiTitle-is-a-name rule.
   titleNamed: z.boolean().optional(),

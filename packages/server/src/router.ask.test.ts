@@ -651,7 +651,7 @@ test("a DANGER question the human typed past is never set aside, and still block
   } finally { h.close() }
 })
 
-// A PIVOT STICKS (maintainer 2026-09-28: "when a question is not answered and we pivot, the question
+// A PIVOT STICKS (David 2026-09-28: "when a question is not answered and we pivot, the question
 // should not be asked again"). A worker `unask`ed stale cards and re-registered them word for word under
 // the human's unrelated next request. Since 2026-09-29 a pivot is an ACT, never a timestamp: the human's
 // ×, or the worker's own `unask` after the human's newest typed message.

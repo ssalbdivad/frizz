@@ -2,7 +2,7 @@ import { embedded } from "./embed.ts"
 // THE TAB'S OWN REST MARK: a dot on the favicon of a /full tab whose thread is in the queue (maintainer
 // 2026-09-19: "a little indicator should pop up in the favicon when a full-screen view tab is at
 // rest"), and a COUNT on the page's tab — how many cards its queue holds, in one project's view or
-// All projects alike (maintainer 2026-09-30: "more detailed favicon changes e.g. for the number of
+// All projects alike (David 2026-09-30: "more detailed favicon changes e.g. for the number of
 // waiting threads instead of just a binary"). The count is what the retired project sidebar's badges
 // said per project; with one tab per project, the tab strip is that sidebar. Several tabs are usually
 // open at once and a tab strip shows a favicon and a few characters of title, so the favicon is the
@@ -37,7 +37,7 @@ const DOT_Y = DOT_RADIUS + RING
 const DOT_COLOR = "#4a9eff"
 
 // THE COUNT'S PILL, in the same 64px space. It has to carry a digit, so it is bigger than the dot, but it
-// must leave the logo readable: 44px tall (11 tab px) covered the whole mark (maintainer 2026-09-30: "the
+// must leave the logo readable: 44px tall (11 tab px) covered the whole mark (David 2026-09-30: "the
 // number needs to be smaller and/or more top right aligned so it doesnt cover the whole logo"). 34px is
 // 8.5 tab px, a bold digit inking ~6px, and the pill sits FLUSH in the corner — its own edge on the
 // canvas edge, the clear ring surviving only on the two sides that face the tile, which are the only
