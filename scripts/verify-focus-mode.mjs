@@ -1,15 +1,18 @@
 #!/usr/bin/env node
-// Drive FOCUS MODE — the page showing one project, chosen from the switcher (web lib/pageView.ts) — on a real,
-// seeded, multi-project stack, and check what it promised:
-//   · the launcher's `/?project=<slug>` (and an older launcher's `?focus=<slug>`) shows that project alone:
-//     its list, its cards, and a prompt box that dispatches into it with no picker;
-//   · the view lives in the ADDRESS, per tab: two tabs on two projects stay there across reloads, and a
-//     bare `/` is always All projects (2026-09-30), as is a retired `/?all`;
-//   · the READY header's switcher changes the view by navigating, and Back undoes it; All projects is the
+// Drive a PROJECT'S BOARD (focus mode) — the page showing one project at `/project/<slug>`, chosen from the
+// switcher (web lib/pageView.ts, components/ProjectBoard.tsx) — on a real, seeded, multi-project stack, and
+// check what it promised:
+//   · `/project/<slug>` shows that project alone: its list, its cards, and a prompt box that dispatches into
+//     it with no picker; the query-era `/?project=<slug>` (2026-09-29 to 2026-10-06) and an older
+//     launcher's `?focus=<slug>` land there;
+//   · the view lives in the ADDRESS, per tab: two tabs on two boards stay there across reloads, and a bare
+//     `/` is always All projects (2026-09-30), as is a retired `/?all`;
+//   · the status row's switcher changes the view by navigating, and Back undoes it; All projects is the
 //     unified page, with the prompt box's picker carried over to the project just left;
 //   · a thread drawer closes back to the tab's view, not to a guess;
-//   · a retired `/project/<slug>` lands focused on it; an unknown `?project=` says so;
-//   · the list names its loud bands, and opens Snoozed, Done and External one at a time;
+//   · an unknown board says so;
+//   · the board names its bands (Colin's: Pinned, Queue and Running, which never fold), and Snoozed, Done
+//     and External fold, collapsed to start, each on its own;
 //   · at a phone's width nothing overflows sideways, in either view.
 //
 // Usage:
@@ -117,12 +120,12 @@ const choose = async (page, value) => {
 }
 
 try {
-  // ── the launcher's address ─────────────────────────────────────────────────────────────────────────
+  // ── the board's address ────────────────────────────────────────────────────────────────────────────
   const main = await browser.createBrowserContext()
-  let page = await open(main, `${origin}/?project=${A.slug}`)
-  await step("the launcher's /?project=<slug> shows that project alone", async () => {
+  let page = await open(main, `${origin}/project/${A.slug}`)
+  await step("/project/<slug> shows that project alone", async () => {
     await showing(page, A)
-    check("…the address keeps naming it", (await address(page)) === `/?project=${A.slug}`, await address(page))
+    check("…the address keeps naming it", (await address(page)) === `/project/${A.slug}`, await address(page))
     const groups = await listed(page)
     check("…the list is that project alone", groups.length === 1 && groups[0] === A.id, groups.join(", "))
     const cards = await cardProjects(page)
@@ -139,66 +142,76 @@ try {
     check("the page is bound to the focused project", boards.at(-1) === `/_frizz/${A.slug}/rpc/board`, boards.join(", "))
   })
 
-  // ── the list's bands ───────────────────────────────────────────────────────────────────────────────
-  await step("the loud bands carry no names, and their rows stand in order", async () => {
-    const bands = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band-label]`, (els) => els.map((el) => el.getAttribute("data-xq-band-label")))
-    check("Pinned, Ready and Working carry no name", bands.length === 0, bands.join(", ") || "(none)")
-    const rows = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band]`, (els) => [...new Set(els.map((el) => el.getAttribute("data-xq-band")))])
-    check("…and their rows still stand in order", rows.join() === ["pinned", "ready", "working"].filter((b) => rows.includes(b)).join() && rows.includes("pinned") && rows.includes("ready") && rows.includes("working"), rows.join(", "))
-    const marked = await page.$$eval(`[data-xq-rail-project="${A.id}"] > [data-xq-band="pinned"]`, (els) => els.every((el) => el.querySelector("[data-rail-pin-mark]")))
+  // ── the board's bands ──────────────────────────────────────────────────────────────────────────────
+  // Colin's named bands since 2026-10-06 (ProjectBoard.tsx): a header over each, `data-band-header`; the
+  // three in flight are plain names, the quiet ones folds. Until then focus mode drew the loud bands unnamed.
+  await step("the board names Pinned, Queue and Running, which never fold, and their rows stand in order", async () => {
+    const group = `[data-xq-rail-project="${A.id}"]`
+    const loud = await page.$$eval(`${group} > [data-band-header]`, (els) => els.map((el) => ({ band: el.getAttribute("data-band-header"), fold: el.tagName === "BUTTON" || el.hasAttribute("aria-expanded"), text: el.textContent?.trim() })))
+    check("Pinned, Queue and Running are named, in that order", loud.map((h) => h.band).join() === "pinned,ready,working" && /^Pinned/.test(loud[0]?.text ?? "") && /^Queue/.test(loud[1]?.text ?? "") && /^Running/.test(loud[2]?.text ?? ""), JSON.stringify(loud))
+    check("…and none of them folds", loud.every((h) => !h.fold))
+    const rows = await page.$$eval(`${group} > [data-xq-band]`, (els) => [...new Set(els.map((el) => el.getAttribute("data-xq-band")))])
+    check("…and their rows stand in order", rows.join() === "pinned,ready,working", rows.join(", "))
+    const marked = await page.$$eval(`${group} > [data-xq-band="pinned"]`, (els) => els.every((el) => el.querySelector("[data-rail-pin-mark]")))
     check("…and every pinned row wears its pin", marked)
-    const empty = await page.$$eval(`[data-xq-rail-project] > [data-xq-band-label]`, (labels) => labels.filter((label) => !label.nextElementSibling?.matches("[data-xq-thread-row]")).map((l) => l.getAttribute("data-xq-band-label")))
+    const empty = await page.$$eval(`${group} > [data-band-header]`, (headers) => headers.filter((header) => !header.nextElementSibling?.matches("[data-xq-thread-row]")).map((h) => h.getAttribute("data-band-header")))
     check("…and no name stands over an empty band", empty.length === 0, empty.join(", "))
   })
-  await step("Snoozed, Done and External open one at a time, collapsed to start", async () => {
+  await step("Snoozed, Done and External fold, collapsed to start, each on its own", async () => {
     const group = `[data-xq-rail-project="${A.id}"]`
-    const opened = () => page.$$eval(`${group} [data-xq-drill-band]`, (els) => els.map((el) => el.getAttribute("data-xq-drill-band")))
+    const opened = () => page.$$eval(`${group} [data-xq-board-band-open]`, (els) => els.map((el) => el.getAttribute("data-xq-board-band")))
+    const quiet = await page.$$eval(`${group} [data-xq-board-band]`, (els) => els.map((el) => el.getAttribute("data-xq-board-band")))
+    if (!quiet.includes("done") || !quiet.includes("snoozed")) throw new Error(`the seed needs Snoozed and Done here; bands: ${quiet.join(", ")}`)
     check("every quiet band starts collapsed", (await opened()).length === 0, (await opened()).join(", "))
-    const toggles = await page.$$eval(`[data-xq-project-row="${A.id}"] [data-xq-quiet-count]`, (els) => els.map((el) => el.getAttribute("data-xq-quiet-count")))
-    if (!toggles.includes("done") || !toggles.includes("snoozed")) throw new Error(`the seed needs Snoozed and Done here; counts: ${toggles.join(", ")}`)
-    await clickSettled(page, `${group} [data-xq-quiet-count="done"]`)
-    await page.waitForSelector(`${group} [data-xq-drill-band="done"] [data-sidebar-item]`, { timeout: 8000 })
+    const header = (band) => `${group} [data-xq-board-band="${band}"] > [data-band-header]`
+    await clickSettled(page, header("done"))
+    await page.waitForSelector(`${group} [data-xq-board-band="done"] [data-sidebar-item]`, { timeout: 8000 })
     check("Done opens alone", (await opened()).join() === "done", (await opened()).join(", "))
-    await clickSettled(page, `${group} [data-xq-quiet-count="snoozed"]`)
-    await page.waitForSelector(`${group} [data-xq-drill-band="snoozed"] [data-sidebar-item]`, { timeout: 8000 })
-    check("Snoozed opens beside it, above it in the rail's order", (await opened()).join() === "snoozed,done", (await opened()).join(", "))
-    const named = await page.$$eval(`${group} [data-xq-drill-band] > [data-xq-band-label]`, (els) => els.map((el) => el.getAttribute("data-xq-band-label")))
-    check("…each open band is named", named.join() === "snoozed,done", named.join(", "))
+    await clickSettled(page, header("snoozed"))
+    await page.waitForSelector(`${group} [data-xq-board-band="snoozed"] [data-sidebar-item]`, { timeout: 8000 })
+    check("Snoozed opens beside it, above it in the board's order", (await opened()).join() === "snoozed,done", (await opened()).join(", "))
     await page.screenshot({ path: join(shots, "focus-mode-quiet-open.png") })
-    await clickSettled(page, `${group} [data-xq-drill-band="done"] > [data-xq-band-label]`)
+    await clickSettled(page, header("done"))
     await sleep(300)
-    check("a band's name closes it, and only it", (await opened()).join() === "snoozed", (await opened()).join(", "))
-    await clickSettled(page, `${group} [data-xq-quiet-count="snoozed"]`)
+    check("a band's header closes it, and only it", (await opened()).join() === "snoozed", (await opened()).join(", "))
+    await clickSettled(page, header("snoozed"))
     await sleep(300)
-    check("its count closes it too", (await opened()).length === 0, (await opened()).join(", "))
+    check("…and the other's closes it", (await opened()).length === 0, (await opened()).join(", "))
   })
 
   // ── the cord strings the names ─────────────────────────────────────────────────────────────────────
-  await step("the project's cord runs unbroken through its rows", async () => {
+  await step("the project's cord runs through its rows, parted only where a rule parts the bands", async () => {
     // ThreadConnector's own rule (readRail): the square, each band name and each row are strung while they
     // TOUCH and each holds an icon. A name that broke the run, or held no glyph, would cut the cord there.
+    // The board's one rule in flight, between Queue and Running (ProjectBoard.tsx BandRule), parts the
+    // cord with the bands: Queue is the human's, Running the agents'.
     const run = await page.$eval(`[data-xq-rail-project="${A.id}"]`, (group) => {
-      // Focused, the project's row draws no square (the page's title names the project — ProjectList.tsx
-      // ProjectRow), so the cord starts at the first name or row under it.
+      // A board draws no project row (the status row names the project — ProjectBoard.tsx), so the cord
+      // starts at the first band's header glyph; the quiet bands sit off it, in a container of their own.
       const links = [...group.querySelectorAll(":scope > [data-xq-project-row], :scope > [data-xq-band-label], :scope > [data-xq-thread-row]")]
         .filter((el) => !el.matches("[data-xq-project-row]") || el.querySelector("[data-xq-indicator]"))
       let bottom = NaN
       let strung = 0
+      let ruled = 0
       for (const el of links) {
         const r = el.getBoundingClientRect()
-        if (!el.querySelector("[data-xq-indicator]") || (strung > 0 && Math.abs(r.top - bottom) > 1)) break
+        if (!el.querySelector("[data-xq-indicator]")) break
+        if (strung > 0 && Math.abs(r.top - bottom) > 1) {
+          if (!el.previousElementSibling?.matches("[data-xq-board-rule]")) break
+          ruled++
+        }
         bottom = r.bottom
         strung++
       }
-      return { strung, links: links.length, names: group.querySelectorAll(":scope > [data-xq-band-label]").length }
+      return { strung, ruled, links: links.length, names: group.querySelectorAll(":scope > [data-xq-band-label]").length }
     })
-    check("the cord strings any band name and every row", run.links > 1 && run.strung === run.links, `${run.strung} of ${run.links} strung, ${run.names} names`)
+    check("the cord strings every band name and every row, parted only at the Queue | Running rule", run.links > 1 && run.strung === run.links && run.ruled <= 1, `${run.strung} of ${run.links} strung, ${run.names} names, ${run.ruled} rule`)
     // And the connector drew it: its strands reach from the square to the last row.
     const span = await page.evaluate((id) => {
       const d = document.querySelector("[data-thread-cords] path")?.getAttribute("d") ?? ""
       const ys = [...d.matchAll(/(-?[\d.]+) (-?[\d.]+)/g)].map((m) => Number(m[2]))
       const group = document.querySelector(`[data-xq-rail-project="${id}"]`)
-      const icons = [...group.querySelectorAll(":scope > * [data-xq-indicator]")].filter((slot) => !slot.closest("[data-xq-drill]")).map((slot) => slot.getBoundingClientRect())
+      const icons = [...group.querySelectorAll(":scope > * [data-xq-indicator]")].filter((slot) => !slot.closest("[data-xq-drill], [data-xq-board-quiet]")).map((slot) => slot.getBoundingClientRect())
       return { top: Math.min(...ys), bottom: Math.max(...ys), first: icons[0].top + icons[0].height / 2, last: icons.at(-1).top + icons.at(-1).height / 2 }
     }, A.id)
     check("…and the connector draws it from the square to the last row", Math.abs(span.top - span.first) < 2 && Math.abs(span.bottom - span.last) < 2, JSON.stringify(span))
@@ -207,11 +220,11 @@ try {
   // ── drawers go home to the tab's view ──────────────────────────────────────────────────────────────
   await step("a thread drawer closes back to the focused view", async () => {
     const row = `[data-xq-rail-project="${A.id}"] > [data-xq-band="working"] button`
-    if (!(await page.$(row))) throw new Error("no Working row to open (reseed, or respin the seeded workers)")
+    if (!(await page.$(row))) throw new Error("no Running row to open (reseed, or respin the seeded workers)")
     await clickSettled(page, row)
-    await page.waitForFunction(() => /^\/all\/[^/]+\/thread\/[^/]+$/.test(location.pathname), { timeout: 8000 })
+    await page.waitForFunction(() => /^\/project\/[^/]+\/thread\/[^/]+$/.test(location.pathname), { timeout: 8000 })
     await page.waitForSelector("[data-drawer-layer]", { timeout: 8000 })
-    check("a Working row opens its drawer on the page", true, await address(page))
+    check("a Running row opens its drawer on the board", true, await address(page))
     // At once, not once it has settled: a focused project's row opens its drawer STORE-first, and a close
     // that landed before the route had committed the drawer's address was re-opened by that address
     // (lib/router.ts `stale`) — 6 of 6 tries stuck on a loaded machine before the fix. Escape leaves a
@@ -220,24 +233,24 @@ try {
       await page.keyboard.press("Escape")
       await sleep(150)
     }
-    await waitAddress(page, `/?project=${A.slug}`)
-    check("closing it comes back to /?project=<slug>", true)
+    await waitAddress(page, `/project/${A.slug}`)
+    check("closing it comes back to /project/<slug>", true)
     await sleep(3000)
     const reopened = await page.evaluate(() => ({ drawer: Boolean(document.querySelector("[data-drawer-layer]")), at: location.pathname + location.search }))
-    check("…and it stays closed, though Escape came before the route had caught up", !reopened.drawer && reopened.at === `/?project=${A.slug}`, reopened.at)
+    check("…and it stays closed, though Escape came before the route had caught up", !reopened.drawer && reopened.at === `/project/${A.slug}`, reopened.at)
   })
 
   // ── the switcher ───────────────────────────────────────────────────────────────────────────────────
   await step("the switcher focuses another project, and Back returns", async () => {
     await choose(page, B.slug)
-    await waitAddress(page, `/?project=${B.slug}`)
+    await waitAddress(page, `/project/${B.slug}`)
     await showing(page, B)
     const groups = await listed(page)
     check("the switcher focuses the page on the project chosen", groups.length === 1 && groups[0] === B.id, groups.join(", "))
     const cards = await cardProjects(page)
     check("…with its cards alone", cards.every((c) => c === B.id), cards.join(", "))
     await page.goBack()
-    await waitAddress(page, `/?project=${A.slug}`)
+    await waitAddress(page, `/project/${A.slug}`)
     await showing(page, A)
     check("Back returns to the project before", (await listed(page)).join() === A.id)
   })
@@ -258,35 +271,36 @@ try {
     const chip = await page.$eval(`[data-xq-card] [data-xq-chip="${B.id}"]`, (el) => el.getAttribute("data-xq-chip")).catch(() => null)
     if (!chip) throw new Error(`no ${B.slug} card with a chip`)
     await clickSettled(page, `[data-xq-card] button[data-xq-chip="${B.id}"]`)
-    await waitAddress(page, `/?project=${B.slug}`)
+    await waitAddress(page, `/project/${B.slug}`)
     await showing(page, B)
     check("a card's chip focuses the page on its project", (await listed(page)).join() === B.id)
   })
-  await step("a project row's ⋯ menu offers every project back, and focus", async () => {
-    await page.hover(`[data-xq-project-row="${B.id}"]`)
-    await clickSettled(page, `[data-xq-project-row="${B.id}"] button[aria-label^="More actions for"]`)
+  await step("the board's ⋯ menu offers every project back, and a project row's focuses one", async () => {
+    // A board has no project row: its ⋯ sits beside the repo in the status row (ProjectBoard.tsx BoardIdentity).
+    await page.hover("[data-xq-board-identity]")
+    await clickSettled(page, `[data-xq-board-identity] button[aria-label^="More actions for"]`)
     await clickSettled(page, '[role="menuitem"]', { text: "Show all projects" })
     await waitAddress(page, "/")
     await showing(page, null)
     await page.hover(`[data-xq-project-row="${A.id}"]`)
     await clickSettled(page, `[data-xq-project-row="${A.id}"] button[aria-label^="More actions for"]`)
     await clickSettled(page, '[role="menuitem"]', { text: "Focus on this project" })
-    await waitAddress(page, `/?project=${A.slug}`)
+    await waitAddress(page, `/project/${A.slug}`)
     await showing(page, A)
     check("the ⋯ menu moves between All projects and one", true)
   })
 
   // ── per tab, across reloads ────────────────────────────────────────────────────────────────────────
-  await step("two tabs on two projects stay there across reloads", async () => {
+  await step("two tabs on two boards stay there across reloads", async () => {
     const first = page
-    const second = await open(main, `${origin}/?project=${B.slug}`)
+    const second = await open(main, `${origin}/project/${B.slug}`)
     await showing(second, B)
     await first.bringToFront()
     await first.reload({ waitUntil: "networkidle2" })
     await showing(first, A)
     await second.reload({ waitUntil: "networkidle2" })
     await showing(second, B)
-    check("each tab keeps its project across a reload", (await address(first)) === `/?project=${A.slug}` && (await address(second)) === `/?project=${B.slug}`, `${await address(first)} | ${await address(second)}`)
+    check("each tab keeps its board across a reload", (await address(first)) === `/project/${A.slug}` && (await address(second)) === `/project/${B.slug}`, `${await address(first)} | ${await address(second)}`)
     await first.goto(`${origin}/`, { waitUntil: "networkidle2" })
     await waitAddress(first, "/")
     await showing(first, null)
@@ -309,29 +323,30 @@ try {
   })
   await step("an older launcher's ?focus=<slug> focuses that project", async () => {
     await page.goto(`${origin}/?focus=${B.slug}`, { waitUntil: "networkidle2" })
-    await waitAddress(page, `/?project=${B.slug}`)
+    await waitAddress(page, `/project/${B.slug}`)
     await showing(page, B)
-    check("?focus= reads as ?project=, and the address is rewritten", true)
+    check("?focus= lands on /project/<slug>", true)
   })
-  await step("a retired /project/<slug> lands focused on it", async () => {
-    await page.goto(`${origin}/project/${A.slug}`, { waitUntil: "networkidle2" })
-    await waitAddress(page, `/?project=${A.slug}`)
+  await step("the query-era /?project=<slug> lands on its board", async () => {
+    await page.goto(`${origin}/?project=${A.slug}`, { waitUntil: "networkidle2" })
+    await waitAddress(page, `/project/${A.slug}`)
     await showing(page, A)
-    check("/project/<slug> lands on /?project=<slug>", true)
+    check("/?project=<slug> lands on /project/<slug>", true)
   })
-  await step("an unknown ?project= says so and shows something real", async () => {
-    await page.goto(`${origin}/?project=no-such-project`, { waitUntil: "networkidle2" })
+  await step("an unknown board says so and shows something real", async () => {
+    await page.goto(`${origin}/project/no-such-project`, { waitUntil: "networkidle2" })
     const toast = await page.waitForFunction(() => [...document.querySelectorAll("[data-sonner-toast], [role='status'], [data-toast]")].map((t) => t.textContent).find((t) => t?.includes("No project named no-such-project")) ?? null, { timeout: 6000 }).then(() => true, () => false)
     const now = await address(page)
-    check("an unknown ?project= is reported and replaced", toast && now !== "/?project=no-such-project", now)
+    check("an unknown board is reported and replaced", toast && now !== "/project/no-such-project", now)
   })
 
   // ── a phone's width ────────────────────────────────────────────────────────────────────────────────
-  for (const [view, url] of [["focused", `/?project=${A.slug}`], ["All projects", "/"]]) {
+  for (const [view, url] of [["focused", `/project/${A.slug}`], ["All projects", "/"]]) {
     await step(`at 420px nothing overflows sideways (${view})`, async () => {
       await page.setViewport({ width: 420, height: 900, deviceScaleFactor: 2 })
       await page.goto(`${origin}${url}`, { waitUntil: "networkidle2" })
-      await page.waitForSelector("[data-xq-rail-project]")
+      // A phone's own layout of the page (PhonePage.tsx), focused or All projects.
+      await page.waitForSelector(`[data-mobile-board="${view === "focused" ? "project" : "all"}"]`)
       await sleep(800)
       const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)
       check(`at 420px nothing overflows sideways (${view})`, overflow <= 0, `${overflow}px`)

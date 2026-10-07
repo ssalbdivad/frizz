@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Drive the page's ALL PROJECTS view (`/?all`, web lib/pageView.ts — "Everything", at `/`, until focus
-// mode made one project the default on 2026-09-29) in a real headless browser against a seeded
+// Drive the page's ALL PROJECTS view (`/`, web lib/pageView.ts — "Everything" until focus mode, and `/?all`
+// from 2026-09-29 to 2026-09-30) in a real headless browser against a seeded
 // multi-project stack, and check that every action taken on a card lands on the card's OWN project — and
 // that the view works as a MODE: threads open in place, and new ones start in any project from it.
 //
@@ -8,7 +8,7 @@
 // prompt box's pick), so the page-level client (`rpc`) means that project there, and a slug is unique only
 // within a project — an action wired to the wrong client either fails against the page's project or,
 // worse, succeeds on its namesake. So the page is bound to the launcher (reached the way a person reaches
-// it: the launcher's own `/?project=` landing, then the switcher's All projects, which carries the project
+// it: the project's board, `/project/<slug>`, then the switcher's All projects, which carries the project
 // over as the pick), every write is taken on a TENANT's card (where the page client would be wrong), and
 // the same-slug pair the seed plants (`fix-flaky-login-test`, in the launcher AND a tenant) is checked from
 // both sides — from the cards, and from a tenant's drawer opened in place.
@@ -156,15 +156,16 @@ try {
     ).catch(() => { throw new Error(`${selector} never settled on screen`) })
     await handle.asElement().click()
   }
-  // All projects, reached the way a person reaches it: the launcher's own landing URL (src/index.ts
-  // slugPath), `/?project=<slug>`, focused on the project it was run in — then the READY header's
-  // switcher, whose All projects keeps that project as the prompt box's pick (AllQueues.tsx Switcher).
+  // All projects, reached the way a person reaches it: the project's board, `/project/<slug>` (the
+  // launcher's own landing was `/?project=<slug>` from 2026-09-29, and is `/` since 2026-09-30) — then the
+  // status row's switcher, whose All projects keeps that project as the prompt box's pick (AllQueues.tsx
+  // Switcher).
   const allFrom = async (slug) => {
-    await page.goto(`${origin}/?project=${slug}`, { waitUntil: "networkidle2" })
+    await page.goto(`${origin}/project/${slug}`, { waitUntil: "networkidle2" })
     await page.waitForSelector('[data-status-row] [data-xq-switcher="project"]', { timeout: 30_000 })
     await clickSettled("[data-status-row] [data-xq-switcher]")
     await clickSettled('[role="menuitem"][data-value="all-projects"]')
-    await page.waitForFunction(() => location.search === "?all", { timeout: 15_000 })
+    await page.waitForFunction(() => location.pathname === "/" && location.search === "", { timeout: 15_000 })
     await page.evaluate(() => { document.documentElement.dataset.theme = "dark" })
     await page.waitForSelector('[data-surface="newComposer"]', { timeout: 30_000 })
     await pickerSays(slug, 30_000)
@@ -176,7 +177,7 @@ try {
   await step("All projects keeps the project it was left from as the page's, with its prompt box", async () => {
     await page.waitForSelector('[data-surface="newComposer"]', { timeout: 10_000 })
     const path = await page.evaluate(() => location.pathname + location.search)
-    check("All projects keeps the project it was left from as the page's, with its prompt box", path === "/?all" && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
+    check("All projects keeps the project it was left from as the page's, with its prompt box", path === "/" && (await pickerSays("acme-api")), `${path}, picker "${await picker()}"`)
   })
 
   // Until 2026-09-28 this checked a lane per project in the rail's order; the queue is one queue now, in
@@ -540,22 +541,23 @@ try {
     await pickerSays("acme-api")
   })
 
-  // Leaving All projects for ONE project is a change of view, by address (lib/pageView.ts): `/?project=`.
-  // It was a filter on the queue column, held per tab at `/`, from 2026-09-28 until focus mode; before
-  // that, each of these doors navigated to `/project/<slug>`. The doors are a card's
+  // Leaving All projects for ONE project is a change of view, by address (lib/pageView.ts): the project's
+  // board, `/project/<slug>` (`/?project=<slug>` from 2026-09-29 to 2026-10-06). It was a filter on the
+  // queue column, held per tab at `/`, from 2026-09-28 until focus mode; before that, each of these doors
+  // navigated to `/project/<slug>` too. The doors are a card's
   // project chip (All projects draws one on every card), the READY header's switcher, and a project row's
   // ⋯. What each check reads is the address and whose cards the queue shows:
   // focused, exactly the one project's.
   const focusedTo = async (slug) => {
-    await page.waitForFunction((slug) => new URLSearchParams(location.search).get("project") === slug, { timeout: 15_000 }, slug).catch(() => {})
+    await page.waitForFunction((slug) => location.pathname === `/project/${slug}`, { timeout: 15_000 }, slug).catch(() => {})
     await page.waitForFunction((id) => { const shown = new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])); return shown.size === 1 && shown.has(id) }, { timeout: 30_000 }, ids[slug]).catch(() => {})
     return { projects: await cardProjects(), path: await page.evaluate(() => location.pathname + location.search) }
   }
-  const only = (seen, slug) => JSON.stringify(seen.projects) === JSON.stringify([ids[slug]]) && seen.path === `/?project=${slug}`
+  const only = (seen, slug) => JSON.stringify(seen.projects) === JSON.stringify([ids[slug]]) && seen.path === `/project/${slug}`
   const same = (a, b) => JSON.stringify([...a].sort()) === JSON.stringify([...b].sort())
   // Back to All projects, and every project's cards in it.
   const backToAll = async (count) => {
-    await page.waitForFunction(() => location.search === "?all", { timeout: 15_000 }).catch(() => {})
+    await page.waitForFunction(() => location.pathname === "/" && location.search === "", { timeout: 15_000 }).catch(() => {})
     await page.waitForFunction((count) => new Set([...document.querySelectorAll("[data-xq-card]")].map((el) => el.getAttribute("data-xq-card")?.split("/")[0])).size === count, { timeout: 30_000 }, count).catch(() => {})
     await sleep(400)
     return cardProjects()
