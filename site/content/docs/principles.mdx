@@ -20,9 +20,13 @@ Colin McDonnell designed Frizz around a few commitments. Every feature is held t
 - **Projects stay separate.** The default view is one [project's board](/docs/projects). All projects is one click away.
 - **Density over decoration, and few settings.** The default view shows at least as much as the original board at heavy load (17 projects, ~70 threads), and a test holds it there.
 
-## Frizz brings nothing of its own
+## Frizz is the process that outlives the agent
 
 - **One server, every project.** Agents run detached and talk to Frizz over pipes, so closing the tab, the browser or Frizz itself never stops a turn.
+- **A wait outlives the session that set it.** A watch on a [pull request or issue](/docs/github), or on [another thread](/docs/handles), lasts as long as the server does, for years if need be, and wakes the thread the moment CI settles, a review or comment lands, or the other thread answers. Agents respond on their own, without polling and without you relaying.
+
+## Frizz brings nothing of its own
+
 - **No model of its own.** Frizz drives [your CLIs](/docs/agents) on your sign-in. The few small model calls it makes itself sit behind one switch, **Settings → Background summaries**.
 - **No workflow of its own.** No branches or worktrees behind your back, no build steps, and no universal timeout on a background shell, since some run for days. Your norms go in [`FRIZZ.md`](/docs/frizz-md).
 

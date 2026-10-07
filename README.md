@@ -72,9 +72,13 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 - **Projects stay separate.** The default view is one project's board. All projects is one click away.
 - **Density over decoration, and few settings.** The default view shows at least as much as Colin's original board at heavy load (17 projects, ~70 threads), and [a test](packages/web/src/capacityParity.e2e.test.ts) holds it there.
 
-**Frizz brings nothing of its own.**
+**Frizz is the process that outlives the agent.**
 
 - **One server, every project.** Agents run detached and talk to Frizz over pipes, so closing the tab, the browser or Frizz itself never stops a turn.
+- **A wait outlives the session that set it.** A watch on a pull request, an issue or another thread lasts as long as the server does, for years if need be, and wakes the thread the moment CI settles, a review or comment lands, or the other thread answers. Agents respond on their own, without polling and without you relaying.
+
+**Frizz brings nothing of its own.**
+
 - **No model of its own.** Frizz drives your CLIs on your sign-in. The few small model calls it makes itself sit behind one switch, **Settings → Background summaries**.
 - **No workflow of its own.** No branches or worktrees behind your back, no build steps, and no universal timeout on a background shell, since some run for days.
 
@@ -106,22 +110,22 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 
 <h2 align="center">What this fork adds</h2>
 
-- **All projects** at `/all`: every project's threads down the left, every waiting card beside them, never interleaved. The switcher counts each project's queue. Colin's project sidebar stays as he ships it, opt-in under **Settings → Project sidebar**.
-- **Home**, a board for work that belongs to no project yet: cloning a repo, a question about your machine. It is the switcher's last choice.
+- **Threads that address each other**: every thread has an `@handle`, and agents read, message and wait on other threads by it. `#slug` names a project.
+- **Spinoff**: start a new thread from any card, carrying its context, without interrupting the one you are reading.
+- **Snooze until sub-agents return**: a queued parent waiting on its sub-agents parks until every one is back, and each return still wakes it.
+- **Background summaries**: a stable name for every thread, a one-line status (a hover on a board), and Auto effort. One switch turns all of it off.
 - **First-run onboarding**: a new browser picks a project, then gets a short tour of its board. **Take the tour** in ⌘K replays it.
 - **Schedules**: type "every weekday at 9am triage new issues" and the prompt box reads the schedule as you type. Each run starts a fresh thread.
 - **Time limits**: give a thread `2h` or `15:30`. The agent plans the best result it can deliver by then, its sub-agents get a share, and the card counts down. Running out never interrupts a turn.
-- **Threads that address each other**: every thread has an `@handle`, and agents read, message and wait on other threads by it. `#slug` names a project.
-- **Spinoff**: start a new thread from any card, carrying its context, without interrupting the one you are reading.
 - **Thread terminals**: press `t` on a thread, or start a prompt with `$ npm test`, for a shell in the folder its agent works in. It stops when the thread is done.
-- **Snooze until sub-agents return**: a queued parent waiting on its sub-agents parks until every one is back, and each return still wakes it.
+- **Home**, a board for work that belongs to no project yet: cloning a repo, a question about your machine. It is the switcher's last choice.
 - **A VS Code, Cursor and Windsurf extension**: Frizz in the editor's sidebar. Your selection goes with your message (⌘L), agents can read what you have open, and a thread's changes open as a multi-file diff.
 - **Keyboard first**: single-key shortcuts for the queue, listed under `?`, every one rebindable.
 - **Slash commands**: Claude Code's own, plus prompts of yours that work on every agent.
-- **Background summaries**: a stable name for every thread, a one-line status (a hover on a board), and Auto effort. One switch turns all of it off.
 - **Files and pictures in Frizz**: a reader that follows a file as it is saved, and a viewer that zooms, pans and pages through an agent's screenshots.
 - **Usage**: a quota chip that warns before your plan runs out, and an optional Fable fallback for new Claude threads.
 - **Housekeeping**: thread info (tokens, turns, cost), deleting done threads you have not touched in a while, and keeping the machine awake while an agent works.
+- **All projects** at `/all`, the next step after Colin's project sidebar: every project's threads down the left, every waiting card beside them, never interleaved. A project's board stays the default, and the sidebar stays as he ships it, opt-in under **Settings → Project sidebar**.
 - **[frizz.sh/docs](https://frizz.sh/docs)**: the full docs, one page per feature.
 
 <br/>
