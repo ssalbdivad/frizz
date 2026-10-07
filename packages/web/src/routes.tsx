@@ -174,7 +174,7 @@ function LastViewRedirect() {
   const { search } = useLocation()
   const cards = useQuery({ queryKey: ["projectsList"], queryFn: () => rpc.projectsList() })
   // Shared with the page (same key), so the view it lands on paints from this read.
-  const queues = useQuery({ queryKey: ["projectsQueues"], queryFn: readProjectsQueues })
+  const queues = useQuery(projectsQueuesQuery)
   useState(() => answerArrival(search))
   if (cards.error) return <RegistryError error={String(cards.error)} />
   if (!cards.data || queues.isPending) return <PageSpinner />

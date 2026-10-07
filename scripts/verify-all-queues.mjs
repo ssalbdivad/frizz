@@ -74,9 +74,8 @@ async function step(name, run) {
 const card = (project, slug) => `[data-xq-card="${ids[project]}/${slug}"]`
 // ALL PROJECTS' ADDRESS. `/all` is its name from now on (David 2026-10-06: the project board becomes the
 // default view, and `/` a redirect to the view the browser last showed), so nothing here asks for a bare
-// `/`. The page still WRITES `/` for All projects until that change lands (lib/pageView.ts viewHref), so
-// both read as All projects meanwhile; once `/` only redirects, the page never rests there.
-const ALL_PATHS = ["/all", "/"]
+// `/`, and a desktop page never rests there: All projects resting at `/` is a regression.
+const ALL_PATHS = ["/all"]
 
 const browser = await puppeteer.launch({ headless: true, args: ["--no-sandbox", "--force-color-profile=srgb"] })
 try {
