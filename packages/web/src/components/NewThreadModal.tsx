@@ -150,7 +150,7 @@ function PromptForm({
   }
   // A file on its way into the box: a held Enter waits for no answer while it uploads (ScheduleComposer.tsx).
   const [uploading, setUploading] = useState(false)
-  const { resolved, defaultResolved, picked, codexList, claudeList, acpList, autoEffort, loadError: profileLoadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
+  const { resolved, defaultResolved, picked, codexList, claudeList, acpList, loadError: profileLoadError, choose, chooseAcpModel, makeDefault } = useDispatchProfile(pickState)
 
   // Per-provider LOCAL credential presence, polled so the submit gate has a fresh value without a
   // round-trip on every keystroke. The gate blocks ONLY on a positive "signed-out" (fails open on
@@ -463,7 +463,7 @@ function PromptForm({
         </div>
       )
     }
-    const profileGroups = dispatchProfileGroups(codexList, acpList, claudeList, { autoEffort })
+    const profileGroups = dispatchProfileGroups(codexList, acpList, claudeList)
     const acpAgent = resolved.acpAgentId ? acpList.find((agent) => agent.id === resolved.acpAgentId) : undefined
     return (
       // gap-x-1.5 between the two pills, the same measured gap the thread composer's strip uses

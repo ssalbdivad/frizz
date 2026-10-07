@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react"
 import { useSnapshot } from "valtio"
 import { ArrowLeft, Check, ChevronRight, Copy } from "lucide-react"
-import { backgroundSummariesOn, type Settings } from "@frizz/shared"
+import type { Settings } from "@frizz/shared"
 import { store, type ConnectionState } from "../store.ts"
 import { copyTextToClipboard } from "../lib/clipboard.ts"
 import { prefs } from "../lib/prefs.ts"
@@ -180,23 +180,11 @@ export function SettingsDrawer() {
               {inEditor ? <EditorHint>Shown in your browser, not in the sidebar.</EditorHint> : draft.notifications && <PermHint perm={perm} />}
             </SettingsField>
 
-            {/* The one switch over every model call Frizz makes on its own (shared Settings
-                `backgroundSummaries`, server background-summaries.ts). On by default. */}
-            <SettingsField label="Background summaries" help={SETTINGS_HELP.backgroundSummaries}>
-              <OnOffToggle
-                value={backgroundSummariesOn(draft)}
-                onChange={(backgroundSummaries) => update({ ...draft, backgroundSummaries })}
-              />
+            {/* Client-only VIEW preference (prefs `alwaysShowStatusLines`). */}
+            <SettingsField label="Always show status lines" help={SETTINGS_HELP.alwaysShowStatusLines}>
+              <AlwaysShowStatusLinesToggle />
+              {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
             </SettingsField>
-
-            {/* Client-only VIEW preference (prefs `alwaysShowStatusLines`), under the switch that writes
-                the status lines: with that off there are none to show, so the row goes with it. */}
-            {backgroundSummariesOn(draft) && (
-              <SettingsField label="Always show status lines" help={SETTINGS_HELP.alwaysShowStatusLines}>
-                <AlwaysShowStatusLinesToggle />
-                {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
-              </SettingsField>
-            )}
 
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
             <SlashCommandsField />

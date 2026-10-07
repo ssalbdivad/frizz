@@ -79,14 +79,14 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 
 **Frizz brings nothing of its own.**
 
-- **No model of its own.** Frizz drives your CLIs on your sign-in. The few small model calls it makes itself sit behind one switch, **Settings → Background summaries**.
+- **No model of its own.** Frizz drives your CLIs on your sign-in. The few small model calls it makes itself run on your Claude sign-in.
 - **No workflow of its own.** No branches or worktrees behind your back, no build steps, and no universal timeout on a background shell, since some run for days.
 
 **Where this fork bends one, on purpose.** Each is argued in [`ARCHITECTURE.md`](ARCHITECTURE.md#where-frizz-acts-on-a-clock-or-with-a-model) and can be turned off or ignored:
 
 - A question unanswered 10m after its thread rests takes the agent's recommended option, never one that posts, merges, publishes or spends. The × under the card turns it off.
 - A parent waiting on its sub-agents is asked for a progress note every 30m, so a long fan-out never shows one stale line for hours.
-- Thread names, status lines, Auto effort and reading a schedule out of a prompt use your Claude sign-in. **Background summaries** turns all four off.
+- Thread names, status lines, Auto effort and reading a schedule out of a prompt use your Claude sign-in. `FRIZZ_THREAD_NAMER=0` and `FRIZZ_AUTO_EFFORT=0` turn them off.
 - A clean worktree in `.frizz/worktrees` idle for 7d is removed; its branch is kept. **Settings → Remove idle worktrees after** turns it off.
 - Single-key shortcuts (`j`/`k`, `r`, `d`, `s`) are on. `?` lists them and rebinds any of them.
 
@@ -113,7 +113,7 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 - **Threads that address each other**: every thread has an `@handle`, and agents read, message and wait on other threads by it. `#slug` names a project.
 - **Spinoff**: start a new thread from any card, carrying its context, without interrupting the one you are reading.
 - **Snooze until sub-agents return**: a queued parent waiting on its sub-agents parks until every one is back, and each return still wakes it.
-- **Background summaries**: a stable name for every thread, a one-line status (a hover on a board), and Auto effort. One switch turns all of it off.
+- **Thread names and status lines**: a stable name for every thread, a one-line status (a hover on a board), and Auto effort.
 - **First-run onboarding**: a new browser picks a project, then gets a short tour of its board. **Take the tour** in ⌘K replays it.
 - **Schedules**: type "every weekday at 9am triage new issues" and the prompt box reads the schedule as you type. Each run starts a fresh thread.
 - **Time limits**: give a thread `2h` or `15:30`. The agent plans the best result it can deliver by then, its sub-agents get a share, and the card counts down. Running out never interrupts a turn.
@@ -222,7 +222,7 @@ In the terminal running Frizz, **R** sets up remote access and **L** shows a fre
 <details>
 <summary><b>Does Frizz run its own agent or model?</b></summary>
 
-> No. It drives Claude Code, Codex or an ACP agent under the account you are signed in to. Its own small jobs — naming a thread, its status line, choosing an effort for Auto, reading a schedule from a prompt — are short calls on that same Claude sign-in; **Settings → Background summaries** turns them all off, and each falls back to doing without. Frizz runs its own pinned copy of each CLI; set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another.
+> No. It drives Claude Code, Codex or an ACP agent under the account you are signed in to. Its own small jobs — naming a thread, its status line, choosing an effort for Auto, reading a schedule from a prompt — are short calls on that same Claude sign-in; `FRIZZ_THREAD_NAMER=0` and `FRIZZ_AUTO_EFFORT=0` turn them off, and each falls back to doing without. Frizz runs its own pinned copy of each CLI; set `FRIZZ_CLAUDE_BIN` or `FRIZZ_CODEX_BIN` to point it at another.
 
 </details>
 

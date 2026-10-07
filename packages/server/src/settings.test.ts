@@ -65,22 +65,6 @@ test("the rail, notifications and the file opener are the MACHINE's, shared by e
   }
 })
 
-test("Background summaries is on by default and is the MACHINE's, one switch for every project", () => {
-  const box = sandbox()
-  try {
-    const alpha = box.open("alpha")
-    const beta = box.open("beta")
-    assert.equal(getSettings(alpha, box.home).backgroundSummaries, true)
-    // An old blob that predates the key still reads as on: the default fills it in.
-    assert.equal(Settings.parse({ ...defaultSettings(), backgroundSummaries: undefined }).backgroundSummaries, undefined)
-    setSettings(alpha, { ...getSettings(alpha, box.home), backgroundSummaries: false }, box.home)
-    assert.equal(getSettings(beta, box.home).backgroundSummaries, false, "a project never touched sees it off")
-    assert.equal(readMachineConfig(box.home, "settings", Settings.partial())?.backgroundSummaries, false)
-  } finally {
-    box.done()
-  }
-})
-
 // A REMOVED machine setting is in the machine store AND in each project's blob of every install that ever
 // saved it. Both must still load — stripped, not rejected — and a save must stop writing it. `font` is
 // the one (a machine setting until 2026-09-19); this was pinned with `projectRail` from its removal on
@@ -181,7 +165,7 @@ test("a pre-store settings.json is read until the next save promotes it into the
     assert.equal(getSettings(alpha, box.home).localFileOpener, "cursor")
 
     setSettings(alpha, { ...getSettings(alpha, box.home), notifications: false }, box.home)
-    assert.deepEqual(readMachineConfig(box.home, "settings", Settings.partial()), { notifications: false, localFileOpener: "cursor", projectRail: true, removeIdleWorktreesDays: 7, deleteDoneThreadsUntouchedDays: 0, fableFallback: false, backgroundSummaries: true })
+    assert.deepEqual(readMachineConfig(box.home, "settings", Settings.partial()), { notifications: false, localFileOpener: "cursor", projectRail: true, removeIdleWorktreesDays: 7, deleteDoneThreadsUntouchedDays: 0, fableFallback: false })
     assert.equal(JSON.parse(readFileSync(legacyMachineSettingsPath(box.home), "utf8")).notifications, undefined, "the legacy file is never written again")
     // The store now wins outright, even where the legacy file disagrees.
     writeLegacySettings(box.home, { localFileOpener: "vscode" })

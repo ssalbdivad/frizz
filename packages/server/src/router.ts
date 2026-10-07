@@ -248,7 +248,7 @@ import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VE
 import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces, reorderWorkspaces } from "./home-workspace.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { ProjectCard, ProjectQueue, ProjectRailCounts, activeBandThread, boardAskThread, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread, backgroundSummariesOn } from "@frizz/shared"
+import { ProjectCard, ProjectQueue, ProjectRailCounts, activeBandThread, boardAskThread, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread } from "@frizz/shared"
 import { EditorComposeInputSchema, EditorReviewTargetSchema, EditorSnapshotSchema, type EditorKind, type EditorReviewTarget, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
@@ -5260,8 +5260,7 @@ export function createRouter(ctx: AppContext) {
           throw new Error("Only a running broker-backed Claude thread can be renamed by the provider")
         }
         const namer = ctx.threadNamer
-        // Background summaries off is the human's own choice, and the click says where to undo it.
-        if (!namer?.available) throw new Error(backgroundSummariesOn(ctx.getSettings()) ? "Claude is not available to name this thread" : "Background summaries are off. Turn them on in Settings to rename with Claude.")
+        if (!namer?.available) throw new Error("Claude is not available to name this thread")
         // What to name it FROM: the thread's own opening request, which is what the daemon seeds from.
         // The live tail would name the session after whatever was said most recently, which for a long
         // thread is a side conversation rather than the work — until 2026-08-24 this read the tail's

@@ -4853,21 +4853,8 @@ export const Settings = z.object({
    * model. Machine-level, because quota is the account's, not a project's.
    */
   fableFallback: z.boolean().optional(),
-  /**
-   * BACKGROUND SUMMARIES: whether Frizz itself asks Claude for anything. Every model call Frizz makes on
-   * its own runs on the human's own Claude sign-in through a short throwaway session
-   * (server/backend/claude-oneshot.ts): a thread's NAME at dispatch (and the "Rename with Claude"
-   * click), its STATUS line at each rest and while a turn runs, the level an "auto" EFFORT picks, a
-   * schedule's NAME, and the prompt box's reading of a SCHEDULE. Each has a mechanical fallback, and
-   * off means every one of them takes it: a name from the prompt's own words or the worker's `title`,
-   * no status line, effort "high" (or the model's own default) in place of Auto, a schedule typed in
-   * the schedule drawer rather than read off the prompt. That is Colin's "Frizz runs no model of its
-   * own" posture (upstream ARCHITECTURE.md), made a choice in Settings rather than a set of environment
-   * variables (David 2026-10-06, plans/upstream-superset.md §1 "On P5"). Optional so an old blob parses;
-   * defaultSettings pins true. Machine-level: the sign-in it spends is the account's, not a project's.
-   * Read live by server/background-summaries.ts, so a change takes effect without a restart.
-   */
-  backgroundSummaries: z.boolean().optional(),
+  // There is no `backgroundSummaries` key any more: Frizz's own model calls were a Settings switch until
+  // 2026-10-07, and are on now (FRIZZ_*=0 still turns one off). A stored key is stripped on parse.
   // There is no `font` key any more. The interface rendered in one of two type families as a machine
   // setting until 2026-09-19 (maintainer: "let's drop monospace as an option"); every surface is sans
   // now, and index.html pins `data-font="sans"` on <html> directly. Settings is a non-strict object,
@@ -4935,14 +4922,7 @@ export type Settings = z.infer<typeof Settings>
  * because the query cache keeps one `settingsGet` entry per project and a machine setting changed in
  * one is changed in all.
  */
-export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "removeIdleWorktreesDays", "deleteDoneThreadsUntouchedDays", "fableFallback", "backgroundSummaries"] as const satisfies readonly (keyof Settings)[]
-
-/** Whether Frizz asks Claude for names, status lines, auto effort and schedule readings (Settings
- *  `backgroundSummaries`). On unless the human turned it off: an absent key, an older server's
- *  settings and a settings read still in flight all read as on, the shipped default. */
-export function backgroundSummariesOn(settings: Pick<Settings, "backgroundSummaries"> | null | undefined): boolean {
-  return settings?.backgroundSummaries !== false
-}
+export const MACHINE_SETTING_KEYS = ["notifications", "localFileOpener", "projectRail", "removeIdleWorktreesDays", "deleteDoneThreadsUntouchedDays", "fableFallback"] as const satisfies readonly (keyof Settings)[]
 
 // The new-thread composer's durable choices — MACHINE-wide, one record for every project the server
 // serves (server/dispatch-preferences.ts), because the profile belongs to the operator, not to a

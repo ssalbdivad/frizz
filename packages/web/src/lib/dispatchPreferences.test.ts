@@ -103,34 +103,6 @@ test("a profile with no saved effort defaults to auto on both runtimes", () => {
   assert.equal(resolveDispatchPreferences(codex, models).effort, "auto")
 })
 
-test("with Background summaries off there is no Auto: the default and a saved auto read as the fixed level", () => {
-  // Auto is a model call (server effort-chooser.ts). Off, the pill shows the level the server launches
-  // an "auto" dispatch on anyway (dispatch.ts concreteEffort): high where the ladder has it.
-  const off = { autoEffort: false }
-  const bare: DispatchPreferences = { ...preferences, claude: { ...preferences.claude, effort: undefined } }
-  const claude = resolveDispatchPreferences(bare, models, [], off)
-  assert.equal(claude.effort, "high")
-  assert.equal(claude.effortAvailable, true)
-  assert.equal(claude.effortOptions.some((option) => option.value === "auto"), false, "Auto is not offered")
-  const savedAuto: DispatchPreferences = { ...preferences, claude: { ...preferences.claude, effort: "auto" } }
-  assert.equal(resolveDispatchPreferences(savedAuto, models, [], off).effort, "high")
-  // A concrete saved level is untouched, and the record still says "auto" for when it is turned back on.
-  assert.equal(resolveDispatchPreferences(preferences, models, [], off).effort, "max")
-  assert.equal(resolveDispatchPreferences(savedAuto, models).effort, "auto")
-  // Codex: high where the model's ladder has it, else the model's own default.
-  const codex: DispatchPreferences = { ...preferences, backend: "codex", codex: { ...preferences.codex, effort: "auto" } }
-  assert.equal(resolveDispatchPreferences(codex, models, [], off).effort, "high")
-  const noHigh: CodexModel[] = [{ slug: "gpt-5.5", displayName: "GPT-5.5", defaultEffort: "medium", efforts: ["low", "medium"] }]
-  assert.equal(resolveDispatchPreferences(codex, noHigh, [], off).effort, "medium")
-  // The profile grid drops the Auto column with it, so the grid and the pill agree.
-  const groups = dispatchProfileGroups(models, [], [], off)
-  for (const option of groups.flatMap((group) => group.options)) {
-    assert.equal(option.efforts.includes("auto"), false, option.model)
-    assert.notEqual(option.defaultEffort, "auto", option.model)
-  }
-  assert.ok(dispatchProfileGroups(models).flatMap((group) => group.options).every((option) => option.efforts[0] === "auto"), "on, Auto leads every row")
-})
-
 test("a renamed/unavailable saved model remains visible and invalid instead of becoming Opus or a catalogue default", () => {
   const saved: DispatchPreferences = {
     ...preferences,

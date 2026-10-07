@@ -29,8 +29,8 @@ points.
   `packages/web/src/capacityParity.e2e.test.ts` is the bar.
 - Density over decoration, and few settings.
 - One server serves every project. Nothing Frizz runs on its own uses a pty or tmux.
-- Frizz brings no model of its own: every model call it makes sits behind Settings → Background summaries
-  (`background-summaries.ts`).
+- Frizz brings no model of its own: the few calls it makes itself (names, status lines, Auto effort,
+  schedule reading) run on the operator's Claude sign-in, each with a `FRIZZ_*=0` off-switch.
 - Upstream takes changes in pieces: soundness fixes first, never a wholesale structural change.
 
 **Working here (David)**

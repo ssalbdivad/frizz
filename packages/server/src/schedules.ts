@@ -118,7 +118,7 @@ export interface ScheduleServiceDeps {
   log?: (message: string) => void
   /** The THREAD NAMER's `name` (thread-names.ts): one or two words for `source` from the model, held to
    *  the project's open-thread names other than `exceptSlug`. What renames a `titleAuto` create. Absent
-   *  (Background summaries off, FRIZZ_THREAD_NAMER=0, or no model) ⇒ such a schedule keeps its provisional
+   *  (FRIZZ_THREAD_NAMER=0, or no model) ⇒ such a schedule keeps its provisional
    *  title. Read at each save, so the setting takes effect without a restart. */
   nameFor?: (source: string, exceptSlug?: string) => Promise<string>
 }
