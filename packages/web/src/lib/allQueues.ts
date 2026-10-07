@@ -1,4 +1,4 @@
-import type { BoardSnapshot, ProjectCard, ProjectQueue, ProjectSchedules, RegisteredQuestionView, ThreadView } from "@frizz/shared"
+import type { AwaitingHint, BoardSnapshot, ProjectCard, ProjectQueue, ProjectSchedules, RegisteredQuestionView, ThreadView } from "@frizz/shared"
 import { orderByInteraction, orderQueue, queued, sectionOf, type QueueDirection } from "../groups.ts"
 import { crossProjectHref } from "./base-path.ts"
 import { splitFenceBlocks } from "./fenceBlocks.ts"
@@ -236,7 +236,7 @@ export interface HandoffParts {
   prose: string
   /** ```question fences with a body that no registered card draws — drawn read-only. */
   questions: { raw: string; questionKind: QuestionKind; danger: boolean }[]
-  fences: { kind: "done" | "awaiting"; body: string }[]
+  fences: { kind: "done" | "awaiting"; body: string; hints: AwaitingHint[] }[]
 }
 
 /**
@@ -265,7 +265,7 @@ export function handoffParts(text: string, registered: readonly Pick<RegisteredQ
   const fences: HandoffParts["fences"] = []
   for (const segment of splitFenceBlocks(unquestioned)) {
     if (segment.kind === "prose") prose += segment.text
-    else fences.push({ kind: segment.fenceKind, body: segment.body })
+    else fences.push({ kind: segment.fenceKind, body: segment.body, hints: segment.hints })
   }
   return { prose: prose.trim(), questions, fences }
 }

@@ -211,6 +211,13 @@ const SCRIPTS = {
       prompt: "Publish @acme/billing-client 2.4.0.",
       closing: "**Ready to publish** — the changelog and the version bump are in. I opened `npm publish` in a terminal on this thread; it is waiting for your one-time password.",
     },
+    // A fence that is ALL frontmatter — a title and the steps only the human can perform, no body — the
+    // shape the queue card once drew as a bare "Awaiting" heading over nothing (AllQueuesCard FenceBody).
+    {
+      slug: "rotate-webhook-secret", title: "Rotate the Stripe webhook secret", rest: 11,
+      prompt: "Rotate the Stripe webhook signing secret.",
+      closing: "The verifier now accepts the old and the new secret for a 24h overlap, on `main` as `c19d0a4`.\n\n```awaiting\ntitle: Roll the new secret in Stripe's dashboard\nsteps:\n  - Open Developers → Webhooks in the Stripe dashboard and click **Roll secret** on the billing endpoint.\n  - Paste the new secret into `STRIPE_WEBHOOK_SECRET_NEXT` in the production env.\n```",
+    },
     { slug: "stripe-api-bump", title: "Bump the Stripe API version", rest: 600, archived: true, prompt: "Bump Stripe to the 2026-08 API version.", closing: done("**Fixed** — on the 2026-08 API version.", ["**Bumped** the pinned version and regenerated fixtures."]) },
   ],
   "docs-portal": [

@@ -115,7 +115,20 @@ test("a handoff splits into prose, its signal fences, and the question fences no
   assert.equal(parts.prose, "**Needs you** — three variants are drafted.")
   // The empty marker and the fence restating the registered question are its card's; the third is not.
   assert.deepEqual(parts.questions.map((q) => q.raw.split("\n")[0]), ["Should the old headline stay up until launch day?"])
-  assert.deepEqual(parts.fences, [{ kind: "done", body: "- Drafted three variants" }])
+  assert.deepEqual(parts.fences, [{ kind: "done", body: "- Drafted three variants", hints: [] }])
+})
+
+// The card heads a to-do with the fence's own title and lists its steps (AllQueuesCard FenceBody), so
+// the frontmatter has to survive the split: a steps fence's BODY is empty by design, and the card drew a
+// bare "Awaiting" over nothing when only the body came through (2026-10-06).
+test("an awaiting fence keeps its frontmatter, so a steps-only fence still carries its title and steps", () => {
+  const parts = handoffParts("You can use it two ways.\n\n```awaiting\ntitle: Restart Frizz\nsteps:\n  - Restart Frizz.\n  - Start a new thread.\n```")
+  assert.equal(parts.prose, "You can use it two ways.")
+  assert.deepEqual(parts.fences, [{
+    kind: "awaiting",
+    body: "",
+    hints: [{ kind: "title", value: "Restart Frizz" }, { kind: "step", value: "Restart Frizz." }, { kind: "step", value: "Start a new thread." }],
+  }])
 })
 
 test("with nothing registered, a question fence with a body is KEPT — on a legacy thread it is the live ask", () => {
