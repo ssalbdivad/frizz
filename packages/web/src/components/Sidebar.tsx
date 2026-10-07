@@ -342,14 +342,13 @@ export const ThreadRow = memo(function ThreadRow({
   const uncheckable = done && !foreign
   const dimLabel = titleIsProvisional(t)
   // A WORKING thread's status, and its task clock in the right-edge column a rested row gives its rest
-  // time (ThreadStatusLine.tsx statusElapsed). The status is a hover (RowStatusTip) unless Settings →
-  // Always show status lines puts it inline in grey after the name (prefs `alwaysShowStatusLines`).
+  // time (ThreadStatusLine.tsx statusElapsed). The status is drawn inline in grey after the name while the
+  // row is pointed at, or always with Settings → Always show status lines (prefs `alwaysShowStatusLines`).
   const nowMs = useNowMs()
   const { alwaysShowStatusLines } = useSnapshot(prefs)
   const elapsed = statusElapsed(t, nowMs)
   const working = elapsed && t.statusLine ? { status: t.statusLine.trim(), elapsed } : undefined
-  const inlineStatus = working && alwaysShowStatusLines ? working.status : undefined
-  const hoverStatus = working && !alwaysShowStatusLines ? working.status : undefined
+  const inlineStatus = working?.status
   // The rows with an obvious single next action carry that verb INLINE, instead of making you open the
   // thread to find it. offersRetry (groups.ts) picks them: a STALLED row (the [!] mark — process
   // exited) AND a row KILLED by a usage limit frizz will auto-resume (the yellow hourglass — a faster
@@ -369,13 +368,13 @@ export const ThreadRow = memo(function ThreadRow({
   // count line. Every one of them was a second, competing status beside the row's own — the rail is a column
   // of NAMES you scan, and each caption added there made the next one harder to find.
   //
-  // A WORKING thread's status is a HOVER (RowStatusTip), and only its task clock is on the line: Colin's
-  // call (standup 2026-10-01: always-visible status lines are too dense for the sidebar, put them in hover
-  // states, and the status symbol's hover is wasted on bare labels), taken first for a project's board
-  // (2026-10-06) and then for every row (2026-10-07). ONE OPT-IN puts it ON THE SAME LINE, in grey after
-  // its name (Settings → Always show status lines, prefs `alwaysShowStatusLines`), as the maintainer had
-  // it from 2026-09-29 ("it should display in grey text next to the name of the thread inline"): it costs
-  // no line, only rows that are spinning carry it, and it truncates before the name gives up a character.
+  // A WORKING thread's status sits ON THE SAME LINE, in grey after its name, as David had it from
+  // 2026-09-29 ("it should display in grey text next to the name of the thread inline"): it costs no line,
+  // only rows that are spinning carry it, and it truncates before the name gives up a character. By
+  // default it is drawn only while the row is pointed at or focused, with just the task clock on the line
+  // otherwise: Colin's call (standup 2026-10-01: always-visible status lines are too dense for the
+  // sidebar, put them in hover states). The reveal is the same inline text, not a tooltip (David
+  // 2026-10-07). Settings → Always show status lines (prefs `alwaysShowStatusLines`) keeps it drawn.
   //
   // What frizz knows about the row still exists, one hover away: the indicator's popover composes it
   // from the AWAITING BLOCK deterministically (awaitingWaitClause) plus the worker's own handoff prose, so
@@ -418,7 +417,7 @@ export const ThreadRow = memo(function ThreadRow({
         <span data-xq-indicator className="w-4 h-[19px] shrink-0 flex items-center justify-center">
           {/* An uncheckable row draws its check in the overlay button below instead — a button cannot
               nest inside this one — so the column is held empty here to keep the title where it is. */}
-          {!uncheckable && <ThreadIndicator t={t} status={hoverStatus} />}
+          {!uncheckable && <ThreadIndicator t={t} />}
         </span>
         <span className="min-w-0 flex-1 flex flex-col">
           {/* items-BASELINE, not items-center: the rest time is a smaller type size sitting beside the
@@ -433,17 +432,22 @@ export const ThreadRow = memo(function ThreadRow({
             <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
               {/* With a working status beside it the title keeps its whole width (and wraps if it must)
                   and the status truncates into what is left; without one the title fills the line. */}
-              <RowStatusTip status={hoverStatus}>
-                <span data-rail-status-hover={hoverStatus === undefined ? undefined : ""} className={`min-w-0 break-words text-[13px] leading-[19px] ${inlineStatus ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
-                  <TitleWithTrailers title={displayTitle(t)}>
-                    {/* A schedule's run, or its next run: the repeat glyph, before the provider (ScheduleMark). */}
-                    {t.schedule && <ScheduleMark schedule={t.schedule} className="ml-1" />}
-                    <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
-                  </TitleWithTrailers>
-                </span>
-              </RowStatusTip>
+              <span className={`min-w-0 break-words text-[13px] leading-[19px] ${inlineStatus ? "max-w-full shrink-0" : "flex-1"} ${dimLabel ? "text-provisional" : dim ? "text-fg/75" : "text-fg/90"}`}>
+                <TitleWithTrailers title={displayTitle(t)}>
+                  {/* A schedule's run, or its next run: the repeat glyph, before the provider (ScheduleMark). */}
+                  {t.schedule && <ScheduleMark schedule={t.schedule} className="ml-1" />}
+                  <ProviderMark backend={t.backend} model={t.model} className="ml-1" />
+                </TitleWithTrailers>
+              </span>
+              {/* The same inline status either way; by default it is drawn only while the row is pointed at
+                  or focused. The title keeps its width (shrink-0) in both, so the reveal moves nothing. */}
               {inlineStatus && (
-                <span data-rail-status className="min-w-0 flex-1 truncate text-[12px] leading-none text-muted-70" title={inlineStatus}>
+                <span
+                  data-rail-status
+                  data-rail-status-hover={alwaysShowStatusLines ? undefined : ""}
+                  className={`min-w-0 flex-1 truncate text-[12px] leading-none text-muted-70 ${alwaysShowStatusLines ? "" : "hidden group-hover:block group-focus-within:block"}`}
+                  title={inlineStatus}
+                >
                   <TitleStrut />
                   {inlineStatus}
                 </span>
@@ -858,32 +862,6 @@ function WorkingAge({ elapsed, yieldsToRetry }: { elapsed: string; yieldsToRetry
   )
 }
 
-// ── the status hover (a working row) ─────────────────────────────────────────────────────────────
-
-// A WORKING THREAD'S STATUS, ON HOVER — every row, unless Settings → Always show status lines puts it
-// inline (ThreadRow, prefs `alwaysShowStatusLines`). Pointing at the TITLE shows it after a short rest, and so does the state glyph's own
-// tip, under the state (ThreadIndicator `status`): Colin's suggestion was the glyph, whose hover "is
-// currently wasted on simple labels like 'done' or 'needs your input'" (standup 2026-10-01), and the fork
-// learned on 2026-09-29 (6dbe4e27) that a 16px glyph alone is a target almost nobody finds, so the title,
-// a target the size of the row, carries it too. The delay keeps a pointer sweeping down the list from
-// flashing a tip per row it crosses. The task clock is not in the tip: it stays on the line.
-//
-// It opens UNDER the title, at its start. The title's box is `flex-1` (it fills the line up to the clock),
-// so `side="right"` opened the tip at the row's right edge: 173px past the end of a short name, on top of
-// the clock and the hover's pin (measured 2026-10-06, acme-api's board at 1440: title ink ends at x 397,
-// the box at 560, the tip opened at 570 over the clock at 572). Below and start-aligned, it sits under the
-// words it explains, whatever their length, and covers nothing of its own row.
-const ROW_STATUS_TIP_DELAY_MS = 350
-
-function RowStatusTip({ status, children }: { status: string | undefined; children: ReactElement }) {
-  if (!status) return children
-  return (
-    <Tooltip label={status} side="bottom" align="start" delay={ROW_STATUS_TIP_DELAY_MS}>
-      {children}
-    </Tooltip>
-  )
-}
-
 // ── the indicator (one per row) ──────────────────────────────────────────────────────────────────
 
 // Each indicator carries a terse hover tooltip naming the state it signals. A plain wrapper <span> is
@@ -895,8 +873,8 @@ export function ThreadIndicator({ t, status }: { t: ThreadView; status?: string 
   // hook consulted the steer hint on its own, the glyph and the placement were two rules and drifted apart
   // on every steer.
   const { node, tip: stateTip } = sessionIndicatorFor(t)
-  // The thread's STATUS is here only when the row does not show it inline (the default; ThreadRow): under
-  // the state, as the 2026-09-29 version had it.
+  // A caller may add a thread's STATUS under the state, as the 2026-09-29 version had it. The rail's rows
+  // do not: theirs is inline (ThreadRow).
   const tip = status ? (stateTip ? `${stateTip}\n${status}` : status) : stateTip
   // The resolved kind, on the shipped markup. Cheap, and it is what lets the rail's own glyphs be
   // measured where they actually render (scripts/verify-rail-status-glyphs.mjs holds the family to one
