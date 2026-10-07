@@ -71,6 +71,10 @@ function runHook(
       CLAUDE_PROJECT_DIR: dir,
       FRIZZ_THREAD: "",
       FRIZZ_SCRATCHPAD_HOOK: "",
+      // A Frizz worker running this suite carries its own board root (Home's state dir), and the hook
+      // honours it over CLAUDE_PROJECT_DIR — so the hook looked for these fixtures' scratch files in the
+      // worker's board and every case below failed, only when the suite ran inside a Frizz thread.
+      FRIZZ_BOARD_ROOT: "",
       ...env,
     },
   })
@@ -492,7 +496,7 @@ function runHookIn(
     input: JSON.stringify(event),
     encoding: "utf8",
     // No `gh` on PATH, so session-seed's auth probe fails fast instead of shelling out.
-    env: { ...process.env, PATH: dirname(process.execPath), CLAUDE_PROJECT_DIR: cwd, FRIZZ_THREAD: "", FRIZZ_SCRATCHPAD_HOOK: "", ...env },
+    env: { ...process.env, PATH: dirname(process.execPath), CLAUDE_PROJECT_DIR: cwd, FRIZZ_THREAD: "", FRIZZ_SCRATCHPAD_HOOK: "", FRIZZ_BOARD_ROOT: "", ...env },
   })
 }
 
