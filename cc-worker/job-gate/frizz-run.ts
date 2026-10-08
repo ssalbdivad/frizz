@@ -174,8 +174,12 @@ async function run(argv: string[], hook: boolean): Promise<never> {
       if (!env.GOMEMLIMIT) env.GOMEMLIMIT = `${cap}MiB`
     }
   }
-  if (settings.scope && history?.length && process.platform === "linux" && scopeAvailable(settings.dir)) {
-    const high = Math.ceil(job.estimateMB * 1.25)
+  // The scope backs the estimate with the kernel: past MemoryHigh the job is reclaimed (slowed) rather
+  // than the whole box, past MemoryMax it is OOM-killed. Measured jobs only (a default estimate is a
+  // guess, and killing a suite for our guess is worse than the thrash), heavy jobs only (throttling a
+  // small one buys nothing), and never tighter than half a GB / a GB of slack over the estimate.
+  if (settings.scope && job.heavy && history?.length && process.platform === "linux" && scopeAvailable(settings.dir)) {
+    const high = Math.max(Math.ceil(job.estimateMB * 1.25), job.estimateMB + 512)
     const max = Math.max(Math.ceil(job.estimateMB * 1.5), job.estimateMB + 1024)
     scopeArgs = ["systemd-run", "--user", "--scope", "--quiet", "--collect", "-p", `MemoryHigh=${high}M`, "-p", `MemoryMax=${max}M`, "--"]
   }
@@ -316,7 +320,13 @@ function status(json: boolean) {
   for (const job of state.jobs) {
     if (job.status === "running" && job.childPid) job.rssMB = treeRssMB(job.childPid, procs)
   }
-  const pressure = readPressure({ ...state, vm: state.vm && { ...state.vm } }, settings)
+  // On a copy: status only reads. With no fresh swap-in sample from a waiter, take one over a second.
+  const scratch: typeof state = { ...state, vm: state.vm && { ...state.vm } }
+  let pressure = readPressure(scratch, settings)
+  if (pressure.kind === "unknown" && scratch.vm) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 1_000)
+    pressure = readPressure(scratch, settings)
+  }
   const host = { memAvailableMB: memAvailableMB(), pressure }
   if (json) {
     process.stdout.write(`${JSON.stringify({ settings, host, state }, null, 2)}\n`)
