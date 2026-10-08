@@ -177,6 +177,14 @@ html {
      focused under one is scrolled clear of it rather than left hidden behind it. 0 off the queue. */
   scroll-padding-bottom: var(--queue-dock-inset, 0px);
 }
+/* …except while focus is INSIDE a dock. The dock sits in the very band it pads out, so the browser's
+   reveal-the-caret on every keystroke found the caret "hidden" behind its own box and scrolled the page
+   down to clear it — 42px a key, measured, and again on the next key because a sticky dock never
+   leaves the band. A focused dock is on screen by construction; there is nothing for the padding to
+   clear. */
+html:has([data-thread-composer-box="queueComposer"]:focus-within) {
+  scroll-padding-bottom: 0px;
+}
 html::-webkit-scrollbar {
   width: 0;
   height: 0;

@@ -9,11 +9,10 @@ test("a 1M-capable alias launches with the suffix AND the bare alias as its fall
   assert.deepEqual(resolveClaudeLaunchModel("opus"), { model: "opus[1m]", fallbackModel: "opus" })
   assert.deepEqual(resolveClaudeLaunchModel("fable"), { model: "fable[1m]", fallbackModel: "fable" })
   assert.deepEqual(resolveClaudeLaunchModel("sonnet"), { model: "sonnet[1m]", fallbackModel: "sonnet" })
-})
-
-// There is no Haiku 1M — asking for one is the measured hard 400, so it must never be requested.
-test("haiku is passed through untouched, with no fallback to arrange", () => {
-  assert.deepEqual(resolveClaudeLaunchModel("haiku"), { model: "haiku" })
+  // Claude Code 2.1.293 resolves `haiku` to Haiku 5.5, a 1M model (measured: `haiku[1m]` bills
+  // claude-haiku-5-5 at 1_000_000). It was passed through bare while it meant Haiku 4.5, whose
+  // `[1m]` was a hard 400 — the case the fallback still catches.
+  assert.deepEqual(resolveClaudeLaunchModel("haiku"), { model: "haiku[1m]", fallbackModel: "haiku" })
 })
 
 // A wrong suffix is a DEAD session rather than a degraded one, so anything not on the exact-alias

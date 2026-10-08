@@ -154,9 +154,11 @@ export type ClaudeModel = z.infer<typeof ClaudeModel>
 // GPT-5.5 alone while the browser's fallback included the current generation, so an older Codex app
 // rewriting the machine-wide cache made a model visible in one tab and unavailable in another.
 // Keep the order/defaults in step with the pinned runtime's catalogue when that runtime moves.
-// Re-read from codex-cli 0.160.1 on 2026-10-05; defaults vary by model generation. That catalogue hides
-// gpt-5.5 (visibility "hide", so the live picker drops it too), which is why the mirror no longer lists it.
-export const CODEX_MODELS_FALLBACK_VERSION = "0.160.1"
+// Re-read from codex-cli 0.161.0 on 2026-10-08 (unchanged from 0.160.1 on 2026-10-05 but for the cache's
+// hyphenated display names, which the mirror keeps spaced); defaults vary by model generation. That
+// catalogue hides gpt-5.5 (visibility "hide", so the live picker drops it too), which is why the mirror
+// no longer lists it.
+export const CODEX_MODELS_FALLBACK_VERSION = "0.161.0"
 export const CODEX_MODELS_FALLBACK: CodexModel[] = [
   { slug: "gpt-6.1-sol", displayName: "GPT-6.1 Sol", defaultEffort: "low", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },
   { slug: "gpt-6-astra", displayName: "GPT-6 Astra", defaultEffort: "medium", efforts: ["low", "medium", "high", "xhigh", "max", "ultra"] },

@@ -18,7 +18,11 @@
 //   model "haiku[1m]"  →   HARD 400 — "The long context beta is not yet available for this
 //                                      subscription." is_error, no result, session dead at launch.
 //
-// That last row is the whole reason this module exists. The CLI applies the suffix BLINDLY: no model
+// (Claude Code 2.1.293 moved `haiku` to Haiku 5.5, a 1M model. Measured 2026-10-08 on the same
+// account: "haiku", "haiku[1m]" and "haiku[1m]" + fallback "haiku" each bill claude-haiku-5-5 at
+// 1_000_000, with no 400. The haiku rows above are Haiku 4.5's.)
+//
+// That 400 row is the whole reason this module exists. The CLI applies the suffix BLINDLY: no model
 // gating and no entitlement gating, and an unavailable beta does not quietly degrade to the small
 // window — it kills the session before the first turn. Issue #19 reports a bare alias landing on
 // 200_000 on a lower subscription tier, so asking for the window is worth doing; asking for it
@@ -33,14 +37,16 @@
 // re-tries the primary at the start of each user turn, so an account that later gains the entitlement
 // picks it up without a relaunch.
 //
-// Haiku is excluded because there is no Haiku 1M to ask for (the 400 above IS the haiku case).
+// Haiku was excluded while it resolved to Haiku 4.5, which had no 1M to ask for (the 400 above was the
+// haiku case). Since 2.1.293 it resolves to Haiku 5.5, so it is requested like the others — and an
+// account whose `haiku` still resolves to 4.5 (a provider without 5.5) is caught by the fallback.
 
 const WINDOW_SUFFIX = "[1m]"
 
-// The aliases that have a 1M variant to request. Haiku has none. Deliberately an exact-alias list:
-// anything else — a full model id, a future alias, an operator's hand-typed value — is passed through
-// untouched rather than guessed at, because a wrong suffix is a dead session, not a degraded one.
-export const CLAUDE_1M_MODELS: readonly string[] = ["fable", "opus", "sonnet"]
+// The aliases that have a 1M variant to request. Deliberately an exact-alias list: anything else — a
+// full model id, a future alias, an operator's hand-typed value — is passed through untouched rather
+// than guessed at, because a wrong suffix is a dead session, not a degraded one.
+export const CLAUDE_1M_MODELS: readonly string[] = ["fable", "opus", "sonnet", "haiku"]
 
 export interface ResolvedClaudeModel {
   /** The value to pass as `--model` / the SDK `model` option. */

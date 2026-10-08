@@ -50,8 +50,10 @@ test("observed model normalization accepts only the current provider's identitie
   // A model whose version carries a MINOR part — Claude Code 2.1.280 bills `opus` as claude-opus-5-5 —
   // still collapses to the family the picker offers. The catalogue keys on the family, never a version.
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5-5"), "opus")
-  // …and 2.1.284 moved `sonnet` the same way, to claude-sonnet-5-5.
+  // …and 2.1.284 moved `sonnet` the same way, to claude-sonnet-5-5, and 2.1.293 `haiku`, to
+  // claude-haiku-5-5 (no date suffix, unlike claude-haiku-4-5-20251001 before it).
   assert.equal(normalizeObservedThreadModel("claude", "claude-sonnet-5-5"), "sonnet")
+  assert.equal(normalizeObservedThreadModel("claude", "claude-haiku-5-5"), "haiku")
   assert.equal(normalizeObservedThreadModel("claude", "gpt-5.5"), undefined)
   assert.equal(normalizeObservedThreadModel("codex", "sonnet"), undefined)
 })
@@ -83,6 +85,8 @@ test("an observed 1M model collapses to the bare picker alias", () => {
   // Measured on the provisioned 2.1.280: the pair frizz actually launches (`opus[1m]` + `--fallback-model
   // opus`) comes back as `claude-opus-5-5[1m]` — a minor version AND the suffix in one observed value.
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5-5[1m]"), "opus")
+  // Haiku asks for the window too since 2.1.293 (see claude-context-window.ts); measured reply id.
+  assert.equal(normalizeObservedThreadModel("claude", "claude-haiku-5-5[1m]"), "haiku")
   assert.equal(normalizeObservedThreadModel("claude", "opus[1m]"), "opus")
   // The bare id is unaffected — an account already on 1M reports no suffix at all.
   assert.equal(normalizeObservedThreadModel("claude", "claude-opus-5"), "opus")
@@ -110,6 +114,7 @@ test("a limit message names a model in the PROVIDER's spelling, matched by token
   assert.equal(claudeModelFromLimitName("Opus 5.5"), "opus")
   assert.equal(claudeModelFromLimitName("Sonnet 5.5"), "sonnet")
   assert.equal(claudeModelFromLimitName("Haiku 4.5"), "haiku")
+  assert.equal(claudeModelFromLimitName("Haiku 5.5"), "haiku")
   assert.equal(claudeModelFromLimitName("sonnet"), "sonnet")
   // …and it fails closed rather than reaching for the nearest rung: a name the catalogue cannot place
   // must not be answered with a downgrade to something the operator never chose.
