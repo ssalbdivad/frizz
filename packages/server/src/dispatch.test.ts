@@ -517,7 +517,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /HOW FAR TO FOLLOW A LANDED CHANGE IS JUDGMENT ABOUT WHAT THE HUMAN WANTS NEXT/)
     assert.match(c, /Code they asked to MERGE[^]*?is not done until it merges/)
     assert.match(c, /Code they asked only to PUSH[^]*?is finished once pushed/)
-    assert.match(c, /never pick a long watch yourself: ask[^]*?whether to mark the thread done or watch it/)
+    // …and following its PR or issue is the human's click on the done card, so the card must name it.
+    assert.match(c, /sign off\s+`done` naming each PR or issue as `#N` or `owner\/repo#N`: the human can watch it from the\s+card, so never park on it yourself/)
+    assert.doesNotMatch(c, /whether to mark the thread done or watch it/)
     assert.match(c, /review or merge is never a reason to watch/)
     // …but WHETHER to land is the human's call: a worker asked for one PR opened a second, unasked, for
     // the next change (David 2026-10-06). Unasked, finished code is `done` where it sits, and an

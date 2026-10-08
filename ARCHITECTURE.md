@@ -203,6 +203,15 @@ The fence's other keys name what it waits on:
   `shared/src/thread-handle.ts`), armed for `AWAITING_FOR_MAX_MS` and cancelled the instant the other
   thread answers. A name that matches no armed wait is refused like any dead name.
 
+**A done card offers Watch for the PRs and issues it names** (`DoneWatchButtons.tsx`,
+`router.watchDoneRef`). One "Watch #N" per ref the card links, on the thread's current done at rest. The
+click arms the same `pr_watch` row `watch_pr`/`watch_issue` arm (`registered_by: human`; PR or issue is
+probed), and parks this rest with the event-snooze column, so the thread rests in Snoozed as a `watching`
+rest (`board.doneParkedOnWatch`) until the watch wakes the worker; its next rest decides the place again.
+It is the human's act, not Frizz parking on a worker's behalf. A human's watch leaves the done standing,
+does not gate the worker's `done`, and its wake says whose it is (`PR_WATCH_HUMAN_TRAILER`). A finished
+worker therefore signs off `done` naming the ref rather than parking on it.
+
 **A question is a row with a lifecycle** (`mcp__frizz__ask`, `thread_question`). It is open until the
 human answers or dismisses it or the worker withdraws it with `unask`; Frizz never retracts one by
 omission. A question is the sign-off of the rest that asked it, and every later rest names it under
