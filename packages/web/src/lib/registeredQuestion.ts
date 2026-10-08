@@ -34,7 +34,11 @@ function optionParts(index: number, opt: AskedOption): { line: string; body?: st
   const trade = opt.description?.trim()
   const inline = trade && !trade.includes("\n") ? trade : undefined
   const body = [inline ? undefined : trade, opt.preview?.trim()].filter(Boolean).join("\n\n") || undefined
-  return { line: `${optionLetter(index)} ${opt.label}${inline ? ` — ${inline}` : ""}`, ...(body ? { body } : {}) }
+  // A worker that letters its own labels ("A. Configured instances") would read "A. A. …" (David
+  // 2026-10-08); the card's letter is the one that counts, so the label's copy of it goes.
+  const letter = optionLetter(index)
+  const label = opt.label.replace(new RegExp(`^${letter.slice(0, -1)}[.):]\\s+`), "")
+  return { line: `${letter} ${label}${inline ? ` — ${inline}` : ""}`, ...(body ? { body } : {}) }
 }
 
 /** One question of a registration that is CURRENTLY live — the root, or a follow-up whose parent option

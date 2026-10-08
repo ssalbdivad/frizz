@@ -35,6 +35,11 @@ test("an option with no description carries no dangling dash", () => {
   assert.deepEqual(question.options, ["A. One"])
 })
 
+test("a label that letters itself loses its copy of the card's letter, and only that one", () => {
+  const { question } = toParsedQuestion({ question: "Which?", kind: "question", options: [{ label: "A. Configured instances" }, { label: "B) Lazy" }, { label: "A. Wrong letter" }, { label: "D.C. config" }] })
+  assert.deepEqual(question.options, ["A. Configured instances", "B. Lazy", "C. A. Wrong letter", "D. D.C. config"])
+})
+
 test("a question with no options is free text, and the card renders its box unconditionally", () => {
   const { question, optionLabels } = toParsedQuestion({ question: "What should it be called?", kind: "question" })
   assert.deepEqual(question.options, [])
