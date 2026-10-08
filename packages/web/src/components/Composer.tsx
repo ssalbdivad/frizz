@@ -221,6 +221,15 @@ export const PhoneBarHoldContext = createContext<((held: boolean) => void) | nul
 // clamp measurements, which read layout between the composers' writes and so paid a fresh layout each.
 // Requests made in one turn are flushed together in a microtask — still before the browser paints —
 // as all the writes, then all the reads (one layout), then all the writes.
+//
+// THE COLLAPSE MUST NOT SHRINK THE PAGE (2026-10-08). `height: auto` drops the box to one row for the
+// read, and a composer at the bottom of a scrolled page takes the document's height down with it — the
+// browser clamps the scroll offset to the shorter page during that forced layout, and restoring the
+// height does not give it back. Native scroll anchoring would, but the queue suspends it
+// (lib/viewportLock.ts), so every keystroke in a card's prompt moved the card by the box's height and
+// the lock dragged it back: the card jittered while the human typed. Each textarea's wrapper holds its
+// current height as a `min-height` across the measurement, so the page never gets shorter. That costs
+// one more layout per FLUSH (the reads of the wrappers), not one per composer.
 const pendingSnaps = new Map<HTMLTextAreaElement, number>()
 function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
   if (pendingSnaps.size === 0) queueMicrotask(flushSnaps)
@@ -229,9 +238,13 @@ function snapHeight(el: HTMLTextAreaElement, maxHeight: number): void {
 function flushSnaps(): void {
   const batch = [...pendingSnaps]
   pendingSnaps.clear()
+  const wrappers = batch.map(([el]) => el.parentElement)
+  const held = wrappers.map((w) => w?.offsetHeight)
+  wrappers.forEach((w, i) => { if (w) w.style.minHeight = `${held[i]}px` })
   for (const [el] of batch) el.style.height = "auto"
   const heights = batch.map(([el, maxHeight]) => Math.min(el.scrollHeight, maxHeight))
   batch.forEach(([el], i) => { el.style.height = `${heights[i]}px` })
+  for (const w of wrappers) if (w) w.style.minHeight = ""
 }
 
 export function Composer({
