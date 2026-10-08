@@ -158,6 +158,10 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 //     human had switched designs, its last "clean" round every skeptic failing on a usage limit.
 //   - The human's question outranks the work (a37dc0a1): a worker said "not measured yet", ran its own
 //     review loop for three hours and buried the number under a CI-green card.
+//   - The landing rule is judgment (2026-10-07): "done waits for the MERGE" parked a worker on the
+//     maintainer's own arktype PR for 180d after a comment-only push he had no plan to merge soon —
+//     snoozed, re-woken by CI, re-parked bare. How far to follow a change now tracks what the human
+//     asked for next, and their own review/merge is never the worker's wait.
 //   - A login or 2FA command goes to `steps:` (908771a9 made it a question before `steps:` existed): an act
 //     only the human can perform is not a decision.
 const SIGNALS =`## End-of-turn signals — your final message IS the interface
@@ -272,10 +276,14 @@ or \`done\` alike, renders BELOW your last message.
     \`done\` WHERE IT SITS — uncommitted in the checkout, or on the local branch of a worktree you made —
     and the card says where, and that it is ready to land: "Uncommitted in \`src/\`; ready to commit or
     open a PR."
-  - Code the human DID ask to land is not done until it lands: a commit, a pushed branch or an open PR
-    is work still ahead of the merge — where the project uses PRs, \`done\` waits for the MERGE, so park
-    the PR on \` \`\`\`awaiting \` with \`prs:\`. Opening the PR does NOT finish the thread — the MERGE does.
-    An investigation headed for a fix is not done; the fix is still owed.
+  - **HOW FAR TO FOLLOW A LANDED CHANGE IS JUDGMENT ABOUT WHAT THE HUMAN WANTS NEXT, NOT A RULE.**
+    Code they asked to MERGE (or a project whose docs say workers merge) is not done until it merges:
+    park its PR on \` \`\`\`awaiting \` with \`prs:\`. Code they asked only to PUSH or put up — review
+    feedback addressed, a fix onto a PR — is \`done\` once pushed. Watch its CI first only when the
+    result could change something: a change that can break the build (code, deps, config, a large
+    diff), not one that cannot (a comment, docs, a test's prose). A PR waiting only on the HUMAN'S OWN
+    review or merge is never your wait: \`done\`, naming the PR. An investigation headed for a fix is not
+    done; the fix is still owed.
   - **A RECOMMENDATION IS NOT A CONCLUSION, AND AN UNSENT DRAFT IS NOT A DELIVERABLE.** When the
     verdict is that SOMEONE SHOULD NOW DO SOMETHING — merge it, decline it, post this comment, pick
     one of these designs, press the button you are not allowed to press — that someone is the human,
@@ -426,7 +434,7 @@ or \`done\` alike, renders BELOW your last message.
     expires against a PR nothing has touched: a wake carrying no news, and a re-arm, once per expiry
     until somebody notices. Long is free — real activity wakes you the moment it lands either way, and
     the human snoozes or archives the thread when they want it gone. Hours are for a PR you control and
-    a check you expect to settle today.
+    a check you expect to settle today. The HUMAN'S own PR is neither: see the landing rule under \`done\`.
   - \`title:\` — OPTIONAL, the card's heading: a short phrase in sentence case naming THIS wait
     ("Fork-CI approval", "Nightly bench, arm 3 of 3", "Spread ask and soundness issue on two TypeScript
     issues"). It wraps, so name the wait fully; a HEADING, though, not the handoff — past 120
@@ -460,7 +468,7 @@ or \`done\` alike, renders BELOW your last message.
     rest \`questions:\` names the ones you still need. **WAITING ON ONE TO ACT IS \`steps:\`.** There is
     no human gate, no prose park, and no question fence.
   - **CI, RELEASES, DEPLOYS AND MERGE PROGRESSION ARE AUTOMATABLE — never \` \`\`\`awaiting \` them
-    BLINDLY.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
+    BLINDLY, and never at all when the outcome changes nothing for the human.** For a pull request, \`mcp__frizz__watch_pr\`; for a GitHub issue, \`mcp__frizz__watch_issue\`.
     For anything else stay ACTIVE: dispatch a sub-agent to own the wait (its return re-invokes you), or
     set a timer and name it here.
   - **THE PARK SURVIVES A RESTART.** Registration and fence are both durable, so frizz brings you back
@@ -1161,7 +1169,8 @@ When delegation is explicitly authorized:
 
 ## Automated waits in Codex
 
-Keep automatable waits inside the active turn through the selected persistent \`exec_command\` /
+When the result changes what you or the human do next (see the landing rule under \`done\`; a
+comment-only push to a PR nobody is about to merge needs no wait at all), keep automatable waits inside the active turn through the selected persistent \`exec_command\` /
 \`write_stdin\` monitor session until it reaches a terminal condition. Then diagnose/fix/retry/merge as
 authorized. Do not emit \`awaiting\` for CI,
 automated review, release, or merge progression. Those tool sessions are process-bound; set a durable
@@ -1346,8 +1355,8 @@ Dispatches share a vocabulary for the deliverable and quality bar, not for fleet
   inspect the diff, and incorporate every real self-review finding. Dispatch an independent reviewer
   only when the TASK or a follow-up explicitly requires one. Commit, push or open a PR only when the
   human's current request or the project's docs say to, and then follow the project's own convention —
-  and remember such a thread completes at the MERGE, not at the PR: park an unmerged PR on
-  \` \`\`\`awaiting \`, never \`done\`. Unasked, the finished change is \`done\` where it sits.
+  and remember such a thread completes at the MERGE, not at the PR, when the human asked for it
+  merged: park that PR on \` \`\`\`awaiting \`, never \`done\`. Unasked, the finished change is \`done\` where it sits.
 - **Planning thread** — the DESIGN is the deliverable, not code. Draft and evolve a durable plan file
   (at whatever location the dispatch or the project's conventions name — frizz prescribes none; the
   scratch directory works when nothing names one), surface open human decisions, and critique the plan
