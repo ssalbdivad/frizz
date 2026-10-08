@@ -233,3 +233,49 @@ test("the question's own Send sends it alone; Skip the rest then settles the gro
     await browser.close()
   }
 })
+
+// CHANGE (David 2026-10-08: "unsubmit an answer to a question as you move through them if you change
+// your mind"). The greyed card offers Change; it reopens the question on the answer it replaces, a new
+// pick sends the replacement (the server takes an answered row as a change), and Cancel keeps the old
+// one without sending anything.
+test("Change reopens an answered question on its answer; a new pick sends the replacement", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors, rpcs, answers } = await launch("?many=1")
+  try {
+    await mouseClick(page, `${SETTINGS} [data-question-option]`, 0)
+    await settle(page)
+    assert.deepEqual(await greyed(page), ["qst_0001aaaa"])
+    await mouseClick(page, `${SETTINGS} [data-change-answer]`)
+    await settle(page)
+    assert.deepEqual(await greyed(page), [], "Change reopened it")
+    assert.deepEqual(await live(page), ["qst_0001aaaa", "qst_0002bbbb", "qst_0004dddd"], "in its own slot")
+    assert.equal(await page.$$eval(`${SETTINGS} [data-question-option] button[aria-pressed='true']`, (ns) => ns.length), 1, "opened on the earlier pick")
+    assert.deepEqual(await rpcs(), ["answerQuestions"], "reopening sends nothing")
+    await mouseClick(page, `${SETTINGS} [data-question-option]`, 1)
+    await settle(page)
+    assert.deepEqual(await rpcs(), ["answerQuestions", "answerQuestions"])
+    assert.deepEqual((await answers())[1].map((a) => [a.questionId, a.chosen]), [["qst_0001aaaa", ["A JSON file"]]])
+    assert.deepEqual(await greyed(page), ["qst_0001aaaa"], "greyed again, with the new answer")
+    assert.match(await page.$eval(SETTINGS, (n) => n.textContent ?? ""), /JSON file/)
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
+test("Cancel on a reopened answer keeps the earlier one and sends nothing", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors, rpcs } = await launch("?many=1")
+  try {
+    await mouseClick(page, `${SETTINGS} [data-question-option]`, 0)
+    await settle(page)
+    await mouseClick(page, `${SETTINGS} [data-change-answer]`)
+    await settle(page)
+    await mouseClick(page, `${SETTINGS} [data-keep-answer]`)
+    await settle(page)
+    assert.deepEqual(await greyed(page), ["qst_0001aaaa"])
+    assert.match(await page.$eval(SETTINGS, (n) => n.textContent ?? ""), /SQLite/)
+    assert.deepEqual(await rpcs(), ["answerQuestions"])
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})

@@ -99,8 +99,9 @@ export interface RegisteredAnswering {
   /** Answered questions the human reopened with Change, drawn open again in their slot until the new
    *  answer is sent or Keep puts the old one back. Nothing reaches the server until that send. */
   editing: ReadonlyMap<string, RegisteredQuestionView>
-  /** Whether an answered question offers Change: one of the thread's NEWEST ask, the set the human is
-   *  moving through — not a decision from an older rest the worker has long since built on. */
+  /** Whether an answered question offers Change: one of the set the human is moving through — asked no
+   *  earlier than the oldest still open, or in the newest ask — not a decision from an older rest the
+   *  worker has long since built on. */
   canChange: (s: SettledQuestion) => boolean
   change: (s: SettledQuestion) => void
   keep: (id: string) => void
@@ -383,8 +384,11 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     enabled: false,
     refetchOnWindowFocus: false,
   }).data ?? NO_SETTLED
+  // The set being moved through: every ask from the oldest still open on, or the newest ask once all of
+  // it is answered. ISO stamps of one clock, so they compare as strings.
   const newestAsk = [...open, ...settledList].reduce((max, q) => (q.askedAt > max ? q.askedAt : max), "")
-  const canChange = (s: SettledQuestion) => Boolean(slug) && s.askedAt === newestAsk && settledList.some((entry) => entry.id === s.id)
+  const changeFrom = open.reduce((min, q) => (q.askedAt < min ? q.askedAt : min), newestAsk)
+  const canChange = (s: SettledQuestion) => Boolean(slug) && s.askedAt >= changeFrom && settledList.some((entry) => entry.id === s.id)
   const forget = (id: string) => {
     setPicks((prev) => new Map([...prev].filter(([key]) => !key.startsWith(`${id}|`))))
     const q = editing.get(id)
@@ -565,7 +569,7 @@ export function SettledQuestionCard({ s, wrap, answering: given }: { s: SettledQ
       settled={node.settled}
       wrap={wrap}
       // CHANGE, on the root's title row: the human moving through a set can take an answer back
-      // (David 2026-10-08). Only on the newest ask's answers — see canChange.
+      // (David 2026-10-08). Only on the set being answered now — see canChange.
       aside={node.depth === 1 && changeable && a ? (
         <button
           type="button"

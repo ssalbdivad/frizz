@@ -97,7 +97,9 @@ test("Bash background hook preserves self-contained concurrency and non-job ampe
 test("an untimed run_in_background call gets ONE non-blocking line; a timed one, a foreground one, or a non-worker gets nothing", () => {
   const untimed = decision("npx vite --port 5231", true, { run_in_background: true })
   assert.equal(untimed.hookSpecificOutput?.hookEventName, "PreToolUse")
-  assert.equal(untimed.hookSpecificOutput?.permissionDecision, undefined, "never a decision — the call runs as written")
+  assert.equal(untimed.hookSpecificOutput?.permissionDecision, undefined, "never a decision — permission is untouched")
+  // Claude Code stops an untimed background command at 30m; the hook lifts it to the 24h ceiling.
+  assert.deepEqual(untimed.hookSpecificOutput?.updatedInput, { command: "npx vite --port 5231", run_in_background: true, timeout: 86_400_000 })
   assert.match(untimed.hookSpecificOutput?.additionalContext ?? "", /no `timeout`/)
   assert.match(untimed.hookSpecificOutput?.additionalContext ?? "", /mcp__frizz__extend_shell/)
   assert.match(untimed.hookSpecificOutput?.additionalContext ?? "", /dev server or watcher/)

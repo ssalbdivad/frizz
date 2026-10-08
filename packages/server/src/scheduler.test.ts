@@ -364,6 +364,27 @@ test("question: an answer is handed over once, and the row is not re-delivered",
   assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
 })
 
+test("question: a CHANGED answer is handed over again, marked, rather than deduped into the first delivery", async () => {
+  const h = harness()
+  h.storage.upsertSession(row("t"))
+  askQ(h, "t", "qst_1", "SQLite or a JSON file?")
+  h.tele.set("t", tele())
+  const s = h.make()
+  h.storage.answerThreadQuestion("qst_1", JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["SQLite"] }), h.clock.ms)
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
+
+  h.clock.ms += 1_000
+  h.storage.reviseThreadQuestionAnswer("qst_1", JSON.stringify({ questionId: "qst_1", question: "SQLite or a JSON file?", chosen: ["JSON"], changed: true }), h.clock.ms)
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 2, "the change is its own delivery")
+  assert.match(h.resumes[1].message, /^1\. “SQLite or a JSON file\?” → \(changed — replaces the earlier answer\) JSON$/m)
+  assert.equal(h.storage.getThreadQuestion("qst_1")?.delivered, 1)
+})
+
 test("question: a dismissal rides an answer's message and never wakes anybody on its own", async () => {
   const h = harness()
   h.storage.upsertSession(row("t"))

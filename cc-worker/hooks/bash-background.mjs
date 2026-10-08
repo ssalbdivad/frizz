@@ -204,11 +204,20 @@ export function hasEscapingBackgroundJob(raw, depth = 0) {
 // default — a dev server and a CI poller look identical from outside, and a universal clock killed a
 // real shell its worker had registered a 20h watch on (2026-09-29). So the worker is ASKED, once, at
 // the one moment it knows what the shell is for: a `run_in_background` call with no `timeout` gets one
-// line of context. Never on a call that carries a timeout, never on a foreground call, never a block —
-// the call runs exactly as written. It arrives after the call is committed, so it points at the
-// in-the-moment verb (`extend_shell`) for this shell and at `timeout` for the next.
+// line of context. Never on a call that carries a timeout, never on a foreground call, never a block.
+// It arrives after the call is committed, so it points at the in-the-moment verb (`extend_shell`) for
+// this shell and at `timeout` for the next.
+//
+// THE CALL ALSO GETS THE LONGEST `timeout` CLAUDE CODE ALLOWS. "No timeout" does not mean "no clock" to
+// Claude Code: it stops an untimed background command after its own default, 30m, so a docs server
+// launched exactly as the contract says died half an hour in (yes thread 4f19c4e3, 2026-10-08). The
+// hook raises it to the ceiling through `updatedInput`, with no permission decision — measured on
+// 2.1.287 under `--permission-mode default`: a hook-set 61s cap killed an untimed `sleep 200` at 61s, and
+// the transcript kept the model's original input, so Frizz still reads the shell as unbudgeted
+// (shell-budget.ts). 24h is a hard ceiling here; nothing longer can be asked for.
+export const BACKGROUND_UNTIMED_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 export const BACKGROUND_NO_TIMEOUT_CONTEXT =
-  '⟦background shell with no `timeout`⟧ Frizz never stops this shell on a clock: it runs until it exits or is stopped. ' +
+  '⟦background shell with no `timeout`⟧ Frizz never stops this shell on a clock; Claude Code stops it after 24h. ' +
   'Right for a dev server or watcher meant to keep running. If it is a poller, build or one-off check, give it an end — ' +
   '`mcp__frizz__extend_shell` with its id and a `for` sized to it now (Frizz warns you past it, then stops it), or a ' +
   '`timeout` (ms, max 24h) on the call next time. Either way, `TaskStop` it once you no longer need it.';
@@ -292,7 +301,8 @@ export function evaluateBashBackgroundHook(input, env = process.env) {
   if (!hasEscapingBackgroundJob(command)) {
     if (isSubAgentCall(input)) return {};
     if (isUntimedBackgroundCall(input?.tool_input)) {
-      return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: BACKGROUND_NO_TIMEOUT_CONTEXT } };
+      const updatedInput = codex ? undefined : { ...input.tool_input, timeout: BACKGROUND_UNTIMED_TIMEOUT_MS };
+      return { hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: BACKGROUND_NO_TIMEOUT_CONTEXT, ...(updatedInput && { updatedInput }) } };
     }
     const longTimeout = codex ? undefined : longForegroundTimeout(input?.tool_input);
     if (longTimeout !== undefined) {
