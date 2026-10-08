@@ -28,7 +28,7 @@
 // So every unknown — no telemetry, no transcript, an unparseable timestamp, an enumeration that threw —
 // is a REFUSAL to hibernate, and the predicate below is the union of every "this thread is busy"
 // reading frizz already has rather than the minimum that would look sufficient.
-import { isDirectSubAgent } from "@frizz/shared"
+import { formatElapsed, isDirectSubAgent } from "@frizz/shared"
 import { parseDeliveryLedger } from "./delivery-ledger.ts"
 import { isBrokerClaudeRow, type SessionRow } from "./storage.ts"
 import type { SessionTelemetry } from "./tailer.ts"
@@ -202,8 +202,9 @@ export interface HibernationDeps {
 export interface HibernationResult {
   /** Threads whose daemon was torn down this pass. */
   hibernated: { slug: string; idleMs: number }[]
-  /** Why each live daemon was left alone — the answer to "why is nothing being reclaimed". */
-  blocked: { slug: string; blockedBy: HibernationBlock }[]
+  /** Why each live daemon was left alone — the answer to "why is nothing being reclaimed". `ageMs` is
+   *  the daemon's own age (NaN when its record carries no readable birth). */
+  blocked: { slug: string; blockedBy: HibernationBlock; ageMs: number }[]
 }
 
 /** One sweep: enumerate live daemons → decide each → retire the ones that qualify. Never throws, and
@@ -250,7 +251,7 @@ export function sweepHibernationOnce(deps: HibernationDeps): HibernationResult {
       continue // a decision that threw decided nothing
     }
     if (!verdict.hibernate) {
-      result.blocked.push({ slug: row.slug, blockedBy: verdict.blockedBy })
+      result.blocked.push({ slug: row.slug, blockedBy: verdict.blockedBy, ageMs: nowMs - instant(daemon.createdAt) })
       continue
     }
     let retired = false
@@ -272,14 +273,39 @@ export function sweepHibernationOnce(deps: HibernationDeps): HibernationResult {
   return result
 }
 
+/**
+ * The census line: every daemon the sweep KEPT that has been up longer than the idle threshold, with the
+ * refusal that kept it. Without it the log answered only "what was hibernated", never "why is this
+ * daemon still here after a day" — on 2026-10-08 that question about a 29h daemon had to be answered
+ * from the live DB and its transcript (it held eleven background shells and a fan-out of sub-agents).
+ * A daemon younger than the threshold is not news: it could not have been hibernated yet whatever it is
+ * doing. Undefined when there is nothing to say.
+ */
+export function describeResidentDaemons(result: HibernationResult, idleMs: number): string | undefined {
+  const resident = result.blocked
+    .filter((b) => Number.isFinite(b.ageMs) && b.ageMs >= idleMs)
+    .sort((a, b) => b.ageMs - a.ageMs)
+  if (!resident.length) return undefined
+  const detail = resident.map((b) => `${b.slug} (up ${formatElapsed(b.ageMs)}, ${b.blockedBy})`).join(", ")
+  return `hibernate: kept ${resident.length} broker daemon(s) up longer than ${formatElapsed(idleMs)}: ${detail}`
+}
+
 /** Start the periodic sweep. Returns a stop handle. The timer is unref'd — housekeeping never holds
  *  the event loop open. Deliberately NO startup sweep, unlike the orphan reaper: at boot the tailer has
- *  not primed yet, so every thread would read `no-telemetry` and the pass would be pure noise. */
+ *  not primed yet, so every thread would read `no-telemetry` and the pass would be pure noise. Once per
+ *  idle-threshold's worth of sweeps it also logs the census above. */
 export function startThreadHibernator(deps: HibernationDeps & { intervalMs?: number }): () => void {
   const intervalMs = deps.intervalMs ?? hibernateSweepIntervalMs()
+  const idleMs = deps.idleMs ?? hibernateIdleMs()
+  const censusEvery = Math.max(1, Math.round(idleMs / intervalMs))
+  let sweeps = 0
   const timer = setInterval(() => {
     try {
-      sweepHibernationOnce(deps)
+      const result = sweepHibernationOnce({ ...deps, idleMs })
+      if (++sweeps % censusEvery === 0) {
+        const census = describeResidentDaemons(result, idleMs)
+        if (census) deps.log?.(census)
+      }
     } catch {
       // never let a sweep error escape the timer
     }

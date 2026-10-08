@@ -10,6 +10,7 @@ import {
   hibernationEnabled,
   hibernationVerdict,
   lastActivityMs,
+  describeResidentDaemons,
   sweepHibernationOnce,
   type HibernationCandidate,
 } from "./thread-hibernation.ts"
@@ -202,7 +203,7 @@ test("every enumeration failure reclaims NOTHING", () => {
 // "There might be an approval" is the only honest answer from a store that will not answer.
 test("an interaction store that throws blocks hibernation rather than reading as zero", () => {
   const { deps, retired } = sweepDeps({ pendingInteractions: () => { throw new Error("db locked") } })
-  assert.deepEqual(sweepHibernationOnce(deps).blocked, [{ slug: "fix-the-queue", blockedBy: "pending-approval" }])
+  assert.deepEqual(sweepHibernationOnce(deps).blocked, [{ slug: "fix-the-queue", blockedBy: "pending-approval", ageMs: NOW - DAEMON_STARTED }])
   assert.deepEqual(retired, [])
 })
 
@@ -213,7 +214,24 @@ test("a retire that finds no live daemon is not counted as a hibernation", () =>
 
 test("the sweep reports why each thread was left alone", () => {
   const { deps } = sweepDeps({ telemetry: () => tele({ turn: "in-flight" }) })
-  assert.deepEqual(sweepHibernationOnce(deps).blocked, [{ slug: "fix-the-queue", blockedBy: "turn-in-flight" }])
+  assert.deepEqual(sweepHibernationOnce(deps).blocked, [{ slug: "fix-the-queue", blockedBy: "turn-in-flight", ageMs: NOW - DAEMON_STARTED }])
+})
+
+// The census answers "why is this daemon still here after a day" from the log alone. Only daemons up
+// longer than the threshold are news; a younger one could not have been hibernated yet.
+test("the census names each long-lived kept daemon with its age and refusal, oldest first", () => {
+  const day = 29 * 60 * 60_000
+  const line = describeResidentDaemons({
+    hibernated: [],
+    blocked: [
+      { slug: "fresh", blockedBy: "turn-in-flight", ageMs: 10 * 60_000 },
+      { slug: "orchestrator", blockedBy: "background-shells", ageMs: day },
+      { slug: "auditor", blockedBy: "sub-agents", ageMs: 5 * 60 * 60_000 },
+      { slug: "unborn", blockedBy: "daemon-too-young", ageMs: Number.NaN },
+    ],
+  }, HIBERNATE_IDLE_MS)
+  assert.equal(line, "hibernate: kept 2 broker daemon(s) up longer than 1h: orchestrator (up 1d 5h, background-shells), auditor (up 5h, sub-agents)")
+  assert.equal(describeResidentDaemons({ hibernated: [], blocked: [{ slug: "fresh", blockedBy: "turn-in-flight", ageMs: 10 * 60_000 }] }, HIBERNATE_IDLE_MS), undefined)
 })
 
 // ---- configuration --------------------------------------------------------------------------------

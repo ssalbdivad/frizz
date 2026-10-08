@@ -102,6 +102,8 @@ export interface ClaudeBrokerExitRecord {
 export type ClaudeBrokerTerminationCause =
   | "retire" | "fresh-process" | "hibernate"
   | "session-replaced" | "session-deleted" | "dispatch-replaced"
+  // A boot found the daemon claimed by no row and holding no transcript (unowned-brokers.ts).
+  | "unowned-never-prompted"
   | "unspecified"
 
 export interface ClaudeBrokerTerminationRecord {
