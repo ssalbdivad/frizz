@@ -21,7 +21,7 @@ import { classify } from "./classify.ts"
 import {
   appendTelemetry, decide, estimateMB, heapCapMB, hwmMB, memAvailableMB, readHistory, readPressure, readSettings,
   readStat, readState, recordHistory, repoKey, scanProcs, sessionOf, signatureOf, treeOf, treeRssMB, updateState,
-  type Decision, type Job, type Settings,
+  type Decision, type HistoryEntry, type Job, type Settings,
 } from "./gate.ts"
 
 const say = (line: string) => process.stderr.write(`frizz-run: ${line}\n`)
@@ -76,7 +76,7 @@ async function run(argv: string[], hook: boolean): Promise<never> {
 
   const classified = classify(argv) ?? { class: "heavy" as const, words: argv }
   let job: Job
-  let history
+  let history: HistoryEntry[] | undefined
   try {
     const signature = signatureOf(repoKey(process.cwd()), classified)
     history = readHistory(settings.dir)[signature]
@@ -122,6 +122,12 @@ async function run(argv: string[], hook: boolean): Promise<never> {
           mine = { ...job }
           state.jobs.push(mine)
         }
+        // A run of the same command that finished while this one waited has just measured it: take
+        // the new estimate, so a burst of identical suites queued on the default sizes itself after
+        // the first one ends.
+        history = readHistory(settings.dir)[job.signature]
+        mine.estimateMB = job.estimateMB = estimateMB(history, classified.class)
+        mine.heavy = job.heavy = job.estimateMB >= live.heavyMB
         const running = state.jobs.filter((j) => j.status === "running")
         const procs = running.length ? scanProcs() : new Map()
         const rssMB: Record<string, number> = {}
