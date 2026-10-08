@@ -1002,6 +1002,9 @@ export interface Storage extends ScheduleStore {
   openThreadQuestions(): ThreadQuestionRow[]
   /** The human's answer. Stored, not delivered: `undeliveredSettlements` finds it on the next pass. */
   answerThreadQuestion(id: string, answer: string, atMs: number): boolean
+  /** The human CHANGED an answer they already sent: the new one replaces it and goes back on the delivery
+   *  queue, detached from any delivery still carrying the old one. Answered rows only. */
+  reviseThreadQuestionAnswer(id: string, answer: string, atMs: number): boolean
   /** Settled but not yet told to the worker — the scheduler's delivery queue. Answers AND dismissals,
    *  because a dismissal is news the worker needs ("decide it yourself") even though it wakes nobody on
    *  its own: it rides the next answer's wake. A withdrawal is absent because the worker DID that. */
@@ -2663,6 +2666,13 @@ export function createStorage(source: string | Database, projectId: string): Sto
     UPDATE thread_question SET state = 'answered', answer = ?, settled_at = ?
     WHERE project_id = @project_id AND id = ? AND state = 'open'
   `)
+  // A CHANGED ANSWER IS A NEW SETTLEMENT. `delivered = 0` puts it back on the delivery queue, and clearing
+  // `delivery_id` detaches it from a delivery still carrying the OLD answer, so that one landing cannot
+  // mark the new answer received. The new `settled_at` is what puts it back in flight on the board.
+  const reviseThreadQuestionAnswerStmt = scope.prepare(`
+    UPDATE thread_question SET answer = ?, settled_at = ?, delivered = 0, delivery_id = NULL
+    WHERE project_id = @project_id AND id = ? AND state = 'answered'
+  `)
   // Settled but not yet told to the worker. ANSWERED and DISMISSED, never WITHDRAWN: a withdrawal is the
   // worker's own act, so telling it about one would be reading its own move back to it.
   //
@@ -3531,6 +3541,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     getThreadQuestion: (id) => threadQuestionByIdStmt.get(id),
     openThreadQuestions: () => openThreadQuestionsStmt.all(),
     answerThreadQuestion: (id, answer, atMs) => answerThreadQuestionStmt.run(answer, atMs, id).changes === 1,
+    reviseThreadQuestionAnswer: (id, answer, atMs) => reviseThreadQuestionAnswerStmt.run(answer, atMs, id).changes === 1,
     undeliveredSettlements: () => undeliveredSettlementsStmt.all(),
     assignSettlementDelivery: (id, deliveryId) => assignSettlementDeliveryStmt.run(deliveryId, id).changes === 1,
     markSettlementsDeliveredBy: (deliveryId) => Number(markSettlementsDeliveredByStmt.run(deliveryId).changes),

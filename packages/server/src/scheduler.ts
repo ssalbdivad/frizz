@@ -4052,6 +4052,9 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       const fenceId = questionAnswerFenceId([
         ...answers.map((a) => a.questionId), ...dismissedIds,
         ...rows.flatMap((q) => (q.delivery_id ? [`after:${q.delivery_id}`] : [])),
+        // A CHANGED answer is news the first delivery's key already names, so it keys on when it changed
+        // too: the outbox would otherwise dedupe it into the delivery that carried the old answer.
+        ...answers.flatMap((a) => (a.changed ? [`changed:${a.questionId}@${rows.find((q) => q.id === a.questionId)?.settled_at ?? ""}`] : [])),
       ])
       const deliveryId = wakeDeliveryId(row.slug, row.session_id, fenceId)
       // CLAIM THE ROWS BEFORE THE WAKE EXISTS. A process that dies between the two leaves rows naming a

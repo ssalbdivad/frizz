@@ -3460,6 +3460,15 @@ export interface QuestionAnswer {
    *  answered set plus the branch taken is the whole payload, so an absent follow-up means "not asked",
    *  never "asked and skipped". */
   followUps?: QuestionAnswer[]
+  /** Left blank when the human pressed Send answers on the rest of its group: they are done with the
+   *  group for now, so the question settles rather than holding the card open, and the worker may ask it
+   *  again if it still matters (David 2026-10-08: "it should submit the answers you selected and follow
+   *  up as needed at that point"). Unlike a dismissal, which says "decide it yourself". */
+  skipped?: boolean
+  /** The human CHANGED this answer after the worker already had the earlier one, so the delivery says it
+   *  replaces it. Set by the server (answerQuestions), never by the card: only the server knows whether
+   *  the earlier answer reached the worker. A change made before it did simply replaces it unmarked. */
+  changed?: boolean
 }
 
 export const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.object({
@@ -3470,6 +3479,8 @@ export const QuestionAnswerSchema: z.ZodType<QuestionAnswer> = z.lazy(() => z.ob
   chosen: z.array(z.string().max(400)),
   text: z.string().max(8000).optional(),
   followUps: z.array(QuestionAnswerSchema).optional(),
+  skipped: z.boolean().optional(),
+  changed: z.boolean().optional(),
 }).strict())
 
 export const AnswerQuestionsInput = z.object({
@@ -3487,8 +3498,8 @@ export const AnswerQuestionsInput = z.object({
 export type AnswerQuestionsInput = z.infer<typeof AnswerQuestionsInput>
 
 export const AnswerQuestionsResult = z.object({
-  /** The ids that were open and are now answered. An id that was already settled is silently absent
-   *  rather than an error: two browser tabs answering the same card is a race nobody should see. */
+  /** The ids that were open and are now answered, or answered and now changed. An id that was dismissed
+   *  or withdrawn is silently absent rather than an error: two browser tabs answering the same card is a race nobody should see. */
   answered: z.array(z.string()),
   open: z.array(RegisteredQuestionView),
 }).strict()
@@ -3558,6 +3569,10 @@ export const indentAnswerContinuation = (text: string): string => text.replace(/
  *  WORKER's row only: the human's Answers card leaves it out (the web's `answersForDisplay`), because
  *  the × already said it and the row can arrive several rests after the click. */
 export const DISMISSED_ANSWER = "(dismissed — decide it yourself; do not re-ask)"
+/** A question the human left blank when they sent the rest of its group (QuestionAnswer `skipped`). */
+export const SKIPPED_ANSWER = "(skipped for now — ask again if it still matters)"
+/** Leads a row whose answer replaces one the worker already received (QuestionAnswer.changed). */
+export const CHANGED_ANSWER = "(changed — replaces the earlier answer)"
 
 /** A question the human waved away, as the answer message needs it: the TEXT, never the id. The worker
  *  never saw an id — frizz minted it — so a list of ids names nothing it can act on. */
@@ -3598,7 +3613,8 @@ export function questionAnswerMessage(answers: readonly QuestionAnswer[], dismis
   const rows: string[] = []
   const push = (a: QuestionAnswer, followUp: boolean): void => {
     const said = [a.chosen.join(", "), a.text].filter(Boolean).join(" — ")
-    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${indentAnswerContinuation(said || "(no answer)")}`)
+    const shown = said || (a.skipped ? SKIPPED_ANSWER : "(no answer)")
+    rows.push(`${followUp ? `${ANSWER_FOLLOW_UP_MARKER} ` : ""}“${a.question}” → ${indentAnswerContinuation(a.changed ? `${CHANGED_ANSWER} ${shown}` : shown)}`)
     for (const child of a.followUps ?? []) push(child, true)
   }
   for (const a of answers) push(a, false)

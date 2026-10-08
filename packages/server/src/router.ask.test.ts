@@ -12,7 +12,7 @@ import { mkdtempSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
+import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, CHANGED_ANSWER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -268,6 +268,38 @@ test("answering stores the answer WITHOUT delivering it, and leaves the row for 
     ] } })
     assert.deepEqual(again.answered, [])
     assert.equal(JSON.parse(h.storage.getThreadQuestion(a.id)!.answer!).chosen[0], "SQLite")
+  } finally { h.close() }
+})
+
+test("a CHANGED answer replaces the stored one, goes back for delivery, and says so only once the worker had the old one", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const { registered } = await h.router.ask.handler({ input: { slug: "t", questions: [simple(), simple("Ship it?")] } })
+    const [a, b] = registered
+    const say = (q: typeof a, chosen: string, changed?: boolean) => ({ questionId: q.id, question: q.spec.question, chosen: [chosen], ...(changed ? { changed } : {}) })
+
+    // Changed before the worker saw it: simply replaced, unmarked — and a card cannot mark it itself.
+    await h.router.answerQuestions.handler({ input: { slug: "t", answers: [say(a, "SQLite")] } })
+    const early = await h.router.answerQuestions.handler({ input: { slug: "t", answers: [say(a, "JSON", true)] } })
+    assert.deepEqual(early.answered, [a.id])
+    assert.deepEqual(JSON.parse(h.storage.getThreadQuestion(a.id)!.answer!), say(a, "JSON"))
+
+    // Changed after it was delivered: back on the delivery queue, detached from the old delivery, marked.
+    h.storage.assignSettlementDelivery(a.id, "wd-old")
+    h.storage.markSettlementsDeliveredBy("wd-old")
+    await h.router.answerQuestions.handler({ input: { slug: "t", answers: [say(a, "SQLite")] } })
+    const revised = h.storage.getThreadQuestion(a.id)!
+    assert.equal(revised.state, "answered")
+    assert.equal(revised.delivered, 0)
+    assert.equal(revised.delivery_id, null)
+    assert.deepEqual(JSON.parse(revised.answer!), say(a, "SQLite", true))
+    assert.deepEqual(h.storage.undeliveredSettlements().map((q) => q.id), [a.id])
+    assert.ok(questionAnswerMessage([JSON.parse(revised.answer!)]).includes(`→ ${CHANGED_ANSWER} SQLite`))
+
+    // A dismissed question has no answer to change.
+    await h.router.dismissQuestions.handler({ input: { slug: "t", ids: [b.id] } })
+    assert.deepEqual((await h.router.answerQuestions.handler({ input: { slug: "t", answers: [say(b, "SQLite")] } })).answered, [])
   } finally { h.close() }
 })
 

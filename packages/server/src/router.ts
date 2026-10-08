@@ -4525,8 +4525,20 @@ export function createRouter(ctx: AppContext) {
         for (const answer of input.answers) {
           // Scoped by reading the row first: an id belonging to another thread answers nothing here.
           const q = ctx.storage.getThreadQuestion(answer.questionId)
-          if (!q || q.thread_slug !== input.slug || q.state !== "open") continue
-          if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(answer), now)) answered.push(answer.questionId)
+          if (!q || q.thread_slug !== input.slug) continue
+          // A CHANGED ANSWER (the card's Change on an answered question). It replaces the stored one and is
+          // delivered again; it says so only when the worker may already have the old one — received, or
+          // riding a delivery already offered — since one it never saw is simply replaced.
+          if (q.state === "answered") {
+            const { changed: _client, ...given } = answer
+            const prior = parseStoredAnswer(q.answer)
+            const changed = q.delivered === 1 || q.delivery_id != null || prior?.changed === true
+            if (ctx.storage.reviseThreadQuestionAnswer(answer.questionId, JSON.stringify(changed ? { ...given, changed } : given), now)) answered.push(answer.questionId)
+            continue
+          }
+          if (q.state !== "open") continue
+          const { changed: _ignored, ...fresh } = answer
+          if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(fresh), now)) answered.push(answer.questionId)
         }
         // ANSWERING IS NOT DELIVERING. The row is stored answered-but-undelivered and the scheduler
         // hands it over (evalQuestionAnswers), so an answer given while the worker's process is down
