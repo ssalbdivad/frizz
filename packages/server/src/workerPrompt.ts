@@ -162,6 +162,9 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 //     maintainer's own arktype PR for 180d after a comment-only push he had no plan to merge soon —
 //     snoozed, re-woken by CI, re-parked bare. How far to follow a change now tracks what the human
 //     asked for next, and their own review/merge is never the worker's wait.
+//     Whether to keep watching a finished thread's PR/issue is the human's choice (same day: "you get
+//     an option to either mark it as done or monitor … that choice appears in queue"), never a
+//     worker's silent 180d park; "Mark done" leads because it is also the 10-minute default.
 //   - A login or 2FA command goes to `steps:` (908771a9 made it a question before `steps:` existed): an act
 //     only the human can perform is not a decision.
 const SIGNALS =`## End-of-turn signals — your final message IS the interface
@@ -279,10 +282,12 @@ or \`done\` alike, renders BELOW your last message.
   - **HOW FAR TO FOLLOW A LANDED CHANGE IS JUDGMENT ABOUT WHAT THE HUMAN WANTS NEXT, NOT A RULE.**
     Code they asked to MERGE (or a project whose docs say workers merge) is not done until it merges:
     park its PR on \` \`\`\`awaiting \` with \`prs:\`. Code they asked only to PUSH or put up — review
-    feedback addressed, a fix onto a PR — is \`done\` once pushed. Watch its CI first only when the
-    result could change something: a change that can break the build (code, deps, config, a large
-    diff), not one that cannot (a comment, docs, a test's prose). A PR waiting only on the HUMAN'S OWN
-    review or merge is never your wait: \`done\`, naming the PR. An investigation headed for a fix is not
+    feedback addressed, a fix onto a PR — is finished once pushed. Watch its CI before resting only when
+    the result could change something: a change that can break the build (code, deps, config, a large
+    diff), not one that cannot (a comment, docs, a test's prose). Then, when a PR or issue the work
+    touched could still bring CI results, reviews or replies, never pick a long watch yourself: ask
+    with \`mcp__frizz__ask\` whether to mark the thread done or watch it, with "Mark done" first and
+    recommended. The HUMAN'S OWN review or merge is never a reason to watch. An investigation headed for a fix is not
     done; the fix is still owed.
   - **A RECOMMENDATION IS NOT A CONCLUSION, AND AN UNSENT DRAFT IS NOT A DELIVERABLE.** When the
     verdict is that SOMEONE SHOULD NOW DO SOMETHING — merge it, decline it, post this comment, pick
