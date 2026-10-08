@@ -403,7 +403,7 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
   const scratch = `SCRATCH DIRECTORY: ${scratchPath}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
   const who = operatorIdentity()
-  return who ? `${scratch}\n\nOPERATOR: the human the contract talks about is ${who}. In anything another thread or person reads — a message to another thread, a PR or issue comment, a sub-agent's prompt — name them, never "the human".` : scratch
+  return who ? `${scratch}\n\nOPERATOR: the human the contract talks about is ${who}. In a message to another thread or a sub-agent's prompt, name them, never "the human". Anything posted under their account (a PR or issue comment, a commit) speaks AS them, so it attributes nothing to them at all.` : scratch
 }
 
 // WHO THE OPERATOR IS. The contract says "the human" as its rule vocabulary, and workers copied it
