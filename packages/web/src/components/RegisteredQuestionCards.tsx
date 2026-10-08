@@ -324,7 +324,9 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   // SCOPED TO ONE STACK'S QUESTIONS: the thread page hangs each ask after the rest that asked it, and a
   // footer under the newest must not skip a question still open further up.
   const submitGroup = (ids: ReadonlySet<string>) => sendPairs([
-    ...stagedPairs.filter((pair) => ids.has(pair.q.id)),
+    // Never a reopened answer: Change is finished by that card's own Send or Cancel, and the group
+    // button sending it as it stands would re-send the answer it already had.
+    ...stagedPairs.filter((pair) => ids.has(pair.q.id) && !editing.has(pair.q.id)),
     ...questions.flatMap((q) =>
       // `sent` covers a reopened answer too: left blank, it keeps the answer it has rather than skipping.
       !ids.has(q.id) || sent.has(q.id) || dismissed.has(q.id) || stagedPairs.some((pair) => pair.q.id === q.id)
@@ -394,6 +396,8 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const q = editing.get(id)
     if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, id, path), "")
   }
+  // The answer each reopened question opened on, so its Send waits for an actual change.
+  const changedFrom = useRef(new Map<string, string>())
   const change = (s: SettledQuestion) => {
     if (!slug) return
     setError(undefined)
@@ -406,6 +410,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     })
     for (const [path, pick] of staged) draftStore.set(draftKey.question(projectDir, slug, s.id, path), pick.text)
     setEditing((prev) => new Map(prev).set(s.id, { id: s.id, spec: s.spec, askedAt: s.askedAt }))
+    changedFrom.current.set(s.id, answerKey(s.answer))
   }
   const keep = (id: string) => {
     forget(id)
@@ -465,7 +470,9 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     commit,
     submit,
     submitGroup,
-    unsent: (q) => stagedPairs.some((pair) => pair.q.id === q.id),
+    // A REOPENED answer is unsent only once it differs from the one it replaces: opened on that answer,
+    // "Send new answer" beside it would offer to send the same thing again.
+    unsent: (q) => stagedPairs.some((pair) => pair.q.id === q.id && (!editing.has(q.id) || answerKey(pair.answer) !== changedFrom.current.get(q.id))),
     settled: settledList,
     enter,
     sent,
@@ -955,9 +962,10 @@ export function RegisteredQuestionStack({
  * or more at once. A lone half-filled question has its own Send and needs no second one beside it.
  */
 function groupFinish(questions: readonly RegisteredQuestionView[], a: RegisteredAnswering): { label: string; send: number; skip: number } | undefined {
-  // A reopened answer is neither blank nor skippable: left alone, it keeps the answer it has.
+  // A reopened answer is none of the group's business (submitGroup leaves it out): left alone, it
+  // keeps the answer it has, and its own Send or Cancel finishes it.
   const remaining = questions.filter((q) => !a.sent.has(q.id) && !a.dismissed.has(q.id))
-  const send = remaining.filter((q) => a.unsent(q)).length + questions.filter((q) => a.editing.has(q.id) && a.unsent(q)).length
+  const send = remaining.filter((q) => a.unsent(q)).length
   const skip = remaining.length - remaining.filter((q) => a.unsent(q)).length
   // One `ask` stamps every question it registers with the same askedAt, so the settled list says whether
   // any of THIS group is answered — on the thread page too, where an answered one leaves this stack.
@@ -966,6 +974,13 @@ function groupFinish(questions: readonly RegisteredQuestionView[], a: Registered
   if (!started || (skip === 0 && send < 2)) return undefined
   const label = send > 0 && skip > 0 ? `Send ${send}, skip ${skip}` : send > 0 ? `Send ${send} answers` : "Skip the rest"
   return { label, send, skip }
+}
+
+/** An answer's content, for telling a reopened answer's edit from the answer it opened on. Only what the
+ *  human chose and typed — `questionId`/`question` restate the question, and `changed` is the server's. */
+function answerKey(answer: QuestionAnswer): string {
+  const walk = (a: QuestionAnswer): unknown => [a.chosen, a.text?.trim() ?? "", (a.followUps ?? []).map((f) => walk(f))]
+  return JSON.stringify(walk(answer))
 }
 
 /** EVERY node path in a question's tree — live or not. The draft subscription and the clear-on-send both

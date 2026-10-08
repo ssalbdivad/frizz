@@ -250,6 +250,8 @@ test("Change reopens an answered question on its answer; a new pick sends the re
     assert.deepEqual(await live(page), ["qst_0001aaaa", "qst_0002bbbb", "qst_0004dddd"], "in its own slot")
     assert.equal(await page.$$eval(`${SETTINGS} [data-question-option] button[aria-pressed='true']`, (ns) => ns.length), 1, "opened on the earlier pick")
     assert.deepEqual(await rpcs(), ["answerQuestions"], "reopening sends nothing")
+    assert.equal(await ownSend(page, SETTINGS), null, "opened on its old answer, there is nothing new to send")
+    assert.equal(await sendButton(page), "Skip the rest", "the group button leaves a reopened answer alone")
     await mouseClick(page, `${SETTINGS} [data-question-option]`, 1)
     await settle(page)
     assert.deepEqual(await rpcs(), ["answerQuestions", "answerQuestions"])
