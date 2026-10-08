@@ -14,7 +14,8 @@ function decision(command: string, worker = true, extra: Record<string, unknown>
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", tool_input: { command, ...extra } }),
     encoding: "utf8",
-    env: { ...process.env, FRIZZ_THREAD: worker ? "thread-under-test" : "" },
+    // The job gate rides this hook and would wrap `pnpm prChecks`; job-gate.test.ts covers it.
+    env: { ...process.env, FRIZZ_THREAD: worker ? "thread-under-test" : "", FRIZZ_GATE: "0" },
   })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout || "{}")
@@ -222,7 +223,7 @@ function subAgentDecision(command: string, extra: Record<string, unknown>, idKey
   const result = spawnSync(process.execPath, [hook], {
     input: JSON.stringify({ hook_event_name: "PreToolUse", tool_name: "Bash", [idKey]: "a19ae4fa7706777f6", tool_input: { command, ...extra } }),
     encoding: "utf8",
-    env: { ...process.env, FRIZZ_THREAD: "thread-under-test" },
+    env: { ...process.env, FRIZZ_THREAD: "thread-under-test", FRIZZ_GATE: "0" },
   })
   assert.equal(result.status, 0, result.stderr)
   return JSON.parse(result.stdout || "{}")
