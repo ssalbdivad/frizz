@@ -506,14 +506,18 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /(?:question|permission)[\s\S]{0,100}higher.priority/i)
     assert.match(c, /checked success card[^.]*queue/)
     assert.match(c, /until the human (?:explicitly )?(?:A|a)rchives? it/)
-    // done is gated on LANDED work — merged, not merely committed/pushed/PR-opened (an open PR parks
+    // done is gated on LANDED work — landed as far as asked (a PR the human wants merged parks
     // on awaiting until it merges); a pre-fix bug/issue investigation never earns it, while a
     // commissioned research/audit effort's finished report does (done-requires-landed-work)
     assert.match(c, /COMPLETED\s+the effort's real work/)
     assert.match(c, /code LANDED as far as you were asked to land\s+it/)
-    assert.match(c, /Code the human DID ask to land is not done until it lands/)
-    assert.match(c, /open PR\s+is work still ahead of the merge/)
-    assert.match(c, /`done` waits for the MERGE/)
+    // …and how far to follow a landed change tracks what the human wants next (2026-10-07): only
+    // merge-requested work parks to the merge, CI is watched only when its result matters, and the
+    // human's own review is never the worker's wait
+    assert.match(c, /HOW FAR TO FOLLOW A LANDED CHANGE IS JUDGMENT ABOUT WHAT THE HUMAN WANTS NEXT/)
+    assert.match(c, /Code they asked to MERGE[^]*?is not done until it merges/)
+    assert.match(c, /Code they asked only to PUSH[^]*?is `done` once pushed/)
+    assert.match(c, /review or merge is never your wait/)
     // …but WHETHER to land is the human's call: a worker asked for one PR opened a second, unasked, for
     // the next change (David 2026-10-06). Unasked, finished code is `done` where it sits, and an
     // earlier PR request is no standing mandate.
@@ -523,9 +527,8 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /commit, push or pull request nobody asked for is not that fork/)
     // `prs:`, NOT the retired `pr:` or the older `pr-watch:` — a fence written either old way parses as
     // prose and the park names nothing (AWAITING_HINT_RE + RETIRED_AWAITING_KINDS).
-    assert.match(c, /park the PR on[\s\S]{0,40}`prs:`/)
+    assert.match(c, /park its PR on[\s\S]{0,40}`prs:`/)
     // The git-discipline + implementation-thread surfaces must not contradict it by fencing on a PR.
-    assert.match(c, /Opening the PR does NOT finish the thread — the MERGE does/)
     assert.doesNotMatch(c, /done ` fence naming the PR\/paths/)
     assert.doesNotMatch(c, /changes sitting uncommitted/)
     assert.match(c, /investigat(?:ed|ing|ion)[\s\S]{0,300}NOT `?done`?/i)

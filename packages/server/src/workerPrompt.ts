@@ -585,7 +585,7 @@ const QUALITY_BAR = `## Quality bar
 
 - Verify behavior end-to-end before calling anything done. A green suite over a stubbed implementation
   is worse than honest incompleteness.
-- Run exactly what CI runs, locally, before pushing.
+- Before pushing a change CI could fail, run what CI runs, locally.
 - Tests: the minimum that comprehensively covers the contract. Kill flakes at the source; never ignore,
   retry-wrap, or loosen an assertion to get green.
 - Write code that reads like the surrounding code — match its comment density, naming, and idiom.
