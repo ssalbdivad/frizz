@@ -321,7 +321,7 @@ function GoalPreview({ armed }: { armed: ThreadView["recurringPrompt"] }) {
       {/* FOUR LINES, then an ellipsis — `line-clamp` rather than a character cut, so the clamp lands on
           whatever the panel's own width actually renders instead of on a guessed column count. */}
       <p className={`line-clamp-4 whitespace-pre-wrap ${text ? "text-fg/90" : "text-muted"}`}>
-        {text || "Click to write what this thread is trying to achieve."}
+        {text || "Click to set a goal. The agent pursues it on its own, deciding instead of asking."}
       </p>
     </div>
   )
