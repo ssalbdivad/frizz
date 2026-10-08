@@ -24,7 +24,7 @@
 // which says where it went.
 //
 // Where it lands is `landing`: level with the row whenever the card reaches that height, so the usual
-// reading is one flat stroke. The rail is sticky and the cards scroll, so the knot slides down the card's
+// reading is one flat stroke. The rail is fixed and the cards scroll, so the knot slides down the card's
 // edge as the card passes the row, and the stroke bends only once the card has gone by.
 //
 // One fixed SVG under the lane headers (z-10), which cover the card too, and under the drawers' scrim. It

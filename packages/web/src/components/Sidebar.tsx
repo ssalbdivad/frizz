@@ -86,9 +86,23 @@ function rowWashClass(open: boolean): string {
   }`
 }
 
-/** The page's left column's track — Everything's (AllQueues.tsx), which was the board's sidebar's. */
+/**
+ * The page's left column — Everything's (AllQueues.tsx), which was the board's sidebar's — and the SLOT that
+ * holds its place in the row. The column is `position: fixed` to the viewport, inside a slot of its own width
+ * that keeps the queue beside it; its `left` is auto, so it sits wherever the slot's flow puts it.
+ *
+ * NOT `sticky`, which it was until 2026-10-08. Sticky is pinned by its ancestors' geometry, and the page moves
+ * that geometry in more ways than anything can track: a root that declared its own overflow made a modal's
+ * `body{overflow:hidden}` a scroll container that re-anchored it (2026-08-26, stickyScrollLock.e2e.test.ts);
+ * a pinned page whose queue shrank under a drawer ended its container above the fold, which can never carry
+ * a sticky box past its bottom (2026-10-07: the column at top -1200); and after a page-height patch for that
+ * one, the maintainer still caught the column a few hundred px above the fold under an open drawer
+ * (2026-10-08), by a path no seeded scenario reproduced. A fixed box answers only to the viewport (no
+ * ancestor here sets a transform, filter or containment), so none of those can reach it.
+ */
+export const SIDEBAR_SLOT_CLASS = "w-[clamp(272px,34vw,680px)] shrink-0 max-[800px]:w-full"
 export const SIDEBAR_COLUMN_CLASS =
-  "sticky top-0 self-start h-screen w-[clamp(272px,34vw,680px)] shrink-0 flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
+  "fixed top-0 h-screen w-[clamp(272px,34vw,680px)] flex flex-col justify-center max-[800px]:static max-[800px]:h-auto max-[800px]:w-full max-[800px]:justify-start max-[800px]:pt-16"
 
 /**
  * Where a row's "open" leads. Every row is drawn in Everything's project list (ProjectList.tsx), where the

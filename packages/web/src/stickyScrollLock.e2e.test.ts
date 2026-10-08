@@ -12,7 +12,7 @@ const baseUrl = process.env.FRIZZ_STICKY_SCROLL_LOCK_E2E_URL
 
 const SCROLL_TO = 600
 
-test("a modal scroll lock leaves the sticky rail exactly where it was, and still pins the page", {
+test("a modal scroll lock leaves the rail exactly where it was, and still pins the page", {
   skip: !baseUrl,
   timeout: 60_000,
 }, async () => {
@@ -57,7 +57,7 @@ test("a modal scroll lock leaves the sticky rail exactly where it was, and still
     const open = await probe()
     assert.equal(open.locked, true, "the modal must actually engage react-remove-scroll's body lock")
     // THE REGRESSION: this read -600 with `html { overflow-y: scroll }` in styles.css.
-    assert.equal(open.railTop, scrolled.railTop, "the sticky rail must not move when the modal opens")
+    assert.equal(open.railTop, scrolled.railTop, "the rail must not move when the modal opens")
     assert.equal(open.railLeft, scrolled.railLeft, "…and must not shift horizontally either")
     assert.equal(open.scrollY, SCROLL_TO, "the page must not jump")
     assert.equal(open.gutter, 0, "no scrollbar gutter appears for Radix to compensate for")
@@ -76,6 +76,18 @@ test("a modal scroll lock leaves the sticky rail exactly where it was, and still
     const closed = await probe()
     assert.equal(closed.railTop, 0, "the rail is still stuck to the viewport after the modal closes")
     assert.equal(closed.scrollY, SCROLL_TO, "closing restores nothing because nothing was displaced")
+
+    // A PIN DEEPER THAN THE PAGE (App.tsx's drawer lock, `body{position:fixed; top:-y}`, after the queue
+    // shrank under the drawer). A sticky column could never ride past the bottom of its container, so with
+    // the page ending above the fold it was dragged up by the difference (2026-10-07, and again 2026-10-08
+    // after a page-height patch). The fixed column answers to the viewport alone.
+    const pinned = await page.evaluate(() => {
+      const depth = document.documentElement.scrollHeight + 800
+      Object.assign(document.body.style, { position: "fixed", top: `${-depth}px`, left: "0", right: "0", width: "100%" })
+      const rail = document.querySelector("[data-sticky-rail]")!.getBoundingClientRect()
+      return { railTop: Math.round(rail.top), railLeft: Math.round(rail.left) }
+    })
+    assert.deepEqual(pinned, { railTop: 0, railLeft: closed.railLeft }, "the rail stays on screen under a pin deeper than the page")
     assert.deepEqual(errors, [], "no console/page errors during the flow")
   } finally {
     await browser.close()

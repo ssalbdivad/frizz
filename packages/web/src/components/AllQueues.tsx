@@ -75,7 +75,7 @@ import { isLimitPaused } from "../lib/limitPause.ts"
 import { deliverProjectFollowUp } from "../lib/projectFollowUp.ts"
 import { STALLED_RETRY_MESSAGE } from "../lib/retrySession.ts"
 import { ProjectSquare, warmProjectIcon } from "./ProjectSquare.tsx"
-import { SIDEBAR_COLUMN_CLASS } from "./Sidebar.tsx"
+import { SIDEBAR_COLUMN_CLASS, SIDEBAR_SLOT_CLASS } from "./Sidebar.tsx"
 import { BandLabel } from "./BandLabel.tsx"
 import { homeOf, shortPath, useAddProject } from "./ProjectActions.tsx"
 import { StatusRow } from "./StatusRow.tsx"
@@ -485,62 +485,63 @@ export function AllQueuesPage() {
   }
 
   return (
-    // `--page-lock-offset`: under a drawer the page is pinned, and the sticky column needs this box to reach
-    // the fold at any pinned offset, or it rides up out of view (lib/pageScrollLock.ts pinPageAt).
-    <div className="flex min-h-[calc(100vh+var(--page-lock-offset,0px))] justify-center gap-[clamp(28px,3.4vw,52px)] bg-bg px-5 text-sm text-fg max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
+    <div className="flex min-h-screen justify-center gap-[clamp(28px,3.4vw,52px)] bg-bg px-5 text-sm text-fg max-[800px]:flex-col max-[800px]:justify-start max-[800px]:gap-0 max-[800px]:px-3">
       {/* TOP-anchored, where the project board centred its column: a click here changes the list's height (narrowing
           folds every other project to one line), and a centred column moved the prompt box and the row just
           clicked out from under the pointer — by 110-200px with five projects. 48px sets the status row's middle
           level with the READY header's across the gutter (64 vs 59.85px at 52px). */}
       {/* Above the thread connector (ThreadConnector.tsx, z-[5]) while the prompt box's menu is open: the
-          column is sticky, so the menu's own z-index cannot leave it, and the cords drew over its rows. */}
-      <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5 has-[[data-mention-menu]]:z-[6] has-[[data-slash-menu]]:z-[6]`}>
-        <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
-          {/* The column head: the status row, led by the page's title (the switcher), and the prompt box
-              under it — a new thread without leaving.
-              Focused, it starts in the view's project; showing All projects, in the project chosen in the
-              box's own bottom strip, beside the model. */}
-          <div className="mb-5 shrink-0 px-0.5" onKeyDown={onColumnKeyDown}>
-            {/* On a project's board: the door home before the switcher, the project's repo and menu after it. */}
-            <StatusRow
-              title={<Switcher projects={projects} hidden={hidden} current={viewed} />}
-              crumb={focused}
-              identity={focused && viewed ? <BoardIdentity project={viewed} home={home} /> : undefined}
-            />
-            {/* The first-run tour's "Start a thread" points here (components/Onboarding.tsx). */}
-            <div data-tour="composer">
-              <FocusedComposer
-                focus={focus}
-                project={focusProject}
-                dirs={dirs}
-                autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
-                caret={focusComposerFor?.caret}
-                onFocused={clearFocusComposerFor}
-                target={
-                  focused ? undefined : (
-                    <ProjectPicker
-                      projects={projects}
-                      focus={focus}
-                      onPick={(project) => {
-                        setFocusComposerFor({ slug: project.slug })
-                        pickProject(project, dirs?.projectDir)
-                      }}
-                    />
-                  )
-                }
+          column is fixed, so the menu's own z-index cannot leave it, and the cords drew over its rows. The slot
+          holds the column's place in the row; the column itself is fixed to the viewport (Sidebar.tsx). */}
+      <div className={SIDEBAR_SLOT_CLASS}>
+        <aside aria-label="Projects" className={`${SIDEBAR_COLUMN_CLASS} !justify-start pt-[48px] max-[800px]:!pt-5 has-[[data-mention-menu]]:z-[6] has-[[data-slash-menu]]:z-[6]`}>
+          <div className="flex max-h-[calc(100vh-68px)] min-h-0 min-w-0 w-full flex-col max-[800px]:max-h-none">
+            {/* The column head: the status row, led by the page's title (the switcher), and the prompt box
+                under it — a new thread without leaving.
+                Focused, it starts in the view's project; showing All projects, in the project chosen in the
+                box's own bottom strip, beside the model. */}
+            <div className="mb-5 shrink-0 px-0.5" onKeyDown={onColumnKeyDown}>
+              {/* On a project's board: the door home before the switcher, the project's repo and menu after it. */}
+              <StatusRow
+                title={<Switcher projects={projects} hidden={hidden} current={viewed} />}
+                crumb={focused}
+                identity={focused && viewed ? <BoardIdentity project={viewed} home={home} /> : undefined}
               />
+              {/* The first-run tour's "Start a thread" points here (components/Onboarding.tsx). */}
+              <div data-tour="composer">
+                <FocusedComposer
+                  focus={focus}
+                  project={focusProject}
+                  dirs={dirs}
+                  autoFocus={focusComposerFor !== null && focusComposerFor.slug === focus}
+                  caret={focusComposerFor?.caret}
+                  onFocused={clearFocusComposerFor}
+                  target={
+                    focused ? undefined : (
+                      <ProjectPicker
+                        projects={projects}
+                        focus={focus}
+                        onPick={(project) => {
+                          setFocusComposerFor({ slug: project.slug })
+                          pickProject(project, dirs?.projectDir)
+                        }}
+                      />
+                    )
+                  }
+                />
+              </div>
             </div>
+            {!stacked && (
+              // pb-1.5: a band header (Sidebar BAND_HEADER) is a 15px box whose 11px name, pushed down by its
+              // pt-1, paints ~4.7px below it. Last in the list, that ink fell outside this scroller and was
+              // cut in half (a folded Schedules header, 2026-10-07); the padding gives it room.
+              <div data-xq-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pb-1.5">
+                {list}
+              </div>
+            )}
           </div>
-          {!stacked && (
-            // pb-1.5: a band header (Sidebar BAND_HEADER) is a 15px box whose 11px name, pushed down by its
-            // pt-1, paints ~4.7px below it. Last in the list, that ink fell outside this scroller and was
-            // cut in half (a folded Schedules header, 2026-10-07); the padding gives it room.
-            <div data-xq-rail className="min-h-0 min-w-0 overflow-y-auto overflow-x-hidden pb-1.5">
-              {list}
-            </div>
-          )}
-        </div>
-      </aside>
+        </aside>
+      </div>
       <main
         id="workpane"
         aria-label="Queue"
