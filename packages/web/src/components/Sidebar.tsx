@@ -1207,7 +1207,9 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
       // The event-snooze reaches here for a rest on a shell, a timer OR a registered PR watch, and only
       // the first of those is a shell. A watch the worker never fenced has no hints to read, so the dot
       // was the default by omission rather than by decision.
-      if (eventSnoozed) return { node: waitNamesPr(t) ? github : restingShellDot, tip: eventSnoozed }
+      // A done the human watched from its card (board.doneParkedOnWatch) is that same click on a PR or
+      // issue, and the board calls it `watching`: it reads as the watch it is, not as background work.
+      if (eventSnoozed) return { node: waitNamesPr(t) ? github : restingShellDot, tip: t.waitStatus === "watching" && waitNamesPr(t) ? "Snoozed until its watch reports back" : eventSnoozed }
       // A `watching` REST WITH NO FENCE TO READ (2026-10-05): a worker that rested behind a watch it
       // registered, which the board reads as a watcher. The mark is the watch's own, as above.
       if (t.waitStatus === "watching") {

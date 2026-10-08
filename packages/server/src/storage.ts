@@ -548,6 +548,11 @@ export interface PrWatchRow {
   /** JSON: `{ seen: string[]; checks?: string }` — the review activity already reported, and the last
    *  check verdict reported, so only a CHANGE fires. Opaque to storage; the scheduler owns its grammar. */
   cursor: string | null
+  /** Who armed it (2026-10-07). `worker` is `mcp__frizz__watch_pr` / `watch_issue`; `human` is the Watch
+   *  button on a done card (router.watchDoneRef). A human's watch is not the worker's outstanding wait, so
+   *  it does not block `done`, it leaves the done card standing, and its wake says whose it is. Optional so
+   *  a row read through an older select still types; absent reads as `worker`. */
+  registered_by?: "worker" | "human"
 }
 
 /** A thread terminal's definition and its latest run (thread-terminals.ts), a row of `thread_terminal`.
@@ -897,7 +902,7 @@ export interface Storage extends ScheduleStore {
   // identity, so the record of intent is a TABLE. `id` is minted by the caller so the row and the
   // scheduler's delivery ids agree without a read-back.
   /** `kind` defaults to `pull` — the registry was PR-only until 2026-09-14 and every older caller means that. */
-  armPrWatch(watch: { id: string; slug: string; kind?: "pull" | "issue"; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number }): void
+  armPrWatch(watch: { id: string; slug: string; kind?: "pull" | "issue"; owner: string; repo: string; number: number; createdAtMs: number; expiresAtMs: number; registeredBy?: "worker" | "human" }): void
   /** Every armed watcher whose expiry has passed — settled by the scheduler, not polled again. */
   expiredPrWatches(nowMs: number): PrWatchRow[]
   // A thread's watchers, oldest first. `armedOnly` is what the worker's tool reads back and what the
@@ -1455,6 +1460,8 @@ export const STORAGE_SCHEMA = `
       -- 'pull' or 'issue' (2026-09-14). Defaulted so every row written before issues existed reads as
       -- the pull request it was; added to a live file by the ALTER in ensureStorageSchema.
       kind        TEXT NOT NULL DEFAULT 'pull',
+      -- 'worker' or 'human' (2026-10-07): the done card's Watch button arms a 'human' row. Same ALTER.
+      registered_by TEXT NOT NULL DEFAULT 'worker',
       -- When this watcher stops polling by itself. REQUIRED at registration (2026-08-15): a PR nobody
       -- ever touches would otherwise be polled forever, and the thread parked on it would wait forever
       -- with it. Nullable in the column only so an imported older row reads; the tool refuses to arm
@@ -1779,6 +1786,8 @@ export function ensureStorageSchema(db: Database): void {
   // watcher's table, and every live file predates the column.
   for (const [table, column] of [
     ["pr_watch", "kind TEXT NOT NULL DEFAULT 'pull'"],
+    // `pr_watch.registered_by` (2026-10-07): the done card's Watch button arms a watcher for the HUMAN.
+    ["pr_watch", "registered_by TEXT NOT NULL DEFAULT 'worker'"],
     // `thread_question.delivery_id` (2026-10-01): `delivered` used to be set when the answer was QUEUED,
     // so a wake that then failed every attempt left the answer reading delivered and nothing re-offered
     // it. The column names the carrying wake, so `delivered` can wait for that wake to land.
@@ -2488,8 +2497,8 @@ export function createStorage(source: string | Database, projectId: string): Sto
     WHERE project_id = @project_id AND slug = ? AND park_bumps > 0
   `)
   const armPrWatchStmt = scope.prepare(`
-    INSERT INTO pr_watch (project_id, id, thread_slug, kind, owner, repo, number, state, created_at, settled_at, cursor, expires_at)
-    VALUES (@project_id, @id, @slug, @kind, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs)
+    INSERT INTO pr_watch (project_id, id, thread_slug, kind, owner, repo, number, state, created_at, settled_at, cursor, expires_at, registered_by)
+    VALUES (@project_id, @id, @slug, @kind, @owner, @repo, @number, 'armed', @createdAtMs, NULL, NULL, @expiresAtMs, @registeredBy)
   `)
   const expiredPrWatchesStmt = scope.prepare<[number], PrWatchRow>(
     "SELECT * FROM pr_watch WHERE project_id = @project_id AND state = 'armed' AND expires_at IS NOT NULL AND expires_at <= ? ORDER BY expires_at, id",
@@ -3435,7 +3444,7 @@ export function createStorage(source: string | Database, projectId: string): Sto
     resetSignoffNudges: (slug) => void resetNudgesStmt.run(slug),
     countParkBump: (slug, anchor) => void countParkBumpStmt.run(anchor, slug),
     resetParkBumps: (slug) => void resetParkBumpsStmt.run(slug),
-    armPrWatch: (watch) => void armPrWatchStmt.run({ ...watch, kind: watch.kind ?? "pull" }),
+    armPrWatch: (watch) => void armPrWatchStmt.run({ ...watch, kind: watch.kind ?? "pull", registeredBy: watch.registeredBy ?? "worker" }),
     listPrWatches: (slug, opts) =>
       (opts?.armedOnly ? armedPrWatchesBySlugStmt : prWatchesBySlugStmt).all(slug),
     // Grouped off `armedPrWatchesStmt` — the scheduler's own whole-project read, which already carries

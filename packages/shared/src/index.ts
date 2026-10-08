@@ -1661,6 +1661,17 @@ export const ISSUE_WATCH_SPENT_TRAILER = "(This watcher is spent — there is no
 export const ISSUE_WATCH_ARMED_TRAILER = "(Registered issue watcher — STILL ARMED. It reports again on the next comment, label or"
   + " assignee change, and once more when the issue closes. Drop it with `mcp__frizz__watch_issue` when"
   + " it stops mattering.)"
+// The same two, for a watcher the HUMAN armed from the done card (router.watchDoneRef, 2026-10-07). The
+// worker signed off `done` and never registered it, so the wake says whose it is, that it stays, and how
+// to rest on it — a worker that read the plain trailer dropped "its" watcher or tried to sign off around it.
+export const PR_WATCH_HUMAN_TRAILER = "(The human registered this PR watcher from your done card — STILL ARMED. It reports again"
+  + " on the next CI change, review, comment, label, conflict or review request. Leave it armed. If this"
+  + " needs nothing from you or the human, rest on it: name it under `prs:` with `status: watching` and a"
+  + " long `for:`. Otherwise do what it needs and sign off as usual; it does not block `done`.)"
+export const ISSUE_WATCH_HUMAN_TRAILER = "(The human registered this issue watcher from your done card — STILL ARMED. It reports"
+  + " again on the next comment, label or assignee change, and once more when the issue closes. Leave it"
+  + " armed. If this needs nothing from you or the human, rest on it: name it under `issues:` with `status:"
+  + " watching` and a long `for:`. Otherwise do what it needs and sign off as usual; it does not block `done`.)"
 
 /** What frizz delivers when a REGISTERED PR WATCHER has something to report.
  *
@@ -1696,6 +1707,8 @@ export function prWatchWakeMessage(input: {
   review?: string
   merged?: boolean
   closed?: boolean
+  /** The human armed it from the done card, not the worker — the trailer says so (PR_WATCH_HUMAN_TRAILER). */
+  byHuman?: boolean
 }): string {
   const lines: string[] = []
   if (input.merged || input.closed) {
@@ -1734,7 +1747,7 @@ export function prWatchWakeMessage(input: {
     if (lines.length) lines.push("")
     lines.push(input.review)
   }
-  lines.push("", PR_WATCH_ARMED_TRAILER)
+  lines.push("", input.byHuman ? PR_WATCH_HUMAN_TRAILER : PR_WATCH_ARMED_TRAILER)
   return lines.join("\n")
 }
 
@@ -1753,6 +1766,8 @@ export function issueWatchWakeMessage(input: {
    *  joined with semicolons, for the reason `prWatchWakeMessage.changes` is. */
   changes?: string[]
   review?: string
+  /** The human armed it from the done card — ISSUE_WATCH_HUMAN_TRAILER. */
+  byHuman?: boolean
 }): string {
   const lines: string[] = []
   if (input.closed) {
@@ -1768,7 +1783,7 @@ export function issueWatchWakeMessage(input: {
     if (lines.length) lines.push("")
     lines.push(input.review)
   }
-  lines.push("", ISSUE_WATCH_ARMED_TRAILER)
+  lines.push("", input.byHuman ? ISSUE_WATCH_HUMAN_TRAILER : ISSUE_WATCH_ARMED_TRAILER)
   return lines.join("\n")
 }
 
@@ -2884,6 +2899,25 @@ export const AddOwnPrWatchResult = z.object({
   watches: z.array(PrWatchView),
 }).strict()
 export type AddOwnPrWatchResult = z.infer<typeof AddOwnPrWatchResult>
+
+/** The done card's Watch button (2026-10-07): the HUMAN arms a watcher on a pull request or issue the
+ *  finished thread names, and parks this rest in Snoozed until it reports. `target` is `owner/repo#N` —
+ *  the card resolves a bare `#N` against the project's repo, as its links do. Which of the two it is, is
+ *  the server's to find out (it probes), because prose cannot say. */
+export const WatchDoneRefInput = z.object({
+  slug: ThreadSlug,
+  sessionId: z.string().min(1),
+  target: z.string().trim().min(1).max(200),
+}).strict()
+export type WatchDoneRefInput = z.infer<typeof WatchDoneRefInput>
+
+export const WatchDoneRefResult = z.object({
+  target: z.string(),
+  kind: z.enum(["pull", "issue"]),
+  /** The thread already watched it (the worker's own watcher, or an earlier click); only the park is new. */
+  alreadyArmed: z.boolean(),
+}).strict()
+export type WatchDoneRefResult = z.infer<typeof WatchDoneRefResult>
 
 export const DropOwnPrWatchInput = z.object({
   slug: ThreadSlug,
@@ -5918,7 +5952,7 @@ export function stripWakeTimeHeader(text: string): string {
 // worker's own arbitrary prose, and that parenthetical is the only anchor saying which timer this was —
 // so stripping it upstream would cost the divider it is there to draw. It comes off in the parser
 // instead, which is the same outcome by the other route.
-const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, SHELL_DONE_TRAILER]
+const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, PR_WATCH_HUMAN_TRAILER, ISSUE_WATCH_HUMAN_TRAILER, SHELL_DONE_TRAILER]
 
 /** Display projection: a frizz wake without the agent-facing trailer frizz appended for the worker.
  *

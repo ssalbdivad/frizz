@@ -27,6 +27,7 @@ import { splitFenceBlocks, type FenceKind } from "../lib/fenceBlocks.ts"
 import { registeredDoneBody, showsRegisteredDoneCard } from "../lib/registeredDone.ts"
 import { optimisticallySteered, useSteeredAt } from "../lib/steering.ts"
 import { RestedCard, showsRestedCard } from "./RestedCard.tsx"
+import { DoneWatchButtons, doneWatchable, useDoneWatchRefs } from "./DoneWatchButtons.tsx"
 import { ProviderErrorCard, providerErrorVisible } from "./ProviderErrorCard.tsx"
 import { answersForDisplay, parseAnswersCard, pairAllAnswers, settledAnswerKeys, unrenderedAnswers, withoutSettledAnswers, type PairedAnswer } from "../lib/answersMessage.ts"
 import { questionsByAnchor } from "../lib/questionAnchor.ts"
@@ -4253,7 +4254,12 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
   // so the card's copy would only draw the same verb twice, one above the other (the 2026-09-30 capture of
   // the phone thread flagged exactly that, and the approved design draws the card without it).
   const isMobile = useIsMobile()
+  // The PRs and issues this card links, each a "Watch #N" after the verb (DoneWatchButtons) — on the
+  // thread's current done at rest only, and on a phone too: it is no copy of a control the phone has.
+  const watchRefs = useDoneWatchRefs(fenceKind === "done" ? html : "")
+  const watchable = fenceKind === "done" && fenceThread !== undefined && watchRefs.length > 0 && doneWatchable(fenceThread, body)
   if (fenceKind === "done") {
+    const verb = doneThread && !isMobile
     return (
       // NEUTRAL tone — the green splash stood out as the only saturated color in the UI (maintainer
       // 2026-07-10). The Check + "Done" label carries the meaning; no color needed.
@@ -4262,15 +4268,18 @@ export function FenceCard({ fenceKind, body, hints, wrap }: { fenceKind: FenceKi
         {/* A white "Mark as done" button, deliberately redundant with the header's check — the
             same completion mutation, styled as the primary (light-on-dark) verb. Only shown when the
             thread can actually take the action, and never on a phone (see `isMobile` above). */}
-        {doneThread && !isMobile && (
+        {(verb || watchable) && (
           <CardActions>
-            <StateButton
-              thread={doneThread}
-              className={`${CARD_ACTION_RADIUS} text-[11px] ${CARD_PRIMARY_BUTTON}`}
-              iconClassName={ICON_LABEL_NUDGE}
-              onArchived={queueDismiss?.dismiss}
-              onDismissCancel={queueDismiss?.cancel}
-            />
+            {verb && (
+              <StateButton
+                thread={doneThread}
+                className={`${CARD_ACTION_RADIUS} text-[11px] ${CARD_PRIMARY_BUTTON}`}
+                iconClassName={ICON_LABEL_NUDGE}
+                onArchived={queueDismiss?.dismiss}
+                onDismissCancel={queueDismiss?.cancel}
+              />
+            )}
+            {watchable && <DoneWatchButtons thread={fenceThread} refs={watchRefs} onWatched={queueDismiss?.dismiss} onWatchFailed={queueDismiss?.cancel} />}
           </CardActions>
         )}
       </TranscriptCard>

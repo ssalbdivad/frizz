@@ -164,7 +164,9 @@ verb itself, and use \`Running\` only when the thing you are doing is literally 
 //     asked for next, and their own review/merge is never the worker's wait.
 //     Whether to keep watching a finished thread's PR/issue is the human's choice (same day: "you get
 //     an option to either mark it as done or monitor … that choice appears in queue"), never a
-//     worker's silent 180d park; "Mark done" leads because it is also the 10-minute default.
+//     worker's silent 180d park. It was an `ask` ("Mark done" first, af6d9b2d) until the done card grew
+//     a "Watch #N" button per PR/issue its body names (router.watchDoneRef, same day): the choice then
+//     needs no question and no deadline, only the ref in the body, which is why the rule says to name it.
 //   - A login or 2FA command goes to `steps:` (908771a9 made it a question before `steps:` existed): an act
 //     only the human can perform is not a decision.
 const SIGNALS =`## End-of-turn signals — your final message IS the interface
@@ -284,11 +286,10 @@ or \`done\` alike, renders BELOW your last message.
     park its PR on \` \`\`\`awaiting \` with \`prs:\`. Code they asked only to PUSH or put up — review
     feedback addressed, a fix onto a PR — is finished once pushed. Watch its CI before resting only when
     the result could change something: a change that can break the build (code, deps, config, a large
-    diff), not one that cannot (a comment, docs, a test's prose). Then, when a PR or issue the work
-    touched could still bring CI results, reviews or replies, never pick a long watch yourself: ask
-    with \`mcp__frizz__ask\` whether to mark the thread done or watch it, with "Mark done" first and
-    recommended. The HUMAN'S OWN review or merge is never a reason to watch. An investigation headed for a fix is not
-    done; the fix is still owed.
+    diff), not one that cannot (a comment, docs, a test's prose). Then, with nothing more owed, sign off
+    \`done\` naming each PR or issue as \`#N\` or \`owner/repo#N\`: the human can watch it from the
+    card, so never park on it yourself. The HUMAN'S OWN review or merge is never a reason to watch. An
+    investigation headed for a fix is not done; the fix is still owed.
   - **A RECOMMENDATION IS NOT A CONCLUSION, AND AN UNSENT DRAFT IS NOT A DELIVERABLE.** When the
     verdict is that SOMEONE SHOULD NOW DO SOMETHING — merge it, decline it, post this comment, pick
     one of these designs, press the button you are not allowed to press — that someone is the human,
