@@ -49,3 +49,15 @@ export function goalLimitsSentence(rp: { maxRuns?: number | null; forSeconds?: n
   ].filter((p): p is string => p !== null)
   return limits.length ? `stops after ${limits.join(" or ")}` : "no limit"
 }
+
+/** A Goal that is armed to fire at rest but has not been sent yet under its current text — the gap
+ *  between the operator pressing save and the first delivery, which on a working thread lasts until the
+ *  agent stops. The transcript shows a line for exactly this window (ChatView `goal-pending`), so a
+ *  Goal set mid-turn does not read as ignored. Keyed on `armedAt`, which moves only when the text or the
+ *  cadence changes, so a trigger flipped off and on again over words already sent shows nothing. */
+export function goalAwaitingFirstRest(rp: ThreadRecurringPrompt | undefined): boolean {
+  if (!rp || !rp.stopHook || rp.stopped || !rp.prompt.trim()) return false
+  const armed = Date.parse(rp.armedAt)
+  return ![rp.lastRestFiredAt, rp.lastScheduleFiredAt, rp.lastCompactFiredAt]
+    .some((at) => at !== undefined && Date.parse(at) >= armed)
+}

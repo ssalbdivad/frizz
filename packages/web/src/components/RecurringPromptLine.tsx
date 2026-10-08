@@ -26,7 +26,18 @@ import { WakeDivider } from "./WakeDivider.tsx"
 // text, and the armed text is already legible and editable in the Goal panel — so repeating it inline
 // on every delivery adds nothing a reader cannot already get, which is the failure both earlier
 // renderings shared.
-export function RecurringPromptLine({ bump, sourceId, at }: { bump: RecurringPrompt; sourceId?: string; at?: string }) {
+export function RecurringPromptLine(props: { bump: RecurringPrompt; sourceId?: string; at?: string } | { pending: true }) {
+  // A Goal SAVED BUT NOT YET SENT, pinned at the transcript's tail (ChatView `goal-pending`) so the save
+  // shows where the delivery will land. Same divider, same loop glyph, as the delivery that replaces it.
+  if ("pending" in props) {
+    const label = "Goal set · starts when the agent stops"
+    return (
+      <WakeDivider icon={Repeat} marker="rest" ariaLabel={label}>
+        {label}
+      </WakeDivider>
+    )
+  }
+  const { bump, sourceId, at } = props
   const scheduled = bump.kind === "schedule"
   // FRIZZ'S OWN SIGN-OFF REMINDER collapses hardest of all, because it is the only delivery here whose
   // body says nothing about this thread: it is the protocol, restated. Rendered in full it sat as a card

@@ -35,6 +35,7 @@ import { fenceStandsFor, placedRestEnds, placeQuestions, questionsAtCurrentRest,
 import { settledQuestionPositions, type SettledPlacement } from "../lib/settledQuestions.ts"
 import { FrizzWake, ShellWakeText } from "./FrizzWake.tsx"
 import { RecurringPromptLine } from "./RecurringPromptLine.tsx"
+import { goalAwaitingFirstRest } from "../lib/goalLoop.ts"
 import { LinkifiedText } from "./LinkifiedText.tsx"
 import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, withoutWorktreeNote, type SentContextItem } from "../lib/composerContext.ts"
 import { SentEditorContextChip } from "./SentEditorContext.tsx"
@@ -757,6 +758,7 @@ type VirtualThreadRow =
   | { key: string; kind: "earlier-history" }
   | ({ kind: "message"; stampAt: string | undefined } & VirtualTranscriptMessageRow)
   | { key: "runtime-status"; kind: "runtime-status" }
+  | { key: "goal-pending"; kind: "goal-pending"; gap: number }
   | { key: string; kind: "queued"; message: ChatMessage; messageIndex: number; gap: number }
 
 // THE RUNTIME-STATUS LADDER — ONE slot at the transcript's end, nine mutually exclusive rungs, hardest
@@ -1020,6 +1022,7 @@ function VirtualizedThreadTranscript({
   const errorVisible = providerErrorVisible(messages, thread?.providerError)
   const runtimeStatus: RuntimeStatusState = { thread, showWorking, registeredDone, restedCard, errorVisible }
   const hasRuntimeStatus = runtimeStatusRung(runtimeStatus) !== null
+  const goalPending = goalAwaitingFirstRest(thread?.recurringPrompt)
   // The deps are runtimeStatus's FIELDS, not the object: it is a fresh literal every render.
   const runtimeStatusGap = useMemo(
     () => runtimeStatusGapFor({ thread, showWorking, registeredDone, restedCard, errorVisible }, activityMessages.map((entry) => entry.message)),
@@ -1112,6 +1115,13 @@ function VirtualizedThreadTranscript({
     next.push({ key: "interactions", kind: "interactions" })
     if (hasRuntimeStatus) next.push({ key: "runtime-status", kind: "runtime-status" })
     let queuedGap = hasRuntimeStatus || messageRows.length > 0 ? STEP : 0
+    // A GOAL NOT YET SENT. Set mid-turn, it waits for the agent to stop, and without a line here the
+    // save left nothing in the transcript until then — read as ignored (maintainer 2026-10-08). The
+    // line goes the moment the first delivery's own divider lands.
+    if (goalPending) {
+      next.push({ key: "goal-pending", kind: "goal-pending", gap: queuedGap })
+      queuedGap = STEP
+    }
     messages.forEach((message, messageIndex) => {
       if (!message.queued || answeredBySettledCards(paired[messageIndex])) return
       const key = `queued:${message.deliveryId ?? message.sourceId ?? messageIndex}`
@@ -1119,7 +1129,7 @@ function VirtualizedThreadTranscript({
       queuedGap = STEP
     })
     return next
-  }, [beforeCursor, earlierError, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, paired, questionGroups, settledByRow, transportFallback])
+  }, [beforeCursor, earlierError, goalPending, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, paired, questionGroups, settledByRow, transportFallback])
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -1132,6 +1142,7 @@ function VirtualizedThreadTranscript({
       if (row.kind === "earlier-history") return 42
       if (row.kind === "transport-fallback") return 76
       if (row.kind === "runtime-status") return 54
+      if (row.kind === "goal-pending") return 24 + row.gap
       if (row.kind === "questions") return 220
       if (row.kind === "settled-questions") return 140
       return row.kind === "message" ? 108 + row.gap : 82 + row.gap
@@ -1707,6 +1718,10 @@ function VirtualizedThreadTranscript({
                     <PermPolicyDenialCard policy={thread.permPolicy} denies={thread.permDenies} />
                   </div>
                 ) : null}
+              </div>
+            ) : row.kind === "goal-pending" ? (
+              <div className="flex flex-col px-6" style={{ paddingTop: row.gap }}>
+                <RecurringPromptLine pending />
               </div>
             ) : (
               // The QUEUED branch. Its rows are built straight from `messages`, never through the

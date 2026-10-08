@@ -3824,8 +3824,12 @@ export function createRouter(ctx: AppContext) {
         // thread that rested without saying anything (maintainer 2026-09-02). The durable path is
         // unchanged — the sweep just runs immediately.
         if (input.stopHook && input.prompt?.trim() && autonomousGoal(row) === undefined) {
-          if (cancelQuestionsForAutonomy(input.slug) > 0) ctx.scheduler.kick()
+          cancelQuestionsForAutonomy(input.slug)
         }
+        // AND THE FIRST DELIVERY GOES NOW. A Goal set on a thread that is already resting fires on the
+        // rest it is in; without the kick that waited up to a whole tick behind a save the operator just
+        // made, while the transcript said the Goal was waiting for the agent to stop.
+        if (input.stopHook && input.prompt?.trim()) ctx.scheduler.kick()
         ctx.board.refresh()
       },
     }),
