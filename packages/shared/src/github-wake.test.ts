@@ -26,6 +26,7 @@ import {
   wakeDeliveryToken,
   PR_WATCH_ARMED_TRAILER,
   PR_WATCH_HUMAN_TRAILER,
+  PR_WATCH_HUMAN_QUIET_TRAILER,
   ISSUE_WATCH_HUMAN_TRAILER,
   PR_WATCH_SPENT_TRAILER,
   ISSUE_WATCH_ARMED_TRAILER,
@@ -577,6 +578,7 @@ test("every trailer frizz appends comes off the display projection", () => {
     // The done card's Watch (2026-10-07): the human's watcher says whose it is, and comes off the same way.
     ["human PR watch", prWatchWakeMessage({ target: "nubjs/nub#879", changes: ["labels +blocked"], byHuman: true }), PR_WATCH_HUMAN_TRAILER],
     ["human issue watch", issueWatchWakeMessage({ target: "nubjs/nub#12", changes: ["labels +bug"], byHuman: true }), ISSUE_WATCH_HUMAN_TRAILER],
+    ["human PR watch, green CI", prWatchWakeMessage({ target: "nubjs/nub#879", checks: { verdict: "passing", passed: 3, failed: 0, failing: [] }, byHuman: true }), PR_WATCH_HUMAN_QUIET_TRAILER],
   ] as [string, string, string][]) {
     assert.ok(text.includes(trailer), `${name}: the producer no longer writes the constant it is pinned by`)
     const shown = stripWakeTrailer(text)
@@ -655,4 +657,20 @@ test("splitAwaitingFrontmatter: `issues:` is a structural key producing `issue` 
     { kind: "for", value: "90d" },
   ])
   assert.equal(body, "Waiting on the reporter.")
+})
+
+// A watch the human armed is one they follow: only green CI alone may stay snoozed (2026-10-07).
+test("a human's watch surfaces everything but green CI alone", () => {
+  const green = { verdict: "passing" as const, passed: 3, failed: 0, failing: [] }
+  const red = { verdict: "failing" as const, passed: 2, failed: 1, failing: ["core"] }
+  assert.ok(prWatchWakeMessage({ target: "a/b#1", checks: green, byHuman: true }).includes("`status: watching`"))
+  for (const m of [
+    prWatchWakeMessage({ target: "a/b#1", checks: red, byHuman: true }),
+    prWatchWakeMessage({ target: "a/b#1", checks: green, review: "💬 new review", byHuman: true }),
+    prWatchWakeMessage({ target: "a/b#1", changes: ["now CONFLICTS with the base branch"], byHuman: true }),
+    issueWatchWakeMessage({ target: "a/b#2", review: "💬 new comment", byHuman: true }),
+  ]) {
+    assert.ok(m.includes("`status: needs_input`"), m)
+    assert.ok(!m.includes("`status: watching`"), m)
+  }
 })

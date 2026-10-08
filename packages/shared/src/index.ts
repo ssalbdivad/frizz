@@ -1664,14 +1664,21 @@ export const ISSUE_WATCH_ARMED_TRAILER = "(Registered issue watcher — STILL AR
 // The same two, for a watcher the HUMAN armed from the done card (router.watchDoneRef, 2026-10-07). The
 // worker signed off `done` and never registered it, so the wake says whose it is, that it stays, and how
 // to rest on it — a worker that read the plain trailer dropped "its" watcher or tried to sign off around it.
+// A watch the HUMAN armed is one they want to follow (maintainer 2026-10-07: watched threads that "never
+// come back" to the queue). So only green CI may stay quiet; a review, a comment, red CI or any state
+// change goes back in front of them as `needs_input`, rather than being judged noise and re-snoozed.
+const HUMAN_WATCH_SURFACE = " The human chose to follow this, so put it in front of them: rest on it with"
+  + " `status: needs_input` and one or two sentences on what happened, unless it needs work from you first."
+  + " It does not block `done`.)"
 export const PR_WATCH_HUMAN_TRAILER = "(The human registered this PR watcher from your done card — STILL ARMED. It reports again"
-  + " on the next CI change, review, comment, label, conflict or review request. Leave it armed. If this"
-  + " needs nothing from you or the human, rest on it: name it under `prs:` with `status: watching` and a"
-  + " long `for:`. Otherwise do what it needs and sign off as usual; it does not block `done`.)"
+  + " on the next CI change, review, comment, label, conflict or review request. Leave it armed." + HUMAN_WATCH_SURFACE
+/** Green CI alone on a human's watch: the one report that stays quiet. */
+export const PR_WATCH_HUMAN_QUIET_TRAILER = "(The human registered this PR watcher from your done card — STILL ARMED. Green CI"
+  + " alone needs nothing from the human: rest on it with the fence alone, naming it under `prs:` with"
+  + " `status: watching` and a long `for:`. It does not block `done`.)"
 export const ISSUE_WATCH_HUMAN_TRAILER = "(The human registered this issue watcher from your done card — STILL ARMED. It reports"
   + " again on the next comment, label or assignee change, and once more when the issue closes. Leave it"
-  + " armed. If this needs nothing from you or the human, rest on it: name it under `issues:` with `status:"
-  + " watching` and a long `for:`. Otherwise do what it needs and sign off as usual; it does not block `done`.)"
+  + " armed." + HUMAN_WATCH_SURFACE
 
 /** What frizz delivers when a REGISTERED PR WATCHER has something to report.
  *
@@ -1747,7 +1754,8 @@ export function prWatchWakeMessage(input: {
     if (lines.length) lines.push("")
     lines.push(input.review)
   }
-  lines.push("", input.byHuman ? PR_WATCH_HUMAN_TRAILER : PR_WATCH_ARMED_TRAILER)
+  const quiet = input.checks?.verdict === "passing" && !input.changes?.length && !input.review
+  lines.push("", !input.byHuman ? PR_WATCH_ARMED_TRAILER : quiet ? PR_WATCH_HUMAN_QUIET_TRAILER : PR_WATCH_HUMAN_TRAILER)
   return lines.join("\n")
 }
 
@@ -5952,7 +5960,7 @@ export function stripWakeTimeHeader(text: string): string {
 // worker's own arbitrary prose, and that parenthetical is the only anchor saying which timer this was —
 // so stripping it upstream would cost the divider it is there to draw. It comes off in the parser
 // instead, which is the same outcome by the other route.
-const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, PR_WATCH_HUMAN_TRAILER, ISSUE_WATCH_HUMAN_TRAILER, SHELL_DONE_TRAILER]
+const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, PR_WATCH_HUMAN_TRAILER, ISSUE_WATCH_HUMAN_TRAILER, PR_WATCH_HUMAN_QUIET_TRAILER, SHELL_DONE_TRAILER]
 
 /** Display projection: a frizz wake without the agent-facing trailer frizz appended for the worker.
  *
