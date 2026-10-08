@@ -191,7 +191,7 @@ export function settledQuestionNodes(spec: AskedQuestion, answer: QuestionAnswer
       else if (!kept.includes(i)) kept.push(i)
     }
     kept.sort((a, b) => a - b)
-    const text = [unmatched.join(", "), said.text?.trim()].filter(Boolean).join(" — ") || undefined
+    const text = [unmatched.join(", "), said.text?.trim()].filter(Boolean).join(" — ") || (said.skipped ? "Skipped" : undefined)
     const rec = question.recommendedIdx
     out.push({
       path,

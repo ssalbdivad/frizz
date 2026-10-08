@@ -262,3 +262,10 @@ test("questionComplete: a pick with no follow-ups is the whole answer; one that 
   assert.equal(questionComplete(TREE, at([[ROOT_PATH, pick(1)], [yes, blank]])), true)
   assert.equal(questionComplete({ question: "Which?", kind: "multi", options: [{ label: "A" }, { label: "B" }] }, at([[ROOT_PATH, toggle(0, 1)]])), true)
 })
+
+test("a skipped answer settles as Skipped, with no option kept", () => {
+  const spec: AskedQuestion = { question: "Which?", kind: "question", options: [{ label: "A" }, { label: "B" }] }
+  const [node] = settledQuestionNodes(spec, { questionId: "q", question: "Which?", chosen: [], skipped: true })
+  assert.deepEqual(node!.settled, { chosenIdxs: [], text: "Skipped" })
+  assert.deepEqual(node!.question.options, [])
+})

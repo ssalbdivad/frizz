@@ -146,3 +146,11 @@ test("threadQuestionDefaults: a thread's questions default together on the lates
   assert.equal(threadQuestionDefaults([a, b], undefined, undefined), undefined, "a working thread defaults nothing")
   assert.equal(threadQuestionDefaults([a], 5_000, new Date(2_000).toISOString()), undefined, "typed past: waits for the human")
 })
+
+test("questionAnswerMessage: a question skipped beside its group's answers tells the worker it may ask again", () => {
+  const message = questionAnswerMessage([
+    { questionId: "a", question: "Which store?", chosen: [], text: "SQLite" },
+    { questionId: "b", question: "Which key format?", chosen: [], skipped: true },
+  ])
+  assert.match(message, /^2\. “Which key format\?” → \(skipped for now — ask again if it still matters\)$/m)
+})

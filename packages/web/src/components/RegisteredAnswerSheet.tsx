@@ -320,8 +320,9 @@ function ReviewFooter({ a, onSent }: { a: RegisteredAnswering; onSent: () => voi
     // no field for it, folding it into an answer's text would change the answer, and sent as a follow-up
     // it RACES the answers — the server stores them and the scheduler delivers them, while a follow-up
     // goes straight to the worker, so the note reached the worker first on a seeded thread. A word about
-    // the answers is a reply, which the bar's keyboard button sends after them.
-    a.submit()
+    // the answers is a reply, which the bar's keyboard button sends after them. Like the desktop's Send
+    // answers, anything left blank goes as skipped.
+    a.submitGroup()
     // Nothing advances after a send (unlike Done): the worker resumes on this thread.
     onSent()
   }

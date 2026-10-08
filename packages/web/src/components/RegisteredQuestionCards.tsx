@@ -78,6 +78,8 @@ export interface RegisteredAnswering {
    *  passes its own send here, so a reply typed with answers staged goes out after them rather than
    *  instead of them. */
   submit: (then?: () => void) => void
+  /** The Send answers button: what is staged, plus every blank question as skipped. */
+  submitGroup: () => void
   /** Enter inside one of `q`'s cards (`grid` is that node's options grid): walk to `q`'s next unanswered
    *  follow-up; with none left, send `q` — whatever it holds, which is how a half-filled one is sent on
    *  purpose — and move to the next unanswered question. Enter never sends another question. */
@@ -86,6 +88,14 @@ export interface RegisteredAnswering {
    *  A surface that keeps the answered card in place (the queue card) reads it; the thread page draws its
    *  own from the settled list. */
   sent: ReadonlyMap<string, SettledQuestion>
+  /** Answered questions the human reopened with Change, drawn open again in their slot until the new
+   *  answer is sent or Keep puts the old one back. Nothing reaches the server until that send. */
+  editing: ReadonlyMap<string, RegisteredQuestionView>
+  /** Whether an answered question offers Change: one of the thread's NEWEST ask, the set the human is
+   *  moving through — not a decision from an older rest the worker has long since built on. */
+  canChange: (s: SettledQuestion) => boolean
+  change: (s: SettledQuestion) => void
+  keep: (id: string) => void
   staged: number
   sending: boolean
   error: string | undefined
@@ -102,7 +112,7 @@ export const RegisteredAnsweringContext = createContext<RegisteredAnswering | nu
  * answer lands on the thread that asked and a half-typed one shares its draft with that project's board.
  */
 export interface RegisteredAnsweringScope {
-  api: Pick<Api, "answerQuestions" | "dismissQuestions" | "holdQuestionDefault">
+  api: Pick<Api, "answerQuestions" | "dismissQuestions" | "holdQuestionDefault" | "threadSettledQuestions">
   projectDir: string | undefined
   /** Whose steer an answer is: the project list reads it back for that project's row (lib/steering.ts). */
   projectId: string
@@ -112,10 +122,18 @@ export interface RegisteredAnsweringScope {
  *  provider above it) yields an inert state nobody reads — hooks cannot be conditional. */
 export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: RegisteredAnsweringScope): RegisteredAnswering {
   const slug = thread?.id
-  const questions = thread?.questions ?? []
   const pageProjectDir = useProjectDir()
   const projectDir = scope ? scope.projectDir : pageProjectDir
   const api = scope?.api ?? rpc
+  // CHANGE REOPENS AN ANSWERED QUESTION ON THIS SURFACE ONLY. It joins the open ones for staging and
+  // sending, and the send is an ordinary answer the server takes as a change (router answerQuestions),
+  // so the worker hears nothing until the new answer exists — a Change abandoned changes nothing.
+  const [editing, setEditing] = useState<ReadonlyMap<string, RegisteredQuestionView>>(() => new Map())
+  const open = thread?.questions ?? []
+  const questions = useMemo(
+    () => (editing.size === 0 ? open : [...open.filter((q) => !editing.has(q.id)), ...editing.values()]),
+    [open, editing],
+  )
   const [picks, setPicks] = useState<Picks>(() => new Map())
   const [error, setError] = useState<string>()
   // What this state has sent, by id — kept until the server refuses it, so a question is never staged or
@@ -153,7 +171,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
 
   // What a send would carry, per question — never one already sent.
   const stagedPairs = questions.flatMap((q) => {
-    if (sent.has(q.id)) return []
+    if (sent.has(q.id) && !editing.has(q.id)) return []
     const built = registeredAnswer(q, answersOf(q))
     return built ? [{ q, answer: built }] : []
   })
@@ -173,6 +191,9 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
         const q = questions.find((entry) => entry.id === id)
         if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, q.id, path), "")
       }
+      // A changed answer has landed: its slot draws the settled card again, with the new answer.
+      const landed = new Set(result.answered)
+      setEditing((prev) => ([...prev.keys()].some((id) => landed.has(id)) ? new Map([...prev].filter(([id]) => !landed.has(id))) : prev))
     },
     onError: (cause, answers) => {
       // The card faded (or greyed) on click; the answer did not land, so put it back rather than leaving
@@ -181,7 +202,9 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       queueDismiss?.cancel()
       if (slug && scope) clearSteeredIn(scope.projectId, slug)
       else if (slug) clearSteered(slug)
-      const ids = new Set(answers.map((a) => a.questionId))
+      // A CHANGE that failed keeps its entry: the card is still open for it (`editing` wins), and the
+      // greyed copy under it must not come back as a second card on surfaces that draw `sent` apart.
+      const ids = new Set(answers.map((a) => a.questionId).filter((id) => !editing.has(id)))
       setSent((prev) => new Map([...prev].filter(([id]) => !ids.has(id))))
       setError(errorText(cause))
     },
@@ -257,7 +280,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     // still asks something HOLDS (David 2026-09-29: "the remaining questions … should stay there"):
     // the worker starts on this answer and leaves the queue for it, and the card stays in its place, live,
     // with the answered question greyed and the rest answerable, until the last one is sent.
-    const stillOpen = questions.some((q) => !ids.has(q.id) && !sent.has(q.id))
+    const stillOpen = open.some((q) => !ids.has(q.id) && !sent.has(q.id)) || [...editing.keys()].some((id) => !ids.has(id))
     if (stillOpen) queueDismiss?.hold?.()
     else queueDismiss?.dismiss()
     // …AND THE RAIL ROW GOES TO WORK WITH IT. Every answer wakes the worker (the scheduler delivers it),
@@ -285,6 +308,17 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   }
   const commit = (q: RegisteredQuestionView) => sendPairs(stagedPairs.filter((pair) => pair.q.id === q.id))
   const submit = (then?: () => void) => sendPairs(stagedPairs, then)
+  // THE SEND ANSWERS BUTTON IS "DONE WITH THIS GROUP" (David 2026-10-08: blank questions kept the card
+  // waiting after it). What is staged goes as answered, and every question still blank goes beside it as
+  // `skipped`, so the worker hears everything at once and asks again whatever still matters. A typed
+  // reply carrying staged answers (`submit`) leaves the blanks open: its box promises they stay.
+  const submitGroup = () => sendPairs([
+    ...stagedPairs,
+    ...questions.flatMap((q) =>
+      sent.has(q.id) || dismissed.has(q.id) || stagedPairs.some((pair) => pair.q.id === q.id)
+        ? []
+        : [{ q, answer: { questionId: q.id, question: q.spec.question, chosen: [], skipped: true } }]),
+  ])
 
   // A PICK THAT COMPLETES ITS QUESTION SENDS IT (David 2026-09-29: "the agent should receive the
   // answer to one question at a time so it can start working"). Before 2026-09-29 a pick sent only once
@@ -303,7 +337,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     if (id === null) return
     autoSend.current = null
     const q = questions.find((entry) => entry.id === id)
-    if (!q || sent.has(q.id) || !questionComplete(q.spec, answersOf(q))) return
+    if (!q || (sent.has(q.id) && !editing.has(q.id)) || !questionComplete(q.spec, answersOf(q))) return
     const drafting = slug ? (draftStore.get(draftKey.followUp(projectDir, slug, thread?.sessionId)) ?? "").trim() !== "" : false
     if (!drafting) commit(q)
   })
@@ -325,6 +359,40 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const next = [...after, ...others.filter((node) => !after.includes(node))].find((node) => node.dataset.answered === "false")
     commit(q)
     if (next) focusQuestionNode(next)
+  }
+
+  // The settled list this thread's answered cards draw from — subscribed, never fetched from here (the
+  // surface's useSettledQuestions decides when). The real fetcher all the same: a shared query refetches
+  // with whichever observer's options it holds last.
+  const settledList = useQuery({
+    queryKey: settledQuestionsKey(slug ?? "", scope?.projectId),
+    queryFn: async (): Promise<SettledQuestion[]> => (await api.threadSettledQuestions({ slug: slug! })).questions,
+    enabled: false,
+    refetchOnWindowFocus: false,
+  }).data ?? NO_SETTLED
+  const newestAsk = [...open, ...settledList].reduce((max, q) => (q.askedAt > max ? q.askedAt : max), "")
+  const canChange = (s: SettledQuestion) => Boolean(slug) && s.askedAt === newestAsk && settledList.some((entry) => entry.id === s.id)
+  const forget = (id: string) => {
+    setPicks((prev) => new Map([...prev].filter(([key]) => !key.startsWith(`${id}|`))))
+    const q = editing.get(id)
+    if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, id, path), "")
+  }
+  const change = (s: SettledQuestion) => {
+    if (!slug) return
+    setError(undefined)
+    // OPENS ON THE ANSWER IT REPLACES, so changing one pick of several is one click and the rest stand.
+    const staged = stagedFromAnswer(s.spec, s.answer)
+    setPicks((prev) => {
+      const next = new Map([...prev].filter(([key]) => !key.startsWith(`${s.id}|`)))
+      for (const [path, pick] of staged) next.set(pickKey(s.id, path), { chosen: pick.chosen, chosenSet: pick.chosenSet ?? [] })
+      return next
+    })
+    for (const [path, pick] of staged) draftStore.set(draftKey.question(projectDir, slug, s.id, path), pick.text)
+    setEditing((prev) => new Map(prev).set(s.id, { id: s.id, spec: s.spec, askedAt: s.askedAt }))
+  }
+  const keep = (id: string) => {
+    forget(id)
+    setEditing((prev) => new Map([...prev].filter(([key]) => key !== id)))
   }
 
   return {
@@ -379,8 +447,13 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     defaultCountdown: !defaulting.some((q) => defaultCancelled.has(q.id)) && defaulting.length > 0 ? { ownerId: defaulting[defaulting.length - 1]!.id, count: defaulting.length } : undefined,
     commit,
     submit,
+    submitGroup,
     enter,
     sent,
+    editing,
+    canChange,
+    change,
+    keep,
     staged: stagedPairs.length,
     sending: inFlight > 0,
     error,
@@ -457,8 +530,14 @@ export function openQuestionsOf(thread: ThreadView | undefined, settled: readonl
 
 /** ONE answered registration, in the slot its open card filled: the same card, the same branch rule,
  *  greyed, and carrying only what was picked or typed. Read-only — the answer has been sent. */
-export function SettledQuestionCard({ s, wrap }: { s: SettledQuestion; wrap?: boolean }) {
+export function SettledQuestionCard({ s, wrap, answering: given }: { s: SettledQuestion; wrap?: boolean; answering?: RegisteredAnswering }) {
+  const shared = useContext(RegisteredAnsweringContext)
+  const a = given ?? shared
   const nodes = useMemo(() => settledQuestionNodes(s.spec, s.answer), [s.spec, s.answer])
+  // REOPENED WITH CHANGE: the open card, in this same slot, until the new answer lands or Keep.
+  const reopened = a?.editing.get(s.id)
+  if (reopened && a) return <RegisteredQuestionCard q={reopened} answering={a} />
+  const changeable = a?.canChange(s) === true
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
       key={node.path}
@@ -468,6 +547,19 @@ export function SettledQuestionCard({ s, wrap }: { s: SettledQuestion; wrap?: bo
       label={node.depth > 1 ? "Follow-up" : "Question"}
       settled={node.settled}
       wrap={wrap}
+      // CHANGE, on the root's title row: the human moving through a set can take an answer back
+      // (David 2026-10-08). Only on the newest ask's answers — see canChange.
+      aside={node.depth === 1 && changeable && a ? (
+        <button
+          type="button"
+          data-change-answer
+          title="Change this answer"
+          onClick={() => a.change(s)}
+          className="icon-hover-outline -mx-1.5 -my-0.5 rounded-md px-1.5 py-0.5 text-[12px] leading-5 text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg"
+        >
+          Change
+        </button>
+      ) : undefined}
     />
   )
   const branch = nodes.slice(1)
@@ -568,7 +660,19 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
       // a `danger` question: a generic close icon is not consent for something irreversible, and
       // declining is a real option INSIDE that question. The server refuses one too, so this is the
       // affordance and not the rule.
-      aside={node.depth === 1 && !q.spec.danger ? (
+      aside={node.depth === 1 && a.editing.has(q.id) ? (
+        // A REOPENED answer's × puts the old answer back: nothing was sent, so there is nothing to undo.
+        <button
+          type="button"
+          data-keep-answer
+          aria-label="Keep the earlier answer"
+          title="Keep the earlier answer"
+          onClick={() => a.keep(q.id)}
+          className="icon-hover-outline card-icon-offset -mx-2 -my-1 flex rounded-md p-1 text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg"
+        >
+          <X size={16} />
+        </button>
+      ) : node.depth === 1 && !q.spec.danger ? (
         <button
           type="button"
           data-dismiss-question
@@ -709,7 +813,7 @@ export function RegisteredQuestionStack({
   let questions: readonly RegisteredQuestionView[] = listed
   if (keepAnswered) {
     const live = new Map(listed.map((q) => [q.id, q]))
-    const kept = drawn.current.flatMap((q) => (live.has(q.id) ? [live.get(q.id)!] : a.sent.has(q.id) ? [q] : []))
+    const kept = drawn.current.flatMap((q) => (live.has(q.id) ? [live.get(q.id)!] : a.sent.has(q.id) || a.editing.has(q.id) ? [q] : []))
     questions = [...kept, ...listed.filter((q) => !kept.some((k) => k.id === q.id))]
     drawn.current = questions
   }
@@ -757,7 +861,7 @@ export function RegisteredQuestionStack({
       // The batch a card's Enter walks before it sends (QuestionBlockCard advanceOrSubmit).
       data-question-set
       aria-label={(() => {
-        const waiting = questions.filter((q) => !a.sent.has(q.id)).length
+        const waiting = questions.filter((q) => !a.sent.has(q.id) || a.editing.has(q.id)).length
         return `${waiting} question${waiting === 1 ? "" : "s"} waiting for an answer`
       })()}
       className={`flex min-w-0 flex-col gap-3 ${className}`}
@@ -765,8 +869,8 @@ export function RegisteredQuestionStack({
       {questions.map((q) => {
         // Sent from here: greyed in its own slot at once, before the round-trip, the way the thread page
         // greys it from the settled list — never drawn open a second time while the board catches up.
-        const sentAs = a.sent.get(q.id)
-        return sentAs ? <SettledQuestionCard key={q.id} s={sentAs} /> : <RegisteredQuestionCard key={q.id} q={q} answering={a} />
+        const sentAs = a.editing.has(q.id) ? undefined : a.sent.get(q.id)
+        return sentAs ? <SettledQuestionCard key={q.id} s={sentAs} answering={a} /> : <RegisteredQuestionCard key={q.id} q={a.editing.get(q.id) ?? q} answering={a} />
       })}
       {a.error && <div role="alert" className="break-words text-[11px] leading-snug text-danger-soft">{a.error}</div>}
       {a.sending && (
@@ -789,7 +893,7 @@ export function RegisteredQuestionStack({
             type="button"
             data-send-answers
             disabled={a.sending}
-            onClick={() => a.submit()}
+            onClick={() => a.submitGroup()}
             onMouseDown={(e) => e.preventDefault()}
             className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
           >
@@ -819,4 +923,25 @@ function allPaths(q: RegisteredQuestionView): string[] {
 /** Is this question answered enough to send? Exported for the board card, which shows a count. */
 export function questionIsStaged(q: RegisteredQuestionView, answers: ReadonlyMap<string, BlockAnswer>): boolean {
   return nodeAnswered(q.spec, answers.get(ROOT_PATH))
+}
+
+/** The staged picks and text that reproduce `answer` on its card, by node path — what Change opens a
+ *  question on. The inverse of registeredAnswer: a chosen label back to its option, typed text back to
+ *  its box, and each follow-up answer back under the option that opened it. */
+function stagedFromAnswer(spec: RegisteredQuestionView["spec"], answer: QuestionAnswer): Map<string, BlockAnswer> {
+  const out = new Map<string, BlockAnswer>()
+  const walk = (node: RegisteredQuestionView["spec"], said: QuestionAnswer, path: string) => {
+    const labels = (node.options ?? []).map((o) => o.label)
+    const picked = said.chosen.map((label) => labels.indexOf(label)).filter((i) => i !== -1)
+    const chosen = node.kind === "multi" ? null : (picked[0] ?? null)
+    out.set(path, { chosen, chosenSet: node.kind === "multi" ? picked : [], text: said.text ?? "" })
+    if (chosen === null) return
+    const followUps = node.options?.[chosen]?.followUps ?? []
+    followUps.forEach((child, i) => {
+      const childSaid = said.followUps?.[i]
+      if (childSaid) walk(child, childSaid, `${path}/${chosen}.${i}`)
+    })
+  }
+  walk(spec, answer, ROOT_PATH)
+  return out
 }
