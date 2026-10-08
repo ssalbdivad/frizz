@@ -73,7 +73,7 @@ export function RegisteredAnswerSheet({ questions, initialStep, onClose }: { que
         step ? (
           <StepFooter a={a} step={step} first={index === 0} writing={writing} onBack={() => go(steps[index - 1]?.key ?? step.key)} onNext={() => go(stepAfter(steps, step.key))} />
         ) : (
-          <ReviewFooter a={a} onSent={() => dismiss()} />
+          <ReviewFooter a={a} ids={new Set(questions.map((q) => q.id))} onSent={() => dismiss()} />
         )
       }
     >
@@ -313,7 +313,7 @@ function ReviewStep({ a, steps, onChange }: { a: RegisteredAnswering; steps: rea
   )
 }
 
-function ReviewFooter({ a, onSent }: { a: RegisteredAnswering; onSent: () => void }) {
+function ReviewFooter({ a, ids, onSent }: { a: RegisteredAnswering; ids: ReadonlySet<string>; onSent: () => void }) {
   const send = () => {
     // THE ANSWERS GO EXACTLY AS THE DESKTOP SENDS THEM (one answerQuestions call over every staged
     // answer). There is deliberately NO note field here, though the approved mockup drew one: the RPC has
@@ -322,7 +322,7 @@ function ReviewFooter({ a, onSent }: { a: RegisteredAnswering; onSent: () => voi
     // goes straight to the worker, so the note reached the worker first on a seeded thread. A word about
     // the answers is a reply, which the bar's keyboard button sends after them. Like the desktop's Send
     // answers, anything left blank goes as skipped.
-    a.submitGroup()
+    a.submitGroup(ids)
     // Nothing advances after a send (unlike Done): the worker resumes on this thread.
     onSent()
   }

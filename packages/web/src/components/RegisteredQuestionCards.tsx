@@ -19,16 +19,17 @@
 // the moment it is complete — a single-choice pick that opens no follow-up, the last of its follow-ups
 // answered, an Enter in its own box, a multi confirmed with Enter or Send — and the rest stay open and
 // owed where they are. The questions of one `ask` are independent by contract (a dependent one is a
-// `followUps` entry), which is what makes one answer actionable alone. Send answers survives only as the
-// on-purpose send of whatever is half-filled (typed and not Entered, a multi not confirmed), and a typed
-// reply still carries anything staged ahead of itself.
+// `followUps` entry), which is what makes one answer actionable alone. A half-filled question (typed and
+// not Entered, a multi not confirmed) carries its own Send answer; the group's footer button finishes the
+// group, its label naming what it sends and skips (groupFinish); a typed reply still carries anything
+// staged ahead of itself.
 //
 // ONE ANSWERING STATE PER THREAD, however many mounts. The staged picks, what has been sent, and the
 // prompt box that carries staged answers ahead of a reply all have to agree, so the state cannot live
 // in the stack that draws the cards. `useRegisteredAnswering` holds it for the whole thread; the surface
 // mounts it ONCE (RegisteredAnsweringProvider) and every stack on that surface reads it through context.
 // A stack mounted with no provider above it (a surface that draws one stack) owns a state of its own.
-import { createContext, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react"
+import { createContext, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { X } from "lucide-react"
 import { type QuestionAnswer, type RegisteredQuestionView, type SettledQuestionView, type ThreadView } from "@frizz/shared"
@@ -78,8 +79,15 @@ export interface RegisteredAnswering {
    *  passes its own send here, so a reply typed with answers staged goes out after them rather than
    *  instead of them. */
   submit: (then?: () => void) => void
-  /** The Send answers button: what is staged, plus every blank question as skipped. */
-  submitGroup: () => void
+  /** The group footer's button, over `ids` — the questions of the stack it sits under, never another
+   *  rest's: what is staged, plus every blank question as skipped. */
+  submitGroup: (ids: ReadonlySet<string>) => void
+  /** Whether `q` holds an answer nothing has sent yet — a multi's toggles, typed text, a branch partly
+   *  answered, a pick held by a draft in the reply box. Its card offers its own Send while it does. */
+  unsent: (q: RegisteredQuestionView) => boolean
+  /** The thread's answered questions, as the settled list holds them — what a stack counts its group's
+   *  progress from. Read, never fetched, here. */
+  settled: readonly SettledQuestion[]
   /** Enter inside one of `q`'s cards (`grid` is that node's options grid): walk to `q`'s next unanswered
    *  follow-up; with none left, send `q` — whatever it holds, which is how a half-filled one is sent on
    *  purpose — and move to the next unanswered question. Enter never sends another question. */
@@ -308,14 +316,17 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   }
   const commit = (q: RegisteredQuestionView) => sendPairs(stagedPairs.filter((pair) => pair.q.id === q.id))
   const submit = (then?: () => void) => sendPairs(stagedPairs, then)
-  // THE SEND ANSWERS BUTTON IS "DONE WITH THIS GROUP" (David 2026-10-08: blank questions kept the card
-  // waiting after it). What is staged goes as answered, and every question still blank goes beside it as
+  // THE GROUP FOOTER IS "DONE WITH THIS GROUP" (David 2026-10-08: blank questions kept the card waiting
+  // after it). What is staged goes as answered, and every question still blank goes beside it as
   // `skipped`, so the worker hears everything at once and asks again whatever still matters. A typed
   // reply carrying staged answers (`submit`) leaves the blanks open: its box promises they stay.
-  const submitGroup = () => sendPairs([
-    ...stagedPairs,
+  // SCOPED TO ONE STACK'S QUESTIONS: the thread page hangs each ask after the rest that asked it, and a
+  // footer under the newest must not skip a question still open further up.
+  const submitGroup = (ids: ReadonlySet<string>) => sendPairs([
+    ...stagedPairs.filter((pair) => ids.has(pair.q.id)),
     ...questions.flatMap((q) =>
-      sent.has(q.id) || dismissed.has(q.id) || stagedPairs.some((pair) => pair.q.id === q.id)
+      // `sent` covers a reopened answer too: left blank, it keeps the answer it has rather than skipping.
+      !ids.has(q.id) || sent.has(q.id) || dismissed.has(q.id) || stagedPairs.some((pair) => pair.q.id === q.id)
         ? []
         : [{ q, answer: { questionId: q.id, question: q.spec.question, chosen: [], skipped: true } }]),
   ])
@@ -330,9 +341,11 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   // the send for those. Read on the render AFTER the pick, because completeness includes the follow-ups
   // the pick just opened: a pick that opens some waits for them, and the pick that answers the last one
   // sends the whole question. And it holds off while the thread's prompt box has a draft: that human is
-  // mid-note, and their Enter sends both (ThreadComposerBox).
+  // mid-note, and their Enter sends both (ThreadComposerBox) — the card's own Send says it is held.
+  // A LAYOUT effect, so the pick and its send paint as one frame: after paint, the card's Send flashed
+  // up for the frame between them.
   const autoSend = useRef<string | null>(null)
-  useEffect(() => {
+  useLayoutEffect(() => {
     const id = autoSend.current
     if (id === null) return
     autoSend.current = null
@@ -448,6 +461,8 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     commit,
     submit,
     submitGroup,
+    unsent: (q) => stagedPairs.some((pair) => pair.q.id === q.id),
+    settled: settledList,
     enter,
     sent,
     editing,
@@ -538,13 +553,15 @@ export function SettledQuestionCard({ s, wrap, answering: given }: { s: SettledQ
   const reopened = a?.editing.get(s.id)
   if (reopened && a) return <RegisteredQuestionCard q={reopened} answering={a} />
   const changeable = a?.canChange(s) === true
+  const skipped = s.answer.skipped === true
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
       key={node.path}
       question={node.question}
-      // "Question" even for a `multi`: its own title, "Select multiple", is an instruction nobody can act
-      // on any more.
-      label={node.depth > 1 ? "Follow-up" : "Question"}
+      // THE TITLE SAYS IT WENT. "Question" on a greyed card read as a question gone inert, not one
+      // answered, so whether a click had sent anything was a guess (David 2026-10-08). Never "Select
+      // multiple" either: that is an instruction nobody can act on any more.
+      label={node.depth > 1 ? "Follow-up" : skipped ? "Skipped" : "Answered"}
       settled={node.settled}
       wrap={wrap}
       // CHANGE, on the root's title row: the human moving through a set can take an answer back
@@ -553,11 +570,11 @@ export function SettledQuestionCard({ s, wrap, answering: given }: { s: SettledQ
         <button
           type="button"
           data-change-answer
-          title="Change this answer"
           onClick={() => a.change(s)}
-          className="icon-hover-outline -mx-1.5 -my-0.5 rounded-md px-1.5 py-0.5 text-[12px] leading-5 text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg"
+          className={TITLE_TEXT_BUTTON}
         >
-          Change
+          {/* A skipped question has no answer to change; this answers it after all. */}
+          {skipped ? "Answer" : "Change"}
         </button>
       ) : undefined}
     />
@@ -585,6 +602,12 @@ export function SettledQuestionCard({ s, wrap, answering: given }: { s: SettledQ
 // own 32px of padding, leaving a depth-3 follow-up ~160px of label at 300. Under 24rem of card the rule
 // keeps its place and the indent halves (6px + 8px); anywhere wider it is the desktop's 12 + 12.
 const QUESTION_CONTAINER = "@container/question"
+/** A word on a card's title row — Change, Answer, Cancel. A WORD, never a second ×: the dismiss × owns
+ *  that corner, and a × that meant "keep the earlier answer" in the same spot read as dismissing it. */
+const TITLE_TEXT_BUTTON = "icon-hover-outline -mx-1.5 -my-0.5 rounded-md px-1.5 py-0.5 text-[12px] leading-5 text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg"
+/** The send buttons — a question's own, and the group's. */
+const SEND_BUTTON = "button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+const QUIET_BUTTON = "rounded-md border border-border px-3 py-1.5 text-[12px] font-medium text-fg/90 outline-none transition-all hover:bg-elevated active:scale-95 disabled:opacity-30"
 const BRANCH_RULE = "ml-3 border-l border-border pl-3 @max-[24rem]/question:ml-1.5 @max-[24rem]/question:pl-2"
 
 /** A follow-up the human's own pick just opened. It grows the card BELOW the fold of a drawer's transcript
@@ -649,35 +672,36 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
     {countdown}
   </>
   const nodes = liveQuestionNodes(q.spec, a.answersOf(q))
+  const editing = a.editing.has(q.id)
   const card = (node: (typeof nodes)[number]) => (
     <QuestionBlockCard
       key={node.path}
       question={node.question}
-      // Named for what it IS, so the relationship survives even where the rule is subtle.
-      label={node.depth > 1 ? "Follow-up" : undefined}
+      // Named for what it IS, so the relationship survives even where the rule is subtle. A reopened
+      // answer says so: it looks like any open question, and its Cancel only makes sense as an edit's.
+      label={node.depth > 1 ? "Follow-up" : editing ? "Changing answer" : undefined}
       // The ×, on the ROOT card's title row only — one registration is one thing to dismiss, and a
       // follow-up cannot be declined separately from the answer that opened it. It is NEVER offered on
       // a `danger` question: a generic close icon is not consent for something irreversible, and
       // declining is a real option INSIDE that question. The server refuses one too, so this is the
       // affordance and not the rule.
-      aside={node.depth === 1 && a.editing.has(q.id) ? (
-        // A REOPENED answer's × puts the old answer back: nothing was sent, so there is nothing to undo.
+      aside={node.depth === 1 && editing ? (
+        // A REOPENED answer's Cancel puts the old answer back: nothing was sent, so there is nothing to undo.
         <button
           type="button"
           data-keep-answer
-          aria-label="Keep the earlier answer"
           title="Keep the earlier answer"
           onClick={() => a.keep(q.id)}
-          className="icon-hover-outline card-icon-offset -mx-2 -my-1 flex rounded-md p-1 text-muted-70 outline-none transition-colors hover:bg-elevated hover:text-fg"
+          className={TITLE_TEXT_BUTTON}
         >
-          <X size={16} />
+          Cancel
         </button>
       ) : node.depth === 1 && !q.spec.danger ? (
         <button
           type="button"
           data-dismiss-question
           aria-label="Dismiss this question"
-          title="Dismiss — the worker decides it itself"
+          title="Dismiss — let the worker decide"
           disabled={a.dismissing}
           onClick={() => a.dismiss(q.id)}
           // PLACED BY CONSTRUCTION, not by a fitted constant. `p-1 -m-1` cancels exactly, so the
@@ -710,6 +734,16 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
         onSubmit: () => a.submit(),
         onEnter: (grid) => a.enter(q, grid),
       }}
+      // THIS QUESTION'S OWN SEND, on its last card, while it holds something nothing has sent: a multi's
+      // toggles, typed text, a branch partly answered, a pick a draft in the reply box is holding. A
+      // single pick needs none — it sends itself — so the button is the visible difference between
+      // "picked" and "sent", which until 2026-10-08 only Enter knew. It sends this question alone,
+      // exactly as Enter does, and sits INSIDE the card so it never reads as the group's button below.
+      footer={node.path === nodes[nodes.length - 1]!.path && a.unsent(q) ? (
+        <button type="button" data-send-question disabled={a.sending} onClick={() => a.commit(q)} onMouseDown={(e) => e.preventDefault()} className={SEND_BUTTON}>
+          {editing ? "Send new answer" : "Send answer"}
+        </button>
+      ) : undefined}
     />
   )
   // THE WHOLE BRANCH SITS BEHIND ONE CONTINUOUS RULE, opened by the first follow-up and closed by the
@@ -738,18 +772,16 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
 /** THE DEFAULT'S COUNTDOWN — a caption under the card, not chrome on it: the card's own title-row × is
  *  the dismiss, and a second × beside it would read as the same control. Minutes only, on the page's
  *  30s clock (a ticking seconds digit would pull the eye off the question it sits under); `<1m` for the
- *  last minute, as the shell-budget reading spells it. Its × turns the default off for this question. */
+ *  last minute, as the shell-budget reading spells it. Its Cancel turns the default off for the group. */
 function DefaultCountdown({ at, to, count, onCancel }: { at: string; to?: string; count: number; onCancel: () => void }) {
   const now = useNowMs()
   const left = Date.parse(at) - now
   const reading = left < 60_000 ? "<1m" : `${Math.ceil(left / 60_000)}m`
   return (
-    // The × is the caption's own handle: at 12px lucide's X paints 6 of its 12 box px, and with `p-1`
-    // the box put 11.63px of ink gap after the text under `gap-1` (sans, measured 2026-10-05) — detached.
-    // At 4.70px it read as "8m×", a multiplication sign; no gap and `-ml-px` measure ~6.7px, keeping the
-    // 20px hit area. Vertically `items-center` lands the ink 0.50px from the cap band's centre — left alone.
+    // Cancel is the caption's own handle, a word set off by the run of space a word gap is; measured in
+    // the optical pass that landed it (2026-10-08). Vertically `items-center` — left alone.
     <div data-question-default className="flex items-center px-4 text-[12px] leading-4 text-muted-70">
-      {/* Short enough to stay on one line beside its × in a 380px card; the tooltip says the rest. */}
+      {/* Short enough to stay on one line beside its Cancel in a 380px card; the tooltip says the rest. */}
       {/* `to` names a FALLBACK: the recommendation acts outside this machine, so the default takes the
           first option that does not, and the countdown must not claim it takes the recommendation. */}
       {to ? (
@@ -759,15 +791,16 @@ function DefaultCountdown({ at, to, count, onCancel }: { at: string; to?: string
       ) : (
         <span title="Unless they are answered first">{count === 1 ? "Picks the recommended option" : `Picks all ${count} recommended options`} in {reading}</span>
       )}
+      {/* A WORD, not the × it was until 2026-10-08: under a card whose own corner × dismisses the
+          question, a second × read as another dismiss rather than "don't pick for me". */}
       <button
         type="button"
         data-cancel-question-default
-        aria-label="Keep waiting for an answer"
         title="Keep waiting for an answer"
         onClick={onCancel}
-        className="icon-hover-outline -my-1 -ml-px flex rounded-md p-1 outline-none transition-colors hover:bg-elevated hover:text-fg"
+        className="icon-hover-outline -my-0.5 ml-0.5 rounded-md px-1.5 py-0.5 text-fg/80 outline-none transition-colors hover:bg-elevated hover:text-fg"
       >
-        <X size={12} />
+        Cancel
       </button>
     </div>
   )
@@ -818,6 +851,7 @@ export function RegisteredQuestionStack({
     drawn.current = questions
   }
   const phone = usePhoneQuestions()
+  const finish = groupFinish(questions, a)
 
   // THE ANSWER, ALREADY SENT AND NOT YET IN THE WORKER'S HANDS. Answering stores the row; a wake hands
   // it over a moment later (deliberately — an answer given while the worker's process is down has to
@@ -883,26 +917,51 @@ export function RegisteredQuestionStack({
           2026-07-22 "the spacing is insane": ≤10px up, at least 1.5x that down). Both marks here are
           filled or bordered boxes, so the box gap IS the ink gap.
 
-          ONLY WHILE SOMETHING IS HALF-FILLED (2026-09-29). A complete question sends itself, so this
-          is no longer the gate every answer passes through; it is the on-purpose send of what nothing
-          else sends — text typed and not Entered, a multi's toggles, a branch left partly answered.
-          Drawn disabled at all times, it read as the step still owed after every pick. */}
-      {a.staged > 0 && (
+          ONLY ONCE THE GROUP IS STARTED, and only while it would do something a question's own Send does
+          not (groupFinish). Drawn disabled at all times, it read as the step still owed after every
+          pick (2026-09-29). */}
+      {finish && (
         <div className="-mt-1 flex justify-start">
           <button
             type="button"
             data-send-answers
             disabled={a.sending}
-            onClick={() => a.submitGroup()}
+            title={finish.skip > 0 ? "Questions left blank go to the worker as skipped, and it can ask them again" : undefined}
+            onClick={() => a.submitGroup(new Set(questions.map((q) => q.id)))}
             onMouseDown={(e) => e.preventDefault()}
-            className="button-outline rounded-md bg-fg px-3 py-1.5 text-[12px] font-medium text-bg outline-none transition-all hover:opacity-90 active:scale-95 disabled:opacity-30 disabled:hover:opacity-30"
+            className={finish.send > 0 ? SEND_BUTTON : QUIET_BUTTON}
           >
-            {a.staged === 1 ? "Send answer" : "Send answers"}
+            {finish.label}
           </button>
         </div>
       )}
     </section>
   )
+}
+
+/**
+ * THE GROUP'S FOOTER BUTTON, and the words on it — or none. Each question sends on its own (a pick, its
+ * own Send, Enter); this is the one control that speaks for the GROUP, and its label says exactly what a
+ * click does, counts included (David 2026-10-08: "what each button will do and when things are
+ * submitted"). It was "Send answers" until then, and since that morning it also skipped every blank
+ * question — a skip its label never mentioned.
+ *
+ * Drawn once the human has started on the group — one of its questions answered, or something staged —
+ * and only while it would do something a question's own Send does not: skip what is blank, or send two
+ * or more at once. A lone half-filled question has its own Send and needs no second one beside it.
+ */
+function groupFinish(questions: readonly RegisteredQuestionView[], a: RegisteredAnswering): { label: string; send: number; skip: number } | undefined {
+  // A reopened answer is neither blank nor skippable: left alone, it keeps the answer it has.
+  const remaining = questions.filter((q) => !a.sent.has(q.id) && !a.dismissed.has(q.id))
+  const send = remaining.filter((q) => a.unsent(q)).length + questions.filter((q) => a.editing.has(q.id) && a.unsent(q)).length
+  const skip = remaining.length - remaining.filter((q) => a.unsent(q)).length
+  // One `ask` stamps every question it registers with the same askedAt, so the settled list says whether
+  // any of THIS group is answered — on the thread page too, where an answered one leaves this stack.
+  const asked = new Set(questions.map((q) => q.askedAt))
+  const started = send > 0 || questions.some((q) => a.sent.has(q.id)) || a.settled.some((s) => asked.has(s.askedAt))
+  if (!started || (skip === 0 && send < 2)) return undefined
+  const label = send > 0 && skip > 0 ? `Send ${send}, skip ${skip}` : send > 0 ? `Send ${send} answers` : "Skip the rest"
+  return { label, send, skip }
 }
 
 /** EVERY node path in a question's tree — live or not. The draft subscription and the clear-on-send both

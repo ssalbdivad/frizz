@@ -99,6 +99,7 @@ export function QuestionBlockCard({
   aside,
   label,
   settled,
+  footer,
 }: {
   /** Producer 1: the raw body of a ```question fence, parsed here. */
   raw?: string
@@ -123,6 +124,9 @@ export function QuestionBlockCard({
    *  `text` an answer that named none, and neither ⇒ the ask ended unanswered, which renders a muted
    *  "Not answered" note. */
   settled?: { chosenIdxs: number[]; text?: string }
+  /** A control for the card's last line, inside its border — producer 3's own Send for a question
+   *  holding an answer nothing has sent, so it reads as THIS question's and not the group's. */
+  footer?: ReactNode
 }) {
   const parsed = useMemo(
     () => question ?? parseQuestionBlock(raw ?? "", questionKind ?? "question", danger),
@@ -364,6 +368,7 @@ export function QuestionBlockCard({
       {parsed.recommendation && recIdx === null && (
         <LinkedHtml className="md-inline mt-1.5 text-[11px] text-muted-70" html={recHtml} />
       )}
+      {footer && <div className="mt-2.5 flex justify-start">{footer}</div>}
     </TranscriptCard>
   )
 }

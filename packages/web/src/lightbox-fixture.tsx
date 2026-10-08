@@ -128,6 +128,8 @@ function AnswerSheet() {
     dismissed: new Set(),
     submit: () => {},
     submitGroup: () => {},
+    unsent: () => false,
+    settled: [],
     cancelDefault: () => {},
     defaultCountdown: undefined,
     commit: () => {},

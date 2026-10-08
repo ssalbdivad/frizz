@@ -7,7 +7,9 @@ import test from "node:test"
 //   · a question is SENT the moment it is complete, ALONE — a single-choice pick that opens no follow-up,
 //     the answer to the last of its follow-ups, an Enter in its own box, a multi confirmed with Enter;
 //   · the rest stay open and answerable, and the one sent greys in its own slot (the queue card holds);
-//   · Send answer(s) appears only while something is half-filled, as the on-purpose send of it;
+//   · a half-filled question carries its OWN Send answer, inside its card, and sends alone;
+//   · the group's footer button says exactly what it does — "Skip the rest", "Send 1, skip 2" — and
+//     appears once the human has started on the group;
 //   · a typed reply is NOT a verdict on the open questions: it sends anything staged FIRST, then itself,
 //     and every question it did not answer stays open (the worker decides what the reply made moot);
 //   · a pick made while the reply box holds a draft waits for that reply's Enter.
@@ -64,7 +66,9 @@ const GATES = "[data-question-id='qst_0004dddd']"
 // Which of the stack's questions are still answerable, and which are drawn greyed as sent.
 const live = (page: Page) => page.$$eval("[data-registered-questions] [data-question-id]:not([data-settled-question])", (ns) => ns.map((n) => (n as HTMLElement).dataset.questionId))
 const greyed = (page: Page) => page.$$eval("[data-registered-questions] [data-settled-question]", (ns) => ns.map((n) => (n as HTMLElement).dataset.questionId))
+// The GROUP's footer button, and one question's own Send (inside its card).
 const sendButton = (page: Page) => page.$eval("[data-send-answers]", (b) => b.textContent?.trim() ?? "").catch(() => null)
+const ownSend = (page: Page, q: string) => page.$eval(`${q} [data-send-question]`, (b) => b.textContent?.trim() ?? "").catch(() => null)
 
 test("a single-choice pick that completes its question sends it", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs } = await launch("")
@@ -88,7 +92,8 @@ test("a pick sends ITS question alone; the others stay open and it greys in its 
     assert.deepEqual((await answers()).map((call) => call.map((a) => [a.questionId, a.chosen])), [[["qst_0001aaaa", ["SQLite"]]]], "one question, not the batch")
     assert.deepEqual(await greyed(page), ["qst_0001aaaa"], "the answered question greys where it stood")
     assert.deepEqual(await live(page), ["qst_0002bbbb", "qst_0004dddd"], "the other two are still answerable, in order")
-    assert.equal(await sendButton(page), null)
+    assert.equal(await sendButton(page), "Skip the rest", "the group is started, so its footer offers to finish it")
+    assert.match(await page.$eval(SETTINGS, (n) => n.textContent ?? ""), /^Answered/, "the greyed card says it was answered")
     assert.equal(await page.$eval("[data-registered-questions]", (s) => s.getAttribute("aria-label")), "2 questions waiting for an answer")
     assert.deepEqual(errors, [])
   } finally {
@@ -112,7 +117,8 @@ test("a pick that opens follow-ups waits for them; the last one sends the whole 
     await mouseClick(page, `${TREE} [data-question-option]`, 2)
     await settle(page)
     assert.deepEqual(await rpcs(), [], "one follow-up is still unanswered")
-    assert.equal(await sendButton(page), "Send answer", "the half-filled branch can be sent on purpose")
+    assert.equal(await ownSend(page, TREE), "Send answer", "the half-filled branch can be sent on purpose, from its own card")
+    assert.equal(await sendButton(page), null, "a lone question needs no group button beside its own")
     // The notes follow-up: type, then Enter — the Enter that completes the question sends it.
     const boxes = `${TREE} textarea[data-surface='questionAnswer']`
     const last = (await page.$$(boxes)).length - 1
@@ -139,7 +145,9 @@ test("a multi stages its toggles until Enter confirms it, and sends it alone", {
     await mouseClick(page, `${GATES} [data-question-option]`, 2)
     await settle(page)
     assert.deepEqual(await rpcs(), [], "a toggle is one of several, never the whole answer")
-    assert.equal(await sendButton(page), "Send answer")
+    assert.equal(await ownSend(page, GATES), "Send answer", "the multi carries its own Send")
+    assert.equal(await ownSend(page, SETTINGS), null, "a question holding nothing has none")
+    assert.equal(await sendButton(page), "Send 1, skip 2", "the group button names the skip it would make")
     await mouseClick(page, `${GATES} textarea[data-surface='questionAnswer']`)
     await page.keyboard.press("Enter")
     await settle(page)
@@ -169,7 +177,7 @@ test("a typed reply sends what is staged first, then itself — and every questi
     await mouseClick(page, `${GATES} [data-question-option]`, 1)
     await mouseClick(page, `${SETTINGS} textarea[data-surface='questionAnswer']`)
     await page.keyboard.type("Postgres, actually")
-    assert.equal(await sendButton(page), "Send answers")
+    assert.equal(await sendButton(page), "Send 2, skip 1")
     assert.equal(await page.$eval(reply, (ta) => (ta as HTMLTextAreaElement).placeholder), "Add a note to your answers…")
     await page.focus(reply)
     await page.keyboard.type("and skip the e2e pass for now")
@@ -197,6 +205,30 @@ test("a pick made while the reply box holds a draft waits for the reply's Enter"
     await page.keyboard.press("Enter")
     await settle(page)
     assert.deepEqual(await rpcs(), ["answerQuestions", "followUp"], "the answer first, then the reply")
+  } finally {
+    await browser.close()
+  }
+})
+
+test("the question's own Send sends it alone; Skip the rest then settles the group", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors, rpcs, answers } = await launch("?many=1")
+  try {
+    await mouseClick(page, `${GATES} [data-question-option]`, 1)
+    await settle(page)
+    await mouseClick(page, `${GATES} [data-send-question]`)
+    await settle(page)
+    assert.deepEqual((await answers()).map((call) => call.map((a) => [a.questionId, a.chosen])), [[["qst_0004dddd", ["Unit tests"]]]], "its own Send skips nothing")
+    assert.deepEqual(await live(page), ["qst_0001aaaa", "qst_0002bbbb"])
+    assert.equal(await sendButton(page), "Skip the rest")
+    await mouseClick(page, "[data-send-answers]")
+    await settle(page)
+    assert.deepEqual(await rpcs(), ["answerQuestions", "answerQuestions"])
+    const skipped = (await answers())[1] as (Answer & { skipped?: boolean })[]
+    assert.deepEqual(skipped.map((a) => [a.questionId, a.skipped]).sort(), [["qst_0001aaaa", true], ["qst_0002bbbb", true]])
+    assert.deepEqual(await live(page), [], "nothing left open")
+    assert.equal(await sendButton(page), null)
+    assert.match(await page.$eval(SETTINGS, (n) => n.textContent ?? ""), /^Skipped/, "a skipped card says so")
+    assert.deepEqual(errors, [])
   } finally {
     await browser.close()
   }

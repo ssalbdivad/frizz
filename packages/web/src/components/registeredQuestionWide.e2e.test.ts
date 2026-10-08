@@ -54,7 +54,7 @@ test("a registered multi over thirty options letters past Z, toggles every chip,
     const selected = await page.$$eval(OPTION, (ns) => ns.flatMap((n, i) => (n.classList.contains("border-selection-border") ? [i] : [])))
     assert.deepEqual(selected, Array.from({ length: 30 }, (_, i) => i), "every one of the thirty rows wears the selection border")
 
-    await page.click("[data-send-answers]")
+    await page.click("[data-send-question]")
     await page.waitForFunction(() => (window as unknown as { __rpc: unknown[] }).__rpc.length === 1, { timeout: 10_000 })
     const calls = await page.evaluate(() => (window as unknown as {
       __rpc: Array<{ rpc: string; body: { answers?: Array<{ questionId: string; question: string; chosen: string[] }> } }>
