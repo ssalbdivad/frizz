@@ -239,7 +239,7 @@ The contract that teaches all of this is `packages/server/src/workerPrompt.ts`, 
 Each of these departs from "Frizz only checks" on purpose.
 
 - **The 10-minute default answer** (`QUESTION_DEFAULT_AFTER_MS`, scheduler `evalQuestionDefaults`). A
-  question unanswered 10 minutes after its thread rests takes its `recommended` option, delivered marked
+  question the worker marked `mayDefault` (opt-in since 2026-10-08), unanswered 10 minutes after its thread rests, takes its `recommended` option, delivered marked
   as Frizz's default. An `external` recommendation (it posts, merges, pushes, publishes or spends) is
   never taken: the first option that is not is, and with none the question waits. So does a `danger`,
   `multi` or free-text question, one with no recommendation, and one the human typed past

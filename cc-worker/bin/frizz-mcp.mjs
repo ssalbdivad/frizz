@@ -589,8 +589,8 @@ function questionSchema(depth) {
           "Mark the ONE option you would take, and put it first. At most one per question — a " +
           "recommendation on two of three choices says nothing. IF YOU CAN MARK ONE, ASK YOURSELF WHY " +
           "YOU ARE ASKING: you already know the answer, so implement it and say which way you went. " +
-          "This is for the fork you genuinely cannot take yourself. It is also the 10-minute default " +
-          "(see the tool description), so mark only an option you would act on without them, or mark it `external`.",
+          "This is for the fork you genuinely cannot take yourself. Under `mayDefault` it is also the 10-minute default " +
+          "(see the tool description).",
       },
       external: {
         type: "boolean",
@@ -652,14 +652,13 @@ function questionSchema(depth) {
           "x cannot dismiss it, because a generic close icon is not consent for something irreversible. " +
           "Declining must therefore be one of your own options.",
       },
-      waitForHuman: {
+      mayDefault: {
         type: "boolean",
         description:
-          "This decision shapes what gets built on it — the architecture of a library or a major version, " +
-          "a public API, a data model, the design a plan commits to — so a guessed answer means redoing " +
-          "that work, not tweaking it. Set it and the 10-minute default never answers: the question waits " +
-          "for the human, your recommendation still shown. Judge by how sensitive the downstream work is " +
-          "to the pick, not by how sure you are of your recommendation.",
+          "Lets Frizz answer this question with your recommendation if the human has not after 10 minutes. " +
+          "Without it the question waits for the human, however long. Set it only on a call you would " +
+          "make yourself without them — never on the architecture of a library or a major version, a " +
+          "public API, a data model, or the design a plan commits to.",
       },
       // No `maxItems`: the count is the worker's to choose (maintainer 2026-09-03 — "allow arbitrary
       // numbers of options"). A `multi` over a long list is a real shape, and the card letters past 26.
@@ -710,11 +709,11 @@ const ASK = {
     "handoff — it stays where you asked it. Name it under `questions:` in an ```awaiting fence while you " +
     "still need the answer (its card is then drawn at that rest), or withdraw it with `unask`. A rest " +
     "that does neither is bumped, and so is any ```awaiting fence that leaves an open question out.\n\n" +
-    "AN UNANSWERED QUESTION DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
+    "A QUESTION MARKED `mayDefault` DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
     "`recommended` option for the human and delivers that as the answer, noting it was the default — " +
     "UNLESS that option is `external` (it files, posts, merges, pushes or publishes): then the default " +
-    "takes the first option that is not `external`, and you must not do the external act anyway. A `danger`, `waitForHuman`, `multi` or " +
-    "free-text question, one with no recommendation, or one whose every option is `external`, waits " +
+    "takes the first option that is not `external`, and you must not do the external act anyway. Any other question — unmarked, `danger`, `multi` or " +
+    "free text, one with no recommendation, or one whose every option is `external`, waits " +
     "for the human.\n\n" +
     "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU `unask` IT. A message " +
     "the human types instead of answering changes nothing about it; the message comes with a note naming " +

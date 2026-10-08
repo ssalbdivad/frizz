@@ -415,7 +415,7 @@ test("question: a rested thread's unanswered question takes its recommended opti
   const h = harness()
   h.storage.upsertSession(row("t"))
   const t0 = h.clock.ms
-  const spec = (over: object) => JSON.stringify({ question: "Narrow the error rule?", kind: "question", options: [{ label: "Narrow", recommended: true, followUps: [{ question: "Rewrite the brief?", kind: "question", options: [{ label: "No" }, { label: "Yes", recommended: true }] }] }, { label: "Keep" }], ...over })
+  const spec = (over: object) => JSON.stringify({ question: "Narrow the error rule?", kind: "question", mayDefault: true, options: [{ label: "Narrow", recommended: true, followUps: [{ question: "Rewrite the brief?", kind: "question", options: [{ label: "No" }, { label: "Yes", recommended: true }] }] }, { label: "Keep" }], ...over })
   h.storage.askThreadQuestion({ id: "qst_rec", slug: "t", spec: spec({}), askedAtMs: t0 })
   h.storage.askThreadQuestion({ id: "qst_free", slug: "t", spec: JSON.stringify({ question: "Name it?", kind: "question" }), askedAtMs: t0 })
   h.storage.askThreadQuestion({ id: "qst_none", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A" }, { label: "B" }] }), askedAtMs: t0 })
@@ -445,12 +445,12 @@ test("question: a rested thread's unanswered question takes its recommended opti
 })
 
 // A thread's questions default together (shared threadQuestionDefaults): one the human must answer —
-// `danger`, `waitForHuman` — holds every sibling, however safe its own recommendation.
+// `danger`, or one not marked `mayDefault` — holds every sibling, however safe its own recommendation.
 test("question: one question that waits for the human holds the thread's others", async () => {
   const h = harness()
   const t0 = h.clock.ms
-  const rec = JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }, { label: "B" }] })
-  for (const [slug, mark] of [["d", { danger: true }], ["w", { waitForHuman: true }]] as const) {
+  const rec = JSON.stringify({ question: "Which?", kind: "question", mayDefault: true, options: [{ label: "A", recommended: true }, { label: "B" }] })
+  for (const [slug, mark] of [["d", { danger: true }], ["w", { mayDefault: false }]] as const) {
     h.storage.upsertSession(row(slug))
     h.storage.askThreadQuestion({ id: `qst_${slug}_rec`, slug, spec: rec, askedAtMs: t0 })
     h.storage.askThreadQuestion({ id: `qst_${slug}_held`, slug, spec: JSON.stringify({ ...JSON.parse(rec), ...mark }), askedAtMs: t0 })
@@ -472,8 +472,8 @@ test("question: the default never takes an external option", async () => {
   h.storage.upsertSession(row("t"))
   const t0 = h.clock.ms
   const file = { label: "File the issue upstream", recommended: true, external: true }
-  h.storage.askThreadQuestion({ id: "qst_ext", slug: "t", spec: JSON.stringify({ question: "File the TS5088 repro?", kind: "question", options: [file, { label: "Keep the repro local" }] }), askedAtMs: t0 })
-  h.storage.askThreadQuestion({ id: "qst_all_ext", slug: "t", spec: JSON.stringify({ question: "Where to file it?", kind: "question", options: [file, { label: "Comment on the old issue", external: true }] }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_ext", slug: "t", spec: JSON.stringify({ question: "File the TS5088 repro?", kind: "question", mayDefault: true, options: [file, { label: "Keep the repro local" }] }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_all_ext", slug: "t", spec: JSON.stringify({ question: "Where to file it?", kind: "question", mayDefault: true, options: [file, { label: "Comment on the old issue", external: true }] }), askedAtMs: t0 })
   h.tele.set("t", { ...tele(), lastAssistantAt: iso(t0) })
   const s = h.make()
   h.clock.ms = t0 + QUESTION_DEFAULT_AFTER_MS
@@ -489,7 +489,7 @@ test("question: the human working on the card holds the default, and the countdo
   const h = harness()
   h.storage.upsertSession(row("t"))
   const t0 = h.clock.ms
-  const spec = JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }, { label: "B" }] })
+  const spec = JSON.stringify({ question: "Which?", kind: "question", mayDefault: true, options: [{ label: "A", recommended: true }, { label: "B" }] })
   h.storage.askThreadQuestion({ id: "qst_held", slug: "t", spec, askedAtMs: t0 })
   h.storage.upsertSession(row("u"))
   h.storage.askThreadQuestion({ id: "qst_off", slug: "u", spec, askedAtMs: t0 })
@@ -519,7 +519,7 @@ test("question: a question the human typed past is never defaulted", async () =>
   const h = harness()
   h.storage.upsertSession(row("t"))
   const t0 = h.clock.ms
-  h.storage.askThreadQuestion({ id: "qst_1", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }] }), askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_1", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", mayDefault: true, options: [{ label: "A", recommended: true }] }), askedAtMs: t0 })
   // The human typed while the turn ran. The question stays open and waits for them or for the worker's
   // `unask` — before the worker rests on the message and after.
   h.tele.set("t", { ...tele(), lastHumanAt: iso(t0 + 1_000), lastUserAt: iso(t0 + 1_000), lastAssistantAt: iso(t0) })

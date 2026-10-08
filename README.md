@@ -84,7 +84,7 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 
 **Where this fork bends one, on purpose.** Each is argued in [`ARCHITECTURE.md`](ARCHITECTURE.md#where-frizz-acts-on-a-clock-or-with-a-model) and can be turned off or ignored:
 
-- A question unanswered 10m after its thread rests takes the agent's recommended option, never one that posts, merges, publishes or spends. The × under the card turns it off.
+- A question the agent marks as safe to default, unanswered 10m after its thread rests, takes the agent's recommended option; never one that posts, merges, publishes or spends. Every other question waits for you. The × under the card turns it off.
 - A parent waiting on its sub-agents is asked for a progress note every 30m, so a long fan-out never shows one stale line for hours.
 - Thread names, status lines, Auto effort and reading a schedule out of a prompt use your Claude sign-in. `FRIZZ_THREAD_NAMER=0` and `FRIZZ_AUTO_EFFORT=0` turn them off.
 - A clean worktree in `.frizz/worktrees` idle for 7d is removed; its branch is kept. **Settings → Remove idle worktrees after** turns it off.

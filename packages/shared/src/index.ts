@@ -3185,6 +3185,13 @@ export interface AskedQuestion {
    *  answered by the 10m default: "fundamental architectural decisions like this … should wait for my
    *  feedback". */
   waitForHuman?: boolean
+  /** The worker's opt-in to the unanswered-question default: only a question marked `mayDefault` is
+   *  ever answered on the human's behalf. Absent ⇒ it waits for the human. The default was opt-out
+   *  (`waitForHuman`) until 2026-10-08, and a worker started before that rule existed let three ArkType
+   *  3.0 design questions default anyway; David: "this should absolutely never be defaulted". An opt-in
+   *  fails safe when a worker forgets — `waitForHuman` is kept only so older workers' calls still parse,
+   *  and now changes nothing a missing `mayDefault` does not already do. */
+  mayDefault?: boolean
   /** Absent or empty ⇒ a free-text question. */
   options?: AskedOption[]
 }
@@ -3225,6 +3232,7 @@ export const AskedQuestionSchema: z.ZodType<AskedQuestion> = z.lazy(() => z.obje
   kind: AskQuestionKind,
   danger: z.boolean().optional(),
   waitForHuman: z.boolean().optional(),
+  mayDefault: z.boolean().optional(),
   // UNBOUNDED, deliberately. This carried `.max(8)` from launch until 2026-09-03, when the maintainer
   // asked for the cap to go ("allow arbitrary numbers of options"): a `multi` over a long list — which
   // gates to run, which of twenty findings to act on — is a real shape, and the card letters past 26
@@ -3375,12 +3383,12 @@ function defaultOption(node: AskedQuestion): { option: AskedOption; fallback: bo
 /** The answer Frizz gives an unanswered question on the human's behalf, or undefined when it has none to
  *  give: a free-text or `multi` question (no single pick to take), one with no option marked
  *  `recommended`, a `danger` question — the irreversible call stays the human's however long it
- *  waits — one marked `waitForHuman`, and one whose every option is `external`. A recommendation marked `external` is never taken:
+ *  waits — one the worker did not mark `mayDefault` (follow-ups ride on the root's mark), and one whose every option is `external`. A recommendation marked `external` is never taken:
  *  the default falls back to the first option that stays on this machine (defaultOption). Follow-ups
  *  under the taken option follow the same rule, or go out with nothing chosen, the same shape the card
  *  sends for a live follow-up the human left blank. */
 export function recommendedDefaultAnswer(questionId: string, spec: AskedQuestion): QuestionAnswer | undefined {
-  if (spec.danger) return undefined
+  if (spec.danger || !spec.mayDefault) return undefined
   const build = (node: AskedQuestion, root: boolean): QuestionAnswer | undefined => {
     const pick = defaultOption(node)
     const taken = pick?.option
@@ -3397,11 +3405,17 @@ export function recommendedDefaultAnswer(questionId: string, spec: AskedQuestion
   return build(spec, true)
 }
 
+/** A recommendation the worker did not opt into the default: the human must answer it, so it holds its
+ *  siblings like a `danger` one. With no recommendation there is nothing to take either way. */
+function holdsForHuman(spec: AskedQuestion): boolean {
+  return spec.kind === "question" && !!spec.options?.some((o) => o.recommended) && !spec.mayDefault
+}
+
 /** ONE THREAD'S OPEN QUESTIONS DEFAULT TOGETHER OR NOT AT ALL (David 2026-10-08: "groups of questions
  *  should probably all be either default to recommended or blocked for human based on the most
  *  dangerous/in need of input … dismissing 10 … bubbles individually is painful"). The default exists
  *  for the human who is away; one who has to come back for any of them answers all of them. So any open
- *  question marked `danger` or `waitForHuman`, or whose countdown the human turned off, holds every one,
+ *  question marked `danger`, a pickable one not marked `mayDefault`, or whose countdown the human turned off, holds every one,
  *  and the rest share ONE deadline — the latest of their own (questionDefaultAtMs) — so touching any
  *  card holds the group. A question with nothing to take (free text, `multi`, no recommendation) or one
  *  the human typed past simply waits for them without holding the others. The board's countdown and the
@@ -3411,7 +3425,7 @@ export function threadQuestionDefaults(
   restedMs: number | undefined,
   lastHumanAt: string | undefined,
 ): { atMs: number; answers: Map<string, QuestionAnswer> } | undefined {
-  if (open.some((q) => q.spec.danger || q.spec.waitForHuman || q.default_off)) return undefined
+  if (open.some((q) => q.spec.danger || q.spec.waitForHuman || q.default_off || holdsForHuman(q.spec))) return undefined
   const answers = new Map<string, QuestionAnswer>()
   let atMs: number | undefined
   for (const q of open) {

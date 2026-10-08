@@ -93,8 +93,8 @@ test("questionDefaultAtMs: starts at the later of ask and rest; engagement exten
   assert.equal(questionDefaultAtMs({ ...q, default_off: 1 }, 5_000), undefined)
 })
 
-test("recommendedDefaultAnswer: takes the single recommendation, its follow-ups' too, and nothing on danger, waitForHuman, multi or free text", () => {
-  const spec = { question: "Q", kind: "question" as const, options: [{ label: "A" }, { label: "B", recommended: true, followUps: [
+test("recommendedDefaultAnswer: takes the single recommendation, its follow-ups' too, and nothing on danger, unmarked, multi or free text", () => {
+  const spec = { question: "Q", kind: "question" as const, mayDefault: true, options: [{ label: "A" }, { label: "B", recommended: true, followUps: [
     { question: "F1", kind: "question" as const, options: [{ label: "x", recommended: true }] },
     { question: "F2", kind: "question" as const },
   ] }] }
@@ -103,14 +103,14 @@ test("recommendedDefaultAnswer: takes the single recommendation, its follow-ups'
     followUps: [{ questionId: "qst_1", question: "F1", chosen: ["x"] }, { questionId: "qst_1", question: "F2", chosen: [] }],
   })
   assert.equal(recommendedDefaultAnswer("q", { ...spec, danger: true }), undefined)
-  assert.equal(recommendedDefaultAnswer("q", { ...spec, waitForHuman: true }), undefined)
+  assert.equal(recommendedDefaultAnswer("q", { ...spec, mayDefault: undefined }), undefined, "a question waits unless the worker opts in")
   assert.equal(recommendedDefaultAnswer("q", { ...spec, kind: "multi" }), undefined)
   assert.equal(recommendedDefaultAnswer("q", { question: "Q", kind: "question" }), undefined)
   assert.equal(recommendedDefaultAnswer("q", { question: "Q", kind: "question", options: [{ label: "A" }] }), undefined)
 })
 
 test("recommendedDefaultAnswer: never takes an external option — falls back to the first local one, or waits", () => {
-  const spec = { question: "File the repro upstream?", kind: "question" as const, options: [
+  const spec = { question: "File the repro upstream?", kind: "question" as const, mayDefault: true, options: [
     { label: "File it", recommended: true, external: true },
     { label: "Post a comment instead", external: true },
     { label: "Keep it in the handoff" },
@@ -122,7 +122,7 @@ test("recommendedDefaultAnswer: never takes an external option — falls back to
   const allExternal = { ...spec, options: spec.options.slice(0, 2) }
   assert.equal(recommendedDefaultAnswer("q", allExternal), undefined, "nothing local to take: it waits for the human")
   // A follow-up under the taken option follows the same rule, and goes out blank when all of it is external.
-  const nested = { question: "Q", kind: "question" as const, options: [{ label: "A", recommended: true, followUps: [
+  const nested = { question: "Q", kind: "question" as const, mayDefault: true, options: [{ label: "A", recommended: true, followUps: [
     { question: "F1", kind: "question" as const, options: [{ label: "push", recommended: true, external: true }, { label: "local" }] },
     { question: "F2", kind: "question" as const, options: [{ label: "publish", recommended: true, external: true }] },
   ] }] }
@@ -133,14 +133,14 @@ test("recommendedDefaultAnswer: never takes an external option — falls back to
 })
 
 test("threadQuestionDefaults: a thread's questions default together on the latest deadline, or not at all", () => {
-  const rec = (label: string) => ({ question: label, kind: "question" as const, options: [{ label: "yes", recommended: true }, { label: "no" }] })
+  const rec = (label: string) => ({ question: label, kind: "question" as const, mayDefault: true, options: [{ label: "yes", recommended: true }, { label: "no" }] })
   const a = { id: "a", asked_at: 1_000, spec: rec("A") }
   const b = { id: "b", asked_at: 1_000, engaged_at: 9_000_000, spec: rec("B") }
   const free = { id: "f", asked_at: 1_000, spec: { question: "Name?", kind: "question" as const } }
   const both = threadQuestionDefaults([a, b, free], 5_000, undefined)
   assert.deepEqual([...both!.answers.keys()], ["a", "b"], "free text has nothing to take and holds nobody")
   assert.equal(both!.atMs, 9_000_000 + QUESTION_DEFAULT_ENGAGED_GRACE_MS, "touching one card holds the group")
-  assert.equal(threadQuestionDefaults([a, { ...b, spec: { ...b.spec, waitForHuman: true } }], 5_000, undefined), undefined)
+  assert.equal(threadQuestionDefaults([a, { ...b, spec: { ...b.spec, mayDefault: undefined } }], 5_000, undefined), undefined)
   assert.equal(threadQuestionDefaults([a, { ...b, spec: { ...b.spec, danger: true } }], 5_000, undefined), undefined)
   assert.equal(threadQuestionDefaults([a, { ...b, default_off: 1 }], 5_000, undefined), undefined, "one × turns off the group")
   assert.equal(threadQuestionDefaults([a, b], undefined, undefined), undefined, "a working thread defaults nothing")
