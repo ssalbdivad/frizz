@@ -25,6 +25,8 @@ import {
   stripWakeTrailer,
   wakeDeliveryToken,
   PR_WATCH_ARMED_TRAILER,
+  PR_WATCH_HUMAN_TRAILER,
+  ISSUE_WATCH_HUMAN_TRAILER,
   PR_WATCH_SPENT_TRAILER,
   ISSUE_WATCH_ARMED_TRAILER,
   ISSUE_WATCH_SPENT_TRAILER,
@@ -572,6 +574,9 @@ test("every trailer frizz appends comes off the display projection", () => {
     ["still armed", prWatchWakeMessage({ target: "nubjs/nub#879", changes: ["now CONFLICTS with the base branch"] }), PR_WATCH_ARMED_TRAILER],
     ["watcher spent", prWatchWakeMessage({ target: "nubjs/nub#879", merged: true }), PR_WATCH_SPENT_TRAILER],
     ["shell done", shellDoneMessage({ taskId: "bzvtnt3ig", label: "the churn suite", status: "completed" }), SHELL_DONE_TRAILER],
+    // The done card's Watch (2026-10-07): the human's watcher says whose it is, and comes off the same way.
+    ["human PR watch", prWatchWakeMessage({ target: "nubjs/nub#879", changes: ["labels +blocked"], byHuman: true }), PR_WATCH_HUMAN_TRAILER],
+    ["human issue watch", issueWatchWakeMessage({ target: "nubjs/nub#12", changes: ["labels +bug"], byHuman: true }), ISSUE_WATCH_HUMAN_TRAILER],
   ] as [string, string, string][]) {
     assert.ok(text.includes(trailer), `${name}: the producer no longer writes the constant it is pinned by`)
     const shown = stripWakeTrailer(text)

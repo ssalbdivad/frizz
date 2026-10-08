@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import { mkdtempSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
-import { QUESTION_DEFAULT_AFTER_MS, QUESTION_DEFAULT_ENGAGED_GRACE_MS, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
+import { ISSUE_WATCH_HUMAN_TRAILER, PR_WATCH_HUMAN_TRAILER, QUESTION_DEFAULT_AFTER_MS, QUESTION_DEFAULT_ENGAGED_GRACE_MS, wakeDeliveryToken, type QuotaSnapshot } from "@frizz/shared"
 import { createStorage, type Storage, type SessionRow } from "./storage.ts"
 import { ANSWER_REOFFER_BACKOFF_MS, createScheduler, enqueueInterruptEndedWake, enqueueThreadMessageWake, parsePrRef, ghPrViewArgs, evalRollup, parseGithubReviewActivities, isBotGithubActor, MID_TURN_HOLD_MAX_MS, type GithubReviewActivity, type PrRef, type PrStatus } from "./scheduler.ts"
 import { createGithubReviewFetcher, type GithubReviewFetchResult } from "./github-review.ts"
@@ -126,7 +126,7 @@ interface Harness {
   storage: Storage
   /** Register a PR watcher the way `mcp__frizz__watch_pr` does. A `pr-watch:` fence line DECLARES a wait
    *  and no longer arms anything (2026-08-14), so every test below that expects a wake registers first. */
-  watch(slug: string, ref: string, kind?: "pull" | "issue"): void
+  watch(slug: string, ref: string, kind?: "pull" | "issue", by?: "worker" | "human"): void
   tele: Map<string, SessionTelemetry>
   resumes: { slug: string; message: string; deliveryId?: string }[]
   clock: { ms: number }
@@ -152,7 +152,7 @@ function harness(): Harness {
     clock,
     pr,
     review,
-    watch(slug, ref, kind = "pull") {
+    watch(slug, ref, kind = "pull", by = "worker") {
       const m = /^([^/]+)\/([^#]+)#(\d+)$/.exec(ref)
       if (!m) throw new Error(`bad ref ${ref}`)
       storage.armPrWatch({
@@ -160,6 +160,7 @@ function harness(): Harness {
         // Far out: these cases are about ACTIVITY, not the expiry sweep, which would otherwise settle
         // the watcher out from under them.
         expiresAtMs: clock.ms + 24 * 3600_000,
+        registeredBy: by,
       })
     },
     make(over) {
@@ -2468,6 +2469,53 @@ test("pr-watch: CI wakes on every terminal transition, both directions, and neve
   assert.equal(h.resumes.length, 2, "…still green is not")
   await poll("failing")
   assert.equal(h.resumes.length, 3, "and breaking again is news, from the SAME registration")
+})
+
+// THE DONE CARD'S WATCH (2026-10-07). The human arms it after the worker already reported the CI it saw,
+// so the verdict standing at the first poll is old news; the next one is not, and its wake tells the
+// worker whose watch it is. The worker-registered control is the test above: its first red is news.
+test("pr-watch: a HUMAN's watch takes the standing CI verdict as baseline, and its wake names the human", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7", "pull", "human")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  h.review.result = []
+  const poll = async (checks: "passing" | "failing") => {
+    h.clock.ms += 10 * 60_000
+    h.pr.result = {
+      state: "OPEN",
+      mergedAt: null,
+      rollup: [{ __typename: "CheckRun", name: "ci", conclusion: checks === "passing" ? "SUCCESS" : "FAILURE", status: "COMPLETED" }],
+    } as unknown as PrStatus
+    const s = h.make()
+    await s.tick()
+    await s.tick()
+  }
+  await poll("passing")
+  assert.equal(h.resumes.length, 0, "green when the human clicked is not news")
+  await poll("failing")
+  assert.equal(h.resumes.length, 1, "red after it is")
+  assert.match(h.resumes[0].message, /CI FAILED on acme\/app#7/)
+  assert.ok(h.resumes[0].message.includes(PR_WATCH_HUMAN_TRAILER), "the human's trailer, not the worker's")
+  assert.doesNotMatch(h.resumes[0].message, /Registered PR watcher/)
+})
+
+test("issue-watch: a HUMAN's issue watch wakes with the human's issue trailer", async () => {
+  const h = harness()
+  h.watch("r", "acme/app#7", "issue", "human")
+  h.storage.upsertSession(row("r"))
+  h.tele.set("r", { ...tele(), lastActivityAt: iso(h.clock.ms) })
+  h.review.result = { status: "ok", issue: issueSnap(), activity: [] }
+  await h.make().tick()
+  h.clock.ms += 61_000
+  h.review.result = { status: "ok", issue: issueSnap({ comments: 1 }), activity: [
+    { id: "comment:new", actor: "carol", actorType: "User", at: iso(h.clock.ms), kind: "comment" },
+  ] }
+  const s = h.make()
+  await s.tick()
+  await s.tick()
+  assert.equal(h.resumes.length, 1)
+  assert.ok(h.resumes[0].message.includes(ISSUE_WATCH_HUMAN_TRAILER))
 })
 
 // ---- SENT IS NOT DELIVERED (2026-08-25) ----
