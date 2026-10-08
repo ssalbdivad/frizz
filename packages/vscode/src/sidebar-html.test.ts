@@ -54,6 +54,8 @@ interface Relay {
   windowFocus(active: "body" | "frame"): Promise<void>
   /** What the relay set the frame's address to. */
   src(): string
+  /** The frame finishes loading a document. */
+  frameLoad(): void
   /** VS Code rewrites the theme on this document: its custom properties and its body's class. */
   restyle(vars: Record<string, string>, bodyClass: string): void
 }
@@ -72,7 +74,15 @@ function relay(html: string, theme: { vars: Record<string, string>; bodyClass: s
   const listeners: ((event: unknown) => void)[] = []
   const focusListeners: (() => void)[] = []
   const state = { focused: 0, pageFocused: 0, kept: undefined as unknown }
-  const frame = { contentWindow: frameWindow, focus: () => state.focused++, src: "" }
+  const frameLoads: (() => void)[] = []
+  const frame = {
+    contentWindow: frameWindow,
+    focus: () => state.focused++,
+    src: "",
+    addEventListener: (type: string, listener: () => void) => {
+      if (type === "load") frameLoads.push(listener)
+    },
+  }
   const look = { vars: { ...theme.vars }, bodyClass: theme.bodyClass }
   const observers: (() => void)[] = []
   const body = { classList: { contains: (name: string) => look.bodyClass.split(" ").includes(name) } }
@@ -128,6 +138,7 @@ function relay(html: string, theme: { vars: Record<string, string>; bodyClass: s
     },
     dispatch: (event) => listeners.forEach((listener) => listener(event)),
     src: () => frame.src,
+    frameLoad: () => frameLoads.forEach((listener) => listener()),
     restyle(vars, bodyClass) {
       look.vars = { ...vars }
       look.bodyClass = bodyClass
@@ -211,6 +222,15 @@ test("the relay tells the host when it takes the keyboard, so Ctrl+L knows which
   await r.windowFocus("body")
   await r.windowFocus("frame")
   assert.deepEqual(r.toHost, [{ view: "focused" }, { view: "focused" }])
+})
+
+test("the relay tells the host each time the frame loads a document, so a page that reloaded itself is counted", () => {
+  const r = relay(frameDocument({ nonce: "n", url: URL_, origin: FRIZZ }))
+  r.toHost.length = 0
+  r.frameLoad()
+  r.frameLoad()
+  assert.deepEqual(r.toHost, [{ view: "loaded" }, { view: "loaded" }])
+  assert.deepEqual(r.toPage, [], "the page hears nothing of it")
 })
 
 test("a thread's tab keeps its thread as the webview's state, and nothing at all without one", () => {

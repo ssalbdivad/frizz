@@ -147,6 +147,17 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   let renders = 0
   let readyTimer: NodeJS.Timeout | undefined
   let refreshTimer: NodeJS.Timeout | undefined
+  /** Documents the frame has loaded since it was framed: past the first, the page loaded one itself. */
+  let loads = 0
+  /**
+   * The page reloaded itself and has not said it is ready since. Frizz's page reloads on a server restart
+   * (a new build, Vite's dev client), and a reload that lands while the server is down — the supervisor
+   * restarts it twice in a second when commits land together — leaves the browser's error page in the
+   * frame: blank in VS Code, and silent, so the view showed nothing until the window was reloaded
+   * (2026-10-07). Such a frame is framed afresh: when its ready timer runs out with Frizz reachable, and
+   * when the connection comes back.
+   */
+  let reloaded = false
   let badge = 0
   /** The relay reports the platform of the UI it runs in, which under a remote window is not the extension host's. */
   let mac = process.platform === "darwin"
@@ -277,12 +288,35 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
       hinted = true
       hintText = HINT_OLD_FRIZZ
     }
+    loads = 0
+    reloaded = false
     view.webview.html = frameDocument({ nonce: nonce(), url: target.url, origin: target.origin, match: matchTheme(), ...(old ? { hint: HINT_OLD_FRIZZ } : {}) })
+    armReadyTimer()
+  }
+
+  /** Bound the wait for the page in the frame to say it is ready: past it, the bar — or, for a page that reloaded itself, a fresh frame. */
+  function armReadyTimer(): void {
+    clearTimeout(readyTimer)
     readyTimer = setTimeout(() => {
+      readyTimer = undefined
+      if (reloaded && host.origin()) {
+        host.log.warn(`The sidebar's page reloaded and didn't say it was ready within ${READY_HINT_MS / 1000}s; framing it again.`)
+        void render(true)
+        return
+      }
       host.log.warn(`The sidebar's page didn't say it was ready within ${READY_HINT_MS / 1000}s.`)
       showHint()
       settle(false)
     }, READY_HINT_MS)
+  }
+
+  /** A document loaded in the frame. Past the first, the page reloaded itself: until it says it is ready again, it is not. */
+  function onFrameLoaded(): void {
+    if (++loads === 1) return
+    reloaded = true
+    record("loaded", ready ? "reloaded" : "reloaded before ready")
+    setReady(false)
+    armReadyTimer()
   }
 
   /** The bar over a page that is not ready, in the words that fit what is known about the Frizz behind it. */
@@ -307,6 +341,7 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
   async function onPageMessage(page: EmbedPageMessage): Promise<void> {
     switch (page.type) {
       case "frizz:ready": {
+        reloaded = false
         setReady(true)
         record(page.type, "ready")
         void post({ view: "hint", show: false })
@@ -348,6 +383,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
           return
         case "focused":
           for (const listener of focusListeners) listener()
+          return
+        case "loaded":
+          if (frameUrl) onFrameLoaded()
           return
       }
       return
@@ -412,7 +450,9 @@ export function registerSidebar(api: Vscode, context: vscode.ExtensionContext, h
     refresh() {
       clearTimeout(refreshTimer)
       refreshTimer = setTimeout(() => {
-        void render(false)
+        // A page that reloaded into a Frizz that was down is the browser's error page: the connection
+        // coming back is the moment to frame it again.
+        void render(frameUrl !== undefined && reloaded && !ready)
         // The connection may have just learned what the framed Frizz is (a welcome, a 404): a page that
         // never got ready and now is known never to be says why, without waiting out the timer.
         if (frameUrl && !ready && host.pageSupport() === "no") showHint()

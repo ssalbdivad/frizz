@@ -20,7 +20,7 @@
 //    Frizz's origin, so if the frame were ever somewhere else the browser drops it instead of handing it
 //    selected code.
 //  - the view's own traffic never reaches the page: `{ view: … }` from this document (its buttons, its
-//    platform, `focused` when it takes the keyboard) and `{ view: "hint" }` from the extension, which
+//    platform, `focused` when it takes the keyboard, `loaded` for each document the frame loads) and `{ view: "hint" }` from the extension, which
 //    shows or hides the "hasn't loaded" bar.
 // The envelope keeps the two apart, so nothing the page posts can pass for a click on Reload.
 //
@@ -214,6 +214,10 @@ export function frameDocument(input: {
   restyled.observe(document.documentElement, { attributes: true, attributeFilter: ["style", "class"] })
   restyled.observe(document.body, { attributes: true, attributeFilter: ["class"] })
   posted = JSON.stringify(themeMessage(undefined))
+  // Every document the frame loads — the first, and any the page loads itself (a reload after Frizz
+  // restarts) — including the browser's error page for a reload that reached no server. The extension
+  // counts them: a page that reloaded and never says it is ready is gone (sidebar.ts).
+  frame.addEventListener("load", () => vscode.postMessage({ view: "loaded" }))
   frame.src = ${scriptJson(url)} + (match ? ${scriptJson(`#${EMBED_THEME_FRAGMENT}`)} + encodeURIComponent(posted) : "")
   window.addEventListener("message", (event) => {
     const data = event.data

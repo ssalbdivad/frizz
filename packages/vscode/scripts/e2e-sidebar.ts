@@ -13,7 +13,7 @@
 //   --dev    run the extension from the source tree (dist/ as scripts/build.ts makes it) instead of the
 //            packaged .vsix. The default is the .vsix, unpacked, because the maintainer's "the icon
 //            doesn't display" was a package with no icon in it: the source tree had it all along.
-//   --only   run only these checks (c1…c23); the boot, the seed and the view opening always run.
+//   --only   run only these checks (c1…c24); the boot, the seed and the view opening always run.
 //   --icon-before=<png>   an earlier top-dark activity-bar strip (1x enlarged 6x, as c1 writes it) to set
 //            beside this run's, for the eye.
 //   --worktree  open the window on a thread's git worktree (`.frizz/worktrees/<slug>` of the workspace)
@@ -89,6 +89,9 @@
 //      (a plain drag turns the webview's pointer events off, Shift keeps them on; `osDropRouting` records
 //      them), and the drop itself, trusted and carrying the file from disk, dispatched to the page's frame
 //      (DevTools cannot route a drop into the out-of-process frame, as c14 says), attaches it
+//   c24 a page that reloaded into an error page (a reload that landed while Frizz was down): the sidebar
+//      stops calling it ready, the title row stops claiming its view, and the view frames the page again
+//      on its own, ready, on the queue
 //   c17 a restart and a window reload (last: the test runner's VS Code ends with a reload, so the same
 //      profile is reopened by a VS Code of the harness's own): the framed page's localStorage survives
 //      both, and so does the eye, which is the VS Code setting
@@ -2886,6 +2889,29 @@ try {
     expect("c23", "dropped with Shift held: the file is attached, a tile with its picture", landed.tiles.some((tile) => tile.loaded && tile.alt.includes("dropped-from-the-os")), landed)
     await shot("c23-dropped-file-w300")
     await clearBox("chatComposer").catch(() => undefined)
+  })
+
+  // ── c24: a page that reloads into nothing is framed again ──
+  await run("c24", "a page that reloaded into an error page is framed again, on its own", async () => {
+    await resetPage()
+    await openThreadRow()
+    const lostFrame = await frame()
+    const eventsBefore = (await status()).sidebar.events.length
+    // The frame navigates itself somewhere the relay's CSP refuses (frame-src names Frizz's origin only):
+    // the browser's error page, blank in VS Code — what a page's reload that lands while Frizz is down
+    // leaves in the frame (2026-10-07). The extension is told nothing but that a document loaded.
+    await lostFrame.evaluate(() => { location.href = "http://127.0.0.1:9/" }).catch(() => undefined)
+    const lost = await until(async () => { const s = (await status()).sidebar; return !s.ready && s.view === "" }, 10_000)
+    const lostSnapshot = (await status()).sidebar
+    expect("c24", "the sidebar stops calling the page ready, and the title row stops claiming its thread", lost, { ready: lostSnapshot.ready, view: lostSnapshot.view, events: lostSnapshot.events.slice(eventsBefore) })
+    await shot("c24-error-page-w300")
+    const started = Date.now()
+    const back = await until(async () => (await status()).sidebar.events.slice(eventsBefore).some((event) => event.type === "frizz:ready"), 60_000)
+    const backSnapshot = (await status()).sidebar
+    expect("c24", "framed again, without a click, and the new page says it is ready", back, { afterMs: Date.now() - started, url: backSnapshot.url, events: backSnapshot.events.slice(eventsBefore) })
+    const rows = await waitFor("the queue in the page", async () => (await inPage(() => document.querySelectorAll("[data-xq-thread-row]").length)) || undefined, 30_000).catch(() => 0)
+    expect("c24", "…on the queue, with the title row's buttons back", rows > 0 && (await titleRow()).buttons.includes("New thread"), { rows, row: await titleRow() })
+    await shot("c24-framed-again-w300")
   })
 
   // ── c17: a restart and a window reload (LAST: it ends the agent's VS Code) ──
