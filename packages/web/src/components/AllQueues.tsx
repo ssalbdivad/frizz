@@ -131,6 +131,26 @@ function typingInCard(): string | undefined {
   return slot ? xqCardKey(slot) : undefined
 }
 
+/**
+ * The keys of the cards the human is otherwise engaged with: the one holding the focus (a button or
+ * disclosure they just clicked), the one their text selection is in, and the one under the pointer.
+ */
+function engagedCards(): ReadonlySet<string> {
+  const keys = new Set<string>()
+  const add = (node: Node | null | undefined) => {
+    const element = node instanceof Element ? node : node?.parentElement
+    const slot = element?.closest<HTMLElement>("[data-xq-card]")
+    const key = slot && xqCardKey(slot)
+    if (key) keys.add(key)
+  }
+  if (document.activeElement !== document.body) add(document.activeElement)
+  const selection = document.getSelection()
+  if (selection && !selection.isCollapsed) add(selection.anchorNode)
+  // `:hover` is the browser's own record of the pointer, cleared when the pointer leaves the window.
+  add(document.querySelector("[data-xq-card]:hover"))
+  return keys
+}
+
 /** A HELD card (useLeavingCards `hold`) as it draws: frozen as it was last queued — the handoff the human
  *  is reading does not change under them while the worker streams — except for its questions, which are
  *  the live thread's, so one answered from the drawer or another tab leaves it and one the worker asks
@@ -141,11 +161,11 @@ function heldEntry(projects: readonly QueuesProject[], entry: QueueEntry): Queue
   return live && live.questions !== entry.thread.questions ? { ...entry, thread: { ...entry.thread, questions: live.questions } } : entry
 }
 
-/** A held card whose worker is at work on the answer it sent says so, in place of the time it was ready:
- *  its entry is frozen from when it was queued, and "Ready 2m ago" over a running worker is false. */
-function heldStatus(projects: readonly QueuesProject[], entry: QueueEntry): string | undefined {
+/** A held or engaged card whose worker is at work says so, in place of the time it was ready: its entry
+ *  is frozen from when it was queued, and "Ready 2m ago" over a running worker is false. */
+function heldStatus(projects: readonly QueuesProject[], entry: QueueEntry, working: string): string | undefined {
   const project = projects.find((p) => p.id === entry.project.id)
-  return project?.running.some((t) => t.id === entry.thread.id) ? "Working on your answer" : undefined
+  return project?.running.some((t) => t.id === entry.thread.id) ? working : undefined
 }
 
 // The human's moves that close every empty gap a ghost left (lib/stableQueue.ts): the start of a scroll
@@ -300,15 +320,22 @@ export function AllQueuesPage() {
     orderedAs.current = `${direction}|${viewKey(view)}`
     prevSlots.current = []
   }
-  // THE CARD BEING TYPED IN STAYS A CARD. Its thread can leave the queue on its own while the human is
-  // mid-sentence (a shell finishing, a child returning), and as a ghost the card is an empty gap: the
-  // focused box unmounted under the caret, and every key after it fell through to the page's shortcuts —
-  // `j`/`k` gliding between cards, others opening drawers — so the page jumped around while they typed
-  // (David 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Drawn as it was
-  // while the focus stays in it; the draft is the thread's either way, and a reply still reaches it. Read
-  // off the DOM at render, which is when the thread's leaving is drawn.
-  // Never a card the human just sent away: useLeavingCards `leave` takes the caret out of it.
+  // THE CARD THE HUMAN IS ENGAGED WITH STAYS A CARD. Its thread can leave the queue on its own while the
+  // human is mid-sentence or mid-read (a shell finishing, a child returning), and as a ghost the card is
+  // an empty gap: the focused box unmounted under the caret, and every key after it fell through to the
+  // page's shortcuts — `j`/`k` gliding between cards, others opening drawers — so the page jumped around
+  // while they typed (David 2026-09-30: "scrolling jumps around and makes it hard to read/type"). Typing
+  // was not the only engagement it took away: a card being read under the pointer, or one whose
+  // disclosure had just been clicked, emptied the same way (David 2026-10-08: "I was interacting with the
+  // card then all of a sudden it left without me interacting with it"). So any card holding the focus,
+  // the text selection or the pointer is drawn as it was while that lasts, saying its worker is at work;
+  // the draft is the thread's either way, and a reply still reaches it. Once the human moves off it, the
+  // next render leaves a ghost like any other.
+  // Never a card the human just sent away: useLeavingCards `leave` takes the caret out of it, and the
+  // other engagements hold only a card that would otherwise be a ghost (`mayGhost`: not one this tab
+  // acted on), or Done clicked under a resting pointer would leave the card drawn.
   const typingKey = typingInCard()
+  const engaged = engagedCards()
   // Gaps the human's last move closed (below).
   const [closed, setClosed] = useState<ReadonlySet<string>>(() => new Set())
   const mayGhost = (key: string): boolean => {
@@ -322,7 +349,7 @@ export function AllQueuesPage() {
     keyOf: entryKey,
     onScreen: lock.onScreen.current,
     mayGhost,
-    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key) || key === typingKey)),
+    keep: new Set(prevSlots.current.map((slot) => slot.key).filter((key) => (leaving.isLeaving(key) && !leaving.hidden(key)) || leaving.isHeld(key) || key === typingKey || (engaged.has(key) && mayGhost(key)))),
   })
   prevSlots.current = queue
   // A GHOST IS AN EMPTY GAP, and the human's next move closes it (David 2026-09-29, of the quiet card
@@ -576,7 +603,7 @@ export function AllQueuesPage() {
             {queue.length > 0 ? (
               queue.map((slot, index) => (
                 <Fragment key={slot.key}>
-                  <QueueCardOf entry={leaving.isHeld(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost} status={leaving.isHeld(slot.key) ? heldStatus(projects, slot.item) : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!focused} />
+                  <QueueCardOf entry={leaving.isHeld(slot.key) || engaged.has(slot.key) ? heldEntry(projects, slot.item) : slot.item} ghost={slot.ghost} status={leaving.isHeld(slot.key) ? heldStatus(projects, slot.item, "Working on your answer") : engaged.has(slot.key) && !leaving.isLeaving(slot.key) ? heldStatus(projects, slot.item, "Working") : undefined} concealed={inDrawer.has(slot.key)} leaving={leaving} chip={!focused} />
                   {/* The rule between two cards: a sibling that FOLLOWS its card, so
                       styles.css fades it with the card when that one leaves. */}
                   {index < queue.length - 1 && <hr className="my-10 border-0 border-t border-border/60" />}
