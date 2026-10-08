@@ -84,7 +84,8 @@ import { cardProcesses, focusedProject, openProcessDrawer, TerminalPromptPane, T
 import type { ThreadProcess } from "../lib/threadProcesses.ts"
 import { ThreadCheckoutToken } from "./ThreadCheckoutToken.tsx"
 import { Tooltip } from "./Tooltip.tsx"
-import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { BLOCK_RADIUS, BLOCK_RADIUS_INNER_BOTTOM, CardActions, QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
+import { DoneWatchButtons, doneWatchable, useDoneWatchRefs } from "./DoneWatchButtons.tsx"
 
 /**
  * WHOSE CARD THIS IS, on its meta line — in All projects the page's one queue holds every project's
@@ -664,7 +665,7 @@ function CardArticle({
                 • any other awaiting fence — a wait that is no longer live, a bg-snoozed thread — is the
                   same card stating the fence, with no verbs of its own (ChatView FenceCard's branch). */}
           {parts?.fences.map((fence, index) => fence.kind === "done"
-            ? <FenceBody key={index} body={fence.body} />
+            ? <FenceBody key={index} body={fence.body} project={project} thread={thread} />
             : drawsSubAgentWait
               ? <AwaitingSubAgentsCard key={index} project={project} thread={thread} body={fence.body} openThread={() => openInPlace(project, thread.id, displayTitle(thread))} onSnoozed={onLeave} onUndone={onUnsnoozed} />
               : restingShown ? null
@@ -683,7 +684,7 @@ function CardArticle({
               from the thread (ChatView's "registered-done" rung); this is the same predicate, keyed on
               the same handoff text, so a worker that fenced AND registered gets one card, the fenced one.
               Held until the handoff is read, or a fenced done would draw here first and then swap. */}
-          {(handoff.data || handoff.isError) && registeredDone && <FenceBody body={registeredDoneBody(thread.lastFence!)} />}
+          {(handoff.data || handoff.isError) && registeredDone && <FenceBody body={registeredDoneBody(thread.lastFence!)} project={project} thread={thread} />}
           {/* THE GATE: a turn parked on a request — "Run a command?", a native question, an MCP form —
               with its real buttons, under the prose that led to it. It is the whole reason such a card
               is in the queue, and this card drew none of it until 2026-09-28: a thread held on a
@@ -1134,12 +1135,25 @@ function CardAwaiting({ project, thread, fence, onLeave, onSent, onLanded, onRet
 
 /** A ```done fence (or a registered done), drawn as the transcript's fence card — presentation only; the
  *  verb is the header's check. An ```awaiting fence is CardAwaiting's. */
-function FenceBody({ body }: { body: string }) {
+function FenceBody({ body, project, thread }: { body: string; project: QueuesProject; thread: ThreadView }) {
   const html = useMarkdownHtml(body)
+  // The one verb a done card carries here: "Watch #N" for each PR or issue it links (DoneWatchButtons).
+  // Mark as done is the header's check. In the card's own project scope, and its click takes the card
+  // out the way the header's Snooze does.
+  const watchRefs = useDoneWatchRefs(html)
+  const dismiss = useContext(QueueDismissContext)
+  const watchable = watchRefs.length > 0 && doneWatchable(thread, body)
   return (
     <TranscriptCard icon={Check} label="Done">
       {/* null, not a falsy "": an empty body (registeredDoneBody) is a header-only card, not a blank content gap. */}
       {html ? <LinkedHtml className={`md-body ${QUEUE_WRAP}`} html={html} /> : null}
+      {watchable && (
+        <ThreadProjectScope projectId={project.id} projectDir={project.projectDir}>
+          <CardActions>
+            <DoneWatchButtons thread={thread} refs={watchRefs} onWatched={dismiss?.dismiss} onWatchFailed={dismiss?.cancel} />
+          </CardActions>
+        </ThreadProjectScope>
+      )}
     </TranscriptCard>
   )
 }
