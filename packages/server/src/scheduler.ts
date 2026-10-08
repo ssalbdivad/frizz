@@ -3360,7 +3360,12 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // speaks — that worker pushed onto a PR whose last run was approved, and is otherwise waiting on
       // CI it believes is running. The stamp keeps its shape and the cursor still advances to the new
       // head; only the comparison relaxes, so a cursor written before this reads exactly the same way.
-      const checksChanged = stamp !== undefined && cursor.checks !== stamp
+      // A HUMAN'S WATCH TAKES TODAY'S VERDICT AS ITS BASELINE (2026-10-07). It is armed from a done card,
+      // after the worker already reported the CI it saw, so a verdict standing at the first poll is old
+      // news and a wake for it is a turn that says nothing. A worker's own watch keeps announcing it: the
+      // worker registers as it pushes, and the run it is waiting on is the news.
+      const humanBaseline = w.cursor === null && w.registered_by === "human"
+      const checksChanged = stamp !== undefined && cursor.checks !== stamp && !humanBaseline
         && !(terminal === "gated" && stampVerdict(cursor.checks) === "gated")
       // NEW review activity, against everything already reported. On the FIRST poll there is nothing
       // reported yet, so the baseline is the REGISTRATION INSTANT: a worker registers when it opens or
@@ -3473,6 +3478,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         ...(carried.checks ? { checks: carried.checks } : {}),
         ...(carried.changes?.length ? { changes: carried.changes } : {}),
         ...(review ? { review } : {}),
+        ...(w.registered_by === "human" ? { byHuman: true } : {}),
       }), `pr-watch ${key}${carried.checks ? ` CI ${carried.checks.verdict}` : ""}${carried.changes?.length ? " state" : ""}${review ? " review" : ""}`, nowMs)
       deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report, held: carried }))
     }
@@ -3578,6 +3584,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       target,
       ...(carried.changes?.length ? { changes: carried.changes } : {}),
       ...(review ? { review } : {}),
+      ...(w.registered_by === "human" ? { byHuman: true } : {}),
     }), `issue-watch ${target}${carried.changes?.length ? " state" : ""}${review ? " comment" : ""}`, nowMs)
     deps.storage.setPrWatchCursor(w.id, JSON.stringify({ ...nextCursor, report, held: carried }))
   }

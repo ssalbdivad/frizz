@@ -1067,6 +1067,25 @@ function bgSnoozeArmed(row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at"
   return row.bg_snooze_rested_at != null && row.rested_at != null && row.bg_snooze_rested_at === row.rested_at
 }
 
+// A DONE THE HUMAN CHOSE TO WATCH (2026-10-07). The done card offers "Watch #N" for each pull request or
+// issue it names (router.watchDoneRef): one click arms the watcher and parks THIS rest with the same
+// event-snooze column the resting card's Snooze writes. So the thread is finished AND waiting on GitHub,
+// and the human said which of the two they want to see: it leaves the queue and rests in Snoozed as a
+// `watching` rest, exactly where a worker's own `status: watching` park on a PR would put it, until the
+// watch reports — that wake starts a turn, the next rest is a different instant, and the park is spent,
+// so the worker's answer to the news decides the thread's place again. Frizz parks nothing here on its
+// own: the snooze column is written only by the human's two clicks.
+//
+// Needs the armed watcher: a done the human parked on a watch that has since settled (merged, closed,
+// dropped) has nothing left to wait on, and it goes back to being a done in the queue.
+export function doneParkedOnWatch(
+  row: Pick<SessionRow, "bg_snooze_rested_at" | "rested_at">,
+  tele: Pick<SessionTelemetry, "lastFence"> | undefined,
+  registeredPrWatches: ReadonlySet<string>,
+): boolean {
+  return tele?.lastFence?.kind === "done" && registeredPrWatches.size > 0 && bgSnoozeArmed(row)
+}
+
 // ---- THE SUB-AGENT WAIT: which children are out, which came back, and the snooze that spans it ------
 // A parent that fans out N background sub-agents is re-invoked by EACH return: it wakes, reads the
 // report, and rests again. A rest that is not an honoured park queues (Colin: a partial return may give
@@ -1462,6 +1481,9 @@ export function deriveNeedsYou(
   // blink in and out — see signoffNudgeDue. After every hard member above, so nothing that IS the
   // human's waits behind it.
   if (signoffNudgePending) return false
+  // A done the human chose to watch from its card — see doneParkedOnWatch. After every hard gate above:
+  // a question, a crash or a limit stop still queues it.
+  if (runtime === "turn-idle" && doneParkedOnWatch(row, tele, registeredPrWatches)) return false
   // THE WORKER'S OWN ANSWER (2026-10-01). A thread dispatched at or after NEEDS_INPUT_REQUIRED_AT says
   // with `status:` (2026-10-05; `needs_input:` before it, still read) whether its rest needs the human,
   // and every per-wait rule below is the guess that answer replaces — so none of them is consulted for
@@ -2140,6 +2162,7 @@ function sessionThreadView(
     target: `${w.owner}/${w.repo}#${w.number}`,
     kind: w.kind,
     createdAt: new Date(w.created_at).toISOString(),
+    byHuman: w.registered_by === "human",
   }))
   // BOTH KINDS, by ref. Every reader of this set asks "is there a registration behind this declared
   // wait" (hasParkedPrWatch) or "is CI running on every registered PR" (heldByRunningChecks, which since
@@ -2211,7 +2234,9 @@ function sessionThreadView(
   // addOwnPrWatch, setOwnThreadTimer) and `done` refuses while any is live, so this is the belt to
   // those braces: whatever path leaves a done row beside an open question or an armed wait, the board
   // presents the wait, never a finished thread that is also asking or waiting.
-  const supersededDone = currentQuestionCount > 0 || armedWatches.length > 0 || armedPrWatches.length > 0 || armedTimers.length > 0
+  // …EXCEPT a watcher the HUMAN armed from the done card (router.watchDoneRef), which is a wait on top of
+  // the done rather than instead of it: the card stays readable, and doneParkedOnWatch bands the pair.
+  const supersededDone = currentQuestionCount > 0 || armedWatches.length > 0 || armedPrWatches.some((w) => !w.byHuman) || armedTimers.length > 0
   const codexLive = row.codex_runtime === "app-server" ? codexTurnLiveness(row.slug, row.session_id) : undefined
   const nativeError = codexLive?.providerError
   // A witnessed failed turn can arrive before the tailer's next read. Do not keep spinning on the
@@ -2293,7 +2318,12 @@ function sessionThreadView(
   // hasFreshDelivery rather than deliveryInFlight: the spin stops after a minute, and a message still on
   // its way past that keeps its row where it was rather than parking it in Snoozed. A sign-off nudge on
   // its way counts the same: the worker is about to be woken.
-  const waitStatus = archived ? undefined : deriveWaitStatus(tele, runtime, needsYou, awaitingBackground, answerInFlight || signoffNudgePending || hasFreshDelivery(row, deliveryProcessGone), nowMs, github, registeredPrWatches, armedWatches)
+  const messageInFlight = answerInFlight || signoffNudgePending || hasFreshDelivery(row, deliveryProcessGone)
+  const waitStatus = archived ? undefined
+    // A done the human parked on its watch is a `watching` rest — deriveWaitStatus reads only awaiting
+    // fences and live work, and a done is neither (doneParkedOnWatch).
+    : runtime === "turn-idle" && !needsYou && !messageInFlight && doneParkedOnWatch(row, tele, registeredPrWatches) ? "watching"
+    : deriveWaitStatus(tele, runtime, needsYou, awaitingBackground, messageInFlight, nowMs, github, registeredPrWatches, armedWatches)
   // A worker that exited with work still outstanding — a turn in flight, OR a sub-agent still reading
   // "running" (its parent is gone, so it cannot actually be live) — is a crash/stall, not a clean
   // handoff, so it cards as "stalled" not a bare "rest". Mirrors deriveNeedsYou's surfacing above.

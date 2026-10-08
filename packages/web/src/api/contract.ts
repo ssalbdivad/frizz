@@ -140,6 +140,8 @@ import type {
   ProjectAddResult,
   ProjectPickResult,
   AddOwnPrWatchInput,
+  WatchDoneRefInput,
+  WatchDoneRefResult,
   AddOwnWatchInput,
   AddOwnWatchResult,
   ExtendOwnShellInput,
@@ -351,6 +353,8 @@ export interface Api {
   // rested_at advances. `sessionId` binds the click to the session the tab was looking at.
   // `clear` undoes it (the queue card's toast).
   snoozeAwaitingBackground(input: { slug: string; sessionId: string; clear?: boolean }): Promise<void>
+  // The done card's Watch button: watch a PR or issue the finished thread names, and snooze it until it reports.
+  watchDoneRef(input: WatchDoneRefInput): Promise<WatchDoneRefResult>
   // Hide the thread until ALL its running sub-agents have returned: each return still wakes the parent,
   // but only the last one (or a question, a crash, a done) re-queues it. Refused with none running.
   snoozeUntilSubAgentsReturn(input: { slug: string; sessionId: string; clear?: boolean }): Promise<void>
@@ -613,6 +617,7 @@ export const PROCEDURES = {
   listOwnThreadActivity: "mutation",
   reloadThreadPlugins: "mutation",
   snoozeAwaitingBackground: "mutation",
+  watchDoneRef: "mutation",
   snoozeUntilSubAgentsReturn: "mutation",
   requestParkCheckIn: "mutation",
   deleteThread: "mutation",

@@ -117,6 +117,8 @@ import {
   AWAITING_FOR_MAX_MS,
   AddOwnPrWatchInput,
   AddOwnPrWatchResult,
+  WatchDoneRefInput,
+  WatchDoneRefResult,
   DropOwnPrWatchInput,
   DropOwnPrWatchResult,
   ListOwnPrWatchesInput,
@@ -4147,6 +4149,68 @@ export function createRouter(ctx: AppContext) {
       },
     }),
 
+    // ---- THE DONE CARD'S WATCH BUTTON (2026-10-07) ---------------------------------------------
+    // The HUMAN's half of the same registry. A finished worker no longer parks on the PR or issue it
+    // touched (a 180d `watch_pr` per thread, chosen blind, was how threads vanished into Snoozed); it
+    // signs off `done` naming them, and the card offers "Watch #N" for each. This is that click: the same
+    // `pr_watch` row the worker tools arm, polled by the same scheduler loop, plus the human's own park of
+    // THIS rest — the event-snooze column the resting card's Snooze writes — so the thread rests in
+    // Snoozed until the watch reports, which wakes the worker like any watcher wake.
+    //
+    // It differs from addOwnPrWatch in exactly what makes it the human's act rather than the worker's:
+    //  - the row is `registered_by: human`, so it does not gate the worker's `done` (it is not the
+    //    worker's outstanding wait) and its wake tells the worker whose watch it is (scheduler);
+    //  - it does NOT clear the done: the finished thread stays finished, its card stays readable from
+    //    Snoozed, and the board reads done + this park as a watch (board.doneParkedOnWatch);
+    //  - PR or issue is FOUND OUT, not declared — prose cannot say which `#N` is — by asking `gh pr view`
+    //    first and `gh issue view` second, the two registration probes the worker tools already use;
+    //  - no `for:` to choose: it runs to the ceiling, and a merge or close settles it before that.
+    watchDoneRef: mutation({
+      input: WatchDoneRefInput,
+      output: WatchDoneRefResult,
+      handler: async ({ input }) => {
+        const before = currentOwnedSession(input.slug, input.sessionId)
+        if (before.state === "archived" || before.archived === 1) throw new Error("Reopen this thread to watch it")
+        if (!before.rested_at) throw new Error("This thread is still working; watch it once it finishes")
+        const ref = parsePrRef(input.target)
+        if (!ref) throw new Error(`${input.target} is not a pull request or issue`)
+        const target = `${ref.owner}/${ref.repo}#${ref.number}`
+        const sameName = (a: string, b: string) => a.toLowerCase() === b.toLowerCase()
+        const armed = ctx.storage.listPrWatches(input.slug, { armedOnly: true })
+        // Either kind: the worker may already watch it, and one watcher per thing is the rule.
+        const existing = armed.find((w) => sameName(w.owner, ref.owner) && sameName(w.repo, ref.repo) && w.number === ref.number)
+        let kind: "pull" | "issue"
+        if (existing) {
+          kind = existing.kind === "issue" ? "issue" : "pull"
+        } else {
+          if (armed.length >= PR_WATCH_MAX_ARMED) throw new Error(`This thread already watches ${armed.length} pull requests and issues`)
+          const pr = await ctx.probePr(ref)
+          if (pr.ok) kind = "pull"
+          else {
+            const issue = await ctx.probeIssue(ref)
+            if (!issue.ok) throw new Error(`Couldn't read ${target} on GitHub: ${pr.reason}`)
+            kind = "issue"
+          }
+        }
+        // RE-READ after the probes: the thread may have been steered, archived or re-dispatched while `gh`
+        // answered, and the park below belongs to the rest the human was looking at or to none.
+        const row = currentOwnedSession(input.slug, input.sessionId)
+        if (row.state === "archived" || row.archived === 1 || !row.rested_at || row.rested_at !== before.rested_at) {
+          throw new Error("This thread changed before it could be watched")
+        }
+        if (!existing) {
+          const now = Date.now()
+          const id = `${kind === "issue" ? "isw" : "prw"}_${randomUUID().replace(/-/g, "").slice(0, 12)}`
+          ctx.storage.armPrWatch({ id, slug: input.slug, kind, owner: ref.owner, repo: ref.repo, number: ref.number, createdAtMs: now, expiresAtMs: now + PR_WATCH_FOR_MAX_MS, registeredBy: "human" })
+        }
+        if (!ctx.storage.setBgSnoozeRestedAtIfCurrent(input.slug, row.session_id, row.runtime_generation ?? 0, row.rested_at)) {
+          throw new Error("This thread changed before it could be watched")
+        }
+        ctx.board.refresh()
+        return { target, kind, alreadyArmed: existing !== undefined }
+      },
+    }),
+
     dropOwnPrWatch: mutation({
       input: DropOwnPrWatchInput,
       output: DropOwnPrWatchResult,
@@ -4535,12 +4599,15 @@ export function createRouter(ctx: AppContext) {
         // can, and the registration IS that judgement. Gating on raw liveness would make `done`
         // unreachable for any thread that left a log tail running.
         const blockingQuestions = heldQuestions(input.slug)
+        const humanWatchIds = new Set(ctx.storage.listPrWatches(input.slug, { armedOnly: true }).filter((w) => w.registered_by === "human").map((w) => w.id))
         const blockingWatches = [
           ...armedOwnWatchViews(input.slug).map((w) => ({
             id: w.id,
             what: `${w.kind === "agent" ? "sub-agent" : "shell"}: ${w.label ? `${w.label} (${w.target})` : w.target}`,
           })),
-          ...armedPrWatchViews(input.slug).map((w) => ({ id: w.id, what: `${w.kind === "issue" ? "issue" : "pull request"}: ${w.target}` })),
+          // NOT a watcher the HUMAN armed from the done card (watchDoneRef): that one is theirs, not this
+          // worker's outstanding wait, and refusing `done` over it would push the worker to drop it.
+          ...armedPrWatchViews(input.slug).filter((w) => !humanWatchIds.has(w.id)).map((w) => ({ id: w.id, what: `${w.kind === "issue" ? "issue" : "pull request"}: ${w.target}` })),
           ...ctx.storage
             .listThreadTimers(input.slug, { armedOnly: true })
             .map((t) => ({ id: t.id, what: `timer, fires ${new Date(t.fire_at).toISOString()}` })),
@@ -6029,7 +6096,7 @@ const HUMAN_THREAD_ACTS = [
   "followUp", "unqueueFollowUp", "deliverQueuedNow", "setThreadPermission", "setThreadProfile", "upgradeThreadModel",
   "archiveThread", "markRead", "threadSeen", "setThreadState", "completeThread", "markComplete", "setThreadStatus",
   "dismissThread", "setThreadSnooze", "setThreadPinned", "setThreadRecurringPrompt", "setThreadHeartbeat",
-  "snoozeAwaitingBackground", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "holdQuestionDefault", "renameThread",
+  "snoozeAwaitingBackground", "watchDoneRef", "snoozeUntilSubAgentsReturn", "requestParkCheckIn", "answerQuestions", "dismissQuestions", "holdQuestionDefault", "renameThread",
   "aiRenameThread", "killAgent", "subAgentSteer", "subAgentStop", "stopBackgroundOp", "interactionResolve",
   "interactionCancel", "terminalStart", "terminalRun", "openThreadFolder", "reviewInEditor", "updateHeldPrompt", "startHeldThread",
   "setThreadDeadline",
