@@ -17,11 +17,12 @@ import { CARD_ACTION_RADIUS } from "./TranscriptCard.tsx"
 // OUTLINED, NOT THE WHITE CARD VERB. "Mark as done" is the card's verb and the default answer (it is the
 // header's check on the queue, and the white button beside these in the drawer); watching is the
 // secondary choice, so it takes the secondary sibling's chrome — the provider-fault card's Retry — and
-// sits AFTER the verb so the verb never moves.
+// sits AFTER the verb so the verb never moves. `py-[3px]`, not Retry's `py-1`: the 1px border made that
+// one 25.70px tall beside the verb's 23.70px; measured equal (23.70px, same centre) in the drawer, sans.
 //
 // Only on the thread's CURRENT done at rest: an older done card further up a transcript names work the
 // thread has since moved past, and the click parks the rest the human is looking at.
-export const DONE_WATCH_BUTTON = `shrink-0 ${CARD_ACTION_RADIUS} border border-border px-2 py-1 text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:border-border`
+export const DONE_WATCH_BUTTON = `shrink-0 ${CARD_ACTION_RADIUS} border border-border px-2 py-[3px] text-[11px] text-fg/90 transition-colors hover:bg-panel hover:border-border-strong disabled:opacity-60 disabled:hover:bg-transparent disabled:hover:border-border`
 
 export function useDoneWatchRefs(html: string) {
   const scope = useContext(MarkdownScopeContext)
