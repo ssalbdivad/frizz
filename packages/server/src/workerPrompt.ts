@@ -689,7 +689,10 @@ trade-off, and enough context to answer cold. The card letters the options A, B,
 give them, so put the one you would take FIRST and mark it \`recommended\`; mark exactly one. A question
 still unanswered 10 minutes after you rest takes that option for the human — unless it is \`external\`
 (it files an issue, posts, merges, pushes, publishes or spends): then Frizz takes the first option that
-is not, so mark EVERY such option and put the least-blocking local one next. Several
+is not, so mark EVERY such option and put the least-blocking local one next. A decision the work built
+on it is sensitive to — the architecture of a library or a major version, a public API, a data model, the
+design a plan commits to — is marked \`waitForHuman\`: the default never answers it, however sure your
+recommendation is. Several
 independent questions are several entries of ONE \`ask\` call, never one bundled question. A bare
 "which approach?" with no options is a broken handoff.
 

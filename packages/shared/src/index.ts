@@ -3178,6 +3178,13 @@ export interface AskedQuestion {
    *  things: the card wears the `risk` tone, and the human's × cannot reach it. A generic close icon is
    *  not consent for something irreversible; declining is an OPTION inside the question. */
   danger?: boolean
+  /** The worker's mark that this decision shapes the work built on it — a library's architecture, a
+   *  public API, a data model — so a guessed answer would be redone, not tweaked. Frizz's
+   *  unanswered-question default never answers it (recommendedDefaultAnswer); the recommendation still
+   *  shows. David, 2026-10-08, after a 3.0 precompile design thread had its architecture questions
+   *  answered by the 10m default: "fundamental architectural decisions like this … should wait for my
+   *  feedback". */
+  waitForHuman?: boolean
   /** Absent or empty ⇒ a free-text question. */
   options?: AskedOption[]
 }
@@ -3217,6 +3224,7 @@ export const AskedQuestionSchema: z.ZodType<AskedQuestion> = z.lazy(() => z.obje
   header: z.string().trim().max(24).optional(),
   kind: AskQuestionKind,
   danger: z.boolean().optional(),
+  waitForHuman: z.boolean().optional(),
   // UNBOUNDED, deliberately. This carried `.max(8)` from launch until 2026-09-03, when the maintainer
   // asked for the cap to go ("allow arbitrary numbers of options"): a `multi` over a long list — which
   // gates to run, which of twenty findings to act on — is a real shape, and the card letters past 26
@@ -3356,7 +3364,7 @@ export const DEFAULTED_FALLBACK_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS 
  *  orders options by preference, so that is the least-blocking safe one. No recommendation, or every
  *  option `external`, takes nothing. */
 function defaultOption(node: AskedQuestion): { option: AskedOption; fallback: boolean } | undefined {
-  if (node.kind !== "question") return undefined
+  if (node.kind !== "question" || node.waitForHuman) return undefined
   const recommended = node.options?.find((o) => o.recommended)
   if (!recommended) return undefined
   if (!recommended.external) return { option: recommended, fallback: false }
@@ -3367,7 +3375,7 @@ function defaultOption(node: AskedQuestion): { option: AskedOption; fallback: bo
 /** The answer Frizz gives an unanswered question on the human's behalf, or undefined when it has none to
  *  give: a free-text or `multi` question (no single pick to take), one with no option marked
  *  `recommended`, a `danger` question — the irreversible call stays the human's however long it
- *  waits — and one whose every option is `external`. A recommendation marked `external` is never taken:
+ *  waits — one marked `waitForHuman`, and one whose every option is `external`. A recommendation marked `external` is never taken:
  *  the default falls back to the first option that stays on this machine (defaultOption). Follow-ups
  *  under the taken option follow the same rule, or go out with nothing chosen, the same shape the card
  *  sends for a live follow-up the human left blank. */
@@ -3387,6 +3395,34 @@ export function recommendedDefaultAnswer(questionId: string, spec: AskedQuestion
     }
   }
   return build(spec, true)
+}
+
+/** ONE THREAD'S OPEN QUESTIONS DEFAULT TOGETHER OR NOT AT ALL (David 2026-10-08: "groups of questions
+ *  should probably all be either default to recommended or blocked for human based on the most
+ *  dangerous/in need of input … dismissing 10 … bubbles individually is painful"). The default exists
+ *  for the human who is away; one who has to come back for any of them answers all of them. So any open
+ *  question marked `danger` or `waitForHuman`, or whose countdown the human turned off, holds every one,
+ *  and the rest share ONE deadline — the latest of their own (questionDefaultAtMs) — so touching any
+ *  card holds the group. A question with nothing to take (free text, `multi`, no recommendation) or one
+ *  the human typed past simply waits for them without holding the others. The board's countdown and the
+ *  scheduler both read this. */
+export function threadQuestionDefaults(
+  open: readonly { id: string; asked_at: number; engaged_at?: number | null; default_off?: number | null; spec: AskedQuestion }[],
+  restedMs: number | undefined,
+  lastHumanAt: string | undefined,
+): { atMs: number; answers: Map<string, QuestionAnswer> } | undefined {
+  if (open.some((q) => q.spec.danger || q.spec.waitForHuman || q.default_off)) return undefined
+  const answers = new Map<string, QuestionAnswer>()
+  let atMs: number | undefined
+  for (const q of open) {
+    const due = questionDefaultAtMs(q, restedMs)
+    if (due === undefined) return undefined
+    atMs = Math.max(atMs ?? due, due)
+    if (questionRepliedPast(q, lastHumanAt)) continue
+    const answer = recommendedDefaultAnswer(q.id, q.spec)
+    if (answer) answers.set(q.id, answer)
+  }
+  return atMs === undefined || answers.size === 0 ? undefined : { atMs, answers }
 }
 
 export const AskResult = z.object({

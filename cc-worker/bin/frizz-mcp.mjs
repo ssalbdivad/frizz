@@ -652,6 +652,15 @@ function questionSchema(depth) {
           "x cannot dismiss it, because a generic close icon is not consent for something irreversible. " +
           "Declining must therefore be one of your own options.",
       },
+      waitForHuman: {
+        type: "boolean",
+        description:
+          "This decision shapes what gets built on it — the architecture of a library or a major version, " +
+          "a public API, a data model, the design a plan commits to — so a guessed answer means redoing " +
+          "that work, not tweaking it. Set it and the 10-minute default never answers: the question waits " +
+          "for the human, your recommendation still shown. Judge by how sensitive the downstream work is " +
+          "to the pick, not by how sure you are of your recommendation.",
+      },
       // No `maxItems`: the count is the worker's to choose (maintainer 2026-09-03 — "allow arbitrary
       // numbers of options"). A `multi` over a long list is a real shape, and the card letters past 26.
       options: {
@@ -704,7 +713,7 @@ const ASK = {
     "AN UNANSWERED QUESTION DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
     "`recommended` option for the human and delivers that as the answer, noting it was the default — " +
     "UNLESS that option is `external` (it files, posts, merges, pushes or publishes): then the default " +
-    "takes the first option that is not `external`, and you must not do the external act anyway. A `danger`, `multi` or " +
+    "takes the first option that is not `external`, and you must not do the external act anyway. A `danger`, `waitForHuman`, `multi` or " +
     "free-text question, one with no recommendation, or one whose every option is `external`, waits " +
     "for the human.\n\n" +
     "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU `unask` IT. A message " +

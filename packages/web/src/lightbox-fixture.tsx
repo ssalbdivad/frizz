@@ -128,6 +128,7 @@ function AnswerSheet() {
     dismissed: new Set(),
     submit: () => {},
     cancelDefault: () => {},
+    defaultCountdown: undefined,
     commit: () => {},
     enter: () => {},
     sent: new Map(),

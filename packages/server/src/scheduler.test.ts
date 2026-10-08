@@ -396,7 +396,6 @@ test("question: a rested thread's unanswered question takes its recommended opti
   const t0 = h.clock.ms
   const spec = (over: object) => JSON.stringify({ question: "Narrow the error rule?", kind: "question", options: [{ label: "Narrow", recommended: true, followUps: [{ question: "Rewrite the brief?", kind: "question", options: [{ label: "No" }, { label: "Yes", recommended: true }] }] }, { label: "Keep" }], ...over })
   h.storage.askThreadQuestion({ id: "qst_rec", slug: "t", spec: spec({}), askedAtMs: t0 })
-  h.storage.askThreadQuestion({ id: "qst_danger", slug: "t", spec: spec({ danger: true }), askedAtMs: t0 })
   h.storage.askThreadQuestion({ id: "qst_free", slug: "t", spec: JSON.stringify({ question: "Name it?", kind: "question" }), askedAtMs: t0 })
   h.storage.askThreadQuestion({ id: "qst_none", slug: "t", spec: JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A" }, { label: "B" }] }), askedAtMs: t0 })
   h.storage.askThreadQuestion({ id: "qst_multi", slug: "t", spec: JSON.stringify({ question: "Which gates?", kind: "multi", options: [{ label: "A", recommended: true }, { label: "B" }] }), askedAtMs: t0 })
@@ -417,10 +416,30 @@ test("question: a rested thread's unanswered question takes its recommended opti
   h.clock.ms = restedMs + QUESTION_DEFAULT_AFTER_MS
   await s.tick()
   assert.equal(h.storage.getThreadQuestion("qst_rec")?.state, "answered")
-  for (const id of ["qst_danger", "qst_free", "qst_none", "qst_multi"]) assert.equal(h.storage.getThreadQuestion(id)?.state, "open", id)
+  for (const id of ["qst_free", "qst_none", "qst_multi"]) assert.equal(h.storage.getThreadQuestion(id)?.state, "open", id)
   assert.equal(h.resumes.length, 1, "delivered in the same tick")
   assert.match(h.resumes[0].message, /^1\. “Narrow the error rule\?” → Narrow — No reply in 10m, so Frizz took the recommended option$/m)
   assert.match(h.resumes[0].message, /“Rewrite the brief\?” → Yes$/m)
+  h.storage.close()
+})
+
+// A thread's questions default together (shared threadQuestionDefaults): one the human must answer —
+// `danger`, `waitForHuman` — holds every sibling, however safe its own recommendation.
+test("question: one question that waits for the human holds the thread's others", async () => {
+  const h = harness()
+  const t0 = h.clock.ms
+  const rec = JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }, { label: "B" }] })
+  for (const [slug, mark] of [["d", { danger: true }], ["w", { waitForHuman: true }]] as const) {
+    h.storage.upsertSession(row(slug))
+    h.storage.askThreadQuestion({ id: `qst_${slug}_rec`, slug, spec: rec, askedAtMs: t0 })
+    h.storage.askThreadQuestion({ id: `qst_${slug}_held`, slug, spec: JSON.stringify({ ...JSON.parse(rec), ...mark }), askedAtMs: t0 })
+    h.tele.set(slug, { ...tele(), lastAssistantAt: iso(t0) })
+  }
+  const s = h.make()
+  h.clock.ms = t0 + 24 * 3600_000
+  await s.tick()
+  for (const id of ["qst_d_rec", "qst_d_held", "qst_w_rec", "qst_w_held"]) assert.equal(h.storage.getThreadQuestion(id)?.state, "open", id)
+  assert.equal(h.resumes.length, 0)
   h.storage.close()
 })
 
@@ -451,13 +470,16 @@ test("question: the human working on the card holds the default, and the countdo
   const t0 = h.clock.ms
   const spec = JSON.stringify({ question: "Which?", kind: "question", options: [{ label: "A", recommended: true }, { label: "B" }] })
   h.storage.askThreadQuestion({ id: "qst_held", slug: "t", spec, askedAtMs: t0 })
-  h.storage.askThreadQuestion({ id: "qst_off", slug: "t", spec, askedAtMs: t0 })
+  h.storage.upsertSession(row("u"))
+  h.storage.askThreadQuestion({ id: "qst_off", slug: "u", spec, askedAtMs: t0 })
+  h.storage.askThreadQuestion({ id: "qst_sibling", slug: "u", spec, askedAtMs: t0 })
   h.tele.set("t", { ...tele(), lastAssistantAt: iso(t0) })
+  h.tele.set("u", { ...tele(), lastAssistantAt: iso(t0) })
   const s = h.make()
   // A keystroke a few seconds before the deadline pushes it out by the grace.
   const engagedMs = t0 + QUESTION_DEFAULT_AFTER_MS - 5_000
   assert.equal(h.storage.holdQuestionDefault("t", "qst_held", "engage", engagedMs), true)
-  assert.equal(h.storage.holdQuestionDefault("t", "qst_off", "cancel", engagedMs), true)
+  assert.equal(h.storage.holdQuestionDefault("u", "qst_off", "cancel", engagedMs), true)
   assert.equal(h.storage.holdQuestionDefault("other", "qst_held", "cancel", engagedMs), false, "slug-scoped")
   h.clock.ms = t0 + QUESTION_DEFAULT_AFTER_MS
   await s.tick()
@@ -468,6 +490,7 @@ test("question: the human working on the card holds the default, and the countdo
   h.clock.ms += 24 * 3600_000
   await s.tick()
   assert.equal(h.storage.getThreadQuestion("qst_off")?.state, "open", "the x leaves it for the human for good")
+  assert.equal(h.storage.getThreadQuestion("qst_sibling")?.state, "open", "and every question beside it")
   h.storage.close()
 })
 

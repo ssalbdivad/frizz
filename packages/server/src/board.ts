@@ -8,7 +8,7 @@ import { homedir } from "node:os"
 import { dirname, join } from "node:path"
 import watcher from "@parcel/watcher"
 import type { BoardSnapshot, ClaudeModel, ThreadScheduleRef, ThreadTerminal, ThreadView, RuntimeState, ThreadRecurringPrompt, ProviderError } from "@frizz/shared"
-import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingStatus, awaitingSteps, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, questionRepliedPast, questionDefaultAtMs, recommendedDefaultAnswer, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
+import { AskedQuestionSchema, BoardDiffer, PermissionMode, SnoozeUntil, ThreadSlug, awaitingNeedsInput, awaitingStatus, awaitingSteps, isDirectSubAgent, needsInputRequired, queueUrgency, questionAnswerMessage, threadQuestionDefaults, questionsCancelledWakeMessage, type AskedQuestion, type PermissionMode as PermissionModeValue, type QuestionAnswer, type QuestionDismissal } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import { workDirOf, type Project } from "./project.ts"
 import { liftWorkingDir } from "./thread-cwd.ts"
@@ -2197,24 +2197,24 @@ function sessionThreadView(
   const questions: ThreadView["questions"] = []
   // The rest the default countdown starts from — the scheduler's own reading (evalQuestionDefaults).
   const restedMs = rawTele?.turn === "idle" ? Date.parse(rawTele.lastAssistantAt ?? "") : undefined
-  for (const q of questionRows) {
-    if (q.state !== "open") continue
-    const spec = safeQuestionSpec(q.spec)
-    if (spec) {
-      // The human typed past it: it stays open and owed, but Frizz takes no option for them on it.
-      const typedPast = questionRepliedPast(q, rawTele?.lastHumanAt)
-      const defaultAnswer = typedPast ? undefined : recommendedDefaultAnswer(q.id, spec)
-      const defaultsAtMs = defaultAnswer ? questionDefaultAtMs(q, restedMs) : undefined
-      const recommendedLabel = spec.options?.find((o) => o.recommended)?.label
-      const defaultsTo = defaultAnswer?.chosen[0] !== recommendedLabel ? defaultAnswer?.chosen[0] : undefined
-      questions.push({
-        id: q.id,
-        spec,
-        askedAt: new Date(q.asked_at).toISOString(),
-        ...(defaultsAtMs !== undefined ? { defaultsAt: new Date(defaultsAtMs).toISOString() } : {}),
-        ...(defaultsAtMs !== undefined && defaultsTo ? { defaultsTo } : {}),
-      })
-    }
+  const openQuestions = questionRows.flatMap((q) => {
+    const spec = q.state === "open" ? safeQuestionSpec(q.spec) : undefined
+    return spec ? [{ ...q, spec }] : []
+  })
+  // The thread's questions default together or not at all; one deadline for the group.
+  const defaults = threadQuestionDefaults(openQuestions, restedMs, rawTele?.lastHumanAt)
+  for (const q of openQuestions) {
+    const defaultAnswer = defaults?.answers.get(q.id)
+    const defaultsAtMs = defaultAnswer ? defaults!.atMs : undefined
+    const recommendedLabel = q.spec.options?.find((o) => o.recommended)?.label
+    const defaultsTo = defaultAnswer?.chosen[0] !== recommendedLabel ? defaultAnswer?.chosen[0] : undefined
+    questions.push({
+      id: q.id,
+      spec: q.spec,
+      askedAt: new Date(q.asked_at).toISOString(),
+      ...(defaultsAtMs !== undefined ? { defaultsAt: new Date(defaultsAtMs).toISOString() } : {}),
+      ...(defaultsAtMs !== undefined && defaultsTo ? { defaultsTo } : {}),
+    })
   }
   // The ones HOLDING the thread — every open one, until it is answered, dismissed or withdrawn.
   const currentQuestionCount = questions.length

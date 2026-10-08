@@ -66,8 +66,11 @@ export interface RegisteredAnswering {
   dismissing: boolean
   /** Questions the × took off the card, ahead of the board read that drops them. */
   dismissed: ReadonlySet<string>
-  /** The countdown's ×: Frizz will not take the recommended option for `id`; it waits for the human. */
-  cancelDefault: (id: string) => void
+  /** The countdown's ×: Frizz takes no recommended option on any of the thread's questions; they wait. */
+  cancelDefault: () => void
+  /** The thread's questions default together (shared threadQuestionDefaults), so ONE countdown speaks for
+   *  them, under the last of them: `ownerId` is the card that draws it, `count` how many it will answer. */
+  defaultCountdown: { ownerId: string; count: number } | undefined
   /** Send ONE question's staged answer — what completing a question does. Nothing staged: nothing sent. */
   commit: (q: RegisteredQuestionView) => void
   /** Send EVERY staged answer on the thread: the on-purpose Send answers, and a typed reply carrying what
@@ -218,12 +221,24 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   // (`defaultsAt`) is told about every pick, toggle and keystroke — at most once per ENGAGE_PING_MS, well
   // inside the server's grace — so the default cannot fire under someone halfway through answering. A
   // lost ping is not worth an error line: the next interaction sends another.
+  // The countdown's × hides it at once, like the question's own × (David 2026-10-08), and it is back
+  // only if the request fails.
+  // Keyed by question, as the server's turn-off is: any one turned off holds the group (shared
+  // threadQuestionDefaults), and questions asked afterwards are a new group with a countdown of its own.
+  const [defaultCancelled, setDefaultCancelled] = useState<ReadonlySet<string>>(() => new Set())
   const hold = useMutation({
     mutationFn: async (input: { id: string; action: "engage" | "cancel" }) => api.holdQuestionDefault({ slug: slug!, ...input }),
     onError: (cause, input) => {
-      if (input.action === "cancel") setError(errorText(cause))
+      if (input.action !== "cancel") return
+      setDefaultCancelled((prev) => {
+        const next = new Set(prev)
+        next.delete(input.id)
+        return next
+      })
+      setError(errorText(cause))
     },
   })
+  const defaulting = questions.filter((q) => q.defaultsAt && !sent.has(q.id) && !dismissed.has(q.id))
   const engagedAt = useRef(new Map<string, number>())
   const engage = (q: RegisteredQuestionView) => {
     if (!slug || !q.defaultsAt) return
@@ -355,7 +370,13 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,
     dismissed,
-    cancelDefault: (id) => hold.mutate({ id, action: "cancel" }),
+    cancelDefault: () => {
+      setDefaultCancelled((prev) => new Set([...prev, ...defaulting.map((q) => q.id)]))
+      // Every one, not just the first: the server would hold the group on any one of them, but the
+      // worker may `unask` that one and the others must not start counting down again.
+      for (const q of defaulting) hold.mutate({ id: q.id, action: "cancel" })
+    },
+    defaultCountdown: !defaulting.some((q) => defaultCancelled.has(q.id)) && defaulting.length > 0 ? { ownerId: defaulting[defaulting.length - 1]!.id, count: defaulting.length } : undefined,
     commit,
     submit,
     enter,
@@ -527,7 +548,10 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
   const a = given ?? shared
   if (!a || !a.slug) return null
   // On the phone thread page the card is a reading surface; the sheet answers it (PhoneQuestionCards).
-  const countdown = q.defaultsAt ? <DefaultCountdown at={q.defaultsAt} to={q.defaultsTo} onCancel={() => a.cancelDefault(q.id)} /> : null
+  const group = a.defaultCountdown
+  const countdown = q.defaultsAt && group?.ownerId === q.id
+    ? <DefaultCountdown at={q.defaultsAt} to={group.count === 1 ? q.defaultsTo : undefined} count={group.count} onCancel={a.cancelDefault} />
+    : null
   if (phone) return <>
     <CompactQuestionList questions={[q]} />
     {countdown}
@@ -611,7 +635,7 @@ export function RegisteredQuestionCard({ q, answering: given }: { q: RegisteredQ
  *  the dismiss, and a second × beside it would read as the same control. Minutes only, on the page's
  *  30s clock (a ticking seconds digit would pull the eye off the question it sits under); `<1m` for the
  *  last minute, as the shell-budget reading spells it. Its × turns the default off for this question. */
-function DefaultCountdown({ at, to, onCancel }: { at: string; to?: string; onCancel: () => void }) {
+function DefaultCountdown({ at, to, count, onCancel }: { at: string; to?: string; count: number; onCancel: () => void }) {
   const now = useNowMs()
   const left = Date.parse(at) - now
   const reading = left < 60_000 ? "<1m" : `${Math.ceil(left / 60_000)}m`
@@ -629,7 +653,7 @@ function DefaultCountdown({ at, to, onCancel }: { at: string; to?: string; onCan
           Picks “{to}” in {reading}
         </span>
       ) : (
-        <span title="Unless it is answered first">Picks the recommended option in {reading}</span>
+        <span title="Unless they are answered first">{count === 1 ? "Picks the recommended option" : `Picks all ${count} recommended options`} in {reading}</span>
       )}
       <button
         type="button"
