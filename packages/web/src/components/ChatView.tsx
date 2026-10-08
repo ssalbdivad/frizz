@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
 import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, Repeat, TerminalSquare, X } from "lucide-react"
-import { parseRecurringPrompt, parseScheduledRunPrompt, questionFencesLive } from "@frizz/shared"
+import { parseRecurringPrompt, parseScheduledRunPrompt, parseThreadMessage, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, ThreadWatchView, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushScheduleDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { scheduledRunFacts } from "../lib/schedules.ts"
@@ -40,7 +40,8 @@ import { LinkifiedText } from "./LinkifiedText.tsx"
 import { parseSentContext, parseSentEditorContext, splitProseByTokens, tokenLabel, withoutEditorContext, withoutWorktreeNote, type SentContextItem } from "../lib/composerContext.ts"
 import { SentEditorContextChip } from "./SentEditorContext.tsx"
 import { AnswersCard } from "./AnswersCard.tsx"
-import { MentionIndexProvider } from "./MentionLinks.tsx"
+import { MentionIndexProvider, MentionLink, useMentionSegments } from "./MentionLinks.tsx"
+import { AgentMessage } from "./AgentMessage.tsx"
 import { WakeDivider } from "./WakeDivider.tsx"
 import { useLiveAnswering, type LiveAnswering } from "../lib/answering.ts"
 import { useIsMobile } from "../lib/mobile.ts"
@@ -2204,7 +2205,7 @@ export interface CollapsedTool {
   agentId?: string
   agentStatus?: "completed" | "failed" | "killed"
   agentElapsedMs?: number
-  // Set for a SendMessage (peer/agent-to-agent) call: the SendMessageCard. Like the prompt/read/command
+  // Set for a SendMessage (peer/agent-to-agent) call: an outgoing AgentMessage. Like the prompt/read/command
   // entries it stands alone — never folds into a ×N count.
   sendTo?: string
   sendSummary?: string
@@ -2264,7 +2265,7 @@ function collapseTools(tools: TranscriptMessage["tools"]): CollapsedTool[] {
       // silently demoting every codex dispatch to a generic card even after the router accepted it.
       out.push({ name: t.name, detail: t.detail, prompt: t.prompt, input: t.input, subagentType: t.subagentType, agentId: t.agentId, agentStatus: t.agentStatus, agentElapsedMs: t.agentElapsedMs, output: t.output, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.sendTo !== undefined || t.sendBody !== undefined) {
-      // A SendMessage (peer message) renders as its own SendMessageCard — never folds into a ×N run.
+      // A SendMessage (peer message) renders as its own outgoing AgentMessage — never folds into a ×N run.
       out.push({ name: t.name, detail: t.detail, sendTo: t.sendTo, sendSummary: t.sendSummary, sendBody: t.sendBody, sendType: t.sendType, sendDispatchId: t.sendDispatchId, sendTargetLabel: t.sendTargetLabel, status: t.status, durationMs: t.durationMs, count: 1 })
     } else if (t.todos) {
       // A to-do list renders as its own TodoBlock — never folds into a ×N run. Checked BEFORE the
@@ -3270,98 +3271,6 @@ function sendMessageVerb(to: string | undefined, type: string | undefined): stri
   return to === "main" ? "Reported" : "Steered"
 }
 
-// WHICH OF THE TWO PEER-MESSAGE RENDERINGS THIS SURFACE GETS.
-//
-// In a THREAD's chat the maintainer's ruling (2026-07-31) applies: "render 'Steered' or SendMessage
-// using the same full width notifications, the horizontal rule style component that we render when an
-// agent completes." A steer is the same class of event as a completion or an upward report — a child
-// this turn touched reaching a notable state — so it draws the same divider and carries no body.
-//
-// In the SUB-AGENT DRAWER it must stay the CARD, and that is not an inconsistency — it is the other
-// half of the same design. The divider's whole contract is "click the title and read it there": a
-// steer's text lands in the child's transcript as an incoming message, and an upward report's text is
-// read off the child's own `SendMessage` record, which is exactly this card. Hollowing the card out too
-// would leave the message unreadable on every surface. `ThreadSlugContext` is set only on a real
-// thread's chat (the drawer deliberately provides ChildDrillSlugContext instead), so it is the honest
-// test for which surface this is.
-function SendMessageBlock({ to, summary, body, type, dispatchId, targetLabel, status, durationMs, at }: { to?: string; summary?: string; body: string; type?: string; dispatchId?: string; targetLabel?: string; status?: ToolStatus; durationMs?: number; at?: string }) {
-  const inThreadChat = useContext(ThreadSlugContext) !== null
-  if (inThreadChat) return <SendMessageLine to={to} type={type} dispatchId={dispatchId} targetLabel={targetLabel} at={at} />
-  return <SendMessageCard to={to} summary={summary} body={body} type={type} status={status} durationMs={durationMs} />
-}
-
-// A SendMessage (peer / agent-to-agent messaging) rendered as a sibling of AgentBlock/BashBlock: the
-// SAME quiet bordered card family, but purpose-built to read as "this agent steered that one" rather
-// than a generic SendMessage(...) tool line. The header leads with the petite-caps kind label
-// ("Steered", or "Shutdown" for a shutdown_request), then the model's one-line `summary` (muted,
-// truncated). The
-// chevron expands the MESSAGE BODY, rendered as markdown in a quiet indented block (long bodies clamp
-// with a "Show all N lines" affordance, exactly like the Bash/Read/Agent bodies). Default state mirrors
-// AgentBlock: COLLAPSED when a summary already conveys the gist, OPEN when there's no summary so a
-// bodied message isn't hidden behind a chevron showing nothing but the recipient.
-//
-// This is now the DRAWER-ONLY rendering — see SendMessageBlock for why the thread's own chat draws a
-// divider instead, and why this one has to keep its body.
-const SEND_MAX_LINES = 16
-function SendMessageCard({ to, summary, body, type, status, durationMs }: { to?: string; summary?: string; body: string; type?: string; status?: ToolStatus; durationMs?: number }) {
-  const [open, setOpen] = useState(!summary)
-  const [expanded, setExpanded] = useState(false)
-  const bodyId = useId()
-  const html = useMarkdownHtml(body)
-  const inner = useInnerHtml(html)
-  const lineCount = useMemo(() => body.split("\n").length, [body])
-  const long = lineCount > SEND_MAX_LINES
-  const hasBody = !!body.trim()
-  const label = sendMessageVerb(to, type)
-  return (
-    <div className="frizz-bash">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        onMouseDown={(e) => e.preventDefault()}
-        aria-controls={hasBody ? bodyId : undefined}
-        aria-expanded={hasBody ? open : undefined}
-        aria-label={`${hasBody ? `${open ? "Collapse" : "Expand"} ` : ""}${label}${to ? ` to ${to}` : ""}`}
-        className="frizz-bash-header w-full text-left outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
-        disabled={!hasBody}
-      >
-        <span className="flex min-w-0 items-center gap-2">
-          <span className="petite-caps frizz-bash-label shrink-0">{label}</span>
-          {summary && <span className="min-w-0 truncate text-[11.5px] text-muted">{summary}</span>}
-        </span>
-        <span className="flex shrink-0 items-center gap-2">
-          <ToolStatusMeta status={status} durationMs={durationMs} />
-          {hasBody && <ChevronRight aria-hidden="true" size={12} className={`shrink-0 text-muted transition-transform ${open ? "rotate-90" : ""}`} />}
-        </span>
-      </button>
-      {hasBody && (
-        <div id={bodyId} hidden={!open}>
-          {open && (
-            <>
-              {/* Quiet indented body: the border-top + 10px/8px padding mirror .frizz-bash-body, but the
-                  content is MARKDOWN (md-body — sans, 14px) so a peer message reads like prose, not a code
-                  dump. The clamp caps a long body at ~320px until "Show all" expands it. */}
-              <div className={`border-t border-border px-2.5 py-2${long && !expanded ? " frizz-bash-clamp" : ""}`}>
-                <div className="md-body" dangerouslySetInnerHTML={inner} />
-              </div>
-              {long && (
-                <button
-                  type="button"
-                  onClick={() => setExpanded((v) => !v)}
-                  onMouseDown={(e) => e.preventDefault()}
-                  className="frizz-bash-expand petite-caps px-2.5 pb-1.5"
-                >
-                  {expanded ? "Collapse" : `Show all ${lineCount} lines`}
-                </button>
-              )}
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // The user chat bubble, right-justified — plain and uncapped. Its own component so the unqueue /
 // deliver-now hooks stay out of memoized Message.
 // A sent message that carries ⌘I selected context (lib/composerContext.ts — inline `@file:line`
@@ -3750,6 +3659,10 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // can lose its text to this.
     const recurring = m.wake ? parseRecurringPrompt(text) : undefined
     if (recurring) return <RecurringPromptLine bump={recurring} sourceId={m.sourceId} at={m.at} />
+    // A message from ANOTHER FRIZZ THREAD is delivered as a wake, but it is another agent speaking, so
+    // it takes the agent-message bubble rather than Frizz's own chrome (AgentMessage.tsx).
+    const threadMessage = m.wake ? parseThreadMessage(text) : undefined
+    if (threadMessage) return <AgentMessage direction="in" kind="thread" name={<ThreadHandleName handle={threadMessage.from} />} body={threadMessage.body} status={threadMessage.answersWait ? "replied" : threadMessage.awaitsReply ? "reply requested" : undefined} at={m.at} sourceId={m.sourceId} />
     if (m.wake) return <FrizzWake steer={m.wakeSteer} text={text} sourceId={m.sourceId} at={m.at} wrap={dense} />
     // …and the same correction for the OTHER writer of a user turn the human didn't type: a background
     // sub-agent pushing a report up to its parent through `SendMessage({to:"main"})`. `m.peerFrom` is the
@@ -3759,7 +3672,7 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
     // …and a message from ANOTHER SESSION rides the same `peerFrom` tell, told apart by `peerSession`.
     // It is settled first because it is not a child: no report verb, no drawer, and a body to keep.
     if (m.peerSession && m.peerFrom) return <PeerSessionMessageLine from={m.peerFrom} unnamed={m.peerUnnamed} text={text} sourceId={m.sourceId} at={m.at} />
-    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} sourceId={m.sourceId} at={m.at} />
+    if (m.peerFrom) return <SubAgentReportLine from={m.peerFrom} unnamed={m.peerUnnamed} dispatchId={m.peerDispatchId} text={text} sourceId={m.sourceId} at={m.at} />
     // A SPINOFF REQUEST: the human's instructions for a new thread, drawn as the card that links to it.
     // `m.spinoff` is the server's tell (transcript.ts withSpinoffCards).
     if (m.spinoff) return <SpinoffCard id={m.spinoff.id} instructions={m.spinoff.instructions} sourceId={m.sourceId} />
@@ -4740,219 +4653,72 @@ function AgentCompletionLine({ call, sourceId, at }: { call: TranscriptToolCall;
   )
 }
 
-// A SUB-AGENT'S UPWARD REPORT — a background child calling `SendMessage({to:"main"})` mid-flight to tell
-// its dispatcher something before it finishes. It rides the SAME wake-divider idiom as the completion
-// above, and for the same reason: this is a child the worker launched reaching a notable state and
-// re-invoking the agent, which is exactly the class the divider was converged on to carry.
+// THE AGENT EXCHANGES — a child reporting up, another Claude session writing in, and this turn steering a
+// child or messaging another thread — all draw the chat-style AgentMessage (AgentMessage.tsx, which has
+// the history). Until 2026-10-08 the first and third were bodiless hairlines whose text lived one drawer
+// away (maintainer 2026-07-29, 2026-07-31); the maintainer replaced that ruling on 2026-10-08 with a
+// message UI that keeps the body readable in place, clamped when it is long.
 //
-// It is deliberately NOT a message and NOT a card (maintainer 2026-07-29: it "should look more like tool
-// calls, or even more like the kind of full-width messages that show up whenever a subagent or a sub-shell
-// complete… we don't need to render its full message in the chat like any other message"). The earlier
-// TranscriptCard version rendered the child's whole markdown body inline, which read as a full peer turn
-// and competed with the parent's own prose for the eye.
-//
-// It carries NO EXCERPT of the message either (maintainer, same day: "Do not include any piece of the
-// message in that component. It is not useful to have 30 [...] characters of that message get rendered. I
-// should just have to click on the title, then I can see the whole message if I want to. It should open up
-// in a drawer."). A 30-character window onto a report is too little to act on and too much to ignore, so
-// the line states only THAT a child reported, and the TITLE is the affordance: it opens the child's own
-// drawer, where the message is rendered in full alongside the work it came out of.
-function SubAgentReportLine({ from, unnamed, dispatchId, sourceId, at }: { from: string; unnamed?: boolean; dispatchId?: string; sourceId?: string; at?: string }) {
+// The other party's NAME is the drill-in wherever there is one: a child's title opens its drawer, a
+// thread's handle opens that thread. A profile is not a name — an unresolved child shows as "Sub-agent"
+// with its subagent_type on hover, never the model+effort cell as if it were a title (2026-08-06).
+function SubAgentReportLine({ from, unnamed, dispatchId, text, sourceId, at }: { from: string; unnamed?: boolean; dispatchId?: string; text: string; sourceId?: string; at?: string }) {
+  return <AgentMessage direction="in" kind="sub-agent" name={<ChildName label={unnamed ? undefined : from} subagentType={from} dispatchId={dispatchId} />} body={text} at={at} sourceId={sourceId} />
+}
+
+function ChildName({ label, subagentType, dispatchId }: { label?: string; subagentType?: string; dispatchId?: string }) {
   const slug = useChildDrillSlug()
-  // `dispatchId` is the child's Agent DISPATCH tool_use id, NOT its agentId — that is the only key
-  // pushSubAgentDrawer/tailer.subAgent resolve against, and handing over the agentId (which is what the
-  // report's delivery record actually names) opens an "unavailable" drawer. The server does the
-  // translation; see peerDispatchId. No id ⇒ plain text, never a dead link.
-  const canDrill = !!(slug && dispatchId)
-  // A PROFILE IS NOT A NAME. When the parser could not resolve the sender's dispatch description, `from`
-  // is only the subagent_type — identical across every child dispatched at that model+effort cell — and
-  // the divider used to promote it to a title, so two siblings reporting read as the same agent and the
-  // line named the MODEL where the reader expected the work (maintainer 2026-08-06: "I'm also still
-  // occasionally seeing things like 'Agent <OPUS:HIGH> rested'. Sometimes these later resolve into the
-  // actual title"). It resolves later because the description lives on the DISPATCH record, which the
-  // window may not have reached yet — so the honest reading in the meantime is no name at all, not a
-  // borrowed one. The cell stays in the tooltip, where it is a fact about the child rather than its
-  // identity, and the drill-in survives: the word "Sub-agent" carries the link.
-  const label = unnamed ? undefined : from
-  // Shown as the child's handle, like the completion line above; `label` itself still titles the drawer.
-  const name = label === undefined ? undefined : subAgentName(label)
-  const openTitle = unnamed && from ? `${CHILD_OPEN_TITLE.AGENT} — ${from}` : CHILD_OPEN_TITLE.AGENT
-  // ONE element for the whole unnamed reading, never a "Sub-agent" span plus the shared trailing verb.
-  // The divider's flex `gap` is 12px — a full em at its 12px petite-caps — because it was tuned to stand
-  // either side of a QUOTED TITLE. With the title gone it would land between two words of one phrase, and
-  // measured on the real page that is the difference between a word space and an em of air.
-  if (label === undefined) {
-    return (
-      <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : "Sub-agent reported"} at={at}>
-        {canDrill ? (
-          <button
-            type="button"
-            data-subagent-report-open
-            title={openTitle}
-            aria-label={`${CHILD_OPEN_TITLE.AGENT}${from ? `: ${from}` : ""}`}
-            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: UNNAMED_SUB_AGENT_LABEL, subagentType: from })}
-            onMouseDown={(e) => e.preventDefault()}
-            className="shrink-0 rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-          >
-            Sub-agent reported
-          </button>
-        ) : (
-          <span className="shrink-0" title={from || undefined}>Sub-agent reported</span>
-        )}
-      </WakeDivider>
-    )
-  }
+  const name = label === undefined ? "Sub-agent" : subAgentName(label)
+  if (!slug || !dispatchId) return <span title={label ?? subagentType}>{name}</span>
   return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-report" ariaLabel={canDrill ? undefined : `Sub-agent ${label} reported`} at={at}>
-      <span className="shrink-0">Sub-agent</span>
-      {/* Guillemets OUTSIDE the truncating element, per the completion line: a title clipped at a narrow
-          width still closes its quote. The TITLE is the only part allowed to shrink (`min-w-0 truncate`
-          on it and on its flex host) — a `shrink-0` wrapper here let a long name push the whole divider
-          past the pane at 420px, losing its left hairline, while the completion line beside it clipped
-          cleanly. Codex task names are long snake_case identifiers, so that is the common case, not the
-          edge. `label` is the child's real title: its codex task name, or on Claude the dispatch
-          description the parser resolved — the unnamed case returned above and never reaches here, so
-          the quoted slot is either a real title or absent entirely, never the profile. */}
-      <span className="flex min-w-0 items-center">
-        <span className="shrink-0">«</span>
-        {canDrill ? (
-          <button
-            type="button"
-            data-subagent-report-open
-            title={name === label ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${label}`}
-            aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${label}`}
-            onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label, subagentType: from })}
-            onMouseDown={(e) => e.preventDefault()}
-            className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-          >
-            {name}
-          </button>
-        ) : (
-          <span className="min-w-0 truncate" title={name === label ? undefined : label}>{name}</span>
-        )}
-        <span className="shrink-0">»</span>
-      </span>
-      <span className="shrink-0">reported</span>
-    </WakeDivider>
+    <button
+      type="button"
+      data-subagent-open
+      title={label && name !== label ? `${CHILD_OPEN_TITLE.AGENT} — ${label}` : CHILD_OPEN_TITLE.AGENT}
+      aria-label={`${CHILD_OPEN_TITLE.AGENT}${label ? `: ${label}` : ""}`}
+      onClick={() => pushSubAgentDrawer(slug, dispatchId, label === undefined ? { label: UNNAMED_SUB_AGENT_LABEL, subagentType } : { label, subagentType })}
+      onMouseDown={(e) => e.preventDefault()}
+      className="max-w-full truncate rounded-sm text-left outline-none hover:underline hover:underline-offset-2 focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+    >
+      {name}
+    </button>
   )
+}
+
+// Another Frizz thread by handle: a link when this project (or another open one) resolves it, the bare
+// `@handle` when nothing does.
+function ThreadHandleName({ handle }: { handle: string }) {
+  const segment = useMentionSegments(`@${handle}`).find((s) => s.kind === "mention")
+  return segment?.kind === "mention" ? <MentionLink segment={segment} /> : <span>@{handle}</span>
 }
 
 // A MESSAGE FROM ANOTHER SESSION — Claude Code's cross-session `SendMessage` (2.1.280+), which lets a
-// worker message any other local session by the name that session is listed under. It reaches this
-// worker's queue exactly like the operator's own follow-up, and until the server learned its wrapper it
-// rendered as the operator's bubble with the XML showing (2026-09-28: "as a user I shouldn't see this,
-// especially as one of my messages"). The server's tell is `peerSession` (see parseCrossSessionMessage).
-//
-// It is two agents coordinating, so it takes the family's quietest shape, one hairline, and stays
-// collapsed. It keeps its BODY one click away where the report line above carries none, for the reason
-// the fired timer does: a child's report is readable in the child's drawer, but this one has no drawer,
-// so a bare hairline would be the only place the app ever showed what the other session said — and the
-// worker's next move is often a reply to it.
-//
-// The session name takes the label's petite caps, NOT WAKE_DIVIDER_IDENT's ordinary case. It was ordinary
-// case first, on the reading that it is an address the workers write in their prose; on the real page it
-// was the loudest mark on the line, and the worker's own reply to the same session, the `SendMessage`
-// line one row down, already spells it «STANDARD-SCHEMA-7C». One name, one spelling, in one family.
+// worker message any other local session by the name that session is listed under. The server's tell is
+// `peerSession` (parseCrossSessionMessage). A wrapper with no name carries only a socket path, which is
+// an address rather than a name, so it reads "Another session" with the address on hover.
 function PeerSessionMessageLine({ from, unnamed, text, sourceId, at }: { from: string; unnamed?: boolean; text: string; sourceId?: string; at?: string }) {
-  const [open, setOpen] = useState(false)
-  const bodyId = useId()
-  return (
-    <div data-frizz-msg={sourceId} className="flex flex-col">
-      <WakeDivider
-        icon={Bot}
-        marker="peer-session"
-        at={at}
-        onClick={() => setOpen((v) => !v)}
-        ariaExpanded={open}
-        ariaControls={bodyId}
-        ariaLabel={`${open ? "Collapse" : "Expand"} the message from ${unnamed ? "another Claude session" : `the Claude session ${from}`}`}
-      >
-        <span className="shrink-0">Message from</span>
-        {/* No name, only the sender's reply address (a socket path): say what it is, keep the address
-            on hover, and never quote a path as if it were a title. */}
-        {unnamed ? (
-          <span className="shrink-0" title={from}>another session</span>
-        ) : (
-          <span className="flex min-w-0 items-center">
-            <span className="shrink-0">«</span>
-            <span className="min-w-0 truncate">{from}</span>
-            <span className="shrink-0">»</span>
-          </span>
-        )}
-        <span aria-hidden="true" className="shrink-0 opacity-50">·</span>
-        <span className="shrink-0">{open ? "Click to collapse" : "Click to expand"}</span>
-      </WakeDivider>
-      {open && (
-        // The fired timer's ruled aside, flush left under a centred label for the same reason, but
-        // MARKDOWN: this is another agent's prose, and it writes lists and `code`. `card-md` puts it on
-        // the 13px aside scale in the inherited muted tone, a step below the transcript's own prose.
-        <div id={bodyId} className="card-md mt-1.5 border-l border-border/70 pl-3 text-muted">
-          <ProseHtml md={text} wrap />
-        </div>
-      )}
-    </div>
-  )
+  return <AgentMessage direction="in" kind="session" name={unnamed ? <span title={from}>Another session</span> : from} body={text} at={at} sourceId={sourceId} />
 }
 
-// THE OUTGOING HALF of the pair above — this turn calling `SendMessage` to steer a child it dispatched
-// (or `shutdown_request`/codex `followup_task`, which address the same class of recipient). Maintainer
-// 2026-07-31: "render 'Steered' or SendMessage using the same full width notifications, the horizontal
-// rule style component that we render when an agent completes. In the case of Claude Code, clicking on
-// the title should open up the sub-agent in the drawer."
-//
-// So it drops the bordered SendMessageCard for the SAME divider the completion and report lines draw.
-// The three now read as one family, which is the point: they are the three things that happen between a
-// worker and its children, and a bordered card for one of them sat in the tool band the divider exists
-// to stand out from.
-//
-// It carries NO summary and NO body — the same ruling the report line took ("Do not include any piece
-// of the message in that component… I should just have to click on the title, then I can see the whole
-// message if I want to"). The steer's text is not lost: it lands in the child's transcript as an
-// incoming message, which is precisely what the title opens.
-//
-// The TITLE is the child's dispatch DESCRIPTION and the link target its DISPATCH tool_use id — both
-// resolved server-side (sendTargetLabel/sendDispatchId), because the raw `to` is an agentId that reads
-// as a hash and resolves to nothing. Codex peer calls name a target that was never dispatch-acked here,
-// so they keep that target as plain text rather than becoming a dead link.
-function SendMessageLine({ to, type, dispatchId, targetLabel, sourceId, at }: { to?: string; type?: string; dispatchId?: string; targetLabel?: string; sourceId?: string; at?: string }) {
-  const slug = useChildDrillSlug()
+// THE OUTGOING HALF: this turn calling `SendMessage` (a steer to a child it dispatched, a report up to
+// `main`, a codex follow-up) or `message_thread` (another Frizz thread). The same component on every
+// surface — the thread's chat and the sub-agent drawer both keep the body now, so there is no longer a
+// reason for the two to differ. The recipient is the child's dispatch DESCRIPTION, resolved server-side
+// (sendTargetLabel/sendDispatchId), because the raw `to` is an agent id that reads as a hash; a codex
+// target that was never dispatch-acked here stays plain text rather than a dead link.
+function SendMessageBlock({ to, body, type, dispatchId, targetLabel, at }: { to?: string; summary?: string; body: string; type?: string; dispatchId?: string; targetLabel?: string; status?: ToolStatus; durationMs?: number; at?: string }) {
+  if (type === "frizz_thread" || type === "frizz_thread_await") {
+    const handle = (to ?? "").replace(/^@/, "")
+    return <AgentMessage direction="out" kind="thread" name={<ThreadHandleName handle={handle} />} body={body} status={type === "frizz_thread_await" ? "reply requested" : undefined} at={at} />
+  }
   const verb = sendMessageVerb(to, type)
-  // `to === "main"` is an upward report, whose recipient is the conversation itself — there is no title
-  // worth showing and nothing to drill into, so the divider states the verb alone.
-  const title = to === "main" ? undefined : (targetLabel ?? to)
-  // A resolved dispatch description shows as the child's handle, like the completion and report lines;
-  // a raw `to` (a codex peer target, an id) is an identifier already and stays as written.
-  const name = targetLabel && title === targetLabel ? subAgentName(targetLabel) : title
-  const canDrill = !!(slug && dispatchId)
-  return (
-    <WakeDivider icon={Bot} sourceId={sourceId} marker="agent-steer" ariaLabel={canDrill ? undefined : `${verb}${title ? ` ${title}` : ""}`} at={at}>
-      <span className="shrink-0">{verb}</span>
-      {/* Guillemets OUTSIDE the truncating title, and the title the only shrinkable part — the same
-          construction the completion and report lines use, so a long child description clips cleanly at
-          a narrow width instead of pushing the divider's hairline off the pane. */}
-      {title && (
-        <span className="flex min-w-0 items-center">
-          <span className="shrink-0">«</span>
-          {canDrill ? (
-            <button
-              type="button"
-              data-subagent-steer-open
-              title={name === title ? CHILD_OPEN_TITLE.AGENT : `${CHILD_OPEN_TITLE.AGENT} — ${title}`}
-              aria-label={`${CHILD_OPEN_TITLE.AGENT}: ${title}`}
-              onClick={() => pushSubAgentDrawer(slug!, dispatchId!, { label: title })}
-              onMouseDown={(e) => e.preventDefault()}
-              className="min-w-0 truncate rounded-sm underline decoration-muted/30 underline-offset-2 outline-none transition-colors hover:text-fg hover:decoration-fg/60 focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
-            >
-              {name}
-            </button>
-          ) : (
-            <span className="min-w-0 truncate" title={name === title ? undefined : title}>{name}</span>
-          )}
-          <span className="shrink-0">»</span>
-        </span>
-      )}
-    </WakeDivider>
-  )
+  // `main` is the conversation that dispatched this child: the parent, not a sub-agent of anyone.
+  // A raw agent id is a hash, not a name: unresolved, the child reads "Sub-agent" with the id on hover.
+  const label = targetLabel ?? (to && !/^(?:agent-)?[0-9a-f]{12,}$/i.test(to) ? to : undefined)
+  const name = to === "main" ? <span>Parent</span> : <ChildName label={label} subagentType={label === undefined ? to : undefined} dispatchId={dispatchId} />
+  // A shutdown or follow-up is a different act from a plain message, so it says so beside the name.
+  const status = verb === "Shutdown" ? "shutdown request" : verb === "Followed up" ? "follow-up" : undefined
+  return <AgentMessage direction="out" kind={to === "main" ? "thread" : "sub-agent"} name={name} body={body || "(no message)"} status={status} at={at} />
 }
 
 // A quiet transcript annotation (a context-compaction note, an "Agent … finished" line), or — with

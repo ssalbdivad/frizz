@@ -10,6 +10,7 @@ const wakeDivider = () => readFileSync(new URL("./WakeDivider.tsx", import.meta.
 // …and so did the ANSWERS card, on 2026-08-27, so the registered-question surface could draw the
 // human's answer from the same component while it was still on its way to the worker.
 const answersCard = () => readFileSync(new URL("./AnswersCard.tsx", import.meta.url), "utf8")
+const agentMessage = () => readFileSync(new URL("./AgentMessage.tsx", import.meta.url), "utf8")
 
 // The REGRESSION this pins: `data-transcript-source-id` is load-bearing for transcript pagination —
 // the virtualized requestEarlier anchor queries it and expects it on ROW wrappers (which also carry
@@ -30,9 +31,9 @@ test("a message root never joins the pagination-anchor attribute", () => {
 // frizzWake all query it to find message roots and read their geometry. Losing it in a later cleanup would take
 // those with it, so the count is pinned here.
 test("every rendered message variant still carries its own data-frizz-msg handle", () => {
-  const sources = [chatView(), wakeDivider(), answersCard()]
-  // assistant turn, user bubble, event line, reasoning block, and the line for a message from another
-  // Claude session (PeerSessionMessageLine, 2026-09-28), a slash command's output block (CommandOutputBlock,
+  const sources = [chatView(), wakeDivider(), answersCard(), agentMessage()]
+  // assistant turn, user bubble, event line, reasoning block, the chat-style message one agent sends
+  // another (AgentMessage.tsx, 2026-10-08, which took over PeerSessionMessageLine's handle), a slash command's output block (CommandOutputBlock,
   // 2026-10-02), a scheduled run's opening — its divider over the saved prompt (ScheduledRunOpening,
   // 2026-10-05) — plus the wake divider (WakeDivider.tsx) and the
   // answers card, which moved to its own module on 2026-08-27 when the registered-question path needed

@@ -88,27 +88,9 @@ export function subAgentAddresses(threadHandle: string, agents: readonly Child[]
  *  on both sides, and nothing a human sees would stop it. Ten is far past any real exchange. */
 export const THREAD_MESSAGE_HOURLY_CAP = 10
 
-/** The delivered text: who it is from, whether they are waiting, and how to answer. */
-export function threadMessageBody(input: { fromHandle: string; message: string; awaitsReply?: boolean; answersWait?: boolean; fromProject?: string }): string {
-  const from = input.fromHandle
-  // A sender in ANOTHER project is still answered by its bare handle: a handle this project's threads do
-  // not carry resolves in the other open projects (router resolveElsewhere).
-  const where = input.fromProject ? `in the ${input.fromProject} project` : "in this project"
-  const how = input.awaitsReply
-    ? `@${from} is WAITING on your answer — it is parked until you reply. Answer with \`mcp__frizz__message_thread\` ` +
-      `(handle \`${from}\`) as soon as you can, even if only to say you cannot help; it reaches that thread, not the human.`
-    : `Answer with \`mcp__frizz__message_thread\` (handle \`${from}\`) only if it asks you something; it reaches that ` +
-      "thread, not the human. Do not reply just to acknowledge."
-  return [
-    `Message from @${from}, another Frizz thread ${where}${input.answersWait ? " — this answers the message you were waiting on" : ""}:`,
-    "",
-    input.message,
-    "",
-    "---",
-    `${how} Do not drop your own work for it unless it matters to that work. ` +
-      `\`mcp__frizz__read_thread\` reads @${from}'s own request, approach and latest handoff.`,
-  ].join("\n")
-}
+// The delivered text lives in @frizz/shared beside its parser (parseThreadMessage), because the chat
+// rebuilds the message from it.
+export { threadMessageBody } from "@frizz/shared"
 
 // A REPLY WAIT's prompt format and its reader live in @frizz/shared (thread-handle.ts), because the
 // resting card reads it too.

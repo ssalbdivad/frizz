@@ -44,8 +44,8 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
         cls: n.className,
       })),
     )
-    assert.equal(dividers.length, 4, "the after panel holds a steer, a codex follow-up, an agent completion and a shell wake")
-    const [steer, followup, agent, shell] = dividers
+    assert.equal(dividers.length, 2, "the after panel holds an agent completion and a shell wake")
+    const [agent, shell] = dividers
     assert.equal(agent.marker, "agent")
     assert.equal(shell.marker, "event")
     // The convergence itself: identical chrome, two hairlines each, same wrapper classes.
@@ -58,24 +58,20 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     assert.match(agent.text, /Sub-agent\s+«\s*Audit the pricing parser for edge cases\s*»\s+finished · 35m$/)
     assert.match(shell.text, /Agent terminal «.+» exited 143$/)
 
-    // ---- 1b. a STEER draws the same divider (maintainer 2026-07-31) ----
-    // "render 'Steered' or SendMessage using the same full width notifications, the horizontal rule
-    // style component that we render when an agent completes." Same chrome as the completion beside it,
-    // and the title is the child's DISPATCH DESCRIPTION — not the raw agentId the model addressed.
-    assert.equal(steer.marker, "agent-steer")
-    assert.equal(steer.cls, agent.cls, "the steer divider must reuse the completion divider's chrome verbatim")
-    assert.equal(steer.hairlines, 2)
-    assert.match(steer.text, /^Steered\s+«\s*Audit the pricing parser for edge cases\s*»$/)
-    // NEITHER the summary NOR the body may appear on it — the same ruling the report line took.
-    assert.doesNotMatch(steer.text, /narrow the audit|Skip the currency formatting/)
-    // A codex peer call names a target this transcript never dispatch-acked, so it has no dispatch id:
-    // the title must stay PLAIN TEXT rather than become a dead link.
-    assert.equal(followup.marker, "agent-steer")
-    assert.match(followup.text, /^Followed up\s+«\s*codex-child-2\s*»$/)
-    const followupLinks = await page.$$eval("[data-after] [data-wake-divider]", (ns) =>
-      ns.filter((n) => (n as HTMLElement).innerText.includes("Followed up")).map((n) => n.querySelectorAll("button").length),
+    // ---- 1b. a STEER is an outgoing agent message (maintainer 2026-10-08) ----
+    // A chat-style bubble under "To <child>", its body readable in place. The name is the child's
+    // DISPATCH DESCRIPTION as its handle — not the raw agentId the model addressed.
+    const sends = await page.$$eval('[data-after] [data-agent-message="out"]', (nodes) =>
+      nodes.map((n) => ({ text: (n as HTMLElement).innerText.replace(/\s+/g, " ").trim(), buttons: n.querySelectorAll("button").length })),
     )
-    assert.deepEqual(followupLinks, [0], "an unresolvable codex target must not render a button")
+    assert.equal(sends.length, 2, "the after panel holds a steer and a codex follow-up")
+    const [steer, followup] = sends
+    assert.match(steer.text, /^To Audit the pricing parser for edge cases sub-agent /)
+    assert.match(steer.text, /Skip the currency formatting/, "the steer's body reads in place")
+    // A codex peer call names a target this transcript never dispatch-acked, so it has no dispatch id:
+    // the name must stay PLAIN TEXT rather than become a dead link.
+    assert.match(followup.text, /^To codex-child-2 sub-agent · follow-up/)
+    assert.equal(followup.buttons, 0, "an unresolvable codex target must not render a button")
 
     // The steer point must no longer draw a bordered tool card anywhere in the thread's chat.
     const sendHeaders = await page.$$eval("[data-after] .frizz-bash-label", (n) => n.map((e) => e.textContent))
@@ -91,7 +87,7 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
     // ---- 2. every title opens the drawer ----
     const surfaces: [string, string][] = [
       ["completion divider", "[data-after] [data-subagent-completion-open]"],
-      ["steer divider", "[data-after] [data-subagent-steer-open]"],
+      ["steer message", '[data-after] [data-agent-message="out"] [data-subagent-open]'],
       ["transcript launch card", '[data-after] button[aria-label^="Open sub-agent transcript"]'],
       ["sidebar rail row", '[data-live-rows] button[class*="pl-[26px]"]'],
       ["queue card row", "[data-queue-subagents] button"],
@@ -135,36 +131,17 @@ test("a finished sub-agent draws the shell's wake divider, and every sub-agent t
       await closeAll()
     }
 
-    // ---- 2b. the DRAWER keeps the peer-message CARD, body and all ----
-    // This is the other half of the divider change, not an inconsistency. The divider's whole contract
-    // is "click the title and read it there": the child's own upward `SendMessage` record is where an
-    // upward report's text actually lives, so hollowing this one out too would leave the message
-    // unreadable on every surface. It must therefore stay a bordered card with an expandable body.
-    assert.ok(await mouseClick("[data-after] [data-subagent-steer-open]"))
+    // ---- 2b. the DRAWER draws the child's own upward report as the same outgoing message ----
+    // The child's `SendMessage({to:"main"})` record is where an upward report's text lives, so in the
+    // drawer it is a message to "Parent" with its body readable in place.
+    assert.ok(await mouseClick('[data-after] [data-agent-message="out"] [data-subagent-open]'))
     await page.waitForFunction(() => document.body.innerText.includes("Reading the tier table"), { timeout: 5000 })
-    assert.equal(
-      await page.$$eval('[data-wake-divider="agent-steer"]', (n) => n.length),
-      2,
-      "the drawer draws no steer divider — only the two in the thread panel",
+    await page.waitForFunction(() => [...document.querySelectorAll<HTMLElement>('[data-agent-message="out"]')].some((n) => n.innerText.startsWith("To\nParent") || /^To\s+Parent/.test(n.innerText)), { timeout: 5000 }).catch(() => {})
+    const reported = await page.evaluate(() =>
+      [...document.querySelectorAll<HTMLElement>('[data-agent-message="out"]')].map((n) => n.innerText.replace(/\s+/g, " ").trim()).find((t) => /^To Parent/.test(t)) ?? null,
     )
-    const reported = await page.evaluate(() => {
-      const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
-      if (!h) return null
-      h.click()
-      return h.parentElement!.innerText.replace(/\s+/g, " ").trim()
-    })
-    assert.ok(reported, "the child's own upward SendMessage keeps its bordered card in the drawer")
-    // Same rule as above: the disclosure was just clicked open, so wait for the body it reveals rather
-    // than for a fixed 400ms.
-    await page.waitForFunction(() => {
-      const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
-      return /rounds half-away-from-zero, not half-even/.test(h?.parentElement?.innerText ?? "")
-    }, { timeout: 5000 }).catch(() => {})
-    const openedBody = await page.evaluate(() => {
-      const h = [...document.querySelectorAll<HTMLElement>(".frizz-bash-header")].find((n) => n.textContent?.startsWith("Reported"))
-      return h!.parentElement!.innerText.replace(/\s+/g, " ").trim()
-    })
-    assert.match(openedBody, /rounds half-away-from-zero, not half-even/, "…and its body is still readable there")
+    assert.ok(reported, "the child's own upward SendMessage draws as a message to its parent in the drawer")
+    assert.match(reported!, /rounds half-away-from-zero, not half-even/, "…and its body is readable there")
     await closeAll()
 
     // A dispatch NESTED inside the sub-agent drawer — the scenario that was dead text before, because

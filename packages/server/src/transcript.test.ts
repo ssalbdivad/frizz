@@ -1109,6 +1109,15 @@ test("SendMessage → SendMessageCard fields captured (to/summary/body/type)", (
   assert.equal(call.detail, "Steer to UTM path")
 })
 
+test("a message to another Frizz thread rides the send fields, with its handle and wait", () => {
+  const call = parseTranscript(toolLine("mcp__frizz__message_thread", { handle: "@port-the-parser", message: "Are keys normalized?", await_reply: true })).at(0)!.tools[0]
+  assert.equal(call.sendTo, "@port-the-parser")
+  assert.equal(call.sendBody, "Are keys normalized?")
+  assert.equal(call.sendType, "frizz_thread_await")
+  const plain = parseTranscript(toolLine("mcp__frizz__message_thread", { handle: "port-the-parser", message: "FYI: landed." })).at(0)!.tools[0]
+  assert.equal(plain.sendType, "frizz_thread")
+})
+
 test("SendMessage accepts the recipient/content aliases and a shutdown_request type", () => {
   const call = parseTranscript(toolLine("SendMessage", { recipient: "peer", content: "please rest", type: "shutdown_request" })).at(0)!.tools[0]
   assert.equal(call.sendTo, "peer")

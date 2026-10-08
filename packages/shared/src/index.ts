@@ -6326,6 +6326,54 @@ export function parseCrossSessionMessage(text: string): { from: string; name?: s
   return { from, ...(name ? { name } : {}), body }
 }
 
+// ---- A message from ANOTHER FRIZZ THREAD (`mcp__frizz__message_thread`) ------------------------------
+// FORMATTER AND PARSER LIVE TOGETHER, for the reason the PR-watcher steer below gives: the scheduler
+// pastes this text into the recipient's composer as a wake, and the chat has nothing but the text to
+// rebuild the sender, the body and whether it answered a wait from. The agent-facing instructions after
+// the `---` are for the recipient worker; the parser drops them, so the human reads only what was said.
+export function threadMessageBody(input: { fromHandle: string; message: string; awaitsReply?: boolean; answersWait?: boolean; fromProject?: string }): string {
+  const from = input.fromHandle
+  // A sender in ANOTHER project is still answered by its bare handle: a handle this project's threads do
+  // not carry resolves in the other open projects (router resolveElsewhere).
+  const where = input.fromProject ? `in the ${input.fromProject} project` : "in this project"
+  const how = input.awaitsReply
+    ? `@${from} is WAITING on your answer — it is parked until you reply. Answer with \`mcp__frizz__message_thread\` ` +
+      `(handle \`${from}\`) as soon as you can, even if only to say you cannot help; it reaches that thread, not the human.`
+    : `Answer with \`mcp__frizz__message_thread\` (handle \`${from}\`) only if it asks you something; it reaches that ` +
+      "thread, not the human. Do not reply just to acknowledge."
+  return [
+    `Message from @${from}, another Frizz thread ${where}${input.answersWait ? THREAD_MESSAGE_ANSWERS : ""}:`,
+    "",
+    input.message,
+    "",
+    "---",
+    `${how} Do not drop your own work for it unless it matters to that work. ` +
+      `\`mcp__frizz__read_thread\` reads @${from}'s own request, approach and latest handoff.`,
+  ].join("\n")
+}
+
+const THREAD_MESSAGE_ANSWERS = " — this answers the message you were waiting on"
+const THREAD_MESSAGE_HEAD = /^Message from @([^\s,]+), another Frizz thread (?:in this project|in the (.+?) project)( — this answers the message you were waiting on)?:\n\n/
+// The instructions open on one of exactly two sentences, so a `---` the SENDER wrote inside its message
+// is never mistaken for the trailer.
+const THREAD_MESSAGE_TRAILER = /\n\n---\n(?:@[^\s]+ is WAITING on your answer|Answer with `mcp__frizz__message_thread`)[\s\S]*$/
+
+export function parseThreadMessage(text: string): { from: string; project?: string; answersWait: boolean; awaitsReply: boolean; body: string } | undefined {
+  const head = THREAD_MESSAGE_HEAD.exec(text)
+  if (!head) return undefined
+  const rest = text.slice(head[0].length)
+  const trailer = THREAD_MESSAGE_TRAILER.exec(rest)
+  const body = (trailer ? rest.slice(0, trailer.index) : rest).trim()
+  if (!body) return undefined
+  return {
+    from: head[1],
+    ...(head[2] ? { project: head[2] } : {}),
+    answersWait: Boolean(head[3]),
+    awaitsReply: Boolean(trailer && trailer[0].startsWith("\n\n---\n@")),
+    body,
+  }
+}
+
 // ---- THE PR-WATCHER WAKE STEER (scheduler ↔ chat card) -------------------------------------------
 // FORMATTER AND PARSER LIVE TOGETHER, for the same reason the token and its stripper do. The scheduler
 // composes this string and pastes it into a worker's composer; the chat then has nothing BUT that

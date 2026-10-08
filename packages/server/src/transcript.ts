@@ -1959,6 +1959,16 @@ function toolCalls(block: any, turn: { turnModel?: string; turnEffort?: string }
         return [{ name, detail: summary ?? to, sendTo: to, sendSummary: summary, sendBody: capSendBody(body), sendType }]
       }
     }
+    // A message to ANOTHER FRIZZ THREAD rides the same send fields, so the chat draws it as the same
+    // outgoing agent message as a steer and never folds it into a run of tool calls. `sendTo` carries the
+    // `@handle` the worker addressed (a leading `@` tells it from a child's agent id) and `sendType` says
+    // whether the sender now waits on the reply.
+    if (/(?:^|__)message_thread$/.test(name) && typeof input.handle === "string" && typeof input.message === "string") {
+      const handle = input.handle.trim().replace(/^@/, "")
+      if (handle && input.message.trim()) {
+        return [{ name, detail: `@${handle}`, sendTo: `@${handle}`, sendBody: capSendBody(normalizeNewlines(input.message)), sendType: input.await_reply === true ? "frizz_thread_await" : "frizz_thread" }]
+      }
+    }
     // SendUserFile (Claude Code file delivery) → a SentFilesCard that shows the delivered files inline
     // instead of a generic tool block: image files are copied into the servable cache and rendered as
     // pictures; non-image (or display:"attach") files become openable chips; the `caption` shows below.
