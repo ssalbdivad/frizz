@@ -77,8 +77,9 @@ import {
   reconcileAdoptionClaims,
 } from "./adoption-recovery.ts"
 import { acquireSharedOrphanReaper } from "./orphan-reaper.ts"
-import { hibernationEnabled, startThreadHibernator } from "./thread-hibernation.ts"
-import { liveBrokerRecords } from "./backend/claude-broker-host.ts"
+import { hibernateSweepIntervalMs, hibernationEnabled, startThreadHibernator } from "./thread-hibernation.ts"
+import { startUnownedBrokerAudit } from "./unowned-brokers.ts"
+import { killBroker, liveBrokerRecords } from "./backend/claude-broker-host.ts"
 import {
   createRetryableCleanup,
   createShutdownBarrier,
@@ -944,6 +945,20 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // Fire-and-forget, exactly like codex's above: a broker being unavailable must never fail or delay a
   // boot.
   void claudeBroker?.warmUp()
+  // …and say which daemons it did NOT rejoin. A daemon no open row claims is rejoined by nobody — the
+  // hibernator skips row-less daemons and the orphan reaper never touches a session root — so it would
+  // otherwise sit unlisted until its own six-hour idle timer. This lists each one now, re-checks on the
+  // hibernation sweep's cadence, and ends only the kind that provably never held a conversation
+  // (unowned-brokers.ts).
+  if (claudeBroker) {
+    contextUnsubscribers.push(startUnownedBrokerAudit({
+      liveDaemons: () => liveBrokerRecords(project.stateDir),
+      rows: () => storage.allSessions(),
+      end: (sessionId) => killBroker(project.stateDir, sessionId, "unowned-never-prompted"),
+      log: (m) => frizzLog.warn("broker", m),
+      intervalMs: hibernateSweepIntervalMs(),
+    }))
+  }
   opts.startup?.afterPhase?.("Claude broker bridge")
 
   // The tailer derives turn/liveness telemetry and, on a state change, asks the board for an
