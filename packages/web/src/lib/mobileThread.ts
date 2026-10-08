@@ -1,5 +1,5 @@
 import type { ThreadView } from "@frizz/shared"
-import { futureSnoozedUntil, lastActiveLabelAt, sessionIndicatorKind } from "../groups.ts"
+import { lastActiveLabelAt, sectionOf, sessionIndicatorKind } from "../groups.ts"
 import { ageSpan } from "./activityTime.ts"
 import { formatRuntimeElapsed } from "./durationLabels.ts"
 import { EFFORT_LABEL } from "./options.ts"
@@ -20,9 +20,13 @@ export function mobileThreadState(t: ThreadView): MobileThreadState {
   if (kind === "needs-input") return "needs-you"
   if (t.runtime === "running" || t.runtime === "spawning") return "working"
   if (kind === "archived") return "done"
-  // Only the operator's own wall-clock park. A worker's fenced park and the resting card's event-snooze
-  // are rests, and read as one — the same split the board's AlarmMark draws.
-  if (kind === "snoozed" && futureSnoozedUntil(t) !== undefined) return "snoozed"
+  // THE WORD NAMES THE BAND the desktop board files the row in, so every park in Snoozed says "Snoozed":
+  // the operator's wall-clock snooze, the resting card's event-snooze, a worker's `status: watching` rest,
+  // and a done the human parked on "Watch #N" (server doneParkedOnWatch → waitStatus `watching` over the
+  // event-snooze). Until 2026-10-07 this read only the wall-clock park — the split the board's AlarmMark
+  // draws, which is a GLYPH choice — so a thread the human had just watched from its done card sat in
+  // the Snoozed band on desktop while the phone header still called it "Rested".
+  if (sectionOf(t) === "snoozed") return "snoozed"
   return "rested"
 }
 

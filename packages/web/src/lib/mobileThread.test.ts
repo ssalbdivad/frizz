@@ -69,3 +69,16 @@ test("a link to the Frizz machine is recognised as unreachable from a phone", ()
   assert.equal(displayUrl("http://localhost:5175/"), "localhost:5175")
   assert.equal(displayUrl("https://github.com/colinhacks/frizz/pull/42"), "github.com/colinhacks/frizz/pull/42")
 })
+
+test("every row the board files in Snoozed says Snoozed, not Rested", () => {
+  // A done the human parked on "Watch #N": the server reads it as a `watching` rest over the event-snooze.
+  const watchedDone = thread({ waitStatus: "watching", bgSnoozed: true, lastFence: { kind: "done" } as ThreadView["lastFence"] })
+  assert.equal(mobileThreadState(watchedDone), "snoozed")
+  // A worker's own `status: watching` rest, and the resting card's event-snooze, park the same way.
+  assert.equal(mobileThreadState(thread({ waitStatus: "watching" })), "snoozed")
+  assert.equal(mobileThreadState(thread({ bgSnoozed: true })), "snoozed")
+  // Negative control: the same done with no park is an ordinary rest.
+  assert.equal(mobileThreadState(thread({ lastFence: { kind: "done" } as ThreadView["lastFence"] })), "rested")
+  // A running turn still says Working, whatever its last rest was.
+  assert.equal(mobileThreadState(thread({ waitStatus: "watching", runtime: "running" })), "working")
+})

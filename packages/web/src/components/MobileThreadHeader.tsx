@@ -30,7 +30,8 @@ import { PhoneScheduleSheet } from "./PhoneScheduleSheet.tsx"
 //
 // The subtitle leads with the STATE because that is what a phone reader opens a thread to learn:
 // "Needs you" in the accent (the one thing the accent is for), "Working" in the live green while a turn
-// runs, otherwise "Rested" — then the age, then the model and effort. See lib/mobileThread.ts.
+// runs, "Snoozed" for any row the board files in Snoozed, otherwise "Rested" — then the age, then the
+// model and effort. See lib/mobileThread.ts.
 //
 // Everything the desktop header and the prompt box's rail hold — Snooze, Goal, the registered files,
 // Rename, Copy link, and Retry / Restart worker / Reload plugins where the header offers them — is in
