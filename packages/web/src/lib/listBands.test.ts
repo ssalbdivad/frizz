@@ -2,7 +2,7 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { ThreadView } from "@frizz/shared"
 import { threadKey, type QueuesProject } from "./allQueues.ts"
-import { listOverlay, loudBands } from "./listBands.ts"
+import { listOrder, listOverlay, loudBands } from "./listBands.ts"
 
 // The project list's rows move the moment the operator acts, not a poll later: a reply, an answer or a
 // Retry sets the thread to work (lib/steering.ts), a drawer's Mark as done files it (lib/optimisticArchive.ts).
@@ -108,4 +108,15 @@ test("a pinned thread that is Done is still a Pinned row — the pin outranks Do
   assert.deepEqual(ids(bands.ready), [])
   assert.deepEqual([...bands.carded], ["open-pin"], "a Done pin has no card to tie to")
   assert.equal(bands.rows, 3, "it counts as a row, so a project whose only pin is Done still lists it")
+})
+
+test("the menus list the projects in the list's order: those with rows first, a pin counting as one", () => {
+  const quiet = project("quiet", [])
+  const busy = project("busy", [ready("fix")])
+  const pinnedOnly = project("pinned", [], [], [ready("old", { state: "done", pinnedAt: new Date(NOW).toISOString() })])
+  const later = project("later", [], [running("build")])
+  assert.deepEqual(
+    listOrder([quiet, busy, pinnedOnly, later]).map((p) => p.id),
+    ["busy", "pinned", "later", "quiet"],
+  )
 })

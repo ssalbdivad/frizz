@@ -45,9 +45,10 @@ import { useSnapshot } from "valtio"
 import type { BoardSnapshot, ProjectCard, ProjectQueue } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { projectsQueuesQuery, readStartedAt } from "../lib/projectsQueuesRead.ts"
-import { isBusy, liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
+import { liveQueue, mergedQueue, overlayQueues, projectMarkdownScope, queuesProjects, threadKey, type QueueEntry, type QueuesProject } from "../lib/allQueues.ts"
 import { innerPath, projectSlug } from "../lib/base-path.ts"
 import { rememberCrossProjectFocus, stepPick } from "../lib/crossProject.ts"
+import { listOrder } from "../lib/listBands.ts"
 import { setFaviconBadge } from "../lib/faviconBadge.ts"
 import { ALL_PROJECTS, homeHref, projectViewHref, usePageView, viewHref, viewKey } from "../lib/pageView.ts"
 import { carryDispatchDraft } from "../lib/scheduleDraftState.ts"
@@ -640,8 +641,7 @@ function Switcher({ projects, hidden, current, row = false }: { projects: Queues
   const add = useAddProject()
   // Busy projects first, then the quiet ones; Home last, on its own — unlike ProjectList, where Home is
   // dragged into place like any project.
-  const listed = projects.filter((project) => !project.card?.home)
-  const ordered = [...listed.filter(isBusy), ...listed.filter((project) => !isBusy(project))]
+  const ordered = listOrder(projects).filter((project) => !project.card?.home)
   const item = (project: QueuesProject): SwitcherProject => ({
     id: project.id,
     slug: project.slug,
@@ -715,7 +715,7 @@ function ProjectPicker({ projects, focus, onPick }: { projects: QueuesProject[];
   const current = projects.find((project) => project.slug === focus)
   const name = current?.name ?? focus ?? "a project"
   // A project whose directory is gone cannot take a thread; it stays on the rail, saying why.
-  const choices = projects.filter((project) => !project.stale && !project.card?.home)
+  const choices = listOrder(projects).filter((project) => !project.stale && !project.card?.home)
   const steps = stepPick(pickOrder(projects), focus, 1) !== undefined
   // The Home workspace, for the work that belongs to no project yet: last, under a rule, with the folder
   // it runs in, because "Home" alone does not say that its agents start outside every project. Last is
@@ -973,11 +973,12 @@ function FocusedComposer({
 }
 
 /**
- * The picker's own order, which ⌥↓ and ⌥↑ in the box step through: every project in the list's order,
- * then Home, which the menu draws last under its own rule.
+ * The picker's own order, which ⌥↓ and ⌥↑ in the box step through: every project in the list's order
+ * (lib/listBands.ts listOrder), then Home, which the menu draws last under its own rule.
  */
 function pickOrder(projects: QueuesProject[]): QueuesProject[] {
-  return [...projects.filter((project) => !project.card?.home), ...projects.filter((project) => project.card?.home)]
+  const ordered = listOrder(projects)
+  return [...ordered.filter((project) => !project.card?.home), ...ordered.filter((project) => project.card?.home)]
 }
 
 /**
