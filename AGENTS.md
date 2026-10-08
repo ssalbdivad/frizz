@@ -45,6 +45,9 @@ points.
 - Size work by scope, never in days. "Shipped" means merged.
 - Use `nub` for the toolchain, and write every new script as `.ts`.
 - Never interrupt a running agent (§ Agent completion invariant).
+- A worker snoozes a thread only while its own task still waits on something (a merge the human asked for, CI
+  that could fail it, a release, a reply). Following a FINISHED thread's PR or issue is the human's choice, made
+  from its done card, never a worker's silent park (2026-10-07: a comment-only push sat 180d in Snoozed).
 
 # Git: how work lands here
 
