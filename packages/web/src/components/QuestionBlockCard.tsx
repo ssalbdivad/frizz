@@ -483,6 +483,7 @@ function Chip({
         type="button"
         disabled={disabled}
         aria-labelledby={labelId}
+        aria-pressed={selected}
         onClick={onClick}
         onMouseDown={(e) => e.preventDefault()}
         className="absolute inset-0 rounded-md outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
