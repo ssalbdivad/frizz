@@ -1,7 +1,6 @@
 import { closeSync, constants, existsSync, fstatSync, lstatSync, openSync, readFileSync, realpathSync, statSync, writeFileSync, renameSync, mkdirSync, rmSync, type Stats } from "node:fs"
 import { basename, join, resolve, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { execFileSync } from "node:child_process"
 import { homedir } from "node:os"
 import { createHash, randomUUID } from "node:crypto"
 import {
@@ -403,14 +402,15 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
   const scratch = `SCRATCH DIRECTORY: ${scratchPath}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
   const who = operatorIdentity()
-  return who ? `${scratch}\n\nOPERATOR: the human the contract talks about is ${who}. In a message to another thread or a sub-agent's prompt, name them, never "the human". Anything posted under their account (a PR or issue comment, a commit) speaks AS them, so it attributes nothing to them at all.` : scratch
+  return who ? `${scratch}\n\nThe human is ${who}.` : scratch
 }
 
 // WHO THE OPERATOR IS. The contract says "the human" as its rule vocabulary, and workers copied it
 // verbatim into messages to other threads ("The human asked me to…"), which names nobody (maintainer
 // 2026-10-07). One server serves one operator, so this is machine-wide: the GitHub login gh is signed
-// into (read from its hosts file — no network, no subprocess) plus the global git user.name, read once
-// per process. Either may be missing; with neither, the line is left out and the contract reads as before.
+// into, read from its hosts file once per process (no network, no subprocess). A bare "The human is X."
+// is enough — the model uses a name it has, and posting under the operator's account already speaks as
+// them, so no rule is spelled out. Not signed in ⇒ the line is left out.
 let operatorCache: string | null | undefined
 export function operatorIdentity(): string | null {
   if (operatorCache !== undefined) return operatorCache
@@ -419,11 +419,7 @@ export function operatorIdentity(): string | null {
     const hosts = readFileSync(join(process.env.GH_CONFIG_DIR || join(homedir(), ".config", "gh"), "hosts.yml"), "utf8")
     login = /^github\.com:\n(?:[ \t]+.*\n)*?[ \t]+user:[ \t]*(\S+)/m.exec(hosts)?.[1]
   } catch {}
-  let name: string | undefined
-  try {
-    name = execFileSync("git", ["config", "--global", "user.name"], { encoding: "utf8", timeout: 2_000, stdio: ["ignore", "pipe", "ignore"] }).trim() || undefined
-  } catch {}
-  operatorCache = name && login ? `${name} (GitHub @${login})` : login ? `@${login}` : (name ?? null)
+  operatorCache = login ?? null
   return operatorCache
 }
 
