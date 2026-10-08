@@ -27,8 +27,24 @@ export function pageScrollY(): number {
 // `--page-lock-offset` for the desktop page's min-height, which kept a STICKY left column's container
 // reaching the fold under a pin; the column is fixed to the viewport now (Sidebar.tsx SIDEBAR_COLUMN_CLASS),
 // so nothing reads the page's height for it.
+//
+// Never deeper than the page: a native scroll clamps to the document's end, a pinned top does not. A long
+// card leaving the queue under an open drawer (its thread started running) shortened the page by its
+// height and left the pin past the end, so the queue showed nothing and the thread out of the rail ran
+// off the top of the window to a card above it (2026-10-08). So every write is clamped, and App re-clamps
+// whenever the pinned page changes height (`clampPinnedPage`).
 export function pinPageAt(top: number | null): void {
-  document.body.style.top = top === null ? "" : `${top}px`
+  document.body.style.top = top === null ? "" : `${clampPin(top, document.body.getBoundingClientRect().height, window.innerHeight)}px`
+}
+
+/** The pinned top (`-y`) held within the page: no deeper than its end, never below 0. */
+export function clampPin(top: number, pageHeight: number, viewportHeight: number): number {
+  return Math.min(0, Math.max(top, -Math.max(0, pageHeight - viewportHeight))) || 0
+}
+
+/** Re-applies the clamp to the current pin, for a page that got shorter under it. */
+export function clampPinnedPage(): void {
+  if (isPageScrollLocked()) pinPageAt(-pageScrollY())
 }
 
 export function isPageScrollLocked(): boolean {

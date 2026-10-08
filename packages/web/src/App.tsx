@@ -10,7 +10,7 @@ import { openDispatch } from "./lib/newThreadDoor.ts"
 import { useBoard } from "./hooks.ts"
 import { closeDrawerAnimated } from "./lib/overlays.ts"
 import { useShortcut } from "./lib/keyboardRuntime.ts"
-import { pageScrollY, pinPageAt } from "./lib/pageScrollLock.ts"
+import { clampPinnedPage, pageScrollY, pinPageAt } from "./lib/pageScrollLock.ts"
 import { startRouter } from "./lib/router.ts"
 import { projectSlug } from "./lib/base-path.ts"
 import { AllQueuesPage } from "./components/AllQueues.tsx"
@@ -194,7 +194,11 @@ export function App() {
     body.style.left = "0"
     body.style.right = "0"
     body.style.width = "100%"
+    // The pinned body is as tall as the page, so it reports every change in the page's height.
+    const resize = new ResizeObserver(clampPinnedPage)
+    resize.observe(body)
     return () => {
+      resize.disconnect()
       // The offset to come back to is the body's pinned top NOW, not the one captured at the lock: the
       // queue's viewport lock (lib/viewportLock.ts) moves that top when a card arrives or leaves above the
       // one behind the drawer, and restoring the old offset displaced the reader by exactly that card.
