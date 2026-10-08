@@ -117,6 +117,14 @@ window.fetch = async (input, init) => {
     calls.push(JSON.parse(String(init?.body ?? "{}")))
     return new Response(JSON.stringify({ result: { interrupted: true } }), { headers: { "content-type": "application/json" } })
   }
+  // A LIST, not the generic `{}`: the thread view iterates it, and `{}` threw before the transcript drew.
+  if (url.pathname === "/_frizz/rpc/threadSettledQuestions") {
+    return new Response(JSON.stringify({ result: { questions: [] } }), { headers: { "content-type": "application/json" } })
+  }
+  // Lists too: the spinoff dialog iterates both.
+  if (url.pathname === "/_frizz/rpc/projectsQueues" || url.pathname === "/_frizz/rpc/projectsList") {
+    return new Response(JSON.stringify({ result: [] }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }

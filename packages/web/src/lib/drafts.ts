@@ -141,6 +141,10 @@ export const draftKey = {
   // asked it (that is the whole point of it being a row), and a half-typed answer must survive the
   // worker restarting under it.
   question: (projectDir: string | undefined, slug: string, id: string, path: string) => `question:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(id)}:${encodeURIComponent(path)}`,
+  // The same node's chip/toggle half: `{chosen, chosenSet}` as JSON, keyed exactly as its text is, so a
+  // pick staged but not yet sent — a multi's toggles, a branch partly answered — survives the reload a
+  // dev-server restart forces, as the typed half always has.
+  questionPick: (projectDir: string | undefined, slug: string, id: string, path: string) => `question-pick:${projectDraftScope(projectDir)}:${encodeURIComponent(slug)}:${encodeURIComponent(id)}:${encodeURIComponent(path)}`,
   // There is no `settings:` key: the Settings drawer autosaves, so the server IS its draft store. A
   // sessionStorage mirror could only ever hold the ~500ms of typing the debounce has not written yet,
   // and it outlived the save — a stale entry that reappeared over the stored value on the next open.

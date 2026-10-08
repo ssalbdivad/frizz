@@ -57,7 +57,7 @@ async function column(page: import("puppeteer").Page) {
       order: items.map((i) => i.id),
       gapAbove: Object.fromEntries(items.slice(1).map((item, i) => [item.id, round(item.top - items[i].bottom)])),
       digests: [...scope.querySelectorAll("[data-tool-activity] button")].map((b) => b.getAttribute("aria-label") ?? ""),
-      shimmer: working?.querySelector(".shimmer-text")?.textContent ?? null,
+      shimmer: working?.querySelector("[data-working-label]")?.textContent ?? null,
     }
   })
 }
@@ -75,7 +75,9 @@ test("a queued steer is transparent to the activity run, and label rows keep the
     await page.waitForSelector("[data-working-indicator]")
     const queued = await column(page)
     assert.equal(queued.error, undefined, `fixture must mount: ${queued.error}`)
-    assert.deepEqual(queued.order, ["m0", "m1", "SHIMMER", "m8", "m11"], "the queued bubbles render below the shimmer, not inside the run")
+    // The queued bubbles stay out of the run, and the typing dots come AFTER them: the dots answer the
+    // newest message, never sit above it (maintainer 2026-10-08).
+    assert.deepEqual(queued.order, ["m0", "m1", "m8", "m11", "SHIMMER"], "the queued bubbles render above the typing dots, not inside the run")
     assert.deepEqual(queued.digests, [], "a live run stays behind the shimmer — the queued steer must not strand it as a settled digest")
     assert.equal(queued.shimmer, "Finding callers of the socket resolver", "the newest ordinary call still names the shimmer")
 
@@ -92,7 +94,7 @@ test("a queued steer is transparent to the activity run, and label rows keep the
     await page.goto(fixtureUrl("?steer=landed"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector("[data-working-indicator]")
     const landed = await column(page)
-    assert.deepEqual(landed.order, ["m0", "m1", "m8", "SHIMMER", "m11"], "a delivered steer sits inline, between the run it interrupted and the one it started")
+    assert.deepEqual(landed.order, ["m0", "m1", "m8", "m11", "SHIMMER"], "a delivered steer sits inline, between the run it interrupted and the one it started; the still-queued send stays above the typing dots")
     assert.deepEqual(landed.digests, ["Expand 8 tool calls: Ran 8 tool calls"], "the interrupted run settles at its real count")
     // The human's own words still open a wider break below them, so the label step did not quietly
     // flatten the rest of the rhythm into one uniform gap.

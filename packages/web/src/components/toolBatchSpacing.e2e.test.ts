@@ -102,7 +102,7 @@ for (const [surface, query, column] of [
         const working = scope.querySelector<HTMLElement>("[data-working-indicator]")
         return {
           workingActivity: working?.dataset.workingActivity,
-          shimmerText: working?.querySelector<HTMLElement>(".shimmer-text")?.textContent ?? "",
+          shimmerText: working?.querySelector<HTMLElement>("[data-working-label]")?.textContent ?? "",
           digests: scope.querySelectorAll("[data-tool-activity] button").length,
         }
       }, idx)
@@ -119,7 +119,7 @@ for (const [surface, query, column] of [
         const labels = disclosures.map((button) => button.getAttribute("aria-label") ?? "")
         const visibleCards = [...scope.querySelectorAll<HTMLElement>(".frizz-bash")].filter((card) => card.offsetParent !== null).length
         const working = scope.querySelector<HTMLElement>("[data-working-indicator]")
-        const shimmer = working?.querySelector<HTMLElement>(".shimmer-text")
+        const shimmer = working?.querySelector<HTMLElement>("[data-working-label]")
         return {
           labels,
           visibleCards,
@@ -162,7 +162,7 @@ for (const [surface, query, column] of [
       // Three: the live tail's own calls, the exact set this row expands onto and the exact count the
       // third digest states once the turn settles (asserted below) — so the number never jumps when the
       // withheld run finally lands in history.
-      assert.equal(gap.shimmerText, "Ran 3 tool calls. Thinking…", "a landed result hands the bottom slot back to the generic reading, which names the run it is standing in for")
+      assert.equal(gap.shimmerText, "Ran 3 tool calls", "a landed result hands the bottom slot back to the generic reading, which names the run it is standing in for")
       assert.equal(gap.workingActivity, "generic", "…and the slot reports that it is no longer naming a tool")
       assert.equal(gap.digests, live.labels.length, "the run's digest must not appear in history during the gap")
 

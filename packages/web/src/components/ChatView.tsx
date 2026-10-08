@@ -387,6 +387,9 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
   const count = q.data?.messages.length ?? 0
   // The thread view's tail is held until the transcript window has loaded — see the eager branch below.
   const tailReady = !q.isLoading
+  // The typing dots answer the newest message, so they draw after the queued sends; every card rung stays
+  // above them (see typingLast in the virtualized row builder).
+  const typingLast = runtimeStatusRung(runtimeStatus) === "working"
   // The EAGER (non-virtualized) fallback's own tail follow. No production surface reaches it — both
   // ThreadView callers virtualize, and this branch only renders when `count === 0` besides — but it shares
   // the SAME `[overflow-anchor:none]` scroller, so its band must not disagree with the virtualized path's:
@@ -595,8 +598,8 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
                   />
                 )
               },
-              // QUEUED (optimistic, not-yet-in-the-log) messages are pinned to the very BOTTOM
-              // (rendered after the working/pending indicators, below) — not interleaved here.
+              // QUEUED (optimistic, not-yet-in-the-log) messages are pinned to the BOTTOM (after every
+              // card rung, below; only the typing dots come after them) — not interleaved here.
               (m) => !!m.queued,
             )}
             {/* THE RUNTIME-STATUS SLOT, through the one ladder the virtualized path draws too — see
@@ -608,10 +611,10 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
                 it with the transcript a beat later. The tail describes the END of the transcript and
                 mounts with it, exactly as the project board's queue card held its tail (TodosView,
                 until 2026-09-28). */}
-            {tailReady && runtimeStatusRung(runtimeStatus) !== null && (
+            {tailReady && !typingLast && runtimeStatusRung(runtimeStatus) !== null && (
               <VSpace h={runtimeStatusGapFor(runtimeStatus, activityMessages.map((entry) => entry.message))} />
             )}
-            {tailReady && (
+            {tailReady && !typingLast && (
               <RuntimeStatusLadder
                 state={runtimeStatus}
                 slug={slug}
@@ -652,6 +655,20 @@ function ChatView({ slug, virtualized, phone = false, railBeside = false }: { sl
             <div className="flex flex-col gap-3.5">
               {messages.map((m, i) => (m.queued ? <Message key={`q${i}`} m={m} paired={paired[i]} /> : null))}
             </div>
+            {tailReady && typingLast && (
+              <>
+                <VSpace h={messages.some((m) => m.queued) ? STEP + USER_TAIL_EXTRA : runtimeStatusGapFor(runtimeStatus, activityMessages.map((entry) => entry.message))} />
+                <RuntimeStatusLadder
+                  state={runtimeStatus}
+                  slug={slug}
+                  retryText={lastUserIdx >= 0 ? messages[lastUserIdx]?.text : undefined}
+                  onTerminal={copyTerminalCommand}
+                  liveRuntimeStart={liveRuntimeStart}
+                  liveActivityLabel={liveActivityLabel}
+                  liveToolRun={liveToolRun}
+                />
+              </>
+            )}
           </>
         )}
       </div>
@@ -1023,11 +1040,19 @@ function VirtualizedThreadTranscript({
   const errorVisible = providerErrorVisible(messages, thread?.providerError)
   const runtimeStatus: RuntimeStatusState = { thread, showWorking, registeredDone, restedCard, errorVisible }
   const hasRuntimeStatus = runtimeStatusRung(runtimeStatus) !== null
+  const workingLast = runtimeStatusRung(runtimeStatus) === "working"
   const goalPending = goalAwaitingFirstRest(thread?.recurringPrompt)
   // The deps are runtimeStatus's FIELDS, not the object: it is a fresh literal every render.
+  // Drawn under a queued send (see typingLast below), the dots sit where a reply under the human's own
+  // bubble would; under the goal line, an ordinary step.
+  const queuedShown = messages.some((m, i) => m.queued && !answeredBySettledCards(paired[i]))
   const runtimeStatusGap = useMemo(
-    () => runtimeStatusGapFor({ thread, showWorking, registeredDone, restedCard, errorVisible }, activityMessages.map((entry) => entry.message)),
-    [activityMessages, showWorking, thread, registeredDone, restedCard, errorVisible],
+    () => workingLast && queuedShown
+      ? STEP + USER_TAIL_EXTRA
+      : workingLast && goalPending
+        ? STEP
+        : runtimeStatusGapFor({ thread, showWorking, registeredDone, restedCard, errorVisible }, activityMessages.map((entry) => entry.message)),
+    [activityMessages, showWorking, thread, registeredDone, restedCard, errorVisible, workingLast, queuedShown, goalPending],
   )
   // EVERY OPEN QUESTION, at the newest rest that CLAIMS it — the rest that asked it, or a later one whose
   // ```awaiting fence names it under `questions:` (lib/questionAnchor) — minus the ones a marker PLACED
@@ -1114,8 +1139,13 @@ function VirtualizedThreadTranscript({
     // but a tool call that never finished. It belongs where the block actually happened: after the last
     // message, above the runtime status and the queued sends that are stuck behind it.
     next.push({ key: "interactions", kind: "interactions" })
-    if (hasRuntimeStatus) next.push({ key: "runtime-status", kind: "runtime-status" })
-    let queuedGap = hasRuntimeStatus || messageRows.length > 0 ? STEP : 0
+    // THE TYPING DOTS GO LAST. Every other rung is a card about something that blocks the sends queued
+    // behind it, so those sends stay under it; the dots answer the newest message, and a typing indicator
+    // drawn ABOVE the message that set it off reads backwards (maintainer 2026-10-08: "thinking like this
+    // should never be above the message that triggered it").
+    const typingLast = workingLast
+    if (hasRuntimeStatus && !typingLast) next.push({ key: "runtime-status", kind: "runtime-status" })
+    let queuedGap = (hasRuntimeStatus && !typingLast) || messageRows.length > 0 ? STEP : 0
     // A GOAL NOT YET SENT. Set mid-turn, it waits for the agent to stop, and without a line here the
     // save left nothing in the transcript until then — read as ignored (maintainer 2026-10-08). The
     // line goes the moment the first delivery's own divider lands.
@@ -1129,8 +1159,9 @@ function VirtualizedThreadTranscript({
       next.push({ key, kind: "queued", message, messageIndex, gap: queuedGap })
       queuedGap = STEP
     })
+    if (hasRuntimeStatus && typingLast) next.push({ key: "runtime-status", kind: "runtime-status" })
     return next
-  }, [beforeCursor, earlierError, goalPending, hasEarlier, hasRuntimeStatus, loadingEarlier, messageRows, messages, paired, questionGroups, settledByRow, transportFallback])
+  }, [beforeCursor, earlierError, goalPending, hasEarlier, hasRuntimeStatus, workingLast, loadingEarlier, messageRows, messages, paired, questionGroups, settledByRow, transportFallback])
 
   const virtualizer = useVirtualizer({
     count: rows.length,
@@ -4836,8 +4867,10 @@ function Dots() {
   return <span className="inline-block w-2.5 h-2.5 rounded-full border border-muted/70 border-t-transparent animate-spin" />
 }
 
-// The turn-in-flight banner: the latest tool's gerund replaces "Thinking…" in THIS same bottom slot
-// and THIS same shimmer span. The baseline is `startedAt` — the start of the STRETCH this row is
+// The turn-in-flight banner: typing dots, then the latest tool's gerund (or, between calls, the run's
+// count) in THIS same bottom slot. Until 2026-10-08 the generic reading was a shimmering "Thinking…";
+// the maintainer asked for "a clean `...` animation like if someone is texting", so the dots now carry
+// "thinking" and the history below explains the label that still follows them. The baseline is `startedAt` — the start of the STRETCH this row is
 // reporting (lib/toolActivity.liveRuntimeStartedAt), server-derived so it survives reloads — with
 // `since` (the last real user interaction) as the fallback and mount time behind that. Ticks once a
 // second — cheap, and unmounts with the banner.
@@ -4903,7 +4936,8 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
   // `gap-1.5` INSIDE the label group stays what it was: the chevron is the label's handle, travels with
   // it, and reads as one cluster at ~6.4px of ink. See transcriptMetaChevronClass for why that number
   // is an ink distance and not the CSS one.
-  const rowClass = `group flex min-w-0 items-baseline justify-between gap-3 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${TRANSCRIPT_META_LABEL_CLASS}`
+  const label = activityLabel ?? thinkingToolActivityLabel(total)
+  const rowClass = `group flex min-w-0 items-center justify-between gap-3 rounded text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 ${TRANSCRIPT_META_LABEL_CLASS}`
   // ONE LINE, always — the row is a live status reading, and a status reading that changes height
   // as a path gets longer makes the whole tail jump. The label TRUNCATES (maintainer 2026-07-31:
   // "prevent the actual gerund from ever breaking onto two lines. It should get truncated
@@ -4916,21 +4950,33 @@ export function WorkingIndicator({ since, startedAt, activityLabel, run }: { sin
   // the reading is short as well as unbreakable.
   const row = (
     <>
-      {/* The chevron is the LABEL's control, so it rides in the label's own group and travels with it to
-          the left edge, rather than being stranded beside the right-justified clock. `min-w-0` on both
-          this group and the text inside it is what lets the label truncate instead of shoving the clock
-          off the row. */}
-      <span className="flex min-w-0 items-baseline gap-1.5">
-        <span className="min-w-0 truncate shimmer-text">{activityLabel ?? thinkingToolActivityLabel(total)}</span>
-        {/* Only when there is a run to open. The glyph places ITSELF off the text baseline — see
-            transcriptMetaChevronClass — so this row needs no alignment of its own. */}
-        {expandable && (
-          <ChevronRight
-            data-working-chevron
-            aria-hidden="true"
-            size={13}
-            className={transcriptMetaChevronClass(expanded)}
-          />
+      {/* THE TYPING DOTS lead the row: the worker is composing, said the way a chat app says someone is
+          typing (maintainer 2026-10-08), in place of a shimmering "Thinking…". A running tool's gerund, or
+          the run's `Ran N tool calls` in the gap between calls, still follows them as plain muted text —
+          the dots are the row's one live mark. With neither, the dots stand alone.
+          The chevron is the LABEL's control, so it rides in the label's own baseline group and travels
+          with it, rather than being stranded beside the right-justified clock. `min-w-0` on both groups
+          is what lets the label truncate instead of shoving the clock off the row. */}
+      <span className="flex min-w-0 items-center gap-2">
+        <span className="typing-dots shrink-0" role="img" aria-label={label ? "Working" : "Thinking"}>
+          <span />
+          <span />
+          <span />
+        </span>
+        {label !== undefined && (
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span data-working-label className="min-w-0 truncate text-muted">{label}</span>
+            {/* Only when there is a run to open. The glyph places ITSELF off the text baseline — see
+                transcriptMetaChevronClass — so this row needs no alignment of its own. */}
+            {expandable && (
+              <ChevronRight
+                data-working-chevron
+                aria-hidden="true"
+                size={13}
+                className={transcriptMetaChevronClass(expanded)}
+              />
+            )}
+          </span>
         )}
       </span>
       <span className="shrink-0 whitespace-nowrap tabular-nums text-[12px] text-muted-60">{durationLabel}</span>

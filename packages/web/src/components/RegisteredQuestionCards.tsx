@@ -51,10 +51,23 @@ function errorText(error: unknown): string {
   return message.length > 240 ? `${message.slice(0, 239)}…` : message
 }
 
-/** The chip/toggle half of a staged answer, keyed by `<question id>|<node path>`. The free-text half
- *  lives in the draft store instead, so a half-typed answer survives a remount and a worker restart. */
-type Picks = Map<string, { chosen: number | null; chosenSet: number[] }>
-const pickKey = (id: string, path: string) => `${id}|${path}`
+/** The chip/toggle half of a staged answer. It lives in the draft store beside the free-text half
+ *  (draftKey.questionPick), so a staged answer survives a remount, a worker restart and the reload a
+ *  dev-server restart forces — held in React state until 2026-10-08, every restart reset it. */
+type StagedPick = { chosen: number | null; chosenSet: number[] }
+const NO_PICK: StagedPick = { chosen: null, chosenSet: [] }
+function parsePick(raw: string | undefined): StagedPick {
+  if (!raw) return NO_PICK
+  try {
+    const value = JSON.parse(raw) as { chosen?: unknown; chosenSet?: unknown }
+    return {
+      chosen: typeof value.chosen === "number" ? value.chosen : null,
+      chosenSet: Array.isArray(value.chosenSet) ? value.chosenSet.filter((v): v is number => typeof v === "number") : [],
+    }
+  } catch { return NO_PICK }
+}
+/** "" when nothing is picked, which the draft store reads as a delete. */
+const serializePick = (pick: StagedPick) => (pick.chosen === null && pick.chosenSet.length === 0 ? "" : JSON.stringify(pick))
 
 /** The thread's whole answering state: what is staged on every open question, and the one send. */
 export interface RegisteredAnswering {
@@ -143,7 +156,6 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     () => (editing.size === 0 ? open : [...open.filter((q) => !editing.has(q.id)), ...editing.values()]),
     [open, editing],
   )
-  const [picks, setPicks] = useState<Picks>(() => new Map())
   const [error, setError] = useState<string>()
   // What this state has sent, by id — kept until the server refuses it, so a question is never staged or
   // sent twice however long the board takes to drop it, and so a surface can grey it where it stood.
@@ -167,11 +179,26 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     [projectDir, slug, questions],
   )
   const persistedText = useDraftValues(textKeys)
+  const pickKeys = useMemo(
+    () => (slug ? questions.flatMap((q) => allPaths(q).map((path) => draftKey.questionPick(projectDir, slug, q.id, path))) : []),
+    [projectDir, slug, questions],
+  )
+  const persistedPicks = useDraftValues(pickKeys)
+  // Writes read the STORE, not this render's snapshot: two updates in one event must not drop the first.
+  const readPick = (id: string, path: string): StagedPick => (slug ? parsePick(draftStore.get(draftKey.questionPick(projectDir, slug, id, path))) : NO_PICK)
+  const writePick = (id: string, path: string, pick: StagedPick) => {
+    if (slug) draftStore.set(draftKey.questionPick(projectDir, slug, id, path), serializePick(pick))
+  }
+  /** Drop a question's whole staged answer, picks and text, in one commit. */
+  const clearStaged = (q: RegisteredQuestionView) => {
+    if (!slug) return
+    draftStore.clearMany(allPaths(q).flatMap((path) => [draftKey.question(projectDir, slug, q.id, path), draftKey.questionPick(projectDir, slug, q.id, path)]))
+  }
   const answerFor = (q: RegisteredQuestionView, path: string): BlockAnswer => {
-    const pick = picks.get(pickKey(q.id, path))
+    const pick = slug ? parsePick(persistedPicks.get(draftKey.questionPick(projectDir, slug, q.id, path))) : NO_PICK
     return {
-      chosen: pick?.chosen ?? null,
-      chosenSet: pick?.chosenSet ?? [],
+      chosen: pick.chosen,
+      chosenSet: pick.chosenSet,
       text: (slug ? persistedText.get(draftKey.question(projectDir, slug, q.id, path)) : undefined) ?? "",
     }
   }
@@ -192,13 +219,8 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       // The rows are gone from the board push that follows, so the staged state for them is dead weight;
       // dropping the drafts too keeps a re-asked question from opening pre-filled with a stale answer.
       for (const id of result.answered) {
-        setPicks((prev) => {
-          const next = new Map(prev)
-          for (const key of [...next.keys()]) if (key.startsWith(`${id}|`)) next.delete(key)
-          return next
-        })
         const q = questions.find((entry) => entry.id === id)
-        if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, q.id, path), "")
+        if (q) clearStaged(q)
       }
       // A changed answer has landed: its slot draws the settled card again, with the new answer.
       const landed = new Set(result.answered)
@@ -392,9 +414,8 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   const changeFrom = open.reduce((min, q) => (q.askedAt < min ? q.askedAt : min), newestAsk)
   const canChange = (s: SettledQuestion) => Boolean(slug) && s.askedAt >= changeFrom && settledList.some((entry) => entry.id === s.id)
   const forget = (id: string) => {
-    setPicks((prev) => new Map([...prev].filter(([key]) => !key.startsWith(`${id}|`))))
     const q = editing.get(id)
-    if (q && slug) for (const path of allPaths(q)) draftStore.set(draftKey.question(projectDir, slug, id, path), "")
+    if (q) clearStaged(q)
   }
   // The answer each reopened question opened on, so its Send waits for an actual change.
   const changedFrom = useRef(new Map<string, string>())
@@ -403,13 +424,13 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     setError(undefined)
     // OPENS ON THE ANSWER IT REPLACES, so changing one pick of several is one click and the rest stand.
     const staged = stagedFromAnswer(s.spec, s.answer)
-    setPicks((prev) => {
-      const next = new Map([...prev].filter(([key]) => !key.startsWith(`${s.id}|`)))
-      for (const [path, pick] of staged) next.set(pickKey(s.id, path), { chosen: pick.chosen, chosenSet: pick.chosenSet ?? [] })
-      return next
-    })
-    for (const [path, pick] of staged) draftStore.set(draftKey.question(projectDir, slug, s.id, path), pick.text)
-    setEditing((prev) => new Map(prev).set(s.id, { id: s.id, spec: s.spec, askedAt: s.askedAt }))
+    const view: RegisteredQuestionView = { id: s.id, spec: s.spec, askedAt: s.askedAt }
+    clearStaged(view)
+    draftStore.setMany(Object.fromEntries([...staged].flatMap(([path, pick]) => [
+      [draftKey.question(projectDir, slug, s.id, path), pick.text],
+      [draftKey.questionPick(projectDir, slug, s.id, path), serializePick({ chosen: pick.chosen, chosenSet: pick.chosenSet ?? [] })],
+    ])))
+    setEditing((prev) => new Map(prev).set(s.id, view))
     changedFrom.current.set(s.id, answerKey(s.answer))
   }
   const keep = (id: string) => {
@@ -427,21 +448,16 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       // producers. The typed draft is never cleared (maintainer 2026-09-02): it stays in the box as an
       // unselected draft, and registeredAnswer submits the chip while one is chosen (the box taking
       // focus clears it via onText below).
-      setPicks((prev) => {
-        const next = new Map(prev)
-        const key = pickKey(q.id, path)
-        const pick = next.get(key) ?? { chosen: null, chosenSet: [] }
-        if (isMulti) {
-          const set = pick.chosenSet.includes(optIdx)
-            ? pick.chosenSet.filter((v) => v !== optIdx)
-            : [...pick.chosenSet, optIdx]
-          next.set(key, { ...pick, chosenSet: set })
-        } else {
-          next.set(key, { ...pick, chosen: pick.chosen === optIdx ? null : optIdx })
-          if (pick.chosen !== optIdx) autoSend.current = q.id
-        }
-        return next
-      })
+      const pick = readPick(q.id, path)
+      if (isMulti) {
+        const set = pick.chosenSet.includes(optIdx)
+          ? pick.chosenSet.filter((v) => v !== optIdx)
+          : [...pick.chosenSet, optIdx]
+        writePick(q.id, path, { ...pick, chosenSet: set })
+      } else {
+        if (pick.chosen !== optIdx) autoSend.current = q.id
+        writePick(q.id, path, { ...pick, chosen: pick.chosen === optIdx ? null : optIdx })
+      }
     },
     onText: (q, path, isMulti, text) => {
       if (!slug) return
@@ -450,12 +466,10 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       // SINGLE: the free-text box taking over — a keystroke OR just focusing it — drops the chosen chip,
       // as the fence producer does. The card's onFocus calls this with the text unchanged for exactly
       // that reason, so writing the draft alone left the chip lit beside a focused box (2026-08-28).
-      if (!isMulti) setPicks((prev) => {
-        const key = pickKey(q.id, path)
-        const pick = prev.get(key)
-        if (!pick || pick.chosen === null) return prev
-        return new Map(prev).set(key, { ...pick, chosen: null })
-      })
+      if (!isMulti) {
+        const pick = readPick(q.id, path)
+        if (pick.chosen !== null) writePick(q.id, path, { ...pick, chosen: null })
+      }
     },
     dismiss: (id) => dismiss.mutate(id),
     dismissing: dismiss.isPending,

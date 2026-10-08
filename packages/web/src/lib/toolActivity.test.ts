@@ -683,15 +683,16 @@ test("the digest reports how many distinct files the run edited", () => {
 test("the inter-call gap states the run it is standing in for, so waiting reads as progress", () => {
   // The alternation the maintainer asked for (2026-08-08): a count, the next call's own gerund, then the
   // count one higher. Only the generic half is this helper's — the gerund comes from toolActivityLabel.
-  assert.equal(thinkingToolActivityLabel(23), "Ran 23 tool calls. Thinking…")
-  assert.equal(thinkingToolActivityLabel(24), "Ran 24 tool calls. Thinking…")
-  assert.equal(thinkingToolActivityLabel(1), "Ran 1 tool call. Thinking…")
+  assert.equal(thinkingToolActivityLabel(23), "Ran 23 tool calls")
+  assert.equal(thinkingToolActivityLabel(24), "Ran 24 tool calls")
+  assert.equal(thinkingToolActivityLabel(1), "Ran 1 tool call")
   // The opening of a turn, and the pause right after prose closed a run: there is nothing to report yet,
-  // and `Ran 0 tool calls` would be a claim about the turn that is worse than saying nothing.
-  assert.equal(thinkingToolActivityLabel(0), "Thinking…")
+  // and `Ran 0 tool calls` would be a claim about the turn that is worse than saying nothing. The typing
+  // dots say "thinking" on their own (2026-10-08), so there is no label at all.
+  assert.equal(thinkingToolActivityLabel(0), undefined)
   // Never the digest's file tail. The row truncates at one line, and the half that has to survive a
   // narrow pane is the one saying the model is still going.
-  assert.doesNotMatch(thinkingToolActivityLabel(9), /edited/)
+  assert.doesNotMatch(thinkingToolActivityLabel(9) ?? "", /edited/)
 })
 
 test("edited files are counted once per file, whatever shape the write arrived in", () => {

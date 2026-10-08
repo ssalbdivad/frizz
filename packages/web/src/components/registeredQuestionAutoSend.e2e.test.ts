@@ -162,6 +162,29 @@ test("a multi stages its toggles until Enter confirms it, and sends it alone", {
   }
 })
 
+// A dev-server restart reloads the page, and the toggles used to live in React state alone: every restart
+// cleared a half-answered card (David 2026-10-08). They ride the draft store now, as typed text does.
+test("staged toggles survive a reload, and still send", { skip: !baseUrl, timeout: 120_000 }, async () => {
+  const { browser, page, errors, rpcs } = await launch("?many=1")
+  try {
+    await mouseClick(page, `${GATES} [data-question-option]`, 0)
+    await mouseClick(page, `${GATES} [data-question-option]`, 2)
+    await settle(page)
+    await page.reload({ waitUntil: "networkidle0" })
+    await page.waitForSelector(`${GATES} [data-question-option]`)
+    const pressed = await page.$$eval(`${GATES} [data-question-option]`, (ns) => ns.map((n) => n.querySelector("button[aria-pressed]")?.getAttribute("aria-pressed")))
+    assert.deepEqual(pressed.map((p, i) => [i, p]).filter(([, p]) => p === "true").map(([i]) => i), [0, 2], "both toggles are still on")
+    assert.equal(await ownSend(page, GATES), "Send answer", "and the multi still offers its Send")
+    await mouseClick(page, `${GATES} textarea[data-surface='questionAnswer']`)
+    await page.keyboard.press("Enter")
+    await settle(page)
+    assert.deepEqual(await rpcs(), ["answerQuestions"], "the restored toggles send")
+    assert.deepEqual(errors, [])
+  } finally {
+    await browser.close()
+  }
+})
+
 test("a typed reply sends what is staged first, then itself — and every question it did not answer stays open", { skip: !baseUrl, timeout: 120_000 }, async () => {
   const { browser, page, errors, rpcs, answers } = await launch("?many=1")
   try {

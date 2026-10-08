@@ -210,7 +210,7 @@ test("contextDisplayPath: a Windows project shortens the same way, in the path's
 
 // ── the editor block ─────────────────────────────────────────────────────────────────────────────
 
-const HEADER = "Editor context (attached automatically: what the human had in front of them in their editor when they sent this; it may or may not be related):"
+const HEADER = "Editor context (attached automatically: what the user had in front of them in their editor when they sent this; it may or may not be related):"
 const editorFile = { path: "/repo/src/a.ts" }
 
 test("the editor block quotes a selection under a header that says it was automatic and may be unrelated", () => {
@@ -273,6 +273,14 @@ test("each reading parses back to what the chip shows", () => {
   assert.deepEqual(odd?.editor, { kind: "selection", display: "my dir/a, b.ts", startLine: 3, endLine: 5, text: `${HEADER}\n\nOpen in the editor: x` })
   // A trailing newline from the transport is not the block's.
   assert.equal(parseSentEditorContext(`hi\n\n${HEADER}\n\nOpen in the editor: src/a.ts\n`)?.editor.display, "src/a.ts")
+  // A message sent before 2026-10-08 said "the human", and still parses: header, unquoted tails and note.
+  const OLD_HEADER = "Editor context (attached automatically: what the human had in front of them in their editor when they sent this; it may or may not be related):"
+  assert.notEqual(OLD_HEADER, HEADER)
+  assert.deepEqual(parseSentEditorContext(`hi\n\n${OLD_HEADER}\n\nOpen in the editor: src/a.ts`), { body: "hi", editor: { kind: "file", display: "src/a.ts" } })
+  assert.equal(parseSentEditorContext(`hi\n\n${OLD_HEADER}\n\nSelected in src/a.ts (unsaved changes), lines 1-900 (not quoted here, and the copy on disk differs: ask the human to save it or paste it)`)?.editor.unquoted, "long")
+  assert.equal(parseSentEditorContext(`hi\n\n${OLD_HEADER}\n\nSelected in Untitled-1 (unsaved, not a file on disk), lines 1-900 (not quoted here, and there is no file to read: ask the human to paste it)`)?.editor.unquoted, "long")
+  const oldNote = "The context above is from the human's editor, which shows the project's main checkout (/repo). You are working in your own worktree (/repo/.frizz/worktrees/tidy): the same relative path there is your copy, and it may differ from what they see."
+  assert.equal(withoutWorktreeNote(`fix it\n\n${oldNote}`), "fix it")
 })
 
 test("a message that only quotes an editor block, or garbles one, stays plain text", () => {
@@ -302,13 +310,13 @@ test("an unsaved buffer says the copy on disk differs, an untitled one that ther
   const dirty = { ...editorFile, dirty: true }
   assert.equal(serializeEditorContext({ ...dirty, selection: { startLine: 2, endLine: 3, text: "a\nb" } }, [], "/repo"), `${HEADER}\n\nSelected in src/a.ts (unsaved changes), lines 2-3:\n> a\n> b`)
   assert.equal(serializeEditorContext({ ...dirty, selection: { startLine: 1, endLine: 900 } }, [], "/repo"),
-    `${HEADER}\n\nSelected in src/a.ts (unsaved changes), lines 1-900 (not quoted here, and the copy on disk differs: ask the human to save it or paste it)`)
+    `${HEADER}\n\nSelected in src/a.ts (unsaved changes), lines 1-900 (not quoted here, and the copy on disk differs: ask the user to save it or paste it)`)
   assert.equal(serializeEditorContext({ ...dirty, cursorLine: 40 }, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts (unsaved changes; cursor on line 40)`)
   assert.equal(serializeEditorContext(dirty, [], "/repo"), `${HEADER}\n\nOpen in the editor: src/a.ts (unsaved changes)`)
   const scratch = { path: "Untitled-1", untitled: true }
   assert.equal(serializeEditorContext({ ...scratch, selection: { startLine: 1, endLine: 2, text: "TODO\nlater" } }, [], "/repo"), `${HEADER}\n\nSelected in Untitled-1 (unsaved, not a file on disk), lines 1-2:\n> TODO\n> later`)
   assert.equal(serializeEditorContext({ ...scratch, selection: { startLine: 1, endLine: 900 } }, [], "/repo"),
-    `${HEADER}\n\nSelected in Untitled-1 (unsaved, not a file on disk), lines 1-900 (not quoted here, and there is no file to read: ask the human to paste it)`)
+    `${HEADER}\n\nSelected in Untitled-1 (unsaved, not a file on disk), lines 1-900 (not quoted here, and there is no file to read: ask the user to paste it)`)
   // A file that may hold secrets: named, never quoted, whatever its size.
   assert.equal(serializeEditorContext({ path: "/repo/.env", withheld: true, selection: { startLine: 1, endLine: 3 } }, [], "/repo"), `${HEADER}\n\nSelected in .env, lines 1-3 (not quoted here: the file may hold secrets)`)
 })
@@ -391,7 +399,7 @@ test("a file in the thread's own worktree is relative to the worktree; a main-ch
 
 test("the worktree note: only for context from the main checkout, sent to a thread working elsewhere", () => {
   const note = worktreeNote(["/repo/src/a.ts"], "/repo", { dir: WT, kind: "worktree" })
-  assert.equal(note, "The context above is from the human's editor, which shows the project's main checkout (/repo). You are working in your own worktree (/repo/.frizz/worktrees/tidy): the same relative path there is your copy, and it may differ from what they see.")
+  assert.equal(note, "The context above is from the user's editor, which shows the project's main checkout (/repo). You are working in your own worktree (/repo/.frizz/worktrees/tidy): the same relative path there is your copy, and it may differ from what they see.")
   assert.match(worktreeNote(["/repo/src/a.ts"], "/repo", { dir: "/repo-perf", kind: "folder" }), /You are working in your own checkout \(\/repo-perf\)/)
   // Nothing to say: the thread is at the root, the file is the worktree's own, outside the project, the
   // terminal, or there is no context at all.

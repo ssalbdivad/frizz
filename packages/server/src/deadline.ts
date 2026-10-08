@@ -70,7 +70,7 @@ function named(d: Pick<ThreadDeadline, "atMs" | "setAtMs">, nowMs: number): stri
 export function deadlineCheckInMessage(stage: DeadlineStage, d: Pick<ThreadDeadline, "atMs" | "setAtMs" | "setBy">, nowMs: number): string {
   const left = preciseSpanLabel(Math.max(0, d.atMs - nowMs))
   const when = named(d, nowMs)
-  const setter = d.setBy === "human" ? "the human" : "you"
+  const setter = d.setBy === "human" ? "the user" : "you"
   switch (stage) {
     case "half":
       return (
@@ -96,7 +96,7 @@ export function deadlineCheckInMessage(stage: DeadlineStage, d: Pick<ThreadDeadl
         `⏰ Your time is up: the deadline was ${when}.\n\n` +
         "Your next stop is the handoff. Finish the step you are in, commit it, and hand over: what is done, what is " +
         "not, and what you would do next. Nothing interrupts you, but the board now shows this thread as over time, " +
-        `and no further reminders are coming.${d.setBy === "human" ? " Only the human can extend this deadline." : ""}`
+        `and no further reminders are coming.${d.setBy === "human" ? " Only the user can extend this deadline." : ""}`
       )
   }
 }
@@ -106,13 +106,13 @@ export function deadlineCheckInMessage(stage: DeadlineStage, d: Pick<ThreadDeadl
  *  as of the last time it was composed). */
 export function deadlineNoticeMessage(change: { kind: "set"; deadline: Pick<ThreadDeadline, "atMs" | "setAtMs">; previousAtMs?: number } | { kind: "cleared" }, nowMs: number): string {
   if (change.kind === "cleared") {
-    return "⏰ The human removed your time limit. There is no deadline any more: work to the best deliverable, not to a clock."
+    return "⏰ The user removed your time limit. There is no deadline any more: work to the best deliverable, not to a clock."
   }
   const d = change.deadline
   const left = preciseSpanLabel(Math.max(0, d.atMs - nowMs))
   const verb = change.previousAtMs === undefined ? "set a time limit" : d.atMs > change.previousAtMs ? "extended your deadline" : "moved your deadline earlier"
   return (
-    `⏰ The human ${verb}: your deadline is now ${deadlineClock(d.atMs, nowMs)}, ${left} from now.\n\n` +
+    `⏰ The user ${verb}: your deadline is now ${deadlineClock(d.atMs, nowMs)}, ${left} from now.\n\n` +
     "Plan to the best deliverable you can hand over by then, not the complete one eventually. Frizz checks in " +
     "at half-time, at 80% and shortly before the deadline."
   )
@@ -131,7 +131,7 @@ export function deadlineSection(row: Parameters<typeof rowDeadline>[0], nowMs = 
   const left = d.atMs - nowMs
   const status = left > 0 ? `${spanLabel(left)} from now` : `already passed, ${spanLabel(-left)} ago`
   const extend = d.setBy === "human"
-    ? "The human set it, and only the human can move or remove it: `mcp__frizz__deadline` reads it, and refuses to extend it."
+    ? "The user set it, and only the user can move or remove it: `mcp__frizz__deadline` reads it, and refuses to extend it."
     : "You set it yourself with `mcp__frizz__deadline`, which can also move or clear it."
   return (
     "## Your time limit\n\n" +
@@ -145,7 +145,7 @@ export function deadlineSection(row: Parameters<typeof rowDeadline>[0], nowMs = 
     `(${stageAt("final")}) — hand off at your next stop; and at the deadline itself — your next stop IS the handoff. Every wake ` +
     "Frizz sends you also carries the time left on its clock line.\n" +
     "- **Waiting counts.** The clock is wall time, parks and pauses included. A wait on CI or a reviewer that will outlive the " +
-    "deadline is handed to the human, not waited out.\n" +
+    "deadline is handed to the user, not waited out.\n" +
     "- **Size your sub-agents' time explicitly.** Put a line `Time limit: 20m` on a line of its own in an Agent or Workflow " +
     "agent prompt to give that child a budget; without one it gets your remaining time minus a reserve for you to fold its " +
     "result in, and it is never given more than that. Leave yourself the time to integrate what they return."

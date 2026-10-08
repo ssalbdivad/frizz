@@ -161,7 +161,7 @@ export function scheduledRunHeader(input: ScheduledRunHeaderInput): string {
     lines.push(`It has a condition — check it FIRST: "${condition}". If it rules this run out, finish quietly (below) and give the reason.`)
   }
   const when = formatOccurrence(input.occurrenceAt, input.tz)
-  if (input.byHuman) lines.push(`This run is for ${when}; the human started it early.`)
+  if (input.byHuman) lines.push(`This run is for ${when}; the user started it early.`)
   else if (input.late) {
     const cause = input.late.cause === "off" ? ", because Frizz was off" : input.late.cause === "asleep" ? ", because the computer was asleep" : ""
     lines.push(`This run is for ${when}. It started ${formatLateness(input.late.ms)} late${cause}.`)
@@ -171,7 +171,7 @@ export function scheduledRunHeader(input: ScheduledRunHeaderInput): string {
     lines.push(`The previous run was @${handle} for ${formatOccurrence(input.previous.at, input.tz)}. \`read_thread\` it when "since the last run" matters.`)
   } else lines.push("This is the schedule's first run.")
   lines.push(
-    "If you find nothing that needs the human, finish with `done` and `quiet: true`: the thread goes straight to Done and your body's first line becomes this run's line in the schedule's history. " +
+    "If you find nothing that needs the user, finish with `done` and `quiet: true`: the thread goes straight to Done and your body's first line becomes this run's line in the schedule's history. " +
       "If the NEXT run should not happen as planned, the `schedule` tool's `skip_next` and `move_next` change that one occurrence.",
   )
   return `<${SCHEDULED_RUN_TAG} schedule="${input.scheduleId}">\n${lines.join("\n")}\n</${SCHEDULED_RUN_TAG}>`

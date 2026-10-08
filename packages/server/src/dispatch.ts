@@ -385,7 +385,7 @@ export function composePrompt(sessionId: string, prompt: string, kind: BackendKi
   // operator's prompt byte for byte. That is also what the transcript projectors cut on
   // (DISPATCH_TASK_BANNER_MARKER), so the first chat bubble shows the operator's words alone.
   const handoff =
-    "\n\nEverything above the banner below is frizz system orientation. Everything below it is the human operator's own prompt, verbatim — that, and nothing else, is your task."
+    "\n\nEverything above the banner below is frizz system orientation. Everything below it is the user's own prompt, verbatim — that, and nothing else, is your task."
   return `${scratch}${handoff}\n\n\n${DISPATCH_TASK_BANNER_MARKER}${prompt}`
 }
 
@@ -402,7 +402,7 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
   const scratch = `SCRATCH DIRECTORY: ${scratchPath}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
   const who = operatorIdentity()
-  const address = `${who ? `The human is ${who}. ` : ""}Your messages are read by the human: write to them as "you", never "the human" (a question's own wording aside)${who ? `, and name them as ${who} to another thread` : ""}.`
+  const address = `${who ? `The user is ${who}. ` : ""}Your messages are read by the user: write to them as "you", never "the user" (a question's own wording aside)${who ? `, and name them as ${who} to another thread` : ""}.`
   return `${scratch}\n\n${address}`
 }
 
@@ -1529,7 +1529,7 @@ export function createDispatcher(deps: DispatchDeps): Dispatcher {
       const adoption =
         "ADOPTION: this thread predates you and has prior context recorded in `" +
         (boardRoot ? join(boardRoot, ".frizz", `${slug}.md`) : `.frizz/${slug}.md`) +
-        "` (a previous agent or session worked it — you have no access to that conversation, and you don't need it). READ THAT FILE FIRST for context: `## Goal` is the mission, `## Status`/`## Decisions`/`## Next step` are where things stand. It is CONTEXT, not a contract — do NOT edit its frontmatter. You work session-first from here: keep your working state in your scratchpad and signal end-of-turn with the done/awaiting fences. The human's message below is your steer on top of that context."
+        "` (a previous agent or session worked it — you have no access to that conversation, and you don't need it). READ THAT FILE FIRST for context: `## Goal` is the mission, `## Status`/`## Decisions`/`## Next step` are where things stand. It is CONTEXT, not a contract — do NOT edit its frontmatter. You work session-first from here: keep your working state in your scratchpad and signal end-of-turn with the done/awaiting fences. The user's message below is your steer on top of that context."
       const task = message?.trim() || "Pick up this thread and continue from where the file says things stand."
       // Provision a scratch directory too (the adopted worker's own space); the legacy file stays read-only.
       try {

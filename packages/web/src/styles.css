@@ -1722,6 +1722,39 @@ html[data-host-colors] :is(.md-body, .md-inline) :is(a, .local-file-action) {
   }
 }
 
+/* The worker is composing: three dots in a small bubble, the way a chat app shows someone typing
+   (maintainer 2026-10-08). Each dot lifts and brightens in turn; the bubble wears the human's bubble
+   fill so it reads as a message on its way. Under reduced motion the dots hold still at mid tone. */
+.typing-dots {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--color-user-bubble);
+}
+.typing-dots > span {
+  width: 5px;
+  height: 5px;
+  border-radius: 9999px;
+  background: var(--color-muted);
+  opacity: 0.35;
+  animation: typing-dot 1.2s ease-in-out infinite;
+}
+.typing-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots > span:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-dot {
+  0%, 60%, 100% { opacity: 0.35; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots > span {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 /* Brief arrival ring when a sidebar row scrolls the queue to its card (flashQueueCard in store.ts).
    Set on the BORDERED CARD ROOT, never the outer slot — the slot is the fade wrapper, not the bordered
    box (and while it wrapped the inter-card hairline rule and its margins, a ring on it traced ~80px of

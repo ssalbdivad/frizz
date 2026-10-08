@@ -205,6 +205,10 @@ window.fetch = async (input, init) => {
   if (url.pathname === "/_frizz/rpc/threadSettledQuestions") {
     return new Response(JSON.stringify({ result: { questions: [] } }), { headers: { "content-type": "application/json" } })
   }
+  // Lists too: the spinoff dialog iterates both.
+  if (url.pathname === "/_frizz/rpc/projectsQueues" || url.pathname === "/_frizz/rpc/projectsList") {
+    return new Response(JSON.stringify({ result: [] }), { headers: { "content-type": "application/json" } })
+  }
   if (url.pathname.startsWith("/_frizz/rpc/")) {
     return new Response(JSON.stringify({ result: {} }), { headers: { "content-type": "application/json" } })
   }

@@ -941,12 +941,12 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
         }
         if (input.action === "dry_run") {
           const echo = validate(spec, nowMs)
-          return { text: `Dry run — nothing was saved. This is what the human would confirm:\n\n${[echo.echo, ...(echo.nextLine ? [echo.nextLine] : [])].join("\n")}` }
+          return { text: `Dry run — nothing was saved. This is what the user would confirm:\n\n${[echo.echo, ...(echo.nextLine ? [echo.nextLine] : [])].join("\n")}` }
         }
         const sch = insert(spec, "proposed", input.slug)
         const v = view(sch)
         return {
-          text: `Proposed ${sch.id}. It does NOT run until the human clicks Turn on. Relay this to them verbatim:\n\n${lines(v)}`,
+          text: `Proposed ${sch.id}. It does NOT run until the user clicks Turn on. Relay this to them verbatim:\n\n${lines(v)}`,
           schedule: v,
         }
       }
@@ -968,7 +968,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
           ...(input.backend !== undefined ? { backend: input.backend } : {}),
         })
         const v = view(after)
-        return { text: `Updated ${after.id}; it still waits for the human's Turn on. Relay this to them verbatim:\n\n${lines(v)}`, schedule: v }
+        return { text: `Updated ${after.id}; it still waits for the user's Turn on. Relay this to them verbatim:\n\n${lines(v)}`, schedule: v }
       }
       case "list": {
         const all = storage.listSchedules().map(view)
@@ -983,7 +983,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
         const sch = requireSchedule(input.id)
         if (sch.state !== "active") return { text: `${sch.id} is ${sch.state}; nothing to pause.`, schedule: view(sch) }
         const after = pause(input.id, "human")!
-        return { text: `Paused ${sch.id}. Only the human can resume it.`, schedule: view(after) }
+        return { text: `Paused ${sch.id}. Only the user can resume it.`, schedule: view(after) }
       }
       case "skip_next": {
         const sch = requireSchedule(input.id)
@@ -1102,7 +1102,7 @@ export function createScheduleService(deps: ScheduleServiceDeps): ScheduleServic
       const row = storage.getSession(slug)
       if (!row) throw new Error(`thread ${slug} is not registered`)
       if (!row.schedule_id) {
-        throw new Error("`quiet` is only for a scheduled run, and this thread is not one. Call `done` without it — your card stays in the human's queue.")
+        throw new Error("`quiet` is only for a scheduled run, and this thread is not one. Call `done` without it — your card stays in the user's queue.")
       }
       storage.markThreadDone(slug, body, now())
       storage.setState(slug, "archived")

@@ -91,7 +91,7 @@ test("a send to a thread in a worktree writes its paths for the worktree and say
   const worktree = { dir: "/work/alpha/.frizz/worktrees/r2", kind: "worktree" }
   const active = { ...file, selection: { startLine: 91, endLine: 92, chars: 40, text: "const sig = sign(key, body)\nreturn sig" } }
   const sent = outgoingMessageWith("why does this throw?", [], "/work/alpha", active, worktree)
-  assert.equal(sent.endsWith("\n\nThe context above is from the human's editor, which shows the project's main checkout (/work/alpha). You are working in your own worktree (/work/alpha/.frizz/worktrees/r2): the same relative path there is your copy, and it may differ from what they see."), true, sent)
+  assert.equal(sent.endsWith("\n\nThe context above is from the user's editor, which shows the project's main checkout (/work/alpha). You are working in your own worktree (/work/alpha/.frizz/worktrees/r2): the same relative path there is your copy, and it may differ from what they see."), true, sent)
   // The window shows the worktree itself: the path is the worktree's, and nothing needs saying.
   const own = outgoingMessageWith("why does this throw?", [], "/work/alpha", { ...active, path: "/work/alpha/.frizz/worktrees/r2/src/lib/r2-private.ts" }, worktree)
   assert.equal(parseSentEditorContext(own)?.editor.display, "src/lib/r2-private.ts")

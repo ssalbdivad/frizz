@@ -37,7 +37,7 @@ test("the card is the last rung of the one ladder, after the resting card", () =
 })
 
 test("every gate is the ladder's own answer, so the slot opens exactly when a rung renders", () => {
-  assert.match(chat, /\{tailReady && runtimeStatusRung\(runtimeStatus\) !== null && \(/, "the plain path's spacer gate")
+  assert.match(chat, /\{tailReady && !typingLast && runtimeStatusRung\(runtimeStatus\) !== null && \(/, "the plain path's spacer gate")
   assert.match(chat, /const hasRuntimeStatus = runtimeStatusRung\(runtimeStatus\) !== null/, "the virtualized path's row gate")
   // The spacing is the same answer again: only the Working… rung is a meta line rather than a card.
   assert.match(chat, /runtimeStatusRung\(state\) === "working" \? workingIndicatorGap\(messages\) : STEP/)

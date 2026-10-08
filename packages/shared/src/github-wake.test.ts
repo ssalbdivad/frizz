@@ -35,6 +35,10 @@ import {
   splitAwaitingFrontmatter,
   SHELL_DONE_TRAILER,
   type GithubWakeSteer,
+  interruptEndedSubAgentsMessage,
+  isInterruptEndedWake,
+  parseRecurringPrompt,
+  SIGNOFF_NUDGE_MARKER,
 } from "./index.ts"
 
 const single: GithubWakeSteer = {
@@ -586,6 +590,27 @@ test("every trailer frizz appends comes off the display projection", () => {
     assert.ok(!shown.includes("mcp__frizz__"), `${name}: a raw tool name reached the operator`)
     assert.ok(shown.trim().length > 0, `${name}: the projection ate the news with the boilerplate`)
   }
+})
+
+// Frizz's worker-facing text said "the human" until 2026-10-08 and says "the user" now. A transcript
+// written before that still carries the old bytes, so every recognizer keyed on one of those strings
+// must keep reading them. The old strings are spelled out literally here, not derived, so this fails if
+// the legacy reconstruction ever stops reproducing what was actually written.
+test("text frizz wrote in its old \"the human\" wording is still recognized", () => {
+  const prOld = "(The human registered this PR watcher from your done card — STILL ARMED. It reports again on the next CI change, review, comment, label, conflict or review request. Leave it armed. The human chose to follow this, so put it in front of them: rest on it with `status: needs_input` and one or two sentences on what happened, unless it needs work from you first. It does not block `done`.)"
+  const quietOld = "(The human registered this PR watcher from your done card — STILL ARMED. Green CI alone needs nothing from the human: rest on it with the fence alone, naming it under `prs:` with `status: watching` and a long `for:`. It does not block `done`.)"
+  const issueOld = "(The human registered this issue watcher from your done card — STILL ARMED. It reports again on the next comment, label or assignee change, and once more when the issue closes. Leave it armed. The human chose to follow this, so put it in front of them: rest on it with `status: needs_input` and one or two sentences on what happened, unless it needs work from you first. It does not block `done`.)"
+  for (const [now, old] of [[PR_WATCH_HUMAN_TRAILER, prOld], [PR_WATCH_HUMAN_QUIET_TRAILER, quietOld], [ISSUE_WATCH_HUMAN_TRAILER, issueOld]]) {
+    assert.ok(!now.includes("human"), "the trailer frizz writes now says the user")
+    assert.equal(stripWakeTrailer(`📬 news\n\n${old}`), "📬 news")
+  }
+  assert.ok(SIGNOFF_NUDGE_MARKER.includes("not from the user"))
+  assert.equal(parseRecurringPrompt("**This message is from frizz, not from the human.** You rested without a fence.")?.kind, "signoff")
+  assert.equal(parseRecurringPrompt(`${SIGNOFF_NUDGE_MARKER} You rested without a fence.`)?.kind, "signoff")
+  assert.equal(parseParkWake("👋 The human asked for an update before your wait ran out. Check back in on everything.\n\n- `agent:a1` — still running")?.kind, "requested")
+  assert.equal(parseParkWake(parkExpiredWakeMessage(["`agent:a1` — still running"], false, true))?.kind, "requested")
+  assert.equal(isInterruptEndedWake("⚠️ The human's last follow-up was sent with INTERRUPT, which aborted your turn — and the runtime ends every background sub-agent with the turn. These did not return:\n- x"), true)
+  assert.equal(isInterruptEndedWake(interruptEndedSubAgentsMessage([{ label: "x" }])), true)
 })
 
 // The strip runs BEFORE the chat parses, so a parser that lost its anchor would trade the boilerplate

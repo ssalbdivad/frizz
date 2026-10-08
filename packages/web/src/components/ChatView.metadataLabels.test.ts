@@ -32,26 +32,24 @@ test("minimal tool activity is settled history with no live shimmer or spinner i
   assert.doesNotMatch(block, /frizz-tool-spinner|data-running-indicator|w-2\.5/, "no spinner or reserved mark slot may indent the label")
 })
 
-test("the current gerund replaces Thinking in the exact bottom shimmer span", () => {
+test("the live row leads with typing dots, and the gerund or run count follows them", () => {
   const source = readFileSync(new URL("./ChatView.tsx", import.meta.url), "utf8")
   const block = source.match(/export function WorkingIndicator[\s\S]*?\n}/)?.[0]
   assert.ok(block, "WorkingIndicator must exist")
   assert.match(block, /data-working-indicator/, "the runtime tail needs a stable browser-QA target")
-  // The generic reading names what the model is DOING with the turn — composing its next move — not
-  // that the session is alive, which the reader can already see (maintainer 2026-08-01: "Do you think
-  // it makes more sense to change it to 'thinking'?"). It also carries the run's count, so the gap
-  // between two calls reads as progress rather than a stall (maintainer 2026-08-08) — the wording lives
-  // in lib/toolActivity.thinkingToolActivityLabel, never inline here.
-  assert.match(block, /<span className="[^"]*shimmer-text">\{activityLabel \?\? thinkingToolActivityLabel\(total\)\}<\/span>/, "tool activity and the generic reading must use the exact same shimmer element")
-  assert.doesNotMatch(block, /"Thinking…"/, "the generic reading's wording belongs to the shared label helper, not a literal in the row")
-  assert.doesNotMatch(block, /"Working…"/, "the generic reading is Thinking, not Working")
-  assert.equal((block.match(/shimmer-text/g) ?? []).length, 1, "the runtime tail must have one shimmer treatment")
+  // The worker composing reads as typing dots, the way a chat app shows someone typing (maintainer
+  // 2026-10-08) — not a shimmering "Thinking…". The dots are the row's ONE live mark.
+  assert.match(block, /className="typing-dots shrink-0"/, "the row leads with the typing dots")
+  assert.doesNotMatch(block, /shimmer-text/, "the dots replace the shimmer; the label is plain text")
+  // The label is a running call's gerund or, between calls, the run's count — its wording lives in
+  // lib/toolActivity.thinkingToolActivityLabel, never inline here.
+  assert.match(block, /const label = activityLabel \?\? thinkingToolActivityLabel\(total\)/)
+  assert.doesNotMatch(block, />Thinking…</, "no Thinking word beside the dots")
   // ONE LINE, always. The label TRUNCATES rather than wrapping (maintainer 2026-07-31: "prevent the
   // actual gerund from ever breaking onto two lines. It should get truncated instead") — a live status
   // reading that grows taller as a path lengthens makes the whole transcript tail jump.
-  assert.match(block, /<span className="min-w-0 truncate shimmer-text"/, "the label truncates to one line")
+  assert.match(block, /<span data-working-label className="min-w-0 truncate text-muted">\{label\}<\/span>/, "the label truncates to one line")
   assert.doesNotMatch(block, /break-words/, "and never wraps")
-  assert.match(block, /\{durationLabel\}/, "the runtime tail still reads its own elapsed time")
   assert.match(block, /<span className="shrink-0 whitespace-nowrap [^"]*">\{durationLabel\}<\/span>/, "the elapsed reading never breaks mid-value or shrinks")
 })
 

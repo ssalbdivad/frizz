@@ -766,7 +766,7 @@ export function retiredAwaitingKindsIn(body: string): RetiredAwaitingKind[] {
 export const RETIRED_AWAITING_REPLACEMENT: Record<RetiredAwaitingKind, string> = {
   "watch": "`shells: [<the id your runtime gave you>]` (or `agents: [<id>]`) — the same id, in the current sequence",
   "pr-watch": "register the PR with `mcp__frizz__watch_pr`, then name it `prs: [owner/repo#123]`",
-  "human": "there is no human gate any more — steps only the human can perform go under `steps:`, one `- ` item per line; a decision you need from them is a question, registered with `mcp__frizz__ask`",
+  "human": "there is no human gate any more — steps only the user can perform go under `steps:`, one `- ` item per line; a decision you need from them is a question, registered with `mcp__frizz__ask`",
   "ci": "CI is not a wait of its own: register the PR with `mcp__frizz__watch_pr` and you are woken when its checks settle",
   "session": "there is no cross-session wait — name the sub-agent you dispatched with `agents: [<id>]`",
   // THE 2026-08-24 CUTOVER. The frontmatter is YAML now, and YAML has no repeated keys — so the four
@@ -1472,7 +1472,7 @@ export function saysAllDone(text: string | undefined): boolean {
 // instead of the work it was actually sent.
 const OPT_OUT_NOTE =
   "To stop these, sign off with a ```done fence — but ONLY when the work is genuinely finished:" +
-  " it files this thread away, and nothing but new work from the human reopens it."
+  " it files this thread away, and nothing but new work from the user reopens it."
 
 /** What frizz delivers when the ON REST trigger fires: the operator's words VERBATIM, then the trailer.
  * Kept beside the parser so the wording sent and the wording recognized can never drift apart.
@@ -1586,7 +1586,8 @@ export function parseRecurringPrompt(text: string | undefined): RecurringPrompt 
   // operator's text with a note attached, it IS frizz's text — so it is matched on its own opening
   // marker and collapsed like any other repeating frizz delivery. Left as a card it dominated the queue
   // item it was complaining about (maintainer 2026-08-12, with a screenshot of exactly that).
-  if (text.trimStart().startsWith(SIGNOFF_NUDGE_MARKER)) return { kind: "signoff", prompt: "" }
+  const lead = text.trimStart()
+  if (lead.startsWith(SIGNOFF_NUDGE_MARKER) || lead.startsWith(LEGACY_SIGNOFF_NUDGE_MARKER)) return { kind: "signoff", prompt: "" }
   const m = RECURRING_TRAILER.exec(text.trimEnd())
   if (!m) return undefined
   const prompt = text.trimEnd().slice(0, m.index).trim()
@@ -1669,16 +1670,16 @@ export const ISSUE_WATCH_ARMED_TRAILER = "(Registered issue watcher — STILL AR
 // A watch the HUMAN armed is one they want to follow (maintainer 2026-10-07: watched threads that "never
 // come back" to the queue). So only green CI may stay quiet; a review, a comment, red CI or any state
 // change goes back in front of them as `needs_input`, rather than being judged noise and re-snoozed.
-const HUMAN_WATCH_SURFACE = " The human chose to follow this, so put it in front of them: rest on it with"
+const HUMAN_WATCH_SURFACE = " The user chose to follow this, so put it in front of them: rest on it with"
   + " `status: needs_input` and one or two sentences on what happened, unless it needs work from you first."
   + " It does not block `done`.)"
-export const PR_WATCH_HUMAN_TRAILER = "(The human registered this PR watcher from your done card — STILL ARMED. It reports again"
+export const PR_WATCH_HUMAN_TRAILER = "(The user registered this PR watcher from your done card — STILL ARMED. It reports again"
   + " on the next CI change, review, comment, label, conflict or review request. Leave it armed." + HUMAN_WATCH_SURFACE
 /** Green CI alone on a human's watch: the one report that stays quiet. */
-export const PR_WATCH_HUMAN_QUIET_TRAILER = "(The human registered this PR watcher from your done card — STILL ARMED. Green CI"
-  + " alone needs nothing from the human: rest on it with the fence alone, naming it under `prs:` with"
+export const PR_WATCH_HUMAN_QUIET_TRAILER = "(The user registered this PR watcher from your done card — STILL ARMED. Green CI"
+  + " alone needs nothing from the user: rest on it with the fence alone, naming it under `prs:` with"
   + " `status: watching` and a long `for:`. It does not block `done`.)"
-export const ISSUE_WATCH_HUMAN_TRAILER = "(The human registered this issue watcher from your done card — STILL ARMED. It reports"
+export const ISSUE_WATCH_HUMAN_TRAILER = "(The user registered this issue watcher from your done card — STILL ARMED. It reports"
   + " again on the next comment, label or assignee change, and once more when the issue closes. Leave it"
   + " armed." + HUMAN_WATCH_SURFACE
 
@@ -1854,7 +1855,7 @@ export interface InterruptEndedSubAgent {
   label: string
 }
 
-const INTERRUPT_ENDED_LEAD = "⚠️ The human's last follow-up was sent with INTERRUPT, which aborted your turn — and the runtime ends every background sub-agent with the turn. These did not return:"
+const INTERRUPT_ENDED_LEAD = "⚠️ The user's last follow-up was sent with INTERRUPT, which aborted your turn — and the runtime ends every background sub-agent with the turn. These did not return:"
 
 export function interruptEndedSubAgentsMessage(agents: readonly InterruptEndedSubAgent[]): string {
   const lines = agents.map((a) => `- ${a.taskId ? `\`${a.taskId}\` — ` : ""}${a.label}`)
@@ -1870,7 +1871,8 @@ export function interruptEndedSubAgentsMessage(agents: readonly InterruptEndedSu
 /** Is this delivered wake the interrupt note above? A text match, honest for the same reason it is for
  *  `SIGNOFF_NUDGE_MARKER`: frizz writes the lead and nothing else does. */
 export function isInterruptEndedWake(text: string): boolean {
-  return text.trimStart().startsWith(INTERRUPT_ENDED_LEAD)
+  const lead = text.trimStart()
+  return lead.startsWith(INTERRUPT_ENDED_LEAD) || lead.startsWith(legacyHumanWording(INTERRUPT_ENDED_LEAD))
 }
 
 // ---- THE BUILT-IN SIGN-OFF NUDGE (scheduler SOURCE 9) --------------------------------------------
@@ -1907,7 +1909,16 @@ export function isInterruptEndedWake(text: string): boolean {
  *  this is, and it is what the transcript matches on to collapse the delivery to one hairline rather
  *  than rendering frizz's boilerplate as a card over the agent's own words. A text match is honest here
  *  — frizz writes this string and frizz reads it, both from this file. */
-export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the human.**"
+export const SIGNOFF_NUDGE_MARKER = "**This message is from frizz, not from the user.**"
+
+/** Frizz's worker-facing vocabulary said "the human" until 2026-10-08 and says "the user" now (a worker
+ *  leaking the contract's noun into its prose reads less oddly that way). Text frizz wrote BEFORE the
+ *  change is still in every open thread's transcript, so each recognizer that matches one of these
+ *  constants also accepts its old spelling, rebuilt from the new one so the two cannot drift. */
+function legacyHumanWording(text: string): string {
+  return text.replaceAll("The user", "The human").replaceAll("the user", "the human")
+}
+const LEGACY_SIGNOFF_NUDGE_MARKER = legacyHumanWording(SIGNOFF_NUDGE_MARKER)
 
 /** The live things a thread could legitimately park on, appended to the reminder so the agent does not
  *  have to go looking for ids it cannot see. Maintainer 2026-08-14: "the handoff lists out all of the
@@ -2057,7 +2068,7 @@ export function signoffWaitingNudgeMessage(ops: SignoffLiveOps, needsInput = fal
     // Under the answer-required contract the `status:` answer decides the band: `working` and `watching`
     // park with no write-up owed; `needs_input` queues. Pre-filled `working` because the rest this
     // variant answers is the archetypal build-just-launched wait (see the measurement above).
-    ...(needsInput ? ["", "`status: working` says the work finishes by itself (a build, a test, a sub-agent's task); make it `watching` if it waits on something outside the thread (a release, a review, a poll). Either keeps you out of the human's queue with no write-up owed. If the human can read, try or act on something NOW, make it `needs_input` and add a `---` line with what to look at."] : []),
+    ...(needsInput ? ["", "`status: working` says the work finishes by itself (a build, a test, a sub-agent's task); make it `watching` if it waits on something outside the thread (a release, a review, a poll). Either keeps you out of the user's queue with no write-up owed. If the user can read, try or act on something NOW, make it `needs_input` and add a `---` line with what to look at."] : []),
     // Only a Goal thread reaches here with a child, and it is the one place the child's own park falls
     // short — said in a line, because a worker told "a running child parks you" has no other reason to fence.
     ...(subAgents.length && !needsInput ? ["", "A running sub-agent keeps you out of the queue on its own, but only this fence holds your Goal until it returns."] : []),
@@ -2102,7 +2113,7 @@ export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): s
     lines.push("", "An ```awaiting fence names only what you are ACTUALLY waiting on, one such list per kind, plus")
     if (needsInput) {
       lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`) and a required `status:` (`working`, `watching`")
-      lines.push("or `needs_input`), then a `---` line and whatever prose the human needs. Frizz checks every id:")
+      lines.push("or `needs_input`), then a `---` line and whatever prose the user needs. Frizz checks every id:")
       lines.push("name something that is not running and you are bumped rather than parked.")
     } else {
       lines.push("a required `for:` duration (`30s`/`15m`/`2h`/`3d`), then a `---` line and whatever prose you want")
@@ -2125,12 +2136,12 @@ export function signoffNudgeMessage(ops?: SignoffLiveOps, needsInput = false): s
 // rest, so a dev server kept on purpose is asked about once and then left alone.
 export function strayShellsMessage(shells: readonly { id?: string; label: string }[]): string {
   return [
-    `**This message is from frizz, not from the human.** You rested on a question with ${shells.length === 1 ? "a background shell" : `${shells.length} background shells`} still running, and the question's card hides ${shells.length === 1 ? "it" : "them"} — the human cannot see ${shells.length === 1 ? "it is" : "they are"} there:`,
+    `${SIGNOFF_NUDGE_MARKER} You rested on a question with ${shells.length === 1 ? "a background shell" : `${shells.length} background shells`} still running, and the question's card hides ${shells.length === 1 ? "it" : "them"} — the user cannot see ${shells.length === 1 ? "it is" : "they are"} there:`,
     "",
     ...shells.map((sh) => `- \`${sh.id ?? "?"}\` — ${sh.label}`),
     "",
     "`TaskStop` every one you no longer need, NOW. Above all a poller or waiter whose target has already finished or been stopped — and a shell that waits on a Workflow or a sub-agent was never needed: both notify you themselves when they finish.",
-    "Keep one only if it still serves the work (a dev server the human is about to open), and then say so in one line.",
+    "Keep one only if it still serves the work (a dev server the user is about to open), and then say so in one line.",
     "Then rest again. Your question stays open, and this will not repeat for these shells.",
   ].join("\n")
 }
@@ -2149,7 +2160,7 @@ function signoffNudgeAwaitingLines(needsInput: boolean): string[] {
       "  prs: [owner/repo#123]",
       "  for: 2h",
       "  ---",
-      "  What is running and what it gates, in one sentence — this is what the human reads on your card.",
+      "  What is running and what it gates, in one sentence — this is what the user reads on your card.",
       "  ```",
     ]
   }
@@ -2171,12 +2182,12 @@ function signoffNudgeAwaitingLines(needsInput: boolean): string[] {
     "  - `watching` — something has to HAPPEN outside the thread: a release, a review, another agent's",
     "    merge, the next daily cycle. The thread is snoozed, and nothing on its row moves, until a named",
     "    item reports or `for:` runs out.",
-    "  - `needs_input` — the human can read, try or act on something NOW while the work runs (a partial",
+    "  - `needs_input` — the user can read, try or act on something NOW while the work runs (a partial",
     "    result, a file you wrote, a server to try), even if you need nothing back from them. The thread",
     "    goes into their queue, and the prose under `---` says what to look at.",
     "  `working` and `watching` owe NO write-up: the fence alone is the whole message. If you wrote ANY",
-    "  words for the human at this rest, it is `needs_input` — nothing else is put in front of them. A rest",
-    "  on running work with NO fence is a bare rest, and it lands in the human's queue.",
+    "  words for the user at this rest, it is `needs_input` — nothing else is put in front of them. A rest",
+    "  on running work with NO fence is a bare rest, and it lands in the user's queue.",
   ]
 }
 
@@ -2195,7 +2206,7 @@ function signoffNudgeText(needsInput: boolean): string {
   "FINDING TO REPORT in your sign-off, never work to take on: the bug beside the one you were sent for,",
   "the refactor the code obviously wants, the second issue the first one touches. Widening the job is not",
   "thoroughness — it is a different job nobody asked for, and it buries the answer they did ask for under",
-  "changes they now have to review. If it should be done, name it in one line and let the human dispatch",
+  "changes they now have to review. If it should be done, name it in one line and let the user dispatch",
   "it.",
   "",
   "**IF WHAT YOU WERE ASKED FOR IS A DOCUMENT, THE DOCUMENT IS THE ENDING.** A triage, a review, an",
@@ -2203,7 +2214,7 @@ function signoffNudgeText(needsInput: boolean): string {
   "work. Implementing what it proposes is the NEXT job, and not yours unless you were asked. Sign off with",
   "the write-up.",
   "",
-  "**DECIDE RATHER THAN ASK.** Stop only for a decision that is genuinely the human's AND that blocks you",
+  "**DECIDE RATHER THAN ASK.** Stop only for a decision that is genuinely the user's AND that blocks you",
   "right now: register that one with `mcp__frizz__ask`. Every other open choice INSIDE the task — a name, a",
   "default, a reversible design call — is yours to make: decide it, say in one line which way you went and",
   "what would reverse it, and carry on. A choice that would ENLARGE the task is not one of those: an",
@@ -2211,7 +2222,7 @@ function signoffNudgeText(needsInput: boolean): string {
   "",
   "Otherwise, sign off — a registration, or a fence at the END of your next message:",
   "",
-  "- `mcp__frizz__ask` — you need the human. NOT a fence: the ```question fence is retired, and a fence",
+  "- `mcp__frizz__ask` — you need the user. NOT a fence: the ```question fence is retired, and a fence",
   "  with a question in its body is plain prose. Register it (options with one-line trade-offs, the",
   "  recommended one first), then rest normally — an open registered question is the sign-off.",
   "- `` ```done `` — genuinely FINISHED. A DISMISSAL: the card is filed away and nobody looks again, so",
@@ -2223,9 +2234,9 @@ function signoffNudgeText(needsInput: boolean): string {
   "  A fence that names NOTHING is not a park at all — if you are not waiting on anything, you are not",
   "  awaiting, you are done. Register a PR with `mcp__frizz__watch_pr` and a timer with",
   "  `mcp__frizz__timer`; `mcp__frizz__activity` reads back everything you have running, with its id.",
-  "- `` ```awaiting `` with `steps:` — the human must PERFORM something you cannot: sign in, approve,",
+  "- `` ```awaiting `` with `steps:` — the user must PERFORM something you cannot: sign in, approve,",
   "  merge, press a button you may not. List each step as a `- ` line under `steps:`, written to be",
-  "  followed cold; frizz reads them verbatim. Steps name the HUMAN as the wait, so the fence needs no",
+  "  followed cold; frizz reads them verbatim. Steps name the USER as the wait, so the fence needs no",
   "  other name and no `for:`, and the thread goes into their queue. Their Done comes back to you as",
   "  their reply; anything else they need to say comes as a message of their own.",
   "- `` ```awaiting `` with `questions:` — a question you registered at an EARLIER rest is still open and",
@@ -2243,11 +2254,11 @@ function signoffNudgeText(needsInput: boolean): string {
   "in the handoff.",
   "",
   "**DO NOT REPEAT YOURSELF.** If the message you just wrote already stands on its own, reply with the",
-  "fence ALONE — the human reads both together, so restating it costs them the second read for nothing.",
+  "fence ALONE — the user reads both together, so restating it costs them the second read for nothing.",
   "The same holds inside one message: the card is the ledger of what shipped, the prose is only what a",
   "ledger cannot hold, and a sentence that reads the same in either belongs in exactly one of them.",
   "",
-  "Only if it does NOT stand alone, fix that first, briefly. It has to be readable cold: the human has",
+  "Only if it does NOT stand alone, fix that first, briefly. It has to be readable cold: the user has",
   "seen nothing since their own last message — the Goal, this reminder, a watcher wake all came from",
   "frizz — so anything you assumed they had followed, they have not.",
   ].join("\n")
@@ -2278,7 +2289,7 @@ export function carriedQuestionsNudgeMessage(questions: readonly { id: string; q
     `asked it. So say where ${one ? "it stands" : "each one stands"}:`,
     "",
     "- STILL NEED THE ANSWER → end with an ```awaiting fence naming it, `questions: [qst_…]`. A fence on",
-    "  questions needs no other name and no `for:`, and the thread stays in the human's queue. The card is",
+    "  questions needs no other name and no `for:`, and the thread stays in the user's queue. The card is",
     "  drawn at this rest, under the reasoning you write below the `---` — what changed since you asked,",
     "  if anything did.",
     "- NO LONGER NEED IT → withdraw it with `mcp__frizz__unask`, then sign off as you otherwise would.",
@@ -2394,7 +2405,7 @@ export function spinoffChildPrompt(input: { parentSlug: string; parentTitle: str
   const quoted = input.instructions.trim().split("\n").map((line) => `> ${line}`).join("\n")
   const parent = spinoffParentRef(input)
   return [
-    `A spinoff of ${parent}, at the human's request. Their instructions:`,
+    `A spinoff of ${parent}, at the user's request. Their instructions:`,
     "",
     quoted,
     "",
@@ -2454,7 +2465,7 @@ export function spinoffForkPrompt(input: { parentSlug: string; parentTitle: stri
   const quoted = input.instructions.trim().split("\n").map((line) => `> ${line}`).join("\n")
   const parent = spinoffParentRef(input)
   return [
-    `A spinoff of ${parent}, at the human's request. Their instructions:`,
+    `A spinoff of ${parent}, at the user's request. Their instructions:`,
     "",
     quoted,
     "",
@@ -2478,12 +2489,12 @@ export function spinoffNameSource(origin: { instructions: string; brief: string 
 // spelling of the context line: "Context from …:" now, and "The context … gathered for you:" from when the
 // parent's worker wrote a brief (before 2026-10-07). Anchored at the START of the (envelope-stripped)
 // first turn, like the request's parser.
-const SPINOFF_CHILD_PROMPT = /^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the human's request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\n(?:Context from (?:@[\p{L}\p{N}_.-]+|that thread)|The context (?:@[\p{L}\p{N}_.-]+|that thread) gathered for you):\n\n([\s\S]*)$/u
+const SPINOFF_CHILD_PROMPT = /^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the (?:user|human)'s request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\n(?:Context from (?:@[\p{L}\p{N}_.-]+|that thread)|The context (?:@[\p{L}\p{N}_.-]+|that thread) gathered for you):\n\n([\s\S]*)$/u
 
 // A FORKED child's prompt (spinoffForkPrompt): the same opening and quote, then Frizz's orientation —
 // which is not a brief, so it projects as none.
 const SPINOFF_FORK_PROMPT = new RegExp(
-  String.raw`^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the human's request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\n` +
+  String.raw`^A spinoff of (?:@[\p{L}\p{N}_.-]+|\[[^\]\n]*\]\(\/thread\/[^)\s]+\)), at the (?:user|human)'s request\. Their instructions:\n\n((?:>[^\n]*(?:\n|$))+)\n` +
     SPINOFF_FORK_ORIENTATION.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + String.raw`[\s\S]*$`,
   "u",
 )
@@ -2578,7 +2589,7 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
     // the expiry, early, and with a reader waiting on the answer — so the note is owed to the queue.
     ...(requested
       ? [
-        "The human is waiting to read this one: write the progress note — what landed, what is running,",
+        "The user is waiting to read this one: write the progress note — what landed, what is running,",
         "what changed — and re-park with `status: needs_input` so it reaches them.",
         "",
       ]
@@ -2601,10 +2612,10 @@ export function parkExpiredWakeMessage(status: readonly string[], checkIn = fals
         // 2026-10-06: "went from awaiting … to working status without me interacting or seemingly any
         // change in its state"). `prior` is that last park's own answer.
         prior === "working" || prior === "watching"
-          ? `   \`status: needs_input\` when the human can read or act on something now; otherwise keep\n   \`status: ${prior}\`, which your last park answered, unless the wait itself changed.`
-          : "   `status: needs_input` when the human can read or act on something now, else `working` —\n   or `watching` when the children only watch the world for you.",
-        "4. Ask now. A decision the work has surfaced that is the human's to make goes to `mcp__frizz__ask`",
-        "   at this check-in — never into the note or a file \"for the human\", which nobody is prompted to",
+          ? `   \`status: needs_input\` when the user can read or act on something now; otherwise keep\n   \`status: ${prior}\`, which your last park answered, unless the wait itself changed.`
+          : "   `status: needs_input` when the user can read or act on something now, else `working` —\n   or `watching` when the children only watch the world for you.",
+        "4. Ask now. A decision the work has surfaced that is the user's to make goes to `mcp__frizz__ask`",
+        "   at this check-in — never into the note or a file \"for the user\", which nobody is prompted to",
         "   answer. The children keep running while it waits; rest on the question, with no fence.",
         "",
       ]
@@ -2668,7 +2679,7 @@ export interface ParkWake {
 }
 
 /** The head of an expiry wake the HUMAN asked for early (parkExpiredWakeMessage's `requested`). */
-const PARK_REQUESTED_LEAD = "👋 The human asked for an update before your wait ran out. Check back in on everything."
+const PARK_REQUESTED_LEAD = "👋 The user asked for an update before your wait ran out. Check back in on everything."
 const PARK_EXPIRED_HEAD = /^⏰ Your wait expired, nothing resolved\./
 const PARK_FINISHED_HEAD = /^✅ (?:The work you parked on has|Everything you parked on has) FINISHED, so the park is over/
 
@@ -2681,7 +2692,7 @@ function parkWakeItems(body: string): string[] {
 export function parseParkWake(text: string): ParkWake | null {
   const trimmed = text.trim()
   if (PARK_EXPIRED_HEAD.test(trimmed)) return { kind: "expired", items: parkWakeItems(trimmed) }
-  if (trimmed.startsWith(PARK_REQUESTED_LEAD)) return { kind: "requested", items: parkWakeItems(trimmed) }
+  if (trimmed.startsWith(PARK_REQUESTED_LEAD) || trimmed.startsWith(legacyHumanWording(PARK_REQUESTED_LEAD))) return { kind: "requested", items: parkWakeItems(trimmed) }
   if (PARK_FINISHED_HEAD.test(trimmed)) return { kind: "finished", items: parkWakeItems(trimmed) }
   return null
 }
@@ -3273,7 +3284,7 @@ export function askedQuestionFaults(q: AskedQuestion): string[] {
   }
   walk(q, "question")
   if (askedQuestionDepth(q) > ASK_MAX_DEPTH) {
-    faults.push(`the follow-up tree is ${askedQuestionDepth(q)} levels deep; the limit is ${ASK_MAX_DEPTH} — past that you are asking the human to fill in a form`)
+    faults.push(`the follow-up tree is ${askedQuestionDepth(q)} levels deep; the limit is ${ASK_MAX_DEPTH} — past that you are asking the user to fill in a form`)
   }
   return faults
 }
@@ -3367,7 +3378,7 @@ export const DEFAULTED_ANSWER_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS / 
 /** The `text` when the recommended option acts outside this machine, so the default took the first
  *  option that does not. The worker reads it as "the human never approved the external act" — the
  *  recommendation is still theirs to put to the human later, never something to do anyway. */
-export const DEFAULTED_FALLBACK_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS / 60_000}m. The recommended option acts outside this machine, so Frizz took the first option that does not; the human has not approved the recommended one`
+export const DEFAULTED_FALLBACK_NOTE = `No reply in ${QUESTION_DEFAULT_AFTER_MS / 60_000}m. The recommended option acts outside this machine, so Frizz took the first option that does not; the user has not approved the recommended one`
 
 /** The option Frizz's default takes on one question node, or undefined when it takes none: the
  *  recommended option when it stays on this machine, else the FIRST option that does — the worker
@@ -6028,7 +6039,9 @@ export function stripWakeTimeHeader(text: string): string {
 // worker's own arbitrary prose, and that parenthetical is the only anchor saying which timer this was —
 // so stripping it upstream would cost the divider it is there to draw. It comes off in the parser
 // instead, which is the same outcome by the other route.
-const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, PR_WATCH_HUMAN_TRAILER, ISSUE_WATCH_HUMAN_TRAILER, PR_WATCH_HUMAN_QUIET_TRAILER, SHELL_DONE_TRAILER]
+// The three a human-armed watch writes also strip in their pre-2026-10-08 wording (legacyHumanWording).
+const HUMAN_WATCH_TRAILERS = [PR_WATCH_HUMAN_TRAILER, ISSUE_WATCH_HUMAN_TRAILER, PR_WATCH_HUMAN_QUIET_TRAILER]
+const WAKE_TRAILERS = [PR_WATCH_ARMED_TRAILER, PR_WATCH_SPENT_TRAILER, ISSUE_WATCH_ARMED_TRAILER, ISSUE_WATCH_SPENT_TRAILER, ...HUMAN_WATCH_TRAILERS, ...HUMAN_WATCH_TRAILERS.map(legacyHumanWording), SHELL_DONE_TRAILER]
 
 /** Display projection: a frizz wake without the agent-facing trailer frizz appended for the worker.
  *
@@ -6338,9 +6351,9 @@ export function threadMessageBody(input: { fromHandle: string; message: string; 
   const where = input.fromProject ? `in the ${input.fromProject} project` : "in this project"
   const how = input.awaitsReply
     ? `@${from} is WAITING on your answer — it is parked until you reply. Answer with \`mcp__frizz__message_thread\` ` +
-      `(handle \`${from}\`) as soon as you can, even if only to say you cannot help; it reaches that thread, not the human.`
+      `(handle \`${from}\`) as soon as you can, even if only to say you cannot help; it reaches that thread, not the user.`
     : `Answer with \`mcp__frizz__message_thread\` (handle \`${from}\`) only if it asks you something; it reaches that ` +
-      "thread, not the human. Do not reply just to acknowledge."
+      "thread, not the user. Do not reply just to acknowledge."
   return [
     `Message from @${from}, another Frizz thread ${where}${input.answersWait ? THREAD_MESSAGE_ANSWERS : ""}:`,
     "",

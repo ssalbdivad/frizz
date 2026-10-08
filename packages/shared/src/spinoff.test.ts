@@ -2,7 +2,7 @@
 // for it, and the request an older build delivered to the parent's worker, which the chat still reads.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { DispatchInput, isInjectedNoise, SpinoffInput, parseSpinoffChildPrompt, parseSpinoffRequest, spinoffChildPrompt, spinoffContext } from "./index.ts"
+import { DispatchInput, isInjectedNoise, SpinoffInput, parseSpinoffChildPrompt, parseSpinoffRequest, spinoffChildPrompt, spinoffContext, spinoffForkPrompt } from "./index.ts"
 
 const id = "spn_0123456789abcdef"
 
@@ -58,14 +58,14 @@ test("a first-day request, asked of one message, still reads as a spinoff", () =
 
 test("the child's prompt carries the human's words verbatim and a link back, above the parent's brief", () => {
   const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache [bug]", instructions: "fix this\nsoon", brief: "The resolver keys on…" })
-  assert.equal(prompt.split("\n")[0], "A spinoff of [Cache bug](/thread/cache-bug), at the human's request. Their instructions:")
+  assert.equal(prompt.split("\n")[0], "A spinoff of [Cache bug](/thread/cache-bug), at the user's request. Their instructions:")
   assert.match(prompt, /\n> fix this\n> soon\n/)
   assert.ok(prompt.endsWith("The resolver keys on…"))
 })
 
 test("a parent with a handle is named by it, which the child's prose and read_thread both resolve", () => {
   const prompt = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cache-bug", instructions: "fix this", brief: "The resolver keys on…" })
-  assert.equal(prompt.split("\n")[0], "A spinoff of @cache-bug, at the human's request. Their instructions:")
+  assert.equal(prompt.split("\n")[0], "A spinoff of @cache-bug, at the user's request. Their instructions:")
   assert.match(prompt, /\nContext from @cache-bug:\n/)
 })
 
@@ -80,6 +80,12 @@ test("the child's first prompt reads back into the human's instructions and its 
   // …and so does an older child's, whose context line said the parent's worker had gathered it.
   const older = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cache-bug", instructions: "fix this", brief }).replace("Context from @cache-bug:", "The context @cache-bug gathered for you:")
   assert.deepEqual(parseSpinoffChildPrompt(older), { instructions: "fix this", brief })
+  // …and one written before 2026-10-08, when the request was "the human's".
+  const human = spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cache-bug", instructions: "fix this", brief }).replace("at the user's request", "at the human's request")
+  assert.notEqual(human, spinoffChildPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cache-bug", instructions: "fix this", brief }))
+  assert.deepEqual(parseSpinoffChildPrompt(human), { instructions: "fix this", brief })
+  const humanFork = spinoffForkPrompt({ parentSlug: "cache-bug", parentTitle: "Cache bug", parentHandle: "cache-bug", instructions: "fix this" }).replace("at the user's request", "at the human's request")
+  assert.deepEqual(parseSpinoffChildPrompt(humanFork), { instructions: "fix this", brief: "" })
   // Anything else is just a prompt: a brief a worker wrote itself, a human quoting the header mid-message.
   assert.equal(parseSpinoffChildPrompt("Evaluate whether the feature is a good idea."), null)
   assert.equal(parseSpinoffChildPrompt("see: A spinoff of @cache-bug, at the human's request. Their instructions:\n\n> x\n\nThe context @cache-bug gathered for you:\n\ny"), null)

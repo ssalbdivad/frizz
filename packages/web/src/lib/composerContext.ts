@@ -334,12 +334,16 @@ export function parseSentContext(prose: string): { body: string; items: SentCont
 // same text (`previousEditorQuote`, read from its transcript), the next block names them instead. Any
 // change — another selection, an edit to the selected text, a different file — quotes afresh.
 
-const EDITOR_HEADER = "Editor context (attached automatically: what the human had in front of them in their editor when they sent this; it may or may not be related):"
+const EDITOR_HEADER = "Editor context (attached automatically: what the user had in front of them in their editor when they sent this; it may or may not be related):"
 const NOT_QUOTED = "not quoted here; read it from the file"
-const NOT_QUOTED_UNSAVED = "not quoted here, and the copy on disk differs: ask the human to save it or paste it"
-const NOT_QUOTED_UNTITLED = "not quoted here, and there is no file to read: ask the human to paste it"
+const NOT_QUOTED_UNSAVED = "not quoted here, and the copy on disk differs: ask the user to save it or paste it"
+const NOT_QUOTED_UNTITLED = "not quoted here, and there is no file to read: ask the user to paste it"
 const NOT_QUOTED_SECRET = "not quoted here: the file may hold secrets"
 const QUOTED_EARLIER = "quoted in an earlier message"
+// These said "the human" until 2026-10-08. Messages already sent carry that spelling, and the parsers below
+// still read them: the old header and tails, rebuilt from the new ones so the two cannot drift.
+const legacyHumanWording = (text: string): string => text.replaceAll("the user", "the human")
+const EDITOR_HEADERS = [EDITOR_HEADER, legacyHumanWording(EDITOR_HEADER)]
 const UNSAVED = "unsaved changes"
 const UNTITLED = "unsaved, not a file on disk"
 
@@ -464,6 +468,8 @@ const UNQUOTED: Record<string, SentEditorContext["unquoted"]> = {
   [NOT_QUOTED]: "long",
   [NOT_QUOTED_UNSAVED]: "long",
   [NOT_QUOTED_UNTITLED]: "long",
+  [legacyHumanWording(NOT_QUOTED_UNSAVED)]: "long",
+  [legacyHumanWording(NOT_QUOTED_UNTITLED)]: "long",
   [NOT_QUOTED_SECRET]: "secret",
 }
 const stateOf = (phrase: string | undefined): SentEditorContext["state"] => (phrase === UNSAVED ? "unsaved" : phrase === UNTITLED ? "untitled" : undefined)
@@ -480,11 +486,16 @@ const stateOf = (phrase: string | undefined): SentEditorContext["state"] => (phr
 export function parseSentEditorContext(prose: string): { body: string; editor: SentEditorContext } | null {
   // The LAST header that opens a paragraph. One inside the quoted code cannot: every quoted line opens with
   // `>`, so no blank line precedes it.
-  const opens = prose.lastIndexOf(`\n\n${EDITOR_HEADER}`)
-  const at = opens !== -1 ? opens + 2 : prose.startsWith(EDITOR_HEADER) ? 0 : -1
+  let at = -1
+  let header = EDITOR_HEADER
+  for (const candidate of EDITOR_HEADERS) {
+    const opens = prose.lastIndexOf(`\n\n${candidate}`)
+    const found = opens !== -1 ? opens + 2 : prose.startsWith(candidate) ? 0 : -1
+    if (found > at) [at, header] = [found, candidate]
+  }
   if (at === -1) return null
   // Trailing whitespace is the transport's, never the block's: the serializer trims the quote's end.
-  const rest = prose.slice(at + EDITOR_HEADER.length).trimEnd()
+  const rest = prose.slice(at + header.length).trimEnd()
   if (!rest.startsWith("\n\n")) return null
   const [head, ...quote] = rest.slice(2).split("\n")
   const body = prose.slice(0, Math.max(0, at - 2))
@@ -573,7 +584,7 @@ export function withoutEditorContext(value: string): string {
 // the human wrote. A file in the worktree itself is the agent's own copy, relative to the worktree
 // (`contextDisplayPath`), and needs no sentence.
 
-const WORKTREE_NOTE_RE = /\n\nThe context above is from the human's editor, which shows the project's main checkout \([^\n]*\)\. You are working in your own (?:worktree|checkout) \([^\n]*\): the same relative path there is your copy, and it may differ from what they see\.$/
+const WORKTREE_NOTE_RE = /\n\nThe context above is from the (?:user|human)'s editor, which shows the project's main checkout \([^\n]*\)\. You are working in your own (?:worktree|checkout) \([^\n]*\): the same relative path there is your copy, and it may differ from what they see\.$/
 
 /**
  * The sentence for a message whose context names `paths`, sent to a thread working in `checkout`: "" when
@@ -585,7 +596,7 @@ export function worktreeNote(paths: readonly string[], projectDir: string | null
   const theirs = paths.some((path) => !isTerminalPath(path) && relativeTo(projectDir, path) !== null && relativeTo(checkout.dir, path) === null && path !== checkout.dir)
   if (!theirs) return ""
   const where = checkout.kind === "folder" ? "checkout" : "worktree"
-  return `The context above is from the human's editor, which shows the project's main checkout (${projectDir}). You are working in your own ${where} (${checkout.dir}): the same relative path there is your copy, and it may differ from what they see.`
+  return `The context above is from the user's editor, which shows the project's main checkout (${projectDir}). You are working in your own ${where} (${checkout.dir}): the same relative path there is your copy, and it may differ from what they see.`
 }
 
 /** Put the note at the end of an outgoing value's prose, before its attachment lines. */

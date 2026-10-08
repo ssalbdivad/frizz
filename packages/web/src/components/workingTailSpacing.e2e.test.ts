@@ -61,50 +61,7 @@ async function tailGap(page: import("puppeteer").Page, drawer: boolean) {
   }, drawer)
 }
 
-// The OPTICAL white above a quiet row: the last card's bottom edge to the top of the row's cap band.
-// The cap band (baseline → cap height) rather than the string's own ink, because a descender moves the
-// latter by >1px for the same glyph — see the `visual-review` skill.
-const CAP_WHITE = `(() => {
-  const baselineOf = (node) => {
-    const span = document.createElement("span")
-    node.parentNode.insertBefore(span, node)
-    span.appendChild(node)
-    const probe = document.createElement("span")
-    probe.style.cssText = "display:inline-block;width:0;height:0;padding:0;margin:0;border:0"
-    span.appendChild(probe)
-    const baseline = probe.getBoundingClientRect().bottom
-    const cs = getComputedStyle(span)
-    const font = cs.fontStyle + " " + cs.fontWeight + " " + cs.fontSize + " / " + cs.lineHeight + " " + cs.fontFamily
-    probe.remove()
-    span.parentNode.insertBefore(node, span)
-    span.remove()
-    return { baseline, font }
-  }
-  const capTop = (font, baseline) => {
-    const c = document.createElement("canvas").getContext("2d")
-    c.font = font
-    return baseline - c.measureText("H").actualBoundingBoxAscent
-  }
-  const firstText = (el) => {
-    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT)
-    let n
-    while ((n = w.nextNode())) if (/\\S/.test(n.textContent)) return n
-    return null
-  }
-  const card = document.querySelector('[data-frizz-msg="a2"]').getBoundingClientRect()
-  const white = (el) => {
-    if (!el) return null
-    const b = baselineOf(firstText(el))
-    return Math.round((capTop(b.font, b.baseline) - card.bottom) * 100) / 100
-  }
-  const label = [...document.querySelectorAll('[data-frizz-msg="m1"] span')].find((s) => s.children.length === 0 && s.textContent.trim() === "Reasoning")
-  return {
-    shimmer: white(document.querySelector("[data-working-indicator] .shimmer-text")),
-    settledLabel: white(label),
-  }
-})()`
-
-test("the live shimmer joins the meta run, and matches a settled label's optical white", {
+test("the live row joins the meta run, and its typing dots sit like the next card", {
   skip: !baseUrl,
   timeout: 60_000,
 }, async () => {
@@ -121,17 +78,20 @@ test("the live shimmer joins the meta run, and matches a settled label's optical
     for (const gap of metaRun) near(gap, TIGHT, "a meta-run boundary")
     near(live.aboveWorking!, TIGHT, "the shimmer under a meta tail")
 
-    // The shimmer's optical white — the number the report was actually about.
-    const liveWhite = await page.evaluate(CAP_WHITE) as { shimmer: number; settledLabel: number | null }
+    // The row's optical white — the number the report was actually about. Since 2026-10-08 the generic
+    // reading is the typing-dots bubble rather than a "Thinking…" label, and a bubble is a FILLED shape:
+    // its edge is its ink, so under a card it stands the tight run's own distance away, exactly as the
+    // next card would. (A label's cap-top white is the wrong reference for a filled mark.)
+    const dotsWhite = await page.evaluate(() => {
+      const card = document.querySelector('[data-frizz-msg="a2"]')!.getBoundingClientRect()
+      const dots = document.querySelector("[data-working-indicator] .typing-dots")?.getBoundingClientRect()
+      return dots ? Math.round((dots.top - card.bottom) * 100) / 100 : null
+    })
+    assert.ok(dotsWhite !== null, "the generic reading is the typing dots")
+    near(dotsWhite!, TIGHT, "the typing dots under a card, as the next card would sit")
 
-    // 2. The PEER reference: a settled meta label in the same slot, under the same cards.
     await page.goto(fixtureUrl("?tail=meta"), { waitUntil: "domcontentloaded" })
     await page.waitForSelector('[data-frizz-msg="m1"]')
-    const refWhite = await page.evaluate(CAP_WHITE) as { shimmer: number; settledLabel: number }
-    assert.ok(
-      Math.abs(liveWhite.shimmer - refWhite.settledLabel) < 0.5,
-      `the shimmer must read as a peer of a settled meta label, got ${liveWhite.shimmer}px vs ${refWhite.settledLabel}px`,
-    )
     // The same page also holds the OTHER pair: that settled label is itself a bare row, and the shimmer
     // sits under IT — two labels, so the ordinary step rather than the card run.
     const metaTail = await tailGap(page, false)

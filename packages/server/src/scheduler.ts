@@ -2672,7 +2672,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
         // the `status:` line it wrote, or else the older `needs_input:` one.
         const written = [...tele.lastFence.hints].reverse().find((h) => h.kind === "status") ?? [...tele.lastFence.hints].reverse().find((h) => h.kind === "needs_input")
         const message = [
-          `${PARK_CORRECTION_NEEDS_INPUT_LEAD}\`status:\` that frizz can read — \`working\`, \`watching\` or \`needs_input\`${written ? ` (it says \`${written.kind}: ${written.value}\`)` : ""} — so frizz did not park it, and your thread is in the human's queue.`,
+          `${PARK_CORRECTION_NEEDS_INPUT_LEAD}\`status:\` that frizz can read — \`working\`, \`watching\` or \`needs_input\`${written ? ` (it says \`${written.kind}: ${written.value}\`)` : ""} — so frizz did not park it, and your thread is in the user's queue.`,
           "",
           "Every ```awaiting fence answers one question: where does this rest sit while the work runs?",
           "",
@@ -2680,7 +2680,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "  The thread shows as running until the work wakes you.",
           "- `status: watching` — the wait is on something outside the thread: a review, a release, a",
           "  reporter, another agent's merge. The thread is snoozed until the watch wakes you.",
-          "- `status: needs_input` — the human can act on something now while the work runs. The thread goes",
+          "- `status: needs_input` — the user can act on something now while the work runs. The thread goes",
           "  into their queue, and the prose under `---` says what to look at.",
           "",
           "With `working` or `watching` the fence alone is the whole message: no write-up.",
@@ -2802,7 +2802,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
       // the human may have done the steps without pressing anything, so the line sends the worker to
       // check the world rather than to re-post the same steps blind.
       if (park.steps.length > 0) {
-        status.push(`- \`steps:\` (${park.steps.length}) — the human has not replied; check whether they were done anyway before you post them again`)
+        status.push(`- \`steps:\` (${park.steps.length}) — the user has not replied; check whether they were done anyway before you post them again`)
       }
       if (park.questions.length > 0) {
         status.push(`- \`questions:\` (${park.questions.length}) — not answered yet; name the ones you still need in your next fence and withdraw the rest`)
@@ -2873,7 +2873,7 @@ export function createScheduler(deps: SchedulerDeps): Scheduler {
           "Use `mcp__frizz__activity` to read it all back as a ready-to-paste fence.",
           "",
           "AND IF YOU ARE NOT WAITING ON ANYTHING, you are not awaiting — you are done. End with ```done,",
-          "or register a question with `mcp__frizz__ask` if you need the human.",
+          "or register a question with `mcp__frizz__ask` if you need the user.",
         ].join("\n")
         // THESE TWO LIVE IN @frizz/shared, beside the parsers that read them back. Same rule as
         // `limitResumeSteer`: a formatter the chat cannot parse falls through FrizzWake's legacy

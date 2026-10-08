@@ -2202,7 +2202,7 @@ export function createRouter(ctx: AppContext) {
           `Nothing was spawned. The prompt names another project's checkout — ${where} — but the thread would ` +
             `start in ${here.name}, this thread's project, where that project's board would never show it. This ` +
             `session's spawn_thread is older than its \`project\` argument, so it cannot start a thread anywhere ` +
-            `else. Hand the spawn to the human: write the prompt to a file and give them steps to start it from ` +
+            `else. Hand the spawn to the user: write the prompt to a file and give them steps to start it from ` +
             `${named[0]!.project.name}'s board (\`${named[0]!.project.slug}\`) with that file.\n${listing}`,
         )
       }
@@ -4348,7 +4348,7 @@ export function createRouter(ctx: AppContext) {
       output: z.object({ deadline: ThreadDeadlineView.nullable() }),
       handler: async ({ input }) => {
         if (dispatchCaller() === "worker") {
-          throw new Error("A worker sets its own time limit with `mcp__frizz__deadline`; this control is the human's.")
+          throw new Error("A worker sets its own time limit with `mcp__frizz__deadline`; this control is the user's.")
         }
         const row = ctx.storage.getSession(input.slug)
         if (!row) throw new Error(`thread ${input.slug} is not registered`)
@@ -4380,17 +4380,17 @@ export function createRouter(ctx: AppContext) {
         if (input.action === "read") return { deadline: deadlineView(input.slug) }
         const humans = current?.setBy === "human"
         if (input.action === "clear") {
-          if (humans) throw new Error("The human set this deadline, and only the human can remove it. Work to it, and say in your handoff if it is not enough.")
+          if (humans) throw new Error("The user set this deadline, and only the user can remove it. Work to it, and say in your handoff if it is not enough.")
           ctx.storage.clearDeadline(input.slug)
         } else {
           if (input.action === "set" && current) {
             throw new Error(humans
-              ? "This thread already has a deadline the human set; only the human can move it. `read` shows it."
+              ? "This thread already has a deadline the user set; only the user can move it. `read` shows it."
               : "This thread already has a deadline you set — use `extend` to move it.")
           }
           if (input.action === "extend" && !current) throw new Error("This thread has no deadline to extend — use `set` to give it one.")
           if (input.action === "extend" && humans) {
-            throw new Error("The human set this deadline, and only the human can extend it. Hand over the best you have by then, and say in your handoff what more time would buy.")
+            throw new Error("The user set this deadline, and only the user can extend it. Hand over the best you have by then, and say in your handoff what more time would buy.")
           }
           const nowMs = Date.now()
           let atMs: number
@@ -4464,9 +4464,9 @@ export function createRouter(ctx: AppContext) {
           throw new Error(
             "This thread is running autonomously — decide it yourself and proceed. Its standing " +
             `instruction is:\n\n${goal}\n\nSay which way you went and why in your write-up, so the ` +
-            "human can course-correct. If the call is genuinely theirs — something destructive or " +
+            "user can course-correct. If the call is genuinely theirs — something destructive or " +
             "irreversible — say so in your final message instead; a thread on autonomous mode is not a " +
-            "thread with no human reading it. An ACT only the human can perform (a sign-in, an approval, " +
+            "thread with no user reading it. An ACT only the user can perform (a sign-in, an approval, " +
             "a button you may not press) is not a call: list it under `steps:` in an ```awaiting fence, " +
             "which autonomous mode allows.",
           )
@@ -4483,13 +4483,13 @@ export function createRouter(ctx: AppContext) {
         const reasked = input.questions.flatMap((q) => {
           const prior = pivotTwin(input.slug, q)
           if (!prior) return []
-          const why = prior.state === "dismissed" ? "which the human dismissed" : "which you withdrew after the human's newest message"
+          const why = prior.state === "dismissed" ? "which the user dismissed" : "which you withdrew after the user's newest message"
           return [`"${q.question.slice(0, 120)}" repeats ${prior.id}, ${why}.`]
         })
         if (reasked.length > 0) {
           throw new Error(
             `${reasked.join("\n")}\n\nA question dropped that way is not asked again, in these words or any others: ` +
-            "decide it yourself — do what the human's newest message asks — and say which way you went in " +
+            "decide it yourself — do what the user's newest message asks — and say which way you went in " +
             "your write-up.",
           )
         }
@@ -4631,7 +4631,7 @@ export function createRouter(ctx: AppContext) {
         // A quiet finish is refused BEFORE the gate is consulted when it cannot apply at all, so a worker
         // that reached for it on an ordinary thread learns that first.
         if (input.quiet && !row.schedule_id) {
-          throw new Error("`quiet` is only for a scheduled run, and this thread is not one. Call `done` without it: your card stays in the human's queue.")
+          throw new Error("`quiet` is only for a scheduled run, and this thread is not one. Call `done` without it: your card stays in the user's queue.")
         }
         if (blockingQuestions.length > 0 || blockingWatches.length > 0) {
           return { done: false, blockingQuestions, blockingWatches }
@@ -5170,7 +5170,7 @@ export function createRouter(ctx: AppContext) {
         // refusal says what to do next; a thread that is already named says "stop".
         const refuse = (refusal: string) => ({ accepted: false, title: current(), lockedByHuman: false, refusal })
         if (rowThreadName(row) !== undefined) {
-          return refuse(`this thread is already named "${current()}", and a name never changes once the board has shown it — the human may already be typing it as @${handleOf({ name: current(), slug: row.slug })}. Leave it; do not call this again.`)
+          return refuse(`this thread is already named "${current()}", and a name never changes once the board has shown it — the user may already be typing it as @${handleOf({ name: current(), slug: row.slug })}. Leave it; do not call this again.`)
         }
         const problem = threadNameProblem(input.title)
         if (problem) {
@@ -5267,13 +5267,13 @@ export function createRouter(ctx: AppContext) {
         const handle = handleOf(hit)
         if (!elsewhere && hit.slug === input.slug) return { sent: false, handle, refusal: "that is this thread." }
         if (target.state === "archived" || target.archived === 1) {
-          return { sent: false, handle, refusal: `@${handle} is done, and a message would reopen it. Read it with read_thread instead; only the human reopens a finished thread.` }
+          return { sent: false, handle, refusal: `@${handle} is done, and a message would reopen it. Read it with read_thread instead; only the user reopens a finished thread.` }
         }
         const nowMs = Date.now()
         const pair = `${input.slug}\u0000${home.project.id}\u0000${hit.slug}`
         const recent = (threadMessageLog.get(pair) ?? []).filter((at) => nowMs - at < 3_600_000)
         if (recent.length >= THREAD_MESSAGE_HOURLY_CAP) {
-          return { sent: false, handle, refusal: `this thread has sent @${handle} ${recent.length} messages in the last hour, which is the cap. Stop the exchange here, or ask the human.` }
+          return { sent: false, handle, refusal: `this thread has sent @${handle} ${recent.length} messages in the last hour, which is the cap. Stop the exchange here, or ask the user.` }
         }
         const self = threads.find((t) => t.slug === input.slug)
         const from = self ? handleOf(self) : input.slug

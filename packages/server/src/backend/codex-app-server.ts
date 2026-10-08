@@ -3127,7 +3127,7 @@ export class CodexAppServerBridge {
   // authoritative snapshot, so it is the correct thing to point at.
   private static readonly RESTART_RECOVERY_NUDGE = [
     "[frizz] Your previous turn was interrupted: the Codex app-server process running it exited (a Frizz",
-    "restart or a crash). This was not a decision by you or the human, and nothing you had already done",
+    "restart or a crash). This was not a decision by you or the user, and nothing you had already done",
     "was rolled back — but any command or edit that was in flight at that moment may not have finished.",
     "Re-check the state of your work before trusting it, then continue from where you left off.",
     "",

@@ -801,8 +801,9 @@ export function settledToolActivityLabel(total: number, editedFiles = 0): string
  * the last result reads as a thread that has sat there thinking for ten minutes (maintainer 2026-08-08:
  * "there's a period where it's thinking, and it looks like the thread has just been thinking for like ten
  * minutes"). The run's own count carries that work across the gap, and because the slot alternates
- * `Ran 23 tool calls. Thinking…` → the next call's gerund → `Ran 24 tool calls. Thinking…`, the number
- * ticking up is itself the evidence the turn is moving.
+ * `Ran 23 tool calls` → the next call's gerund → `Ran 24 tool calls`, the number ticking up is itself the
+ * evidence the turn is moving. "Thinking…" itself is no longer a word: the typing dots beside the label
+ * say it (maintainer 2026-10-08), so with no run there is no label at all — undefined.
  *
  * The count is the LIVE RUN's, i.e. exactly the calls history is withholding behind this row
  * (liveToolActivityRun) — the same number its digest will state once the run settles. So it resets when
@@ -812,8 +813,8 @@ export function settledToolActivityLabel(total: number, editedFiles = 0): string
  * Calls only — never the settled digest's `, edited N files` tail. This is a one-line status that
  * TRUNCATES, and the half that must survive a narrow pane is the one saying the model is still going.
  */
-export function thinkingToolActivityLabel(ranCalls: number): string {
-  return ranCalls > 0 ? `${settledToolActivityLabel(ranCalls)}. Thinking…` : "Thinking…"
+export function thinkingToolActivityLabel(ranCalls: number): string | undefined {
+  return ranCalls > 0 ? settledToolActivityLabel(ranCalls) : undefined
 }
 
 export type ToolActivityTool = TranscriptMessage["tools"][number]
