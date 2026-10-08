@@ -402,15 +402,19 @@ export function scratchpadOrientation(sessionId: string, kind: BackendKind = "cl
       : "name it in a sub-agent's prompt when you want its notes back, and give each child its own file"
   const scratch = `SCRATCH DIRECTORY: ${scratchPath}/ — yours, free-form, as many files as you like, and nothing is expected in it. A single direct task usually needs none; writing notes is never a substitute for doing the work (${children}). Nothing in this directory is read automatically; if you want a note back after a compaction, mcp__frizz__goal with post_compaction: true re-sends a prompt of your choosing.`
   const who = operatorIdentity()
-  return who ? `${scratch}\n\nThe human is ${who}.` : scratch
+  const address = `${who ? `The human is ${who}. ` : ""}Your messages are read by the human: write to them as "you", never "the human" (a question's own wording aside)${who ? `, and name them as ${who} to another thread` : ""}.`
+  return `${scratch}\n\n${address}`
 }
 
 // WHO THE OPERATOR IS. The contract says "the human" as its rule vocabulary, and workers copied it
 // verbatim into messages to other threads ("The human asked me to…"), which names nobody (maintainer
 // 2026-10-07). One server serves one operator, so this is machine-wide: the GitHub login gh is signed
-// into, read from its hosts file once per process (no network, no subprocess). A bare "The human is X."
-// is enough — the model uses a name it has, and posting under the operator's account already speaks as
-// them, so no rule is spelled out. Not signed in ⇒ the line is left out.
+// into, read from its hosts file once per process (no network, no subprocess). Not signed in ⇒ no name.
+// A bare "The human is X." was NOT enough: the next day a worker's message TO the operator read "The
+// human chose the interpreter as the default…" (maintainer 2026-10-08: "still referring to me as the
+// human"), so the line now says it outright — "you" to the operator, the name to another thread — and
+// says it whether or not a name is known. The question rule (no "I", no "you" on a card) is the one
+// carve-out, named in the line so the two never read as a contradiction.
 let operatorCache: string | null | undefined
 export function operatorIdentity(): string | null {
   if (operatorCache !== undefined) return operatorCache
