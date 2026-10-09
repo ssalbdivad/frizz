@@ -5737,6 +5737,8 @@ export const MessageThreadResult = z.object({
   known: z.array(z.string()).optional(),
   /** Set when the recipient is in ANOTHER open project than the sender's: that project's name. */
   project: z.string().optional(),
+  /** `mailbox`: the recipient is a running SUB-AGENT (`@thread.child`), which reads it after its next tool call. */
+  delivery: z.literal("mailbox").optional(),
 }).strict()
 export type MessageThreadResult = z.infer<typeof MessageThreadResult>
 

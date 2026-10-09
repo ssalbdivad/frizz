@@ -2969,6 +2969,13 @@ export interface SubAgentLookup {
   workflowAgent?: { runDir: string }
 }
 
+/** A running child's mailbox address — see Tailer.liveMailboxes. */
+export interface ChildMailbox {
+  agentId: string
+  sessionDir: string
+  label: string
+}
+
 /** One row of a thread's sub-agent directory — the shared entry minus its address. */
 export type SubAgentDirectoryRecord = Omit<SubAgentDirectoryEntry, "address">
 
@@ -3003,6 +3010,12 @@ export interface Tailer {
   // `taskId` is the provider's session-wide background-task handle. Unlike `direct`, which controls
   // steer safety, it is available for descendants too and is what the SDK's stopTask accepts.
   subAgent(slug: string, id: string): SubAgentLookup | undefined
+  // EVERY RUNNING CHILD THIS THREAD'S MAILBOX CAN REACH (agent-inbox.ts): its direct sub-agents, their
+  // descendants at any depth, and the agents of its live Workflow runs, each with the runtime agent id
+  // the mailbox is keyed by and the session dir it lives in. A quiet ("stale") child is included: it is
+  // most often inside one long tool call, and a message waiting in its box costs nothing. Codex children
+  // are not Claude agents and have no box. Optional so a narrow test stub may omit it.
+  liveMailboxes?(slug: string): ChildMailbox[]
   // EVERY sub-agent the thread ever dispatched, live first and then finished newest first, each a row the
   // drawer can open by `id` — the `subAgentDirectory` RPC (addresses are the router's: it holds the
   // thread's name). Optional so a narrow test stub may omit it; absent reads as "no sub-agents".
@@ -4429,6 +4442,31 @@ export function createTailer(deps: TailerDeps): Tailer {
   // the drill-in drawer's server-side lookup. Checks the LIVE map first (running/stale), then the
   // RETAINED ring (a completed child kept for review → "done"). Undefined only when the id is unknown
   // to both (never dispatched, or aged out of the ring) → the router maps that to "gone".
+  function liveMailboxes(slug: string): ChildMailbox[] {
+    const state = states.get(slug)
+    if (!state || !registeredStateIsCurrent(state)) return []
+    const sessionDir = sessionDirOf(state)
+    const out = new Map<string, ChildMailbox>()
+    const at = now()
+    for (const e of state.subAgents.values()) {
+      if (e.kind !== "agent" || e.outputFormat) continue
+      if (e.workflow) {
+        if (!e.workflow.runDir) continue
+        for (const agent of readWorkflowRun(e.workflow.runDir)) {
+          const st = workflowAgentState(agent, true, at)
+          if (st === "running" || st === "stale") out.set(agent.agentId, { agentId: agent.agentId, sessionDir, label: agent.label })
+        }
+      } else if (e.taskId) {
+        out.set(e.taskId, { agentId: e.taskId, sessionDir, label: e.label })
+      }
+    }
+    for (const meta of descendantSidecars(state)) {
+      if (out.has(meta.agentId) || descendantState(state, meta) === "done") continue
+      out.set(meta.agentId, { agentId: meta.agentId, sessionDir, label: meta.description ?? "" })
+    }
+    return [...out.values()]
+  }
+
   function subAgentLookup(slug: string, id: string): SubAgentLookup | undefined {
     const state = states.get(slug)
     if (!state || !registeredStateIsCurrent(state)) return undefined
@@ -6541,6 +6579,7 @@ export function createTailer(deps: TailerDeps): Tailer {
     foreignIds: () => foreignFresh.map((f) => f.id),
     foreignBackend: (id) => foreignFresh.find((f) => f.id === id)?.backend,
     subAgent: subAgentLookup,
+    liveMailboxes,
     subAgentDirectory,
     subAgentByTaskId,
     subAgentDescendantTasks,

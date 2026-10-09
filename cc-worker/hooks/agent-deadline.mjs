@@ -186,7 +186,9 @@ export async function threadDeadlineMs(env = process.env) {
 
 // ---- IN THE CHILD -------------------------------------------------------------------------------------
 
-/** @typedef {{ atMs: number, setAtMs: number, announce: boolean } | { none: true }} AgentDeadline */
+/** `setBy: 'user'` marks a limit the server wrote into a child already running, when the user set its
+ *  thread's limit (packages/server/src/agent-inbox.ts `setChildDeadline`).
+ *  @typedef {{ atMs: number, setAtMs: number, announce: boolean, setBy?: 'user' } | { none: true }} AgentDeadline */
 
 /** The child's own transcript: a plain sub-agent's, else a Workflow agent's.
  *  @param {string} sessionDir @param {string} agentId */
@@ -298,7 +300,7 @@ export async function childDeadlineContext(sessionDir, agentId, deps) {
     try {
       closeSync(openSync(intro, 'wx'));
       out.push(
-        `⏰ Your time limit: ${clock(d.atMs)} (a ${budget(d.atMs - d.setAtMs)} budget, set by the agent that dispatched you). Your ` +
+        `⏰ Your time limit: ${clock(d.atMs)} (a ${budget(d.atMs - d.setAtMs)} budget, set by ${d.setBy === 'user' ? 'the user operating Frizz, after you started' : 'the agent that dispatched you'}). Your ` +
         'final message is due by then: return the best result you can by that time, not the complete one eventually. Frizz ' +
         'checks in after your tool calls at half-time, at 80%, just before the deadline and at it.',
       );

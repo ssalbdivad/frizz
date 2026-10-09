@@ -1,4 +1,4 @@
-import { mkdirSync, renameSync, writeFileSync } from "node:fs"
+import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path"
 import { randomUUID } from "node:crypto"
 
@@ -36,7 +36,8 @@ import { randomUUID } from "node:crypto"
 
 export const INBOX_DIRNAME = "frizz-inbox"
 
-export type InboxSender = "parent" | "operator"
+/** `@handle`: another Frizz thread, through `message_thread` to `@thread.child`. */
+export type InboxSender = "parent" | "operator" | `@${string}`
 
 /** A Workflow run's agents live in `<session-dir>/subagents/workflows/<run>` (workflow-runs.ts). */
 export function workflowSessionDir(runDir: string): string {
@@ -55,4 +56,52 @@ export function postToAgentInbox(sessionDir: string, agentId: string, message: {
   const tmp = join(dir, `.${name}.tmp`)
   writeFileSync(tmp, JSON.stringify({ from: message.from, text: message.text, at }))
   renameSync(tmp, join(dir, `${name}.json`))
+}
+
+// ── A RUNNING CHILD'S TIME LIMIT, REWRITTEN FROM OUTSIDE ─────────────────────────────────────────────────
+//
+// A child's deadline is worked out once, by its own hook, and kept in `<session-dir>/frizz-deadlines/
+// <agentId>.json` (cc-worker/hooks/agent-deadline.mjs `agentDeadline`); its stage markers and its intro
+// marker sit beside it. A child dispatched before its thread had a limit therefore cached "none" and never
+// heard of one set later (2026-10-08: 12 children ran on unaware while their 4 parents handed off). So when
+// the USER sets a thread's limit, the server rewrites that file for each running child — the hook then
+// introduces the limit after the child's next tool call and runs its check-ins against it. Same format as
+// the hook writes, plus `setBy: "user"`, which the hook's introduction reads; agent-inbox-hook.test.ts pins
+// the pair. A child already due sooner keeps its own limit.
+
+export const DEADLINES_DIRNAME = "frizz-deadlines"
+const STAGE_NAMES = ["half", "converge", "final", "over"] as const
+
+type ChildDeadlineFile = { atMs: number; setAtMs: number; announce: boolean; setBy?: "user" } | { none: true }
+
+function readChildDeadline(dir: string, agentId: string): ChildDeadlineFile | undefined {
+  try {
+    return JSON.parse(readFileSync(join(dir, `${agentId}.json`), "utf8")) as ChildDeadlineFile
+  } catch {
+    return undefined
+  }
+}
+
+/** Give a running child a time limit the user set (`atMs`), or lift one the user set (`null`). Returns
+ *  whether its file changed. A sooner limit the child already has is kept; a lift touches only a limit
+ *  the user set, never the share its own dispatcher gave it. */
+export function setChildDeadline(sessionDir: string, agentId: string, change: { atMs: number; nowMs: number } | null): boolean {
+  if (!AGENT_ID.test(agentId)) throw new Error(`not an agent id: ${JSON.stringify(agentId)}`)
+  const dir = join(sessionDir, DEADLINES_DIRNAME)
+  const current = readChildDeadline(dir, agentId)
+  let next: ChildDeadlineFile
+  if (change === null) {
+    if (!current || "none" in current || current.setBy !== "user") return false
+    next = { none: true }
+  } else {
+    if (current && !("none" in current) && current.atMs <= change.atMs) return false
+    next = { atMs: change.atMs, setAtMs: change.nowMs, announce: true, setBy: "user" }
+  }
+  mkdirSync(dir, { recursive: true })
+  // A new limit is a new generation: its intro and every check-in are due again.
+  for (const marker of ["intro", ...STAGE_NAMES]) rmSync(join(dir, `${agentId}.${marker}`), { force: true })
+  const tmp = join(dir, `.${agentId}.${randomUUID()}.tmp`)
+  writeFileSync(tmp, JSON.stringify(next))
+  renameSync(tmp, join(dir, `${agentId}.json`))
+  return true
 }

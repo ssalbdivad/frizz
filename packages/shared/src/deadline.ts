@@ -219,6 +219,8 @@ export const SetRunningDeadlinesResult = z.object({
   threads: z.number().int(),
   /** How many distinct projects those threads are in. */
   projects: z.number().int(),
+  /** Running sub-agents and Workflow agents of those threads that were reached through their mailboxes. */
+  children: z.number().int(),
 })
 export type SetRunningDeadlinesResult = z.infer<typeof SetRunningDeadlinesResult>
 

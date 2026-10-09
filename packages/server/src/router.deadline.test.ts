@@ -4,7 +4,7 @@
 // deadline the human set. A worker reads it, sets one where there is none, and moves only its own.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { BoardSnapshot, Settings } from "@frizz/shared"
@@ -13,7 +13,7 @@ import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { AppContext } from "./context.ts"
 import type { Project } from "./project.ts"
-import type { SessionTelemetry, Tailer } from "./tailer.ts"
+import type { ChildMailbox, SessionTelemetry, Tailer } from "./tailer.ts"
 import { withDispatchCaller } from "./dispatch-caller.ts"
 import { createWakeDeliveryStore } from "./wake-store.ts"
 
@@ -26,14 +26,17 @@ function harness() {
     snapshot: async () => snapshot, currentSeq: () => 0, rebuild: async () => snapshot,
     refresh: () => snapshot, start: async () => {}, stop: async () => {},
   }
+  // Each thread's running children, by slug — what `liveMailboxes` answers (the real tailer reads them off disk).
+  const children = new Map<string, ChildMailbox[]>()
   const tailer: Tailer = {
     get: () => ({ subAgents: [], bgShells: [] }) as unknown as SessionTelemetry,
     foreignIds: () => [], subAgent: () => undefined,
+    liveMailboxes: (slug) => children.get(slug) ?? [],
     forget: () => {}, start: () => {}, stop: () => {}, tick: () => {},
   }
   const ctx = { project, storage, board, tailer, getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings } as unknown as AppContext
   const notices = () => createWakeDeliveryStore(storage.scope).listOpen().filter((d) => d.fenceId.startsWith("deadline-notice:"))
-  return { storage, snapshot, notices, router: createRouter(ctx), close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  return { dir, storage, snapshot, children, notices, router: createRouter(ctx), close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 function row(slug: string): SessionRow {
@@ -173,7 +176,7 @@ test("the machine-wide wrap-up: every Running thread gets the deadline and the n
     await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug: "soon", deadline: soonAt } }))
     const at = inMs(15 * 60_000)
     const got = await asBrowser(() => h.router.setRunningDeadlines.handler({ input: { deadline: at, note: "Restarting the machine in 15m.\nOptimize resumability." } }))
-    assert.deepEqual(got, { threads: 2, projects: 1 })
+    assert.deepEqual(got, { threads: 2, projects: 1, children: 0 })
     assert.equal(h.storage.getSession("run")!.deadline_at, new Date(at).toISOString())
     assert.equal(h.storage.getSession("soon")!.deadline_at, new Date(soonAt).toISOString(), "a sooner deadline is kept")
     for (const slug of ["queued", "snoozed", "done"]) assert.equal(h.storage.getSession(slug)!.deadline_at ?? null, null, slug)
@@ -196,7 +199,7 @@ test("the machine-wide wrap-up called off: every Running thread's limit is remov
     const at = inMs(15 * 60_000)
     for (const slug of ["run", "queued"]) await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug, deadline: at } }))
     const got = await asBrowser(() => h.router.setRunningDeadlines.handler({ input: { deadline: null } }))
-    assert.deepEqual(got, { threads: 1, projects: 1 }, "only a thread that had a limit counts")
+    assert.deepEqual(got, { threads: 1, projects: 1, children: 0 }, "only a thread that had a limit counts")
     assert.equal(h.storage.getSession("run")!.deadline_at ?? null, null)
     assert.equal(h.storage.getSession("queued")!.deadline_at, new Date(at).toISOString(), "a queued thread keeps its limit")
     const bySlug = new Map(h.notices().map((n) => [n.slug, n.message]))
@@ -215,6 +218,62 @@ test("the machine-wide wrap-up is the user's: a worker's transport is refused", 
     h.snapshot.threads.push({ id: "run", kind: "session", state: "open", needsYou: false } as never)
     await assert.rejects(asWorker(() => h.router.setRunningDeadlines.handler({ input: { deadline: inMs(15 * 60_000) } })), /Only the user/)
     assert.equal(h.storage.getSession("run")!.deadline_at ?? null, null)
+  } finally {
+    h.close()
+  }
+})
+
+// ---- THE CHANGE REACHES RUNNING CHILDREN (router reachChildren → agent-inbox.ts) ----
+// On 2026-10-08 four parents handed off within a minute of a 5m limit while their twelve children ran on
+// unaware. Each child now gets its share of the limit in its deadline file and the user's note in its mailbox.
+
+const childDeadline = (sessionDir: string, agentId: string) => JSON.parse(readFileSync(join(sessionDir, "frizz-deadlines", `${agentId}.json`), "utf8"))
+const childInbox = (sessionDir: string, agentId: string) =>
+  readdirSync(join(sessionDir, "frizz-inbox", agentId)).map((f) => JSON.parse(readFileSync(join(sessionDir, "frizz-inbox", agentId, f), "utf8")))
+
+test("the wrap-up reaches each running child — with a share that leaves the parent a reserve — and a queued thread's children without waking it", async () => {
+  const h = harness()
+  try {
+    for (const slug of ["run", "resting", "quiet"]) h.storage.upsertSession(row(slug))
+    const sessionDir = join(h.dir, "session")
+    h.children.set("run", [{ agentId: "aaaaaaaaaaaaaaaa1", sessionDir, label: "impl" }, { agentId: "aaaaaaaaaaaaaaaa2", sessionDir, label: "review" }])
+    h.children.set("resting", [{ agentId: "bbbbbbbbbbbbbbbb1", sessionDir, label: "drivers" }])
+    h.snapshot.threads.push(
+      { id: "run", kind: "session", state: "open", needsYou: false } as never,
+      { id: "resting", kind: "session", state: "open", needsYou: true } as never,
+      { id: "quiet", kind: "session", state: "open", needsYou: true } as never, // queued, no children: left alone
+    )
+    const at = inMs(15 * 60_000)
+    const got = await asBrowser(() => h.router.setRunningDeadlines.handler({ input: { deadline: at, note: "Restarting the machine." } }))
+    assert.deepEqual(got, { threads: 2, projects: 1, children: 3 })
+
+    const share = childDeadline(sessionDir, "aaaaaaaaaaaaaaaa1")
+    assert.equal(share.setBy, "user")
+    assert.equal(share.announce, true)
+    const reserve = Date.parse(at) - share.atMs
+    assert.ok(reserve > 4.9 * 60_000 && reserve < 5.1 * 60_000, `a 15m limit leaves the parent its 5m reserve, got ${reserve}ms`)
+    assert.match(childInbox(sessionDir, "bbbbbbbbbbbbbbbb1")[0].text, /> Restarting the machine\./)
+    assert.equal(childInbox(sessionDir, "bbbbbbbbbbbbbbbb1")[0].from, "operator")
+
+    assert.equal(h.storage.getSession("resting")!.deadline_at, new Date(at).toISOString(), "the queued thread carries the limit")
+    assert.deepEqual(h.notices().map((n) => n.slug), ["run"], "but only the RUNNING worker is woken with a notice")
+    assert.equal(h.storage.getSession("quiet")!.deadline_at ?? null, null)
+  } finally {
+    h.close()
+  }
+})
+
+test("one thread's limit reaches its children too, and lifting it lifts theirs", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const sessionDir = join(h.dir, "session")
+    h.children.set("t", [{ agentId: "ccccccccccccccccc", sessionDir, label: "child" }])
+    await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug: "t", deadline: inMs(3_600_000) } }))
+    assert.equal(childDeadline(sessionDir, "ccccccccccccccccc").setBy, "user")
+    await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug: "t", deadline: null } }))
+    assert.deepEqual(childDeadline(sessionDir, "ccccccccccccccccc"), { none: true })
+    assert.match(childInbox(sessionDir, "ccccccccccccccccc").at(-1).text, /removed the time limit/)
   } finally {
     h.close()
   }

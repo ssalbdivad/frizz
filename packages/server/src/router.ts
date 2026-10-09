@@ -17,6 +17,7 @@ import {
   ThreadDeadlineView,
   DEADLINE_MAX_MS,
   DEADLINE_MIN_MS,
+  childDeadlineMs,
   parseDeadlineInput,
   FollowUpInput,
   UnqueueFollowUpInput,
@@ -244,7 +245,7 @@ import { isBrokerClaudeRow, isHeldRow, isScheduleHeldRow, type RecurringWrite, t
 import { createHeldThreadStarter, type HeldStartProfile } from "./held-start.ts"
 import { scheduleProcedures } from "./schedule-router.ts"
 import { unwrapShellCommand, type SessionTelemetry } from "./tailer.ts"
-import { postToAgentInbox, workflowSessionDir } from "./agent-inbox.ts"
+import { postToAgentInbox, setChildDeadline, workflowSessionDir } from "./agent-inbox.ts"
 import { providerResumeCommand } from "./external-terminal.ts"
 import { backgroundShellLineCount, readBackgroundShellOutput } from "./background-shell-output.ts"
 import { projectRetiredBackgroundOps, retiredOpsFor } from "./transcript.ts"
@@ -1721,6 +1722,41 @@ export function createRouter(ctx: AppContext) {
     })
   }
 
+  // THE CHANGE REACHES THE THREAD'S RUNNING CHILDREN TOO — its sub-agents, their descendants, its Workflow
+  // agents — through their mailboxes (agent-inbox.ts). A child gets its share of the limit the way a fresh
+  // dispatch would (`childDeadlineMs`: the parent's remaining time minus a reserve to fold the result in),
+  // and the user's note verbatim. Before this a limit reached only the parent, and on 2026-10-08 four
+  // parents handed off in under a minute while twelve children ran on unaware. Returns how many it reached.
+  // ONE running child's mailbox, by the id the directory and the drawer name it with: a Workflow agent's own
+  // id, or a sub-agent's dispatch id, translated to the runtime agent id its box is keyed by.
+  function childMailbox(slug: string, id: string): { sessionDir: string; agentId: string } | undefined {
+    const info = ctx.tailer.subAgent(slug, id)
+    if (!info || info.state === "done") return undefined
+    if (info.workflowAgent) return { sessionDir: workflowSessionDir(info.workflowAgent.runDir), agentId: id }
+    return info.taskId ? ctx.tailer.liveMailboxes?.(slug).find((m) => m.agentId === info.taskId) : undefined
+  }
+
+  function reachChildren(target: AppContext, slug: string, change: { kind: "set"; atMs: number; note?: string } | { kind: "cleared" }, nowMs: number): number {
+    let reached = 0
+    for (const child of target.tailer.liveMailboxes?.(slug) ?? []) {
+      try {
+        if (change.kind === "cleared") {
+          if (!setChildDeadline(child.sessionDir, child.agentId, null)) continue
+          postToAgentInbox(child.sessionDir, child.agentId, { from: "operator", text: "The user removed the time limit on this work. Carry on to the best result, not to a clock." })
+        } else {
+          const atMs = childDeadlineMs({ nowMs, parentDeadlineMs: change.atMs }) ?? change.atMs
+          const moved = setChildDeadline(child.sessionDir, child.agentId, { atMs, nowMs })
+          if (change.note) postToAgentInbox(child.sessionDir, child.agentId, { from: "operator", text: `Sent with a time limit on this work:\n\n${change.note.split("\n").map((line) => `> ${line}`).join("\n")}` })
+          else if (!moved) continue
+        }
+        reached++
+      } catch {
+        // One child's box that cannot be written is that child unreached, not a failed request.
+      }
+    }
+    return reached
+  }
+
   function armedPrWatchViews(slug: string): PrWatchView[] {
     const github = readGithubStatusBook(ctx.storage.getSetting(GITHUB_STATUS_SETTING))
     const issues = readGithubIssueStatusBook(ctx.storage.getSetting(GITHUB_ISSUE_STATUS_SETTING))
@@ -1980,13 +2016,17 @@ export function createRouter(ctx: AppContext) {
   function subAgentSteerable(
     slug: string,
     id: string,
-  ): { sessionId: string; inbox?: undefined } | { sessionId: null; inbox: string } | { sessionId: null; inbox?: undefined; note: string | null } {
+  ): { sessionId: string; inbox?: undefined } | { sessionId: null; inbox: string; agentId: string } | { sessionId: null; inbox?: undefined; note: string | null } {
     const blocked = (note: string | null) => ({ sessionId: null, note })
     const info = ctx.tailer.subAgent(slug, id)
     if (!info) return blocked(null)
     if (info.state !== "running") return blocked(null)
-    if (info.workflowAgent) return { sessionId: null, inbox: workflowSessionDir(info.workflowAgent.runDir) }
-    if (!info.direct) return blocked("Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.")
+    if (info.workflowAgent) return { sessionId: null, inbox: workflowSessionDir(info.workflowAgent.runDir), agentId: id }
+    // THE CHILD'S MAILBOX (agent-inbox.ts) reaches it after its next tool call wherever the broker's addressed
+    // frame cannot: a descendant this session did not dispatch, or any child while the thread is mid-turn.
+    const box = info.taskId ? ctx.tailer.liveMailboxes?.(slug).find((m) => m.agentId === info.taskId) : undefined
+    const viaBox = box ? { sessionId: null, inbox: box.sessionDir, agentId: box.agentId } as const : undefined
+    if (!info.direct) return viaBox ?? blocked("Only sub-agents this thread dispatched itself can be steered — this one belongs to another agent.")
     const row = ctx.storage.getSession(slug)
     if (!row) return blocked(null)
     if (row.backend === "codex") return blocked("Codex runs its sub-agents inside its own process and exposes no way to address one, so this child can't be steered from here.")
@@ -1997,7 +2037,7 @@ export function createRouter(ctx: AppContext) {
     // about the child, while this one clears on its own the moment the thread rests — and the drawer
     // re-reads steerability on every transcript push, so the prompt box comes back by itself.
     if (ctx.tailer.get(slug)?.turn === "in-flight") {
-      return blocked("The thread is working on its own turn right now, and a steer sent mid-turn is delivered to the thread instead of this sub-agent. The box comes back when the thread rests.")
+      return viaBox ?? blocked("The thread is working on its own turn right now, and a steer sent mid-turn is delivered to the thread instead of this sub-agent. The box comes back when the thread rests.")
     }
     return { sessionId: row.session_id }
   }
@@ -2614,7 +2654,7 @@ export function createRouter(ctx: AppContext) {
         const deliveryId = input.deliveryId ?? randomUUID()
         const sentAtMs = Date.now()
         if (target.inbox !== undefined) {
-          postToAgentInbox(target.inbox, input.id, { from: "operator", text: input.message })
+          postToAgentInbox(target.inbox, target.agentId, { from: "operator", text: input.message })
         } else {
           if (target.sessionId === null) {
             throw new Error(("note" in target ? target.note : null) ?? "This sub-agent is no longer running, so it can't be steered")
@@ -4358,7 +4398,10 @@ export function createRouter(ctx: AppContext) {
         const before = rowDeadline(row)
         const nowMs = Date.now()
         if (input.deadline === null) {
-          if (ctx.storage.clearDeadline(input.slug)) noticeDeadline(input.slug, { kind: "cleared" }, nowMs)
+          if (ctx.storage.clearDeadline(input.slug)) {
+            noticeDeadline(input.slug, { kind: "cleared" }, nowMs)
+            reachChildren(ctx, input.slug, { kind: "cleared" }, nowMs)
+          }
         } else {
           const atMs = Date.parse(input.deadline)
           if (atMs - nowMs < DEADLINE_MIN_MS) throw new Error("A time limit must end at least 1m from now.")
@@ -4366,6 +4409,7 @@ export function createRouter(ctx: AppContext) {
           const setAt = new Date(nowMs).toISOString()
           ctx.storage.setDeadline(input.slug, { deadlineAt: new Date(atMs).toISOString(), setAt, setBy: "human" })
           noticeDeadline(input.slug, { kind: "set", deadline: { atMs, setAtMs: nowMs }, previousAtMs: before?.atMs }, nowMs)
+          reachChildren(ctx, input.slug, { kind: "set", atMs }, nowMs)
         }
         ctx.board.refresh()
         ctx.scheduler?.kick?.()
@@ -4392,6 +4436,7 @@ export function createRouter(ctx: AppContext) {
         const note = input.note || undefined
         let threads = 0
         let projects = 0
+        let children = 0
         const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board, ctx }]
         for (const { project, board, ctx: tenant } of open) {
           const target = tenant ?? (project.id === ctx.project.id ? ctx : undefined)
@@ -4404,19 +4449,27 @@ export function createRouter(ctx: AppContext) {
           }
           let here = 0
           for (const thread of snapshot.threads) {
-            if (!activeBandThread(thread)) continue
+            // A QUEUED thread whose children are still running is in it too: its work is in flight even
+            // though the thread is at rest (2026-10-08, one such thread's two children got nothing). Its
+            // limit and the children's are set, but the RESTING worker is not woken: it has handed off,
+            // and its children's results wake it anyway.
+            const running = activeBandThread(thread)
+            const resting = !running && queuedThread(thread) && (target.tailer.liveMailboxes?.(thread.id).length ?? 0) > 0
+            if (!running && !resting) continue
             const row = target.storage.getSession(thread.id)
             if (!row || row.state === "archived" || row.archived === 1 || isHeldRow(row)) continue
             if (atMs === null) {
               if (!target.storage.clearDeadline(thread.id)) continue
-              noticeDeadline(thread.id, { kind: "cleared" }, nowMs, target)
+              if (running) noticeDeadline(thread.id, { kind: "cleared" }, nowMs, target)
+              children += reachChildren(target, thread.id, { kind: "cleared" }, nowMs)
               here++
               continue
             }
             const before = rowDeadline(row)
             const due = before && before.atMs < atMs ? before.atMs : atMs
             if (!target.storage.setDeadline(thread.id, { deadlineAt: new Date(due).toISOString(), setAt, setBy: "human" })) continue
-            noticeDeadline(thread.id, { kind: "set", deadline: { atMs: due, setAtMs: nowMs }, previousAtMs: before?.atMs, note }, nowMs, target)
+            if (running) noticeDeadline(thread.id, { kind: "set", deadline: { atMs: due, setAtMs: nowMs }, previousAtMs: before?.atMs, note }, nowMs, target)
+            children += reachChildren(target, thread.id, { kind: "set", atMs: due, ...(note ? { note } : {}) }, nowMs)
             here++
           }
           if (here === 0) continue
@@ -4425,7 +4478,7 @@ export function createRouter(ctx: AppContext) {
           target.board.refresh()
           target.scheduler?.kick?.()
         }
-        return { threads, projects }
+        return { threads, projects, children }
       },
     }),
 
@@ -5313,12 +5366,34 @@ export function createRouter(ctx: AppContext) {
         const home = elsewhere?.tenant ?? ctx
         const project = elsewhere ? home.project.name : undefined
         const target = hit ? home.storage.getSession(hit.slug) : undefined
-        // A SUB-AGENT is reached through its own thread, never directly: it lives inside that thread's
-        // session, where a message from outside would land on the thread's main turn instead (see
-        // subAgentSteer for the measured misdelivery). Said plainly, with the handle that does work.
+        // A SUB-AGENT, `@thread.child`: delivered into the child's MAILBOX (agent-inbox.ts), which its own hook
+        // hands it after its next tool call or as it tries to finish — never through the thread's session,
+        // where a message from outside would land on the thread's main turn instead (subAgentSteer). Its own
+        // parent may use this too. Journalled into the child's drawer like a steer, which is its record.
         if (hit && target && childPath.length > 0) {
-          const handle = handleOf(hit)
-          return { sent: false, handle: `${handle}.${childPath.join(".")}`, refusal: `that is a sub-agent of @${handle}, and only its own thread can reach it. Read it with read_thread, or message @${handle} and ask it to pass the message on.` }
+          const threadHandle = handleOf(hit)
+          const address = `${threadHandle}.${childPath.join(".")}`
+          if (elsewhere) return { sent: false, handle: address, refusal: `that is a sub-agent of a thread in ${home.project.name}; a sub-agent can be messaged only from its own project. Message @${threadHandle} instead.` }
+          const { agents } = subAgentDirectoryOf(hit.slug)
+          const child = resolveSubAgent(childPath, agents)
+          if (!child) return { sent: false, handle: address, refusal: `@${threadHandle} has no sub-agent called ${childPath.join(".")}.`, known: subAgentAddresses(threadHandle, agents) }
+          const named = agents.find((a) => a.id === child.id)?.address ?? address
+          if (input.awaitReply) return { sent: false, handle: named, refusal: "a sub-agent answers in its report to its own thread, not to you, so there is no reply to wait for. Send without awaitReply, and read its report later with read_thread." }
+          const box = childMailbox(hit.slug, child.id)
+          if (!box) return { sent: false, handle: named, refusal: `@${named} is not running, so there is nobody to deliver to. Read its report with read_thread.` }
+          const nowMs = Date.now()
+          const pair = `${input.slug}\u0000${ctx.project.id}\u0000${hit.slug}\u0000${child.id}`
+          const recent = (threadMessageLog.get(pair) ?? []).filter((at) => nowMs - at < 3_600_000)
+          if (recent.length >= THREAD_MESSAGE_HOURLY_CAP) {
+            return { sent: false, handle: named, refusal: `this thread has sent @${named} ${recent.length} messages in the last hour, which is the cap. Stop the exchange here, or ask the user.` }
+          }
+          const self = threads.find((t) => t.slug === input.slug)
+          const from = self ? handleOf(self) : input.slug
+          postToAgentInbox(box.sessionDir, box.agentId, { from: hit.slug === input.slug ? "parent" : `@${from}`, text: input.message })
+          ctx.storage.recordSubAgentSteer({ slug: hit.slug, subAgentId: child.id, deliveryId: randomUUID(), message: hit.slug === input.slug ? input.message : `From @${from}: ${input.message}`, sentAtMs: nowMs })
+          threadMessageLog.set(pair, [...recent, nowMs])
+          ctx.board.refresh()
+          return { sent: true, handle: named, from, delivery: "mailbox" as const }
         }
         if (!hit || !target) {
           return { sent: false, refusal: `no thread is called ${input.handle}.`, known: knownHandles(threads, input.slug) }

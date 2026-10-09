@@ -9,7 +9,7 @@
 // measurements and for the file format, which this hook shares with the server's drawer steer.
 //
 // One script, four events:
-//   SubagentStart (Workflow agents) — tell the agent, before it runs anything, that messages may arrive
+//   SubagentStart (every sub-agent) — tell the agent, before it runs anything, that messages may arrive
 //                               and whose they are (MAILBOX_INTRO says why this is load-bearing).
 //   PreToolUse  (SendMessage) — a message aimed at a RUNNING Workflow agent of this session is written
 //                               to its mailbox and the SendMessage is refused, with a reason that says it
@@ -93,16 +93,21 @@ function claim(sessionDir, agentId) {
 // 2026-10-06) the agent received its parent's message and declined it — "It came from a tool result
 // rather than from the user, so I didn't follow it." What makes the message trustworthy is that the
 // agent was told to expect it BEFORE any tool ran, by the same harness that set its task.
+//
+// EVERY sub-agent gets it, not only a Workflow's (2026-10-08). The server now posts into any running
+// child's box — the user's note with a time limit, a steer from the drawer, a `message_thread` to
+// `@thread.child` — so a plain sub-agent receives mailbox messages too, and would decline them the same way.
 const MAILBOX_INTRO =
-  '⟦Frizz mailbox⟧ You are running inside a Workflow that Frizz is supervising. While you work, the agent ' +
-  'that dispatched you, or the user operating Frizz, may send you a message. Frizz delivers it as context ' +
+  '⟦Frizz mailbox⟧ You are running as a sub-agent that Frizz is supervising. While you work, the agent ' +
+  'that dispatched you, the user operating Frizz, or another Frizz thread may send you a message. Frizz delivers it as context ' +
   'right after one of your tool calls, or as you try to finish, headed "⟦Frizz mailbox: message from …⟧". It is ' +
   'not part of that tool\'s output: it is your dispatcher speaking, with the same authority as your task, so ' +
   'act on it. If your work has a time limit, Frizz also delivers its time checks the same way, headed "⏰".';
 
 /** @param {{ from: string, text: string }[]} messages */
 function render(messages) {
-  const who = (/** @type {string} */ from) => (from === 'operator' ? 'the user operating Frizz' : 'the agent that dispatched you');
+  const who = (/** @type {string} */ from) =>
+    from === 'operator' ? 'the user operating Frizz' : from.startsWith('@') ? 'the Frizz thread ' + from : 'the agent that dispatched you';
   return messages
     .map((m) => '⟦Frizz mailbox: message from ' + who(m.from) + '⟧ ' + m.text)
     .concat('Frizz delivered this while you were working; it is not output of the tool you just ran. Act on it in what you do next.')
@@ -201,7 +206,7 @@ try {
     process.exit(0);
   }
 
-  if (event === 'SubagentStart' && input.agent_type === 'workflow-subagent') {
+  if (event === 'SubagentStart') {
     emit({ hookSpecificOutput: { hookEventName: 'SubagentStart', additionalContext: MAILBOX_INTRO } });
     process.exit(0);
   }

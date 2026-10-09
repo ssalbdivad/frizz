@@ -901,8 +901,9 @@ const MESSAGE_THREAD = {
     "its message says so; answer it promptly, even if only to say you cannot help.\n\n" +
     "`read_thread` FIRST — often it already answers the question. Write each message to stand alone: " +
     "the other thread has none of your context. Never reply just to acknowledge. A finished thread cannot " +
-    "be messaged (read it instead), and neither can a sub-agent (`thread.subAgent`): only its own thread " +
-    "reaches it, so message that thread. Messages between two threads are capped per hour.",
+    "be messaged (read it instead). A RUNNING sub-agent can, by its address (`@thread.child`, your own " +
+    "children included): it reads the message after its next tool call, and answers only in its report to " +
+    "its own thread, so `await_reply` does not apply. Messages between two threads are capped per hour.",
   inputSchema: {
     type: "object",
     properties: {
@@ -1285,6 +1286,9 @@ async function messageThread(args) {
   const body = { slug: threadSlug(), handle, message, ...(awaitReply ? { awaitReply: true } : {}) }
   const r = (await callRpc("messageThread", body))?.result
   if (!r?.sent) return `Not sent — ${r?.refusal ?? "Frizz did not accept it."}${knownLine(r?.known)}`
+  if (r.delivery === "mailbox") {
+    return `Sent to the sub-agent @${r.handle}, signed @${r.from}. It reads it after its next tool call; its answer, if any, is in its report to its own thread.`
+  }
   const where = r.project ? ` (in the ${r.project} project)` : ""
   const answered = r.answered ? ` It answers the message @${r.handle} was waiting on, so that thread is no longer parked on you.` : ""
   if (r.timerId) {

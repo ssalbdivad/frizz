@@ -1,11 +1,11 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { execFileSync } from "node:child_process"
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join, dirname } from "node:path"
 import { fileURLToPath } from "node:url"
-import { INBOX_DIRNAME, postToAgentInbox, workflowSessionDir } from "./agent-inbox.ts"
+import { DEADLINES_DIRNAME, INBOX_DIRNAME, postToAgentInbox, setChildDeadline, workflowSessionDir } from "./agent-inbox.ts"
 
 // ---- workflow-agent mailbox (cc-worker/hooks/agent-inbox.mjs + agent-inbox.ts) ----
 // The server writes a message with agent-inbox.ts; the worker plugin's hook reads it. The two are
@@ -87,7 +87,7 @@ test("nothing waiting, the main thread, or a non-worker session: the hook says n
   assert.equal(runHook(postToolUse(s.transcript, "a-different-agent")), "", "another agent's mail is not this one's")
 })
 
-test("a Workflow agent is told about its mailbox before it runs anything; other agents are not", () => {
+test("every sub-agent is told about its mailbox before it runs anything", () => {
   // Measured live (2.1.287): delivered cold, the message reads as an instruction smuggled into a tool
   // result, and the agent declined it. Telling it at the start is what makes the later message its
   // dispatcher's word rather than an injection.
@@ -97,7 +97,9 @@ test("a Workflow agent is told about its mailbox before it runs anything; other 
   assert.equal(out.hookSpecificOutput.hookEventName, "SubagentStart")
   assert.match(out.hookSpecificOutput.additionalContext, /⟦Frizz mailbox⟧/)
   assert.match(out.hookSpecificOutput.additionalContext, /not part of that tool's output/)
-  assert.equal(runHook(start("general-purpose")), "", "a plain sub-agent takes SendMessage natively and needs no mailbox")
+  // A plain sub-agent too (2026-10-08): the server now posts to any running child — a time limit's note, a
+  // drawer steer, a message_thread to @thread.child — so it needs the same introduction.
+  assert.match(JSON.parse(runHook(start("general-purpose"))).hookSpecificOutput.additionalContext, /⟦Frizz mailbox⟧/)
 })
 
 test("an agent about to finish is held for a waiting message, and only then", () => {
@@ -146,4 +148,60 @@ test("SendMessage passes through untouched for anything that is not a RUNNING Wo
 test("a malformed agent id is refused rather than written outside the mailbox", () => {
   const s = newSession([])
   assert.throws(() => postToAgentInbox(s.sessionDir, "../escape", { from: "operator", text: "x" }), /not an agent id/)
+})
+
+test("a message from another Frizz thread is signed with that thread's handle", () => {
+  const s = newSession([{ id: AGENT }])
+  postToAgentInbox(s.sessionDir, AGENT, { from: "@shell-budgets", text: "the cache key moved to src/keys.ts" })
+  const ctx: string = JSON.parse(runHook(postToolUse(s.transcript, AGENT))).hookSpecificOutput.additionalContext
+  assert.match(ctx, /⟦Frizz mailbox: message from the Frizz thread @shell-budgets⟧ the cache key moved/)
+})
+
+// ---- a running child's time limit, rewritten by the server (agent-inbox.ts setChildDeadline) ----
+// The child's hook works its deadline out ONCE and caches it — "none" included — so a limit the user sets
+// after the child started reached it only through this rewrite. Written by the server, read by the REAL hook.
+
+const PLAIN = "a1b2c3d4e5f6a7b8c"
+/** A session with one PLAIN running sub-agent whose prompt carried no deadline marker. */
+function plainChild(): { transcript: string; sessionDir: string } {
+  const s = newSession([])
+  mkdirSync(join(s.sessionDir, "subagents"), { recursive: true })
+  writeFileSync(join(s.sessionDir, "subagents", `agent-${PLAIN}.jsonl`), JSON.stringify({ type: "user", timestamp: new Date(Date.now() - 60_000).toISOString(), message: { role: "user", content: "Audit the parser." } }) + "\n")
+  return s
+}
+const childToolCall = (transcript: string) => ({ hook_event_name: "PostToolUse", transcript_path: transcript, tool_name: "Bash", agent_id: PLAIN, agent_type: "general-purpose" })
+const childSays = (transcript: string): string => {
+  const out = runHook(childToolCall(transcript))
+  return out ? JSON.parse(out).hookSpecificOutput.additionalContext : ""
+}
+
+test("a child that cached no limit picks up the one the user set later, introduced as the user's, then checked in on", () => {
+  const s = plainChild()
+  assert.equal(childSays(s.transcript), "", "negative control: no limit, nothing said")
+  assert.deepEqual(JSON.parse(readFileSync(join(s.sessionDir, DEADLINES_DIRNAME, `${PLAIN}.json`), "utf8")), { none: true }, "and the hook cached that")
+
+  const now = Date.now()
+  assert.equal(setChildDeadline(s.sessionDir, PLAIN, { atMs: now + 10 * 60_000, nowMs: now }), true)
+  const intro = childSays(s.transcript)
+  assert.match(intro, /⏰ Your time limit: .* set by the user operating Frizz, after you started/)
+  assert.equal(childSays(s.transcript), "", "introduced once")
+
+  // Past the deadline already: the next tool call brings the `over` check-in.
+  assert.equal(setChildDeadline(s.sessionDir, PLAIN, { atMs: now - 1_000, nowMs: now - 120_000 }), true)
+  assert.match(childSays(s.transcript), /Your time is up/)
+})
+
+test("a sooner limit the child already has is kept; a lift touches only a limit the user set", () => {
+  const s = plainChild()
+  const now = Date.now()
+  mkdirSync(join(s.sessionDir, DEADLINES_DIRNAME), { recursive: true })
+  const own = { atMs: now + 5 * 60_000, setAtMs: now, announce: false }
+  writeFileSync(join(s.sessionDir, DEADLINES_DIRNAME, `${PLAIN}.json`), JSON.stringify(own))
+  assert.equal(setChildDeadline(s.sessionDir, PLAIN, { atMs: now + 30 * 60_000, nowMs: now }), false, "later than its own: kept")
+  assert.equal(setChildDeadline(s.sessionDir, PLAIN, null), false, "its dispatcher's share is not the user's to lift")
+  assert.deepEqual(JSON.parse(readFileSync(join(s.sessionDir, DEADLINES_DIRNAME, `${PLAIN}.json`), "utf8")), own)
+
+  assert.equal(setChildDeadline(s.sessionDir, PLAIN, { atMs: now + 2 * 60_000, nowMs: now }), true, "sooner: taken")
+  assert.equal(setChildDeadline(s.sessionDir, PLAIN, null), true, "and the user's own limit can be lifted")
+  assert.deepEqual(JSON.parse(readFileSync(join(s.sessionDir, DEADLINES_DIRNAME, `${PLAIN}.json`), "utf8")), { none: true })
 })

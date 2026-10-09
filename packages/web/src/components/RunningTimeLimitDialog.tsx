@@ -69,7 +69,7 @@ function RunningTimeLimitDialog({ onClose }: { onClose: () => void }) {
       onClose()
       showToast(got.threads === 0
         ? "No threads are running"
-        : `Time limit set on ${got.threads} ${got.threads === 1 ? "thread" : "threads"}${got.projects > 1 ? ` in ${got.projects} projects` : ""}`)
+        : `Time limit set on ${got.threads} ${got.threads === 1 ? "thread" : "threads"}${got.projects > 1 ? ` in ${got.projects} projects` : ""}${got.children > 0 ? ` and ${got.children} ${got.children === 1 ? "sub-agent" : "sub-agents"}` : ""}`)
     } catch (caught) {
       setBusy(false)
       setError((caught instanceof Error ? caught.message : String(caught)).slice(0, 160))
@@ -85,7 +85,7 @@ function RunningTimeLimitDialog({ onClose }: { onClose: () => void }) {
       onClose()
       showToast(got.threads === 0
         ? "No running threads have a time limit"
-        : `Time limit removed from ${got.threads} ${got.threads === 1 ? "thread" : "threads"}${got.projects > 1 ? ` in ${got.projects} projects` : ""}`)
+        : `Time limit removed from ${got.threads} ${got.threads === 1 ? "thread" : "threads"}${got.projects > 1 ? ` in ${got.projects} projects` : ""}${got.children > 0 ? ` and ${got.children} ${got.children === 1 ? "sub-agent" : "sub-agents"}` : ""}`)
     } catch (caught) {
       setBusy(false)
       setError((caught instanceof Error ? caught.message : String(caught)).slice(0, 160))
@@ -199,7 +199,7 @@ function RunningTimeLimitDialog({ onClose }: { onClose: () => void }) {
           }}
           className="w-full resize-none rounded-md border border-border bg-bg px-2.5 py-2 text-[13px] text-fg outline-none placeholder:text-muted-40 focus:border-accent"
         />
-        <p className="text-[10.5px] leading-snug text-muted-65">A thread with an earlier time limit keeps it. Queued and snoozed threads are left alone.</p>
+        <p className="text-[10.5px] leading-snug text-muted-65">Sub-agents get it too. A thread with an earlier time limit keeps it; queued threads count only while their sub-agents are still running.</p>
       </form>
     </Dialog>
   )
