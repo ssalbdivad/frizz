@@ -3,11 +3,12 @@
 // scheduler.test.ts, "thread message: …".
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs"
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import { AWAITING_FOR_MAX_MS, type BoardSnapshot, type Settings } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
+import { INBOX_DIRNAME } from "./agent-inbox.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
 import type { AppContext } from "./context.ts"
@@ -319,16 +320,42 @@ test("readThread on a thread.subAgent address answers from the child's own trans
   }
 })
 
-test("messageThread refuses a sub-agent address and names the thread that can reach it", async () => {
-  const h = harness()
+test("messageThread delivers to a running sub-agent's mailbox, and refuses one it cannot reach", async () => {
+  const sessionDir = mkdtempSync(join(tmpdir(), "frizz-subagent-mailbox-"))
+  const h = harness({
+    subAgentDirectory: (slug) => (slug === "pp" ? [
+      { id: "toolu_keys", label: "Cache keys", depth: 1, state: "running" },
+      { id: "toolu_review", label: "Review", depth: 1, state: "done", outcome: "completed", finishedAt: "2026-09-30T02:10:00.000Z" },
+    ] : []),
+    subAgent: (slug, id) => (slug !== "pp" ? undefined
+      : id === "toolu_keys" ? { state: "running", taskId: "aKeys", direct: false }
+      : id === "toolu_review" ? { state: "done", taskId: "aReview", direct: false, outcome: "completed" }
+      : undefined) as ReturnType<Tailer["subAgent"]>,
+    liveMailboxes: (slug) => (slug === "pp" ? [{ agentId: "aKeys", sessionDir, label: "Cache keys" }] : []),
+  })
   try {
     h.storage.upsertSession(row("me", "Mentions"))
     h.storage.upsertSession(row("pp", "Port the parser"))
-    const refused = await h.router.messageThread.handler({ input: { slug: "me", handle: "@port-the-parser.cache-keys", message: "hi" } })
-    assert.equal(refused.sent, false)
-    assert.match(refused.refusal ?? "", /sub-agent of @port-the-parser.*message @port-the-parser/)
-    assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0, "nothing was queued anywhere")
-  } finally { h.close() }
+    const sent = await h.router.messageThread.handler({ input: { slug: "me", handle: "@port-the-parser.cache-keys", message: "hi" } })
+    assert.deepEqual([sent.sent, sent.handle, sent.delivery], [true, "port-the-parser.cache-keys", "mailbox"])
+    const box = join(sessionDir, INBOX_DIRNAME, "aKeys")
+    const posted = readdirSync(box).filter((f) => f.endsWith(".json")).map((f) => JSON.parse(readFileSync(join(box, f), "utf8")))
+    assert.deepEqual(posted.map((m) => [m.from, m.text]), [["@mentions", "hi"]], "the child's own mailbox, signed by the sender")
+    assert.deepEqual(h.storage.listSubAgentSteers("pp", "toolu_keys").map((s) => s.message), ["From @mentions: hi"], "journalled in the child's drawer")
+    assert.equal(createWakeDeliveryStore(h.storage.scope).list().length, 0, "never through the thread's own session")
+
+    const awaiting = await h.router.messageThread.handler({ input: { slug: "me", handle: "@port-the-parser.cache-keys", message: "hi", awaitReply: true } })
+    assert.equal(awaiting.sent, false)
+    assert.match(awaiting.refusal ?? "", /answers in its report/)
+    const finished = await h.router.messageThread.handler({ input: { slug: "me", handle: "@port-the-parser.review", message: "hi" } })
+    assert.equal(finished.sent, false)
+    assert.match(finished.refusal ?? "", /not running.*read_thread/)
+    const missing = await h.router.messageThread.handler({ input: { slug: "me", handle: "@port-the-parser.nobody", message: "hi" } })
+    assert.equal(missing.sent, false)
+    assert.match(missing.refusal ?? "", /@port-the-parser has no sub-agent called nobody/)
+    assert.deepEqual(missing.known, ["@port-the-parser.cache-keys", "@port-the-parser.review (done)"])
+    assert.equal(readdirSync(box).filter((f) => f.endsWith(".json")).length, 1, "no refusal posted anything")
+  } finally { h.close(); rmSync(sessionDir, { recursive: true, force: true }) }
 })
 
 test("activity names the thread by its handle and each running sub-agent by its address", async () => {
