@@ -43,9 +43,9 @@
 // AND THE PROJECTS DRAG. A project's row is its grip: press, travel a few pixels, and the whole group —
 // row and threads — lifts and follows the pointer while the groups it passes slide aside; drop it and the
 // machine-wide order is rewritten (`projectsReorder`), so every surface that reads it moves as one.
-// A drag stays inside its run — the busy projects, or the quiet ones under them — because busy-ness, not
-// the order, decides which run a project is in: a busy project dropped among the quiet ones would
-// only jump back. Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
+// The list IS that order: busy projects are not lifted above quiet ones, because a split by busy-ness
+// made a drag across it spring back with no feedback, and a project jump to the bottom when its last
+// thread finished (David 2026-10-09, "the drag randomly seems to fail"). Alt+Arrow on a focused row moves it one place, for anyone not using a mouse.
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as KeyboardEvent_, type PointerEvent as PointerEvent_, type ReactNode } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Pin, Plus, Repeat } from "lucide-react"
@@ -91,8 +91,8 @@ const INDICATOR_SLOT = "flex h-[19px] w-4 shrink-0 items-center justify-center"
 /** A project's own row: the thread row's 19px line, 2px of padding a side rather than 4 — see ProjectGroup. */
 const HEAD_BUTTON_CLASS = "flex min-w-0 flex-1 items-start gap-2 py-0.5 pl-5 pr-1.5 text-left outline-none focus-visible:ring-1 focus-visible:ring-focus-ink-60 rounded-md"
 /**
- * THE SPACE ABOVE EVERY PROJECT BUT THE FIRST — the only thing between two projects. Between the busy
- * projects, once above the quiet ones (single rows, which need nothing between them), and above the add
+ * THE SPACE ABOVE EVERY PROJECT BUT THE FIRST — the only thing between two projects. Beside any busy
+ * project (two quiet ones, single rows, need nothing between them), and above the add
  * row.
  *
  * It was a hairline in a 13px gap from 2026-10-01 (David: "needs slightly more visual separation between
@@ -166,9 +166,7 @@ export function ProjectList({
       (onPage && (steeredAt[slug] !== undefined || archivingAt[slug] !== undefined))
     return { project, bands: loudBands(project, hidden, listOverlay(project.id, onPage, steeredAt, archivingAt)), moved }
   })
-  // A folded project keeps its place: it is still busy, only quieter to look at. And while the list is
-  // held, a project keeps the run and the place it was drawn in — one that has just gone quiet stays among
-  // the busy ones, so the projects under it do not move up (lib/listHold.ts).
+  // While the list is held, a project keeps the place it was drawn in (lib/listHold.ts).
   //
   // NEVER ACROSS A CHANGE OF VIEW. The hold keeps the projects as last drawn, so with the pointer parked
   // over the list a switch from All projects to one project kept every other project's rows on the
@@ -181,10 +179,7 @@ export function ProjectList({
   const drawnView = useRef(viewKey(view))
   const runs = holdLayout({
     prev: drawnRuns.current,
-    target: [
-      { id: "busy", items: groups.filter((group) => group.bands.rows > 0) },
-      { id: "quiet", items: groups.filter((group) => group.bands.rows === 0) },
-    ],
+    target: [{ id: "projects", items: groups }],
     keyOf: (entry) => entry.project.id,
     frozen: held && drawnView.current === viewKey(view),
     moved: () => false,
@@ -192,9 +187,8 @@ export function ProjectList({
   drawnRuns.current = runs
   drawnView.current = viewKey(view)
   const run = (id: string) => (runs.find((section) => section.id === id)?.slots ?? []).map((slot) => slot.item)
-  const busy = run("busy")
-  const quiet = run("quiet")
-  const grip = reorder.grips([busy.map((entry) => entry.project), quiet.map((entry) => entry.project)])
+  const listed = run("projects")
+  const grip = reorder.grips([listed.map((entry) => entry.project)])
   // A PROJECT'S BOARD is its own component (ProjectBoard.tsx): Colin's banded sidebar, not this list with
   // one project in it. After every hook above, so a change of view keeps this component's hook order.
   const boarded = view.kind === "project" ? reorder.ordered.find((project) => project.slug === view.slug) : undefined
@@ -225,15 +219,13 @@ export function ProjectList({
           <div className={`${HEAD_BUTTON_CLASS} !gap-0`}>{switcher}</div>
         </div>
       )}
-      {busy.map((entry, index) => group(entry, index > 0 || (switcher !== undefined && view.kind === "all")))}
-      {/* Always listed, one line each, under the busy ones — until one is opened, when it lists the rest of
-          itself under its name like any other. They sat behind a collapsed "Quiet" fold until 2026-09-24,
-          which cost a click to reach a project whose row is already about as quiet as a row can be
-          (maintainer: "if I want to navigate to them I shouldn't have to expand"). */}
-      {quiet.length > 0 && (
-        <section aria-label="Quiet projects" className={busy.length > 0 ? GROUP_GAP : ""}>
-          {quiet.map((entry) => group(entry, false))}
-        </section>
+      {/* A quiet project is one line, and two of them need nothing between them; anything beside a busy
+          project gets the group gap. */}
+      {listed.map((entry, index) =>
+        group(
+          entry,
+          index > 0 ? entry.bands.rows > 0 || listed[index - 1]!.bands.rows > 0 : switcher !== undefined && view.kind === "all",
+        ),
       )}
     </>
   )
@@ -433,7 +425,7 @@ function useListReorder(projects: readonly QueuesProject[]) {
     commit(run, fromIndex, toIndex)
   }
 
-  /** The grip for each project, given the runs the list drew — busy, then quiet — in its order. */
+  /** The grip for each project, given the run(s) the list drew, in its order. */
   const grips = (groups: readonly (readonly QueuesProject[])[]) => {
     const runs = groups.map((group) => group.filter(orderable).map((project) => project.id))
     const runOf = (id: string) => runs.find((run) => run.includes(id))

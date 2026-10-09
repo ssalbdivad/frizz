@@ -72,16 +72,3 @@ export function loudBands(project: QueuesProject, hidden: (key: string) => boole
   const carded = new Set([...pinned.filter(queued), ...ready].map((t) => t.id))
   return { pinned, ready, working, carded, rows: pinned.length + ready.length + working.length }
 }
-
-/**
- * THE LIST'S ORDER, for every menu that lists the projects (the switcher, the prompt box's picker and the
- * ⌥↑/⌥↓ steps through it): the projects with rows first, then the quiet ones, each run in the
- * machine-wide order — as ProjectList draws them, so a menu never reads in a different order from the
- * column beside it. Busy is the list's own test, a row to draw (pins included), not `isBusy`, which a
- * project holding only a pinned snoozed thread fails. Home keeps its place here; a menu that sets it
- * apart does so itself.
- */
-export function listOrder<P extends QueuesProject>(projects: readonly P[]): P[] {
-  const busy = projects.map((project) => loudBands(project, () => false).rows > 0)
-  return [...projects.filter((_, i) => busy[i]), ...projects.filter((_, i) => !busy[i])]
-}
