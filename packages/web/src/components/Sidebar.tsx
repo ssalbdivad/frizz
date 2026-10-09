@@ -147,13 +147,16 @@ export function RailRow({ t, active, open = false, restedAge = false, scope, car
 // touching the titles and 19px (a row's line) read as an empty row. It is also what lets the board carry
 // a header over each band and still show upstream's 22 rows at 1440x900 (capacityParity.e2e.test.ts):
 // upstream's headers were 24.5px, and the board has no room for that.
-export function SectionHeader({ band, count, collapsed, onToggle, attention = false }: {
+export function SectionHeader({ band, count, collapsed, onToggle, attention = false, action }: {
   band: BandKey | "schedules"
   count: number
   collapsed?: boolean
   onToggle?: () => void
   /** The count in the warning tone: one of the band's rows wants the human (a paused schedule). */
   attention?: boolean
+  /** A control at the line's right end, in the rows' right-hand column. Only on an unfoldable header: a
+   *  button cannot sit inside the fold's own button. */
+  action?: ReactNode
 }) {
   const { Icon, label } = band === "schedules" ? SCHEDULES_BAND : BANDS[band]
   const body = (
@@ -182,6 +185,7 @@ export function SectionHeader({ band, count, collapsed, onToggle, attention = fa
     return (
       <div data-band-header={band} data-xq-band-label={band} className={className}>
         {body}
+        {action}
       </div>
     )
   }
