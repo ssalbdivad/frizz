@@ -5,6 +5,7 @@ import { once } from "node:events"
 import { connect, type AddressInfo } from "node:net"
 import { WebSocket, type ClientOptions } from "ws"
 import type { BoardSnapshot, SocketServerMsg, TranscriptMessage } from "@frizz/shared"
+import { applyTranscriptPatch } from "@frizz/shared"
 import { Bus, Emitter } from "./bus.ts"
 import {
   APP_SOCKET_MAX_MESSAGE_BYTES,
@@ -62,6 +63,15 @@ const board: BoardSnapshot = {
   warnings: [],
 }
 const msg = (text: string): TranscriptMessage => ({ role: "assistant", text, tools: [], parts: [] })
+// Every full transcript frame names its window with a sha256/base64url signature: always 43 characters,
+// so a fixture that sizes a frame byte-exactly sizes it with a stand-in of the same length.
+const SIG = "s".repeat(43)
+const withoutSig = (m: SocketServerMsg): SocketServerMsg => {
+  if (m.t !== "transcript") return m
+  const { sig, ...rest } = m
+  assert.equal(typeof sig, "string")
+  return rest
+}
 const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 // Poll an OBSERVABLE server-side condition instead of guessing how long a socket frame takes to land.
@@ -519,9 +529,9 @@ test("protocol: a transcript push carries the reader's page envelope when it has
     const c = await connectClient(h.port)
     await c.next()
     c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "paged" }))
-    assert.deepEqual(await c.next(), { t: "transcript", slug: "paged", messages: [msg("tail")], page })
+    assert.deepEqual(withoutSig(await c.next()), { t: "transcript", slug: "paged", messages: [msg("tail")], page })
     c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "bare" }))
-    assert.deepEqual(await c.next(), { t: "transcript", slug: "bare", messages: [msg("bare")] })
+    assert.deepEqual(withoutSig(await c.next()), { t: "transcript", slug: "bare", messages: [msg("bare")] })
     c.ws.close()
   } finally {
     await h.close()
@@ -901,7 +911,7 @@ test("resource control: a sliding window does not amplify bursts across a fixed-
 test("protocol: a transcript frame exactly at the logical byte limit is delivered", async () => {
   const messages = [msg("x".repeat(2_048))]
   const frame: SocketServerMsg = { t: "transcript", slug: "boundary", messages }
-  const exactBytes = Buffer.byteLength(JSON.stringify(frame), "utf8")
+  const exactBytes = Buffer.byteLength(JSON.stringify({ ...frame, sig: SIG }), "utf8")
   const h = await startHarness({
     maxLogicalFrameBytes: exactBytes,
     readTranscript: () => ({ messages }),
@@ -910,7 +920,7 @@ test("protocol: a transcript frame exactly at the logical byte limit is delivere
     const c = await connectClient(h.port)
     await c.next() // keyframe is much smaller than the transcript boundary fixture
     c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "boundary" }))
-    assert.deepEqual(await c.next(), frame)
+    assert.deepEqual(withoutSig(await c.next()), frame)
     assert.equal(c.ws.readyState, WebSocket.OPEN)
     c.ws.close()
   } finally {
@@ -920,7 +930,7 @@ test("protocol: a transcript frame exactly at the logical byte limit is delivere
 
 test("protocol: a one-byte-over Unicode transcript pauses only that slug and an explicit retry recovers after shrink", async () => {
   let current = [msg("🟣".repeat(1_024))]
-  const oversizedFrame: SocketServerMsg = { t: "transcript", slug: "unicode", messages: current }
+  const oversizedFrame: SocketServerMsg = { t: "transcript", slug: "unicode", messages: current, sig: SIG }
   const encoded = JSON.stringify(oversizedFrame)
   const actualBytes = Buffer.byteLength(encoded, "utf8")
   assert.ok(actualBytes > encoded.length, "fixture must distinguish UTF-8 bytes from JS code units")
@@ -1051,7 +1061,7 @@ test("resource control: snapshot cache is entry/byte bounded and last-unsubscrib
     ["cache-c", [msg("c")]],
     ["forgotten", [msg("must disappear")]],
   ])
-  const sampleText = JSON.stringify({ t: "transcript", slug: "cache-a", messages: snapshots.get("cache-a") })
+  const sampleText = JSON.stringify({ t: "transcript", slug: "cache-a", messages: snapshots.get("cache-a"), sig: SIG })
   const oneEntryWeight = Math.max(Buffer.byteLength(sampleText, "utf8"), sampleText.length * 2)
   let reads = 0
   const h = await startHarness({
@@ -1390,6 +1400,177 @@ test("file topic: a malformed file frame is rejected like any other", async () =
     c.ws.send(JSON.stringify({ t: "sub", topic: "file", path: "" }))
     const [code] = (await once(c.ws, "close")) as [number]
     assert.equal(code, 1008)
+  } finally {
+    await h.close()
+  }
+})
+
+// ── transcript deltas ─────────────────────────────────────────────────────────────────────────────────
+// A change pushes only what changed, cut against the window the connection last received. These replay
+// what a client does with each frame (socket.ts): hold the full window, apply each delta to it.
+
+const big = (i: number, suffix = ""): TranscriptMessage => msg(`message ${i} ${"x".repeat(1_000)}${suffix}`)
+
+function holder() {
+  let held: { sig: string; messages: TranscriptMessage[] } | undefined
+  return {
+    // Apply one pushed frame; returns which kind it was, failing on a delta cut against another window.
+    take(frame: SocketServerMsg): "full" | "delta" {
+      if (frame.t === "transcript") {
+        assert.ok(frame.sig, "a full frame names its window")
+        held = { sig: frame.sig, messages: frame.messages }
+        return "full"
+      }
+      assert.equal(frame.t, "transcript-delta")
+      if (frame.t !== "transcript-delta") throw new Error("unreachable")
+      assert.equal(frame.base, held?.sig, "a delta is only ever sent against the window this connection holds")
+      const next = applyTranscriptPatch(held!.messages, frame.ops)
+      assert.ok(next)
+      held = { sig: frame.sig, messages: next }
+      return "delta"
+    },
+    get messages() {
+      return held?.messages
+    },
+  }
+}
+
+test("deltas: an append, a slide, an in-place rewrite and a fold each reach the client exactly", async () => {
+  const h = await startHarness()
+  let current = Array.from({ length: 40 }, (_, i) => big(i))
+  h.transcripts.set("live", current)
+  try {
+    const c = await connectClient(h.port)
+    await c.next()
+    c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "live" }))
+    const client = holder()
+    const first = await c.next()
+    assert.equal(client.take(first), "full", "a subscription always starts from the whole window")
+    const fullBytes = JSON.stringify(first).length
+
+    const step = async (next: TranscriptMessage[]) => {
+      current = next
+      h.transcripts.set("live", current)
+      h.transcriptChange.emit(["live"])
+      const frame = await c.next()
+      const kind = client.take(frame)
+      assert.deepEqual(client.messages, current)
+      return { kind, bytes: JSON.stringify(frame).length, frame }
+    }
+
+    // Append: only the new message rides the frame.
+    const append = await step([...current, big(40)])
+    assert.equal(append.kind, "delta")
+    assert.ok(append.bytes < fullBytes / 10, `an append costs one message, not the window: ${append.bytes} vs ${fullBytes}`)
+
+    // Slide: the head trims as the tail grows — still one message.
+    const slide = await step([...current.slice(1), big(41)])
+    assert.equal(slide.kind, "delta")
+    assert.ok(slide.bytes < fullBytes / 10)
+
+    // In place: an earlier entry rewritten (a tool call gaining its result) — only that entry.
+    const rewritten = [...current]
+    rewritten[5] = big(6, " with its result")
+    const inPlace = await step(rewritten)
+    assert.equal(inPlace.kind, "delta")
+    if (inPlace.frame.t === "transcript-delta") {
+      const puts = inPlace.frame.ops.flatMap((op) => ("put" in op ? op.put : []))
+      assert.deepEqual(puts, [rewritten[5]])
+    }
+
+    // Fold: every message rewritten — the delta would be no smaller, so the snapshot goes out.
+    const fold = await step(current.map((_, i) => big(i, " folded")))
+    assert.equal(fold.kind, "full")
+
+    // Unchanged: nothing at all.
+    h.transcriptChange.emit(["live"])
+    await c.expectNone()
+    c.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
+test("deltas: a connection holding another window gets the snapshot; a resubscribe starts from the snapshot", async () => {
+  const h = await startHarness()
+  let current = Array.from({ length: 20 }, (_, i) => big(i))
+  h.transcripts.set("t", current)
+  try {
+    const a = await connectClient(h.port)
+    await a.next()
+    a.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "t" }))
+    const ca = holder()
+    assert.equal(ca.take(await a.next()), "full")
+
+    // The thread advances before the tailer ticks, and B subscribes in that gap: B's fresh read moves the
+    // server's base past the window A holds.
+    current = [...current, big(20)]
+    h.transcripts.set("t", current)
+    const b = await connectClient(h.port)
+    await b.next()
+    b.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "t" }))
+    const cb = holder()
+    assert.equal(cb.take(await b.next()), "full")
+    assert.deepEqual(cb.messages, current)
+
+    // The tick: A catches up (a delta against ITS window or the snapshot — never a delta cut against B's),
+    // and B, already current, gets nothing.
+    h.transcriptChange.emit(["t"])
+    ca.take(await a.next())
+    assert.deepEqual(ca.messages, current)
+    await b.expectNone()
+
+    // Both now hold the same window: the next change is a delta to each.
+    current = [...current, big(21)]
+    h.transcripts.set("t", current)
+    h.transcriptChange.emit(["t"])
+    assert.equal(ca.take(await a.next()), "delta")
+    assert.equal(cb.take(await b.next()), "delta")
+    assert.deepEqual(ca.messages, current)
+    assert.deepEqual(cb.messages, current)
+
+    // The client's resync is unsub + sub: the server forgets what A held, so A gets the whole window.
+    a.ws.send(JSON.stringify({ t: "unsub", topic: "transcript", slug: "t" }))
+    a.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "t" }))
+    assert.equal(ca.take(await a.next()), "full")
+    assert.deepEqual(ca.messages, current)
+    a.ws.close()
+    b.ws.close()
+  } finally {
+    await h.close()
+  }
+})
+
+test("deltas: a peer that skipped a generation under backpressure catches up with the snapshot", async () => {
+  let slow = false
+  const h = await startHarness({
+    maxOutputBufferBytes: 1_024 * 1_024,
+    bufferedAmount: () => (slow ? 1_024 * 1_024 : 0),
+  })
+  let current = Array.from({ length: 20 }, (_, i) => big(i))
+  h.transcripts.set("t", current)
+  try {
+    const c = await connectClient(h.port)
+    await c.next()
+    c.ws.send(JSON.stringify({ t: "sub", topic: "transcript", slug: "t" }))
+    const client = holder()
+    assert.equal(client.take(await c.next()), "full")
+
+    slow = true
+    current = [...current, big(20)]
+    h.transcripts.set("t", current)
+    h.transcriptChange.emit(["t"])
+    await c.expectNone(100)
+    current = [...current, big(21)]
+    h.transcripts.set("t", current)
+    h.transcriptChange.emit(["t"])
+    await c.expectNone(100)
+
+    // The newest read's delta is cut against the skipped generation, which this peer never received.
+    slow = false
+    assert.equal(client.take(await c.next(2_000)), "full")
+    assert.deepEqual(client.messages, current)
+    c.ws.close()
   } finally {
     await h.close()
   }

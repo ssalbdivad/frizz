@@ -373,9 +373,61 @@ test("socket transport bounds oversized frames and only resets reconnect backoff
     })
     assert.equal(store.socketTranscriptFallbacks["busy-thread"], undefined)
 
+    // A transcript-delta is a recipe over the window this socket last delivered, never over the cache.
+    // Applied against the held window it lands in the cache exactly as the full window would, kept
+    // messages stay the same objects; cut against any other window it is never rendered, and the slug
+    // asks for a fresh snapshot ONCE (unsub + sub) however many stray deltas follow.
+    limitedSocket.close()
+    resetTransportFixtures()
+    store.connection = "connecting"
+    store.socketTranscripts = false
+    store.socketBoardFallback = null
+    store.socketTranscriptFallbacks = {}
+    const deltas = await import(`./socket.ts?delta-${Date.now()}`)
+    deltas.connectSync(queryClient as never)
+    const deltaSocket = FakeWebSocket.instances[0]
+    deltaSocket.open()
+    deltas.subscribeTranscript("live-thread")
+    deltaSocket.message(boardFrame)
+    const m = (text: string, sourceId: string) => ({ role: "assistant" as const, text, tools: [], parts: [], sourceId })
+    const deltaKey = JSON.stringify(["transcript", "live-thread"])
+    const page = { beforeCursor: "c1", hasEarlier: true, reachedTurnBoundary: true, transcriptKey: "k" }
+    deltaSocket.message({ t: "transcript", slug: "live-thread", messages: [m("one", "1"), m("two", "2"), m("three", "3")], page, sig: "w1" })
+    const firstWindow = (cache.get(deltaKey) as { messages: unknown[] }).messages
+    // Head slid by one, the tail call gained its result, one new message appended.
+    deltaSocket.message({
+      t: "transcript-delta",
+      slug: "live-thread",
+      base: "w1",
+      sig: "w2",
+      ops: [{ keep: [1, 1] }, { put: [m("three, with its result", "3"), m("four", "4")] }],
+      page: { ...page, beforeCursor: "c2" },
+    })
+    const afterDelta = cache.get(deltaKey) as { messages: unknown[]; beforeCursor: string }
+    assert.deepEqual(afterDelta.messages, [m("two", "2"), m("three, with its result", "3"), m("four", "4")])
+    assert.equal(afterDelta.beforeCursor, "c2", "the delta's page envelope reconciles like a full frame's")
+    assert.equal(afterDelta.messages[0], firstWindow[1], "a kept message is the same object")
+    // A delta against a window this tab does not hold: the cache is untouched and one resync goes out.
+    const sentBefore = deltaSocket.sent.length
+    deltaSocket.message({ t: "transcript-delta", slug: "live-thread", base: "w1", sig: "w3", ops: [{ keep: [0, 3] }] })
+    deltaSocket.message({ t: "transcript-delta", slug: "live-thread", base: "w3", sig: "w4", ops: [{ keep: [0, 3] }] })
+    assert.deepEqual((cache.get(deltaKey) as { messages: unknown[] }).messages, afterDelta.messages)
+    assert.deepEqual(deltaSocket.sent.slice(sentBefore).map((frame) => JSON.parse(frame)), [
+      { t: "unsub", topic: "transcript", slug: "live-thread" },
+      { t: "sub", topic: "transcript", slug: "live-thread" },
+    ])
+    // The fresh snapshot re-establishes the base, and deltas against it apply again.
+    deltaSocket.message({ t: "transcript", slug: "live-thread", messages: [m("five", "5")], page, sig: "w5" })
+    deltaSocket.message({ t: "transcript-delta", slug: "live-thread", base: "w5", sig: "w6", ops: [{ keep: [0, 1] }, { put: [m("six", "6")] }] })
+    assert.deepEqual((cache.get(deltaKey) as { messages: unknown[] }).messages, [m("five", "5"), m("six", "6")])
+    // A keep that reaches past the held window is malformed: never rendered, resynced instead.
+    deltaSocket.message({ t: "transcript-delta", slug: "live-thread", base: "w6", sig: "w7", ops: [{ keep: [1, 5] }] })
+    assert.deepEqual((cache.get(deltaKey) as { messages: unknown[] }).messages, [m("five", "5"), m("six", "6")])
+    cache.delete(deltaKey)
+    deltaSocket.close()
+
     // Board overflow is a one-way, intentional SSE handoff. Closing that socket cannot schedule a
     // reconnect, and the visible board fallback state remains stable while SSE takes over.
-    limitedSocket.close()
     resetTransportFixtures()
     FakeEventSource.instances = []
     store.connection = "connecting"
