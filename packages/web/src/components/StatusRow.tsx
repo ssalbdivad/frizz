@@ -6,6 +6,7 @@ import { ALL_PROJECTS_HREF } from "../lib/pageView.ts"
 import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 import { QuotaChips, useQuotaChipsVisible } from "./QuotaBar.tsx"
 import { RestartFrizzButton } from "./RestartFrizzButton.tsx"
+import { RunningTimeLimitButton } from "./RunningTimeLimitDialog.tsx"
 import { KeyboardShortcutsButton } from "./KeyboardShortcuts.tsx"
 import { useShortcutLabel, withShortcut } from "../lib/keyboardRuntime.ts"
 import { canRestart } from "../api/restart.ts"
@@ -134,6 +135,9 @@ export function StatusRow({ title, identity, crumb = false, settings = true, sho
       {shortcuts && <KeyboardShortcutsButton />}
       {/* Greyed when there is no update to install; null only before a supervisor has answered, when
           the gap collapses and the row stays even. */}
+      {/* A time limit on every running thread, the wind-down before a machine restart — beside the restart
+          button. Off in an editor's sidebar with the gear: that row is VS Code's to fill. */}
+      {settings && <RunningTimeLimitButton />}
       <RestartFrizzButton />
       {quotaVisible && (
         <>

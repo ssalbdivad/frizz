@@ -37,7 +37,6 @@
 //
 // A THREAD'S SUB-AGENTS ARE ROWS under it here (Sidebar.tsx SubAgentRows), as upstream drew them; All
 // projects keeps the count on the row.
-import { RunningTimeLimitButton } from "./RunningTimeLimitDialog.tsx"
 import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Ellipsis } from "lucide-react"
 import { useNavigate } from "react-router"
@@ -201,7 +200,7 @@ export function ProjectBoard({
         {/* Between the two always-open bands that most often both have rows: Queue above it is yours,
             Running below it the agents'. Pinned needs none — its own header under Queue's says it. */}
         {readyRows.length > 0 && workingRows.length > 0 && <BandRule />}
-        {workingRows.length > 0 && <SectionHeader band="working" count={workingRows.length} action={<RunningTimeLimitButton />} />}
+        {workingRows.length > 0 && <SectionHeader band="working" count={workingRows.length} />}
         {workingRows.map(row)}
         {pinnedRows.length + readyRows.length + workingRows.length === 0 && (
           // "Open", not "active": it stands in for Queue AND Running, and only when both are empty — and

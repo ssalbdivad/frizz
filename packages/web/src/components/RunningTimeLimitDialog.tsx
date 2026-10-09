@@ -8,22 +8,20 @@ import { showToast, store } from "../store.ts"
 import { useNowMs } from "../lib/liveClock.ts"
 import { limitPreview } from "../lib/threadDeadline.ts"
 import { Dialog } from "./ui/Dialog.tsx"
+import { STATUS_ROW_ACTION, STATUS_ROW_ICON } from "../lib/statusRow.ts"
 
 // ONE TIME LIMIT ON EVERY RUNNING THREAD, in every open project, with a note each worker reads beside it
 // (router setRunningDeadlines) — the palette's way to say "restarting the machine in 15m" before a reboot.
 // A Frizz restart needs none of this: the agents run in daemons it does not own. Opened from the command
-// palette (`store.showRunningTimeLimit`), mounted once by App.
+// palette or the status row's stopwatch (`store.showRunningTimeLimit`), mounted once by App.
 
 const PRESETS = ["5m", "15m", "30m", "1h"] as const
 const NOTE_MAX = 2_000
 
 /**
- * The way in that does not need the palette: a stopwatch at the right end of the board's Running header —
- * the mark every row in that band wears when it carries a time limit (DeadlineControl.tsx). Quiet until
- * pointed at, so it reads as part of the header rather than a call to action. On the header's cap band the
- * same way the band glyph is (Sidebar.tsx BAND_MARK); the `before:` square widens the 11px target.
- * Measured 2026-10-08, sans, dsf 2: `-mr-px` brings the ink to 0.83px inside the rows' rest-time column
- * (1.83px before); the dial sits 0.49px under the label's cap band, left alone as sub-pixel.
+ * The way in beside the palette: a stopwatch in the status row, just before the restart button — next to
+ * the restart it prepares for, and on every page that row is on, All projects included. It is the same
+ * stopwatch a row shows once it has a time limit (DeadlineControl.tsx).
  */
 export function RunningTimeLimitButton() {
   return (
@@ -33,9 +31,9 @@ export function RunningTimeLimitButton() {
       title="Time limit for running threads"
       aria-label="Time limit for running threads"
       onClick={() => { store.showRunningTimeLimit = true }}
-      className="relative -mr-px ml-auto flex h-[1em] shrink-0 self-baseline translate-y-[calc(0.5em_-_0.5cap)] items-center rounded-sm text-muted-50 outline-none transition-colors before:absolute before:-inset-1.5 hover:text-fg focus-visible:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60"
+      className={STATUS_ROW_ACTION}
     >
-      <Timer size={11} aria-hidden />
+      <Timer size={STATUS_ROW_ICON} aria-hidden />
     </button>
   )
 }
