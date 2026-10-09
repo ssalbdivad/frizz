@@ -258,7 +258,7 @@ function minutesLabel(ms) {
 export function longForegroundContext(timeoutMs) {
   return (
     `⟦long foreground call⟧ This call may hold the turn for up to ${minutesLabel(timeoutMs)}. Nothing reaches the board while it runs, ` +
-    `so past ${minutesLabel(LONG_FOREGROUND_MS)} the human reads a thread with nothing moving as stuck. Run a gate, build or suite that takes minutes with ` +
+    `so past ${minutesLabel(LONG_FOREGROUND_MS)} the user reads a thread with nothing moving as stuck. Run a gate, build or suite that takes minutes with ` +
     '`run_in_background: true` and the same `timeout` instead: its exit wakes you, and you can keep working or rest meanwhile.'
   );
 }

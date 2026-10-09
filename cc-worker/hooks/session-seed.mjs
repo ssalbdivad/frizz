@@ -86,7 +86,7 @@ const ghBlock =
   '⟦gh available⟧ You are signed into the `gh` CLI and in a GitHub repo. Use `gh` EAGERLY and well — it is the fastest path to issue/PR/CI/release context, and you should reach for it before guessing:\n' +
   '• READ freely: `gh issue view N -R OWNER/REPO --comments`, `gh pr view N`, `gh pr diff N`, `gh pr checks N`, `gh run list`/`gh run view`, `gh api repos/OWNER/REPO/…`. Prefer `--json <fields>` over scraping human text.\n' +
   '• SEARCH across the repo (and GitHub) with `gh search issues`/`gh search prs` when hunting related work, duplicates, or prior art.\n' +
-  '• READ-ONLY BOUNDARY: never push, open a PR, comment, label, assign, close, review, approve, or merge — no mutation of any kind — UNLESS the human\'s CURRENT request asks for it (a PR they asked for earlier covers that change, not the next one). Default to producing your findings/review as your final message, not as a GitHub post.\n' +
+  '• READ-ONLY BOUNDARY: never push, open a PR, comment, label, assign, close, review, approve, or merge — no mutation of any kind — UNLESS the user\'s CURRENT request asks for it (a PR they asked for earlier covers that change, not the next one). Default to producing your findings/review as your final message, not as a GitHub post.\n' +
   'Load the `frizz:gh` skill for the full playbook (recipes + explicit project-local monitor selection + native Monitor/background-Bash CI/PR watches).';
 
 let ghAuthed = false;

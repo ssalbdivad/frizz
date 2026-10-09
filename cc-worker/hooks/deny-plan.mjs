@@ -48,7 +48,7 @@ try {
 // the model reads is `additionalContext`, injected as a plain-text system-reminder. Exit 0 with
 // this JSON on stdout (exit 2 would make Claude Code ignore the JSON — never mix).
 const reason =
-  'Interactive plan-approval prompts freeze headless workers (no one is at the keyboard to approve). Do NOT present a plan for approval. Instead: if the plan is settled, just proceed with the work. If the plan is the deliverable, write it into a durable plan file — wherever the dispatch or the project\'s conventions name; your scratch directory works when nothing names one. If it needs a human call before you build, register a two-option question with `mcp__frizz__ask` stating what you need approved (never a ```question fence — that fence is retired), then come to rest — the human reviews it from the frizz queue.';
+  'Interactive plan-approval prompts freeze headless workers (no one is at the keyboard to approve). Do NOT present a plan for approval. Instead: if the plan is settled, just proceed with the work. If the plan is the deliverable, write it into a durable plan file — wherever the dispatch or the project\'s conventions name; your scratch directory works when nothing names one. If it needs a user call before you build, register a two-option question with `mcp__frizz__ask` stating what you need approved (never a ```question fence — that fence is retired), then come to rest — the user reviews it from the frizz queue.';
 
 process.stdout.write(
   JSON.stringify({

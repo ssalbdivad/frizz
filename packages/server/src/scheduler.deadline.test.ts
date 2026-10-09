@@ -102,7 +102,7 @@ test("each stage reaches a busy worker MID-TURN, once, across passes and a resta
     assert.match(got[1]!, /Start nothing new/)
     assert.match(got[2]!, /Hand off at your next stop/)
     assert.match(got[3]!, /Your time is up/)
-    assert.match(got[3]!, /Only the human can extend this deadline/)
+    assert.match(got[3]!, /Only the user can extend this deadline/)
     await s.stop()
   } finally {
     h.cleanup()

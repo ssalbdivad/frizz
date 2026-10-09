@@ -48,7 +48,7 @@ try {
       hookSpecificOutput: {
         hookEventName: 'PostToolUse',
         additionalContext:
-          `This sub-agent is @${address}. Wherever the human will read about it — your handoff above all — ` +
+          `This sub-agent is @${address}. Wherever the user will read about it — your handoff above all — ` +
           `name it exactly that way, never as "a sub-agent", "the helper" or its description in bold: the ` +
           `board turns the address into a link that opens it.`,
       },

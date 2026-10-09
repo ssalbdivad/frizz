@@ -641,13 +641,13 @@ test("a question the worker withdrew after the human's message, or the human dis
     await h.router.unask.handler({ input: { slug: "t", id: again.id } })
     await assert.rejects(
       h.router.ask.handler({ input: { slug: "t", questions: [simple("sqlite, or a json file")] } }),
-      new RegExp(`repeats ${again.id}, which you withdrew after the human's newest message\\.\\n\\nA question dropped that way is not asked again`),
+      new RegExp(`repeats ${again.id}, which you withdrew after the user's newest message\\.\\n\\nA question dropped that way is not asked again`),
     )
 
     // The human's ×: "decide it yourself; do not re-ask" — refused however long ago.
     const [dismissible] = (await h.router.ask.handler({ input: { slug: "t", questions: [simple("Rename the package first?")] } })).registered
     await h.router.dismissQuestions.handler({ input: { slug: "t", ids: [dismissible.id] } })
-    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple("Rename the package first?")] } }), /which the human dismissed/)
+    await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple("Rename the package first?")] } }), /which the user dismissed/)
     assert.equal(h.storage.listThreadQuestions("t").filter((q) => q.state === "open").length, 1, "nothing refused was stored")
   } finally { h.close() }
 })

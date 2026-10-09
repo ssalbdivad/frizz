@@ -47,7 +47,7 @@ test("a dispatch with a time limit stores it as the human's and tells the worker
   assert.equal(systems.length, 1)
   assert.match(systems[0]!, /## Your time limit/)
   assert.match(systems[0]!, /a 2h budget/)
-  assert.match(systems[0]!, /only the human can move or remove it/)
+  assert.match(systems[0]!, /only the user can move or remove it/)
   assert.match(systems[0]!, /Time limit: 20m/)
 })
 

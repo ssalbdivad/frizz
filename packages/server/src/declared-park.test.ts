@@ -603,7 +603,7 @@ test("requestCheckIn wakes a live agent park early with the check-in, once", asy
     h.s.requestCheckIn("parked", h.restedAt)
     await h.s.tick()
     assert.equal(h.sent.length, 1)
-    assert.match(h.sent[0], /^👋 The human asked for an update/)
+    assert.match(h.sent[0], /^👋 The user asked for an update/)
     assert.match(h.sent[0], /SUB-AGENT CHECK-IN/)
     assert.match(h.sent[0], /re-park with `status: needs_input`/)
     assert.deepEqual(parseParkWake(h.sent[0]), { kind: "requested", items: ["- `agents: [a01b2d20b32feab11]` — still running"] })
@@ -1162,7 +1162,7 @@ test("a new-contract park that gives no answer is corrected for exactly that lin
     // It teaches the three places, by the words the worker writes.
     assert.match(rows[0].message, /`status: working` — the work finishes by itself/)
     assert.match(rows[0].message, /`status: watching` — the wait is on something outside the thread/)
-    assert.match(rows[0].message, /`status: needs_input` — the human can act on something now/)
+    assert.match(rows[0].message, /`status: needs_input` — the user can act on something now/)
     assert.match(rows[0].message, /no write-up/)
     // One per rest, however many ticks run over it.
     await h.s.tick()
@@ -1254,6 +1254,6 @@ test("a steps fence with a for: that ran out sends the worker to check whether t
     const rows = h.queued()
     assert.equal(rows.length, 1)
     assert.match(rows[0].fence_id, /^park:expired:/)
-    assert.match(rows[0].message, /`steps:` \(2\) — the human has not replied; check whether they were done anyway/)
+    assert.match(rows[0].message, /`steps:` \(2\) — the user has not replied; check whether they were done anyway/)
   } finally { h.close() }
 })

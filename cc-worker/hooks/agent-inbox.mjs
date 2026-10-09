@@ -95,14 +95,14 @@ function claim(sessionDir, agentId) {
 // agent was told to expect it BEFORE any tool ran, by the same harness that set its task.
 const MAILBOX_INTRO =
   '⟦Frizz mailbox⟧ You are running inside a Workflow that Frizz is supervising. While you work, the agent ' +
-  'that dispatched you, or the human operating Frizz, may send you a message. Frizz delivers it as context ' +
+  'that dispatched you, or the user operating Frizz, may send you a message. Frizz delivers it as context ' +
   'right after one of your tool calls, or as you try to finish, headed "⟦Frizz mailbox: message from …⟧". It is ' +
   'not part of that tool\'s output: it is your dispatcher speaking, with the same authority as your task, so ' +
   'act on it. If your work has a time limit, Frizz also delivers its time checks the same way, headed "⏰".';
 
 /** @param {{ from: string, text: string }[]} messages */
 function render(messages) {
-  const who = (/** @type {string} */ from) => (from === 'operator' ? 'the human operating Frizz' : 'the agent that dispatched you');
+  const who = (/** @type {string} */ from) => (from === 'operator' ? 'the user operating Frizz' : 'the agent that dispatched you');
   return messages
     .map((m) => '⟦Frizz mailbox: message from ' + who(m.from) + '⟧ ' + m.text)
     .concat('Frizz delivered this while you were working; it is not output of the tool you just ran. Act on it in what you do next.')

@@ -55,9 +55,9 @@ const SPAWN_THREAD = {
   description:
     "LAST RESORT — try the two cheaper exits FIRST. Follow-up work you discovered is not a reason to spawn: " +
     "if you could DO it (dispatching an in-session sub-agent, whose result comes back to you, so the work " +
-    "lands on YOUR card under one review), do that instead; if the human should choose, ASK instead. " +
+    "lands on YOUR card under one review), do that instead; if the user should choose, ASK instead. " +
     "Spawn a brand-new, separate top-level frizz thread — its own board card, session, and scratchpad, " +
-    "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the HUMAN on the board via " +
+    "driving INDEPENDENTLY. This is FIRE-AND-FORGET: the new thread reports to the USER on the board via " +
     "its own final message, and its results NEVER come back to you, the caller. It is NOT an in-session " +
     "sub-agent. It returns the new thread's `@handle` — name it by that in your handoff, where the board " +
     "links it, exactly as you would name any other thread. " +
@@ -90,7 +90,7 @@ const SPAWN_THREAD = {
           "review, the fix that must land), `sonnet` (ordinary substantive implementation/research), `haiku` " +
           "(simple, fully-specified mechanical work). Do NOT pick `fable`: Opus 5 is just as good and cheaper, " +
           "so a high-intensity task takes `opus` at a higher `effort`, not a different model — `fable` only " +
-          "when the human explicitly asks for it. For " +
+          "when the user explicitly asks for it. For " +
           "the `codex` backend use a codex model id instead (e.g. `gpt-5.6-sol`/`gpt-5.6-terra`/`gpt-5.6-luna`). " +
           "Match the model to the backend you choose. Bias toward Opus/a strong model when the task is " +
           "non-trivial or its outcome is load-bearing.",
@@ -140,7 +140,7 @@ const GOAL = {
     "triggers, for as long as it is armed. The board shows it as the thread's Goal. (This tool was " +
     "named `goal` until 2026-08-28 — a summary or note that says so means this one.)\n\n" +
     "  stop_hook          — every time you come to REST. Use it to keep a long autonomous effort moving " +
-    "without the human driving every step, and to rescue yourself from a wait that may never resolve.\n" +
+    "without the user driving every step, and to rescue yourself from a wait that may never resolve.\n" +
     "  heartbeat_seconds  — on a CLOCK, whatever you are doing. This one reaches you MID-TURN: it arrives as " +
     "a queued message you read at your next tool boundary rather than waiting for you to stop, and it " +
     "never aborts what you are running. Use it for something that must be revisited on a schedule no " +
@@ -151,7 +151,7 @@ const GOAL = {
     "Set at least one; any combination is fine.\n\n" +
     "MAKE IT A BOUNDED LOOP with `max_runs` and/or `for`. Either limit, once reached, DISARMS the goal " +
     "by itself — every trigger off, the text kept — and you get ONE message saying which limit ended it. " +
-    "Without either it runs until you stop it, sign off, or the human switches it off. Every delivery " +
+    "Without either it runs until you stop it, sign off, or the user switches it off. Every delivery " +
     "that actually reaches you counts as a run, whichever trigger sent it; `get` shows the count.\n\n" +
     "USE THIS RATHER THAN `CronCreate` or `ScheduleWakeup`. Those are Claude Code's own in-session " +
     "schedulers and they CANNOT fire in the runtime frizz runs you in: their gate stays shut for as long " +
@@ -160,7 +160,7 @@ const GOAL = {
     "frizz itself and is unaffected.\n\n" +
     "READ IT BACK WITH `action: \"get\"` — and do that BEFORE any `start` that is not a fresh arming. A " +
     "thread has AT MOST ONE goal, so a `start` REPLACES whatever is there, triggers and all, " +
-    "and the text you are about to destroy may not be yours: the HUMAN can edit it in the thread footer, " +
+    "and the text you are about to destroy may not be yours: the USER can edit it in the thread footer, " +
     "and a compaction can take your own memory of arming it. `get` answers with the exact text currently " +
     "armed, which triggers are on, the cadence, and when each trigger last fired. Reach for it whenever " +
     "you are about to change one trigger and keep the rest, whenever you are unsure whether you are armed " +
@@ -170,7 +170,7 @@ const GOAL = {
     "self. At most one scheduled delivery is ever outstanding and its clock runs from the last one " +
     "DELIVERED, so you can never be handed a backlog at once.\n\n" +
     "STOP IT when the work it drives is done (`action: \"stop\"`) — one left armed on a finished thread " +
-    "wakes it forever. The human sees it in the thread footer and can edit or switch it off there. " +
+    "wakes it forever. The user sees it in the thread footer and can edit or switch it off there. " +
     "Signing off with a ```done fence stops it too, every trigger at once — but only when the work is " +
     "genuinely finished, because that files the thread away and a thread nobody is watching does not " +
     "restart itself.\n\n" +
@@ -300,7 +300,7 @@ const WATCH_PR = {
   name: "watch_pr",
   description:
     "REGISTER A PULL REQUEST and frizz brings you back whenever something happens on it — CI turning " +
-    "green or red, and every later review, approval or comment, from a human or a bot alike. Register " +
+    "green or red, and every later review, approval or comment, from a user or a bot alike. Register " +
     "it, come to rest, and you are woken. Drop it when it stops mattering.\n\n" +
     "IT REPORTS REPEATEDLY, unlike a timer. One registration covers the whole life of the PR: CI goes " +
     "red, you push a fix, CI goes green, a reviewer comments — that is four wakes from one call, and you " +
@@ -310,13 +310,13 @@ const WATCH_PR = {
     "nothing about GitHub, and an ```awaiting fence STATES what you are waiting on without creating any " +
     "wait at all. This tool is the wait.\n\n" +
     "THE ```awaiting FENCE IS STILL WORTH WRITING, and it is a different job: it is how you come to REST " +
-    "without frizz asking you for a handoff, and how the human sees what you are waiting for. Register " +
+    "without frizz asking you for a handoff, and how the user sees what you are waiting for. Register " +
     "the watcher with this tool, then name the same PR in your fence's `prs:` list — and give the fence " +
     "the same long `for:` you gave the watcher, or the fence expires first and bumps you anyway.\n\n" +
     "GIVE AN EXTERNAL PR A LONG `for` — MONTHS, up to a year. A pull request into a repo nobody here " +
     "controls moves on its maintainers' clock, not yours, and a short watcher on one expires against a " +
     "PR that has not changed: a wake with nothing in it, and a re-arm. Long costs nothing — real " +
-    "activity still wakes you the instant it lands, and the human snoozes or archives the thread if " +
+    "activity still wakes you the instant it lands, and the user snoozes or archives the thread if " +
     "they want it off the board.\n\n" +
     "REGISTERING IS IDEMPOTENT per pull request: asking twice returns the SAME id and tells you it was " +
     "already armed, so re-registering after a compaction is safe and is the right instinct. Use `list` " +
@@ -355,7 +355,7 @@ const WATCH_PR = {
           "expires against a PR nothing has touched, wakes you for nothing, and costs a re-arm. That is " +
           "not hypothetical — a watcher on an external PR re-armed at the old 24h ceiling four days " +
           "running, with zero maintainer activity in between. Long is FREE here: real activity wakes you " +
-          "the moment it happens either way, and the human can snooze or archive the thread whenever " +
+          "the moment it happens either way, and the user can snooze or archive the thread whenever " +
           "they want it gone.",
       },
       id: {
@@ -371,7 +371,7 @@ const WATCH_ISSUE = {
   name: "watch_issue",
   description:
     "REGISTER A GITHUB ISSUE and frizz brings you back whenever something happens on it — every later " +
-    "comment, from a human or a bot alike, a label added or removed, someone assigned, and the issue " +
+    "comment, from a user or a bot alike, a label added or removed, someone assigned, and the issue " +
     "closing. Register it, come to rest, and you are woken. Drop it when it stops mattering.\n\n" +
     "IT REPORTS REPEATEDLY, like `watch_pr` and unlike a timer: one registration covers the whole life " +
     "of the issue, and it settles itself when the issue closes, because there is then nothing left to " +
@@ -382,7 +382,7 @@ const WATCH_ISSUE = {
     "STATES what you are waiting on without creating any wait at all. This tool is the wait. A PULL " +
     "REQUEST is `watch_pr`, not this — `gh issue view` refuses a PR number, and so does this.\n\n" +
     "THE ```awaiting FENCE IS STILL WORTH WRITING, for the same reason it is beside `watch_pr`: it is " +
-    "how you come to REST without frizz asking for a handoff, and how the human sees what you wait for. " +
+    "how you come to REST without frizz asking for a handoff, and how the user sees what you wait for. " +
     "Register the watcher, then name the same issue in the fence's `issues:` list, with the same long " +
     "`for:`.\n\n" +
     "GIVE IT A LONG `for` — an issue in someone else's repo moves on their clock, and a short watcher " +
@@ -437,7 +437,7 @@ const WATCH = {
     "IT DOES NOT REPLACE THE FENCE. Where the thread sits while you wait is an answer about each REST, " +
     "so every rest on running work still ends with a ```awaiting fence that names the work and answers " +
     "`status: working|watching|needs_input` — `working` and `watching` keep the thread out of the " +
-    "human's queue, and a rest with no fence lands in it.\n\n" +
+    "user's queue, and a rest with no fence lands in it.\n\n" +
     "`for` IS REQUIRED and it is a DURATION, never an instant. When it runs out the row is CANCELLED " +
     "and you are woken to re-decide — that is deliberate, and it is what stops a wait outliving the " +
     "reason you made it. Register again if you still mean it.\n\n" +
@@ -571,16 +571,16 @@ function questionSchema(depth) {
         type: "string",
         description:
           "The trade-off, or the evidence — and it renders INSIDE the option, always visible, so this " +
-          "is where the human learns what they are choosing BEFORE they pick anything. ONE LINE is the " +
+          "is where the user learns what they are choosing BEFORE they pick anything. ONE LINE is the " +
           "default and it is right most of the time: name the trade-off and stop. Earn more than that " +
           "and spend it on a shape they can SCAN — a short list, a table, a code block, the diff the " +
           "option would produce, the exact message that would be posted. Never on a RUN OF " +
           "ONE-SENTENCE PARAGRAPHS: four single sentences stacked with blank lines between them is the " +
           "shape that keeps arriving, and it is the least readable one in a card this narrow. An " +
-          "option with no trade-off makes the human reconstruct your reasoning before they can choose; " +
+          "option with no trade-off makes the user reconstruct your reasoning before they can choose; " +
           "an option with four paragraphs makes them read an essay to answer one question. WHEN THE " +
           "OPTION SENDS OR APPLIES SOMETHING YOU WROTE — a comment, an issue body, a diff — put ALL of " +
-          "it here, never \"the draft above\": the human chooses from this card, and your message's " +
+          "it here, never \"the draft above\": the user chooses from this card, and your message's " +
           "prose above it is clipped to its first few lines.",
       },
       recommended: {
@@ -597,7 +597,7 @@ function questionSchema(depth) {
         description:
           "Taking this option acts OUTSIDE this machine: it files an issue, posts a comment or review, " +
           "merges, pushes, publishes, sends a message or spends money — anything that goes out under " +
-          "the human's name or that others see. MARK EVERY SUCH OPTION, recommended or not: the 10-minute " +
+          "the user's name or that others see. MARK EVERY SUCH OPTION, recommended or not: the 10-minute " +
           "default never takes one, so put the least-blocking local choice right after an `external` recommendation.",
       },
       // `preview` (markdown revealed under the option once picked) is RETIRED from this schema
@@ -611,7 +611,7 @@ function questionSchema(depth) {
             followUps: {
               type: "array",
               description:
-                "Questions that become live ONLY if the human picks this option — the conditional " +
+                "Questions that become live ONLY if the user picks this option — the conditional " +
                 "branch. A branch nobody takes is never asked and never answered, so this is how you " +
                 "ask \"and if so, which?\" without asking it of somebody who said no. A `multi` " +
                 "question cannot carry these (several picked options would open several branches at " +
@@ -629,10 +629,10 @@ function questionSchema(depth) {
       question: {
         type: "string",
         description:
-          "THE QUESTION, on one line, in the human's own vocabulary. They have their original prompt " +
+          "THE QUESTION, on one line, in the user's own vocabulary. They have their original prompt " +
           "and nothing else — not your plan, not your notes, not the names you coined while working. " +
           "Lead with the behaviour, not the identifier. NO \"I\" AND NO \"you\": clicking an option is " +
-          "the HUMAN speaking, so first and second person flip between writer and reader. Name the " +
+          "the USER speaking, so first and second person flip between writer and reader. Name the " +
           "actor outright instead.",
       },
       header: { type: "string", description: "A very short chip label for the card, 12 characters or so — \"Auth method\", \"Storage\"." },
@@ -648,15 +648,15 @@ function questionSchema(depth) {
         type: "boolean",
         description:
           "The DESTRUCTIVE gate, and nothing softer: a force-push, a deletion, a history rewrite, a " +
-          "production rollback. It changes two things — the card wears the risk tone, and the human's " +
+          "production rollback. It changes two things — the card wears the risk tone, and the user's " +
           "x cannot dismiss it, because a generic close icon is not consent for something irreversible. " +
           "Declining must therefore be one of your own options.",
       },
       mayDefault: {
         type: "boolean",
         description:
-          "Lets Frizz answer this question with your recommendation if the human has not after 10 minutes. " +
-          "Without it the question waits for the human, however long. Set it only on a call you would " +
+          "Lets Frizz answer this question with your recommendation if the user has not after 10 minutes. " +
+          "Without it the question waits for the user, however long. Set it only on a call you would " +
           "make yourself without them — never on the architecture of a library or a major version, a " +
           "public API, a data model, or the design a plan commits to.",
       },
@@ -677,23 +677,23 @@ function questionSchema(depth) {
 const ASK = {
   name: "ask",
   description:
-    "ASK THE HUMAN SOMETHING YOU CANNOT DECIDE, as a ROW they still owe an answer to. THIS IS THE ONLY " +
+    "ASK THE USER SOMETHING YOU CANNOT DECIDE, as a ROW they still owe an answer to. THIS IS THE ONLY " +
     "WAY TO ASK: the free-form ```question fence is retired (2026-09-11), and a fence with a question " +
     "written in its body is plain prose — no card, no answer, no sign-off. The row renders as an " +
     "answerable card on the board and in the thread, and it STAYS there: it survives your turn ending, " +
     "a compaction, a restart, and the transcript scrolling past. A fence has the lifetime of the " +
     "message carrying it, which is why a question written into one was unanswerable an hour later.\n\n" +
     "YOUR DEFAULT IS TO DECIDE, AND THIS TOOL DOES NOT CHANGE THAT. A reversible call costs minutes to " +
-    "redo; a round-trip to the human costs hours with the whole effort idle. Anything derivable from " +
+    "redo; a round-trip to the user costs hours with the whole effort idle. Anything derivable from " +
     "the code, the conventions or ordinary engineering judgement is yours: make it, say which way you " +
     "went, and keep moving. THE TEST THAT CATCHES ALMOST EVERY BAD QUESTION: if you are about to mark " +
     "one option `recommended`, you already know the answer — so implement it instead of asking.\n\n" +
     "ASK WHEN A WRONG GUESS WOULD BE BOTH COSTLY AND HARD TO UNDO — something destructive or " +
     "irreversible, an external-facing commitment, a security posture with real exposure, product or UX " +
-    "direction that is genuinely the human's taste to set. And ask when you KNOW the answer but cannot " +
+    "direction that is genuinely the user's taste to set. And ask when you KNOW the answer but cannot " +
     "ACT on it: a merge, a publish, a spend, a comment that goes out under their name. Then the " +
     "recommendation is the point, and it goes first.\n\n" +
-    "ASK LAST, THEN REST. The card reaches the human's queue only when you come to REST, so a question " +
+    "ASK LAST, THEN REST. The card reaches the user's queue only when you come to REST, so a question " +
     "asked mid-work sits unseen while you keep going. Finish everything that does NOT " +
     "depend on the answer FIRST, then ask, then stop. If what is left is substantial work you would do " +
     "on your recommended option anyway, the call was yours: take it, say which way you went, and do not " +
@@ -710,30 +710,30 @@ const ASK = {
     "still need the answer (its card is then drawn at that rest), or withdraw it with `unask`. A rest " +
     "that does neither is bumped, and so is any ```awaiting fence that leaves an open question out.\n\n" +
     "A QUESTION MARKED `mayDefault` DOES NOT WAIT FOREVER. Ten minutes after you rest on it, Frizz takes its " +
-    "`recommended` option for the human and delivers that as the answer, noting it was the default — " +
+    "`recommended` option for the user and delivers that as the answer, noting it was the default — " +
     "UNLESS that option is `external` (it files, posts, merges, pushes or publishes): then the default " +
     "takes the first option that is not `external`, and you must not do the external act anyway. Any other question — unmarked, `danger`, `multi` or " +
     "free text, one with no recommendation, or one whose every option is `external`, waits " +
-    "for the human.\n\n" +
-    "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU `unask` IT. A message " +
-    "the human types instead of answering changes nothing about it; the message comes with a note naming " +
+    "for the user.\n\n" +
+    "A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE USER DISMISSES IT, OR YOU `unask` IT. A message " +
+    "the user types instead of answering changes nothing about it; the message comes with a note naming " +
     "the questions still open, and your next rest names each one you still need under `questions:` or " +
-    "withdraws it, like any later rest. Never ask again a question the human dismissed, or one you " +
+    "withdraws it, like any later rest. Never ask again a question the user dismissed, or one you " +
     "yourself withdrew after their newest message — `ask` refuses both.\n\n" +
     "SEVERAL AT ONCE IS ONE CALL — register them together, so they render as one stack. Each must stand " +
     "alone (a question that only makes sense after another's answer is that option's `followUps`), " +
-    "because ANSWERS ARRIVE ONE AT A TIME: each card is sent the moment the human completes it, so you " +
+    "because ANSWERS ARRIVE ONE AT A TIME: each card is sent the moment the user completes it, so you " +
     "hear the first while they are still reading the rest, and a later one may land while you are " +
     "working. Act on each as it lands; the unanswered rest stay open.\n\n" +
     "An answer comes back to you as its own wake, restating what was asked. Withdraw one you no longer " +
-    "need with `unask` — a question you have since answered yourself, still sitting on the human's " +
+    "need with `unask` — a question you have since answered yourself, still sitting on the user's " +
     "board, is worse than never having asked it.\n\n" +
     "ON AN AUTONOMOUS THREAD THIS REFUSES, and tells you the standing instruction you are working " +
     "under. A thread carrying a rest Goal has already been told to keep going and decide for itself, " +
     "so the refusal is that instruction arriving at the moment it matters. Decide, and say which way " +
-    "you went in your write-up. If the call is genuinely the human's — destructive or irreversible — " +
+    "you went in your write-up. If the call is genuinely the user's — destructive or irreversible — " +
     "put it in your FINAL MESSAGE instead of here; autonomous does not mean nobody is reading.\n\n" +
-    "AN ACT IS NOT A QUESTION. When the human must PERFORM something you cannot — sign in, approve, " +
+    "AN ACT IS NOT A QUESTION. When the user must PERFORM something you cannot — sign in, approve, " +
     "merge, press a button you may not — do not ask whether they will: list the steps under `steps:` " +
     "in your ```awaiting fence. That works on an autonomous thread too, and their reply wakes you.",
   inputSchema: {
@@ -755,12 +755,12 @@ const ASK = {
 const UNASK = {
   name: "unask",
   description:
-    "WITHDRAW A QUESTION you registered with `ask`, by its id. Its card disappears and the human is " +
+    "WITHDRAW A QUESTION you registered with `ask`, by its id. Its card disappears and the user is " +
     "never asked.\n\n" +
     "Use it the moment the question stops mattering: you worked out the answer yourself, the code moved " +
-    "and the fork is gone, the human's newest message made it moot, or you are about to finish. A stale " +
+    "and the fork is gone, the user's newest message made it moot, or you are about to finish. A stale " +
     "question on someone's board is worse than no question — they answer it, and the answer is about a " +
-    "decision that no longer exists. Withdrawn after the human's newest message, it is a pivot you " +
+    "decision that no longer exists. Withdrawn after the user's newest message, it is a pivot you " +
     "declared, and `ask` will not take it back.\n\n" +
     "You do NOT need this for a question that gets answered; that settles itself and wakes you. " +
     "Withdrawing is YOUR move and is never reported back to you as news.",
@@ -776,7 +776,7 @@ const UNASK = {
 const DONE = {
   name: "done",
   description:
-    "DECLARE THIS EFFORT FINISHED, with the write-up the human reads. Your thread cards as a checked " +
+    "DECLARE THIS EFFORT FINISHED, with the write-up the user reads. Your thread cards as a checked " +
     "success in their queue and stays there until they archive it — marking done is not dismissal, and " +
     "it does not close, archive or hide anything.\n\n" +
     "FRIZZ CAN REFUSE THIS, which is the whole reason it is a tool rather than a fence. An OPEN " +
@@ -803,7 +803,7 @@ const DONE = {
           "THE CARD, as markdown, read at a glance — keep it SHORT. At most one sentence, then one " +
           "ONE-LINE bullet per deliverable (no sub-bullets), each opening with a bolded verb phrase naming what shipped and where. Backtick every path, identifier and " +
           "command, and make file references real links. It is a LEDGER, not a summary: reasoning, " +
-          "caveats and anything the human must do belong in your final message instead, because a " +
+          "caveats and anything the user must do belong in your final message instead, because a " +
           "sentence that would read the same in both places belongs in exactly one of them. Nothing " +
           "here may point vaguely forward — no \"a follow-up could…\". Do it, ask about it, or drop it.",
       },
@@ -811,9 +811,9 @@ const DONE = {
         type: "boolean",
         description:
           "ONLY on a SCHEDULED RUN (your first message opened with a <scheduled-run> header), and only when you " +
-          "found nothing that needs the human: the thread goes straight to Done instead of their queue, and the " +
+          "found nothing that needs the user: the thread goes straight to Done instead of their queue, and the " +
           "body's FIRST LINE becomes this run's line in the schedule's history — so make it the finding " +
-          "(\"Nothing new — no issues since Oct 5\"). Anything the human should see is not quiet. Refused on any " +
+          "(\"Nothing new — no issues since Oct 5\"). Anything the user should see is not quiet. Refused on any " +
           "other thread.",
       },
     },
@@ -824,8 +824,8 @@ const DONE = {
 const TITLE = {
   name: "title",
   description:
-    "NAME THIS THREAD on the human's board — only if it has no name yet. Frizz names every thread at " +
-    "dispatch, and that name is the thread's @handle: the human reads it on the board and types it to " +
+    "NAME THIS THREAD on the user's board — only if it has no name yet. Frizz names every thread at " +
+    "dispatch, and that name is the thread's @handle: the user reads it on the board and types it to " +
     "point other threads at this one, so it NEVER changes once shown. Frizz refuses this call on a " +
     "thread that already has a name and tells you the name; that is the normal answer, not a failure — " +
     "do not retry it. It only lands on a thread Frizz could not name.\n\n" +
@@ -858,7 +858,7 @@ const READ_THREAD = {
   description:
     "READ ANOTHER THREAD by its handle — the kebab-case name the board shows it under (`shell-budgets`, " +
     "`focus-mode`), in this project or, when no thread here carries it, in another project Frizz has open. " +
-    "The human writes these as `@shell-budgets`: \"ask @shell-budgets about " +
+    "The user writes these as `@shell-budgets`: \"ask @shell-budgets about " +
     "this\", \"reconcile with @focus-mode\". Write them the same way: wherever you mention another thread " +
     "or a sub-agent, name it by its `@` address, which the board links. Returns that thread's original request, its status line, " +
     "whether it is running, resting or done, its last few messages (its approach, and its handoff when it " +
@@ -887,7 +887,7 @@ const MESSAGE_THREAD = {
     "project Frizz has open when no thread here carries the handle — to ask it a " +
     "question, to tell it what you are doing and how, or to agree who changes what. It arrives in that " +
     "thread's conversation signed with THIS thread's handle, joining its current turn if it is working and " +
-    "waking it if it is resting. Nothing reaches the human.\n\n" +
+    "waking it if it is resting. Nothing reaches the user.\n\n" +
     "THE PROTOCOL:\n" +
     "- ASKING, and you need the answer before you can go on → `await_reply: true`. That REGISTERS the " +
     "wait; it does not park you. Rest right after on an ```awaiting fence naming the thread — " +
@@ -932,28 +932,28 @@ const SCHEDULE = {
   name: "schedule",
   description:
     "PROPOSE A RECURRING THREAD: a saved prompt Frizz starts as a FRESH thread of its own on a calendar rule — " +
-    "\"every Monday at 9am triage new issues\". Use it when the human asks for something to happen " +
+    "\"every Monday at 9am triage new issues\". Use it when the user asks for something to happen " +
     "regularly (\"do this every Monday\", \"check this daily\"). It is not `goal` (which repeats in THIS " +
     "thread) and not `timer` (one instant, this thread): each run starts with no memory of this conversation, " +
     "so the prompt must stand on its own.\n\n" +
-    "A SCHEDULE YOU CREATE DOES NOT RUN UNTIL THE HUMAN CLICKS TURN ON. It is a proposal; nothing you can " +
+    "A SCHEDULE YOU CREATE DOES NOT RUN UNTIL THE USER CLICKS TURN ON. It is a proposal; nothing you can " +
     "call activates it, and `ask` is not a way to get it turned on.\n\n" +
     "YOU WRITE THE RULE; FRIZZ COMPUTES THE RUNS. Give an RFC 5545 `rrule` (FREQ HOURLY/DAILY/WEEKLY/MONTHLY/" +
     "YEARLY with INTERVAL, COUNT, UNTIL, BYMONTH, BYMONTHDAY, BYDAY, BYHOUR, BYMINUTE, BYSETPOS, WKST — " +
     "nothing else), a LOCAL `dtstart` (`YYYY-MM-DDTHH:MM`, wall clock, no zone) and optionally an IANA `tz` " +
-    "(default: the human's own zone). ALWAYS include BYHOUR and BYMINUTE. Weekdays = BYDAY=MO,TU,WE,TH,FR; the " +
+    "(default: the user's own zone). ALWAYS include BYHOUR and BYMINUTE. Weekdays = BYDAY=MO,TU,WE,TH,FR; the " +
     "last day of the month = BYMONTHDAY=-1 (never above 28); the first weekday of the month = " +
     "BYDAY=MO,TU,WE,TH,FR;BYSETPOS=1. Runs must be at least " + SCHEDULE_MIN_SPACING_MINUTES + "m apart. " +
-    "Put the human's own words for when in `when`. Anything a rule cannot say (\"unless it's a holiday\", " +
+    "Put the user's own words for when in `when`. Anything a rule cannot say (\"unless it's a holiday\", " +
     "\"the day after each release\") goes in `condition`, a short clause each run checks first.\n\n" +
     "EVERY REPLY CARRIES AN ECHO built from the rule Frizz will fire (\"Triage issues · every Monday at 9am\" " +
-    "and the next runs). RELAY IT TO THE HUMAN VERBATIM — it is how a mistranslated time gets caught before it " +
+    "and the next runs). RELAY IT TO THE USER VERBATIM — it is how a mistranslated time gets caught before it " +
     "runs. Use `dry_run` first when you are unsure; it saves nothing.\n\n" +
     "`model` and `effort` are REQUIRED, chosen for what ONE RUN must do, exactly as for `spawn_thread` — every " +
     "run is a paid agent session.\n\n" +
     "On a schedule that is already on, you may only change ONE OCCURRENCE: `skip_next`, `move_next` (to a " +
     "local time before the run after it), or `pause` it. A scheduled run uses these when its own check says " +
-    "the next run should not happen as planned. Only the human resumes, edits or deletes a schedule.",
+    "the next run should not happen as planned. Only the user resumes, edits or deletes a schedule.",
   inputSchema: {
     type: "object",
     properties: {
@@ -961,17 +961,17 @@ const SCHEDULE = {
         type: "string",
         enum: ["create", "dry_run", "update", "list", "pause", "skip_next", "move_next"],
         description:
-          "`create` proposes a schedule (it waits for the human's Turn on); `dry_run` validates and echoes " +
+          "`create` proposes a schedule (it waits for the user's Turn on); `dry_run` validates and echoes " +
           "without saving; `update` changes a proposal YOU made that is not on yet; `list` shows this project's " +
           "schedules with their ids; `pause`, `skip_next` and `move_next` act on an active schedule by `id`.",
       },
       id: { type: "string", description: "The schedule's `sch_…` id (from `create` or `list`). For update, pause, skip_next, move_next." },
       title: { type: "string", description: "For create/dry_run (and update): one or two words naming the task's subject, sentence case — \"Triage issues\". Every run is named this." },
       prompt: { type: "string", description: "For create/dry_run (and update): what each run does, self-contained — a fresh thread with none of your context reads it." },
-      when: { type: "string", description: "For create/dry_run (and update): the human's own words for when, as they said them — \"every Monday at 9am\"." },
+      when: { type: "string", description: "For create/dry_run (and update): the user's own words for when, as they said them — \"every Monday at 9am\"." },
       rrule: { type: "string", description: "For create/dry_run (and update): the RRULE value without the `RRULE:` prefix, e.g. `FREQ=WEEKLY;BYDAY=MO;BYHOUR=9;BYMINUTE=0`." },
       dtstart: { type: "string", description: "For create/dry_run (and update): the local start, `YYYY-MM-DDTHH:MM`, at the rule's first time of day. It anchors INTERVAL." },
-      tz: { type: "string", description: "Optional IANA zone like `America/New_York`. Default: the zone the human's browser reports." },
+      tz: { type: "string", description: "Optional IANA zone like `America/New_York`. Default: the zone the user's browser reports." },
       condition: { type: "string", description: "Optional: a short clause each run checks before working — \"unless it's a US public holiday\"." },
       model: { type: "string", description: "For create/dry_run: REQUIRED, picked for one run's task — `opus`, `sonnet` or `haiku` (claude), or a codex model id with `backend: \"codex\"`." },
       effort: { type: "string", enum: ["low", "medium", "high", "xhigh", "max"], description: "For create/dry_run: REQUIRED, picked for one run's task." },
@@ -986,17 +986,17 @@ const SCHEDULE = {
 const EDITOR = {
   name: "editor",
   description:
-    "WHAT THE HUMAN HAS IN FRONT OF THEM in VS Code, Cursor or Windsurf right now: the file in front and the " +
+    "WHAT THE USER HAS IN FRONT OF THEM in VS Code, Cursor or Windsurf right now: the file in front and the " +
     "lines they have SELECTED, with the selected text; where the caret is and which lines are on screen; " +
     "their other open tabs, unsaved ones marked; and the editor's errors and warnings (the Problems panel). " +
-    "CALL IT WHENEVER THE HUMAN POINTS AT CODE THEY HAVE NOT PASTED — \"this\", \"here\", \"this function\", " +
+    "CALL IT WHENEVER THE USER POINTS AT CODE THEY HAVE NOT PASTED — \"this\", \"here\", \"this function\", " +
     "\"the selected code\", \"what I highlighted\", \"the error\", \"why is this red\", \"what I'm looking " +
     "at\" — and before asking them which file or lines they mean. The text it returns is what they SEE, " +
     "which differs from the file on disk when the file has unsaved changes. It reads the editor window " +
     "that has this project open (the one they used last, if several do), takes nothing and changes nothing; " +
-    "call it again whenever you need the current picture, since the human keeps moving.",
+    "call it again whenever you need the current picture, since the user keeps moving.",
   inputSchema: { type: "object", properties: {}, required: [] },
-  annotations: { title: "Read the human's editor", readOnlyHint: true, openWorldHint: false },
+  annotations: { title: "Read the user's editor", readOnlyHint: true, openWorldHint: false },
 }
 
 // The unified server's tool registry: `tools/list` returns these and `tools/call` routes by name.
@@ -1025,7 +1025,7 @@ const ACTIVITY = {
 const LINK = {
   name: "link",
   description: "Register a labeled URL or local file underneath this thread's prompt, alongside agents and shells. " +
-    "Use for dev servers, working documents, reports, and downloads the human will need again. " +
+    "Use for dev servers, working documents, reports, and downloads the user will need again. " +
     "The same label updates its existing row without duplicating or reordering it. " +
     "HTTP(S) destinations render as Link; local files render as File and use Frizz's existing file reader/opener. " +
     "Files must exist. Relative paths resolve from the project root; use absolute paths for worktrees. " +
@@ -1059,13 +1059,13 @@ const DEADLINE = {
   name: "deadline",
   description:
     "READ OR SET THIS THREAD'S TIME LIMIT — the instant you owe your best deliverable by.\n\n" +
-    "A thread may carry a deadline: the human sets it when dispatching or from the board, or you may set one on a " +
+    "A thread may carry a deadline: the user sets it when dispatching or from the board, or you may set one on a " +
     "thread that has none. While one is set, frizz checks in with you mid-turn at half-time, at 80%, shortly before " +
     "the deadline and at it, and every wake's clock line shows the time left. Nothing is ever stopped at the deadline: " +
     "the job is the best deliverable you can hand over by then, not the complete one eventually.\n\n" +
     "`read` shows the deadline (or that there is none). `set` gives a thread with NO deadline one — `for` a duration " +
     "from now (`30m`, `2h`, `1h 30m`), or `at` an ISO instant. `extend` moves a deadline YOU set to a later one; " +
-    "`clear` removes a deadline you set. A deadline the HUMAN set is theirs: you can read it, and only they can move " +
+    "`clear` removes a deadline you set. A deadline the USER set is theirs: you can read it, and only they can move " +
     "or remove it — `extend` and `clear` refuse it.\n\n" +
     "To give a SUB-AGENT a budget, do not call this: write `Time limit: 20m` on a line of its own in its prompt.",
   inputSchema: {
@@ -1231,7 +1231,7 @@ async function deadline(args) {
   if (!d) return action === "clear" ? "This thread has no deadline now. Work to the best deliverable, not to a clock." : "This thread has no deadline."
   const leftMs = Date.parse(d.at) - Date.now()
   const left = leftMs > 0 ? `${budgetSpan(leftMs)} left` : `over by ${budgetSpan(-leftMs)}`
-  const who = d.setBy === "human" ? "the human (only they can move or clear it)" : "you"
+  const who = d.setBy === "human" ? "the user (only they can move or clear it)" : "you"
   return `Deadline: ${d.at} — ${left}. Set ${d.setAt} by ${who}. Frizz checks in at half-time, at 80%, shortly before it and at it.`
 }
 
@@ -1358,7 +1358,7 @@ async function title(args) {
   // told "error" would retry a call that can only ever fail again.
   if (result?.lockedByHuman) {
     return (
-      `Not renamed — the human has named this thread "${result.title}" themselves, and their name ` +
+      `Not renamed — the user has named this thread "${result.title}" themselves, and their name ` +
       "outranks yours. Leave it; do not call this again for this thread."
     )
   }
@@ -1375,7 +1375,7 @@ async function activity() {
   // WHO THIS THREAD IS, first: the handle other threads and the human call it, and the head of every
   // sub-agent address below — the names to write in prose, where the board turns each into a link.
   const selfLine = typeof result?.handle === "string" && result.handle
-    ? `This thread is @${result.handle}. Name it, other threads and every sub-agent by their @ address in anything the human reads — the board links each one.\n\n`
+    ? `This thread is @${result.handle}. Name it, other threads and every sub-agent by their @ address in anything the user reads — the board links each one.\n\n`
     : ""
   const linksBlock = links.length === 0 ? "" : "\n\nSaved links and files (not running work; remove with unlink):\n" +
     links.map((link) => `  ${link.id}  ${link.kind}: ${link.label}\n    ${link.target}`).join("\n")
@@ -1400,7 +1400,7 @@ async function activity() {
       return selfLine + (
         "Nothing is RUNNING on this thread — no background shells, no sub-agents, no armed timers, no " +
         "registered PRs. An ```awaiting fence can still wait on your open questions alone — " +
-        "`questions:` names the human as the wait, so it needs no other name and no `for:`." +
+        "`questions:` names the user as the wait, so it needs no other name and no `for:`." +
         askedBlock + linksBlock
       )
     }
@@ -1408,7 +1408,7 @@ async function activity() {
       "Nothing is running on this thread — no background shells, no sub-agents, no armed timers, no " +
       "registered PRs, and no question still owed an answer.\n\nSo there is nothing to wait on: an ```awaiting fence " +
       "would have nothing to name, and a fence naming nothing is not a park. End with ```done, or " +
-      "register a question with `ask` if you need the human." + linksBlock
+      "register a question with `ask` if you need the user." + linksBlock
     )
   }
   const lines = items.map((i) => {
@@ -1444,7 +1444,7 @@ async function activity() {
     "Name the ones you are ACTUALLY waiting on in your ```awaiting fence. The frontmatter is YAML — one " +
     "PLURAL key per kind, taking a list — plus a required `for:` duration and a required `status:` " +
     "answer: `working` (the work finishes by itself; the thread shows as running), `watching` (the wait " +
-    "is on something outside the thread; it is snoozed) or `needs_input` (the human can act on something " +
+    "is on something outside the thread; it is snoozed) or `needs_input` (the user can act on something " +
     "now; it goes in their queue, with what to look at BELOW a `---` line — there is no `reason:` key). " +
     "`working` and `watching` need no prose at all.\n\nEverything above, as a fence:\n\n" +
     "```awaiting\n" +
@@ -1460,7 +1460,7 @@ async function activity() {
 // What `editor` says when it has nothing to show — each says WHY, because "no selection" and "no editor"
 // and "the human switched it off" call for different next moves, and every one ends with the move that
 // is always open: ask the human to paste it.
-const EDITOR_FALLBACK = "Ask the human to paste the code, or to name the file and lines they mean."
+const EDITOR_FALLBACK = "Ask the user to paste the code, or to name the file and lines they mean."
 
 /** The `editor` handler: the editor window that has this project open, as readable text.
  * @returns {Promise<string>} */
@@ -1485,7 +1485,7 @@ async function editor() {
   if (!windows.length) {
     if (!connected) {
       return (
-        "No editor is connected to Frizz, so there is nothing to read: the human is not running VS Code, " +
+        "No editor is connected to Frizz, so there is nothing to read: the user is not running VS Code, " +
         `Cursor or Windsurf with the Frizz extension. ${EDITOR_FALLBACK}`
       )
     }
@@ -1493,7 +1493,7 @@ async function editor() {
     // Frizz says only that they exist (editor-bridge.ts editorState).
     return (
       `${connected} editor window${connected === 1 ? " is" : "s are"} connected to Frizz, but none has this project open, ` +
-      `so what the human has in front of them is in another project. ${EDITOR_FALLBACK}`
+      `so what the user has in front of them is in another project. ${EDITOR_FALLBACK}`
     )
   }
   const [front, ...others] = windows
@@ -1574,7 +1574,7 @@ function editorWindowReport(w, checkout) {
   }
   if (!e.shared) {
     return (
-      `${head} has this project open, but the human turned off sharing their editor with Frizz ` +
+      `${head} has this project open, but the user turned off sharing their editor with Frizz ` +
       `(the eye over the sidebar's prompt box, the \`frizz.shareEditorState\` setting), so nothing of it is read. ${EDITOR_FALLBACK}`
     )
   }
@@ -1590,7 +1590,7 @@ function editorWindowReport(w, checkout) {
       lines.push(
         "",
         `You are working in ${where}, ${checkout.dir}, but this window shows the project's main checkout, ${checkout.root}. ` +
-        `A file below under ${checkout.root} is the human's copy, and what they selected is its text; the same relative ` +
+        `A file below under ${checkout.root} is the user's copy, and what they selected is its text; the same relative ` +
         `path under ${checkout.dir} is your copy, which may differ. Read and edit yours.`,
       )
     } else if (shown.some((path) => typeof path === "string" && editorUnder(path, checkout.dir))) {
@@ -1853,18 +1853,18 @@ async function spawnThread(args) {
   const project = typeof payload?.result?.project === "string" ? payload.result.project : undefined
   const intro =
     `${spawned} It is now on the ${project ? `\`${project}\` project's ` : ""}board driving independently — it reports ` +
-    `to the human via its own final message, NOT back to you, so do not wait on a result from it.\n\n`
+    `to the user via its own final message, NOT back to you, so do not wait on a result from it.\n\n`
   // A thread names another by its `@handle`, which the board links. The server hands one back once the
   // new thread has a name; a thread still unnamed when its bounded wait ran out (or one nothing names,
   // with no model wired) has none to give, and the link to its slug is the only reference that opens it.
   const handle = payload?.result?.handle
   if (typeof handle === "string" && handle) {
-    return `${intro}It is @${handle}: name it that way in anything the human reads, and the board links it.`
+    return `${intro}It is @${handle}: name it that way in anything the user reads, and the board links it.`
   }
   const label = typeof body.title === "string" ? body.title : slug
   // Another project's thread links with that project's prefix — a bare `/thread/…` resolves against this one.
   const href = project ? `/project/${encodeURIComponent(project)}/thread/${slug}` : `/thread/${slug}`
-  return `${intro}It has no handle yet, so paste this link to let the human open it in the drawer:\n\n[${label}](${href})`
+  return `${intro}It has no handle yet, so paste this link to let the user open it in the drawer:\n\n[${label}](${href})`
 }
 
 // HOW LONG A RESTART WINDOW IS ALLOWED TO BE INVISIBLE. frizz replaces its own server routinely
@@ -2219,9 +2219,9 @@ async function goal(args) {
   return (
     `Goal armed — frizz will send you this ${when}.${bound}${superseded}\n\n` +
     "Call this tool again with `action: \"stop\"` once the work it drives is finished — one left armed on " +
-    "a finished thread wakes it forever. The human can also edit or switch it off in the thread footer. " +
+    "a finished thread wakes it forever. The user can also edit or switch it off in the thread footer. " +
     "Signing off with a ```done fence stops it too, but only when there is genuinely nothing left: it " +
-    "files the thread away until the human sends more work."
+    "files the thread away until the user sends more work."
   )
 }
 
@@ -2424,7 +2424,7 @@ async function unwatch(args) {
  * @param {Record<string, unknown> | undefined} result @returns {string} */
 function openQuestionList(result) {
   const open = Array.isArray(result?.open) ? result.open : []
-  if (!open.length) return "Nothing else is open on this thread — the human owes you no answer."
+  if (!open.length) return "Nothing else is open on this thread — the user owes you no answer."
   const lines = open.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
   return `Open on this thread now:\n${lines.join("\n")}`
 }
@@ -2439,16 +2439,16 @@ async function ask(args) {
   const registered = Array.isArray(result?.registered) ? result.registered : []
   const lines = registered.map((q) => `  ${q.id}  ${(q.spec?.question ?? "").split("\n")[0]}`)
   const head = registered.length === 1
-    ? "Registered 1 question. It stays open until the human answers it."
+    ? "Registered 1 question. It stays open until the user answers it."
     : `Registered ${registered.length} questions. They stay open until answered — the card sends every ` +
       "answer as one batch."
   return (
     `${head}\n${lines.join("\n")}\n\n` +
     "NOW WRITE YOUR FINAL MESSAGE, THEN REST. The card holds only the choice; it renders under that " +
-    "message, which must carry everything the human needs to make it — what you found, the evidence, " +
+    "message, which must carry everything the user needs to make it — what you found, the evidence, " +
     "and the answer to anything they asked — written out in full. \"The decision is in the card below\" " +
     "is not a handoff: a worker once ended a PR review on exactly that line, and the review itself " +
-    "existed only in its thinking, which the human never sees. The human is not prompted until you " +
+    "existed only in its thinking, which the user never sees. The user is not prompted until you " +
     "rest: while your turn runs the thread spins in the Active band, not the queue, and the card waits " +
     "unseen — so do no further WORK that does not depend on the answer, but never shorten the write-up " +
     "to rest sooner. The open question is your sign-off. If you are about to keep " +
@@ -2470,7 +2470,7 @@ async function unask(args) {
   // already answered it, or it is another thread's — and a worker that believes it withdrew a question
   // the human is still looking at will get an answer it has stopped expecting.
   const head = result?.withdrawn
-    ? `Question ${id} withdrawn. Its card is gone and the human will not be asked.`
+    ? `Question ${id} withdrawn. Its card is gone and the user will not be asked.`
     : `No OPEN question ${id} on this thread — it was already answered or dismissed, or the id is not one of yours.`
   return `${head}\n\n${openQuestionList(result)}`
 }
@@ -2526,18 +2526,18 @@ async function schedule(args) {
 async function done(args) {
   const slug = threadSlug()
   const body = typeof args.body === "string" ? args.body.trim() : ""
-  if (!body) throw new Error("`body` is required — the write-up the human reads on the card")
+  if (!body) throw new Error("`body` is required — the write-up the user reads on the card")
   const quiet = args.quiet === true
   const result = (await callRpc("markOwnDone", { slug, body, ...(quiet ? { quiet: true } : {}) }))?.result
   if (result?.done && quiet) {
     return (
-      "Marked done QUIETLY. This run is filed under Done, out of the human's queue, and your body's first " +
+      "Marked done QUIETLY. This run is filed under Done, out of the user's queue, and your body's first " +
       "line is its line in the schedule's history. End your turn now."
     )
   }
   if (result?.done) {
     return (
-      "Marked done. Your thread cards as a checked success in the human's queue and stays there until " +
+      "Marked done. Your thread cards as a checked success in the user's queue and stays there until " +
       "they archive it.\n\nNOTHING WAS CLOSED, HIDDEN OR ARCHIVED — if there is more to say, say it in " +
       "your final message; if more work appears, keep going and call this again."
     )
@@ -2549,7 +2549,7 @@ async function done(args) {
   const parts = ["NOT marked done. This thread still holds work open."]
   if (questions.length) {
     parts.push(
-      `${questions.length} question${questions.length === 1 ? "" : "s"} the human has not answered:\n${questions.join("\n")}\n` +
+      `${questions.length} question${questions.length === 1 ? "" : "s"} the user has not answered:\n${questions.join("\n")}\n` +
       "Each one dies unread with a done card. Decide it yourself and withdraw it (`unask`), or leave it " +
       "open and keep working until it is answered.",
     )
@@ -2608,7 +2608,7 @@ async function watchPr(args) {
     : ""
   return (
     `${head}${clamped}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`prs: [${ref}]\`) — the watcher does the ` +
-    `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
+    `waking, the fence is what lets you come to rest and shows the user what you are waiting for.\n\n` +
     `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedPrWatchList(result)}`
   )
 }
@@ -2655,7 +2655,7 @@ async function watchIssue(args) {
     : ""
   return (
     `${head}${clamped}\n\nNAME IT IN YOUR \`\`\`awaiting FENCE TOO (\`issues: [${ref}]\`) — the watcher does the ` +
-    `waking, the fence is what lets you come to rest and shows the human what you are waiting for.\n\n` +
+    `waking, the fence is what lets you come to rest and shows the user what you are waiting for.\n\n` +
     `DROP IT when it stops mattering (\`action: "drop", id: "${id}"\`).\n\n${armedIssueWatchList(result)}`
   )
 }

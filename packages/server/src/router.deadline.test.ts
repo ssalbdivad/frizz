@@ -90,9 +90,9 @@ test("ONLY THE HUMAN moves or clears a deadline the human set; the worker may re
     await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug: "t", deadline: inMs(3_600_000) } }))
     const read = await h.router.ownDeadline.handler({ input: { slug: "t", action: "read" } })
     assert.equal(read.deadline?.setBy, "human")
-    await assert.rejects(h.router.ownDeadline.handler({ input: { slug: "t", action: "extend", for: "2h" } }), /only the human can extend/)
-    await assert.rejects(h.router.ownDeadline.handler({ input: { slug: "t", action: "clear" } }), /only the human can remove/)
-    await assert.rejects(h.router.ownDeadline.handler({ input: { slug: "t", action: "set", for: "2h" } }), /only the human can move/)
+    await assert.rejects(h.router.ownDeadline.handler({ input: { slug: "t", action: "extend", for: "2h" } }), /only the user can extend/)
+    await assert.rejects(h.router.ownDeadline.handler({ input: { slug: "t", action: "clear" } }), /only the user can remove/)
+    await assert.rejects(h.router.ownDeadline.handler({ input: { slug: "t", action: "set", for: "2h" } }), /only the user can move/)
     // Untouched by every refusal.
     assert.equal(h.storage.getSession("t")!.deadline_at, read.deadline?.at)
     // …and the human can.

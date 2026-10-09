@@ -63,15 +63,15 @@ test("the contract teaches that a registered question draws itself at the bottom
     assert.match(prompt, /EVERY OPEN QUESTION DRAWS ITS OWN CARD AT ITS REST/)
     assert.match(prompt, /draws NOTHING: one question, one card/)
     // The card is last, so the explanation is first — said where the worker asks AND where it stops.
-    assert.match(c, /THE CARD IS THE LAST THING THE HUMAN READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
+    assert.match(c, /THE CARD IS THE LAST THING THE USER READS — PUT EVERY WORD OF EXPLANATION BEFORE IT/)
     assert.match(c, /frizz draws the question at the BOTTOM of the handoff of the rest that asked it, below its last line/)
     // A question stays at the rest that asked it (upstream 2026-10-05) — a later rest names it under
     // `questions:` or withdraws it, said once, where the worker stops. A typed message changes nothing
     // about it: it stays open until it is answered, dismissed or withdrawn. The refusal of a re-ask is
     // `ask`'s own (its description and its refusal say so), so the contract does not restate it.
     assert.match(c, /AT EVERY LATER REST, SAY WHERE EACH OLD QUESTION STANDS/)
-    assert.match(c, /A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE HUMAN DISMISSES IT, OR YOU WITHDRAW IT/)
-    assert.match(c, /A message the human types instead of answering changes nothing about it/)
+    assert.match(c, /A QUESTION STAYS OPEN UNTIL IT IS ANSWERED, THE USER DISMISSES IT, OR YOU WITHDRAW IT/)
+    assert.match(c, /A message the user types instead of answering changes nothing about it/)
     assert.doesNotMatch(c, /SETS IT ASIDE|`keep`|mcp__frizz__keep/)
     assert.doesNotMatch(c, /A REPLY PAST A QUESTION IS A PIVOT/)
     assert.doesNotMatch(c, /`unask` the old id and `ask` again/)
@@ -128,7 +128,7 @@ test("the contract puts a question's answer in the prose, and the card below it"
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend)
     assert.match(prompt, /THE ANSWER IS THE PROSE — IN FULL, IN THE MESSAGE/)
-    assert.match(prompt, /the human never\s+sees your thinking/)
+    assert.match(prompt, /the user never\s+sees your thinking/)
     assert.match(prompt, /renders\s+BELOW your last message/)
   }
 })
@@ -139,7 +139,7 @@ test("the contract puts a question's answer in the prose, and the card below it"
 test("the contract puts a draft being approved inside the option that sends it", () => {
   for (const backend of ["claude", "codex"] as const) {
     const prompt = buildWorkerPrompt(backend).replace(/\s+/g, " ")
-    assert.match(prompt, /THE HUMAN SEES THE CARD, NOT YOUR MESSAGE — SO WHAT THEY DECIDE ON GOES IN THE CARD/)
+    assert.match(prompt, /THE USER SEES THE CARD, NOT YOUR MESSAGE — SO WHAT THEY DECIDE ON GOES IN THE CARD/)
     assert.match(prompt, /Never write "above" or "below" in a question/)
     assert.doesNotMatch(prompt, /Leave it in the handoff/)
   }
@@ -155,10 +155,10 @@ test("every backend's contract names the editor tool, and when to call it, only 
   for (const backend of ["claude", "codex", "acp"] as const) {
     const withEditor = buildWorkerPrompt(backend, { editor: true })
     const without = buildWorkerPrompt(backend)
-    assert.match(withEditor.replace(/\s+/g, " "), /When the human points at code they have not pasted — "this", "the selected code", "the error" — call `mcp__frizz__editor`/)
-    assert.doesNotMatch(without, /mcp__frizz__editor|## The human's editor/)
+    assert.match(withEditor.replace(/\s+/g, " "), /When the user points at code they have not pasted — "this", "the selected code", "the error" — call `mcp__frizz__editor`/)
+    assert.doesNotMatch(without, /mcp__frizz__editor|## The (?:user|human)'s editor/)
     assert.equal(buildWorkerPrompt(backend, { editor: false }), without)
-    const section = withEditor.slice(withEditor.indexOf("## The human's editor"), withEditor.indexOf("\n\n## ", withEditor.indexOf("## The human's editor")))
+    const section = withEditor.slice(withEditor.indexOf("## The user's editor"), withEditor.indexOf("\n\n## ", withEditor.indexOf("## The user's editor")))
     assert.equal(withEditor.replace(`\n\n${section}`, ""), without)
   }
 })
@@ -175,17 +175,17 @@ test("the contract teaches steps: as the wait on a human's act, and routes to it
     // Its properties: verbatim, names the human (so no other name and no `for:`), always queues, and its
     // one verb comes back as the human's own reply — anything else is a message of their own.
     assert.match(c, /The `title:` and `steps:` values are the exceptions: frizz reads them verbatim/)
-    assert.match(c, /Steps NAME THE HUMAN as the wait, so the fence needs no other name and no `for:`/)
+    assert.match(c, /Steps NAME THE USER as the wait, so the fence needs no other name and no `for:`/)
     assert.match(c, /it always puts the thread in their queue/)
     assert.match(c, /card shows the steps over one \*\*Done\*\* button, and its click comes back to you as their reply, `Done`/)
     assert.match(c, /anything else they need to tell you — a step that failed, the account they used — comes as a message of their own/)
     assert.doesNotMatch(c, /Couldn't do it/)
-    assert.match(c, /\(`steps:` and `questions:` count: they name the human\.\)/)
+    assert.match(c, /\(`steps:` and `questions:` count: they name the user\.\)/)
     // A decision is still a question; an act is steps — at every place the two used to blur.
     assert.match(c, /A DECISION you need from them is a question, never a fence/)
     assert.match(c, /WAITING ON ONE TO ACT IS `steps:`/)
-    assert.match(c, /Once nothing is left to DECIDE and only the human's act remains, the steps go to them under `steps:`/)
-    assert.match(c, /Something the human must DO \("re-pull before you restart"\) is not a dangling idea either: hand it to them under `steps:`/)
+    assert.match(c, /Once nothing is left to DECIDE and only the user's act remains, the steps go to them under `steps:`/)
+    assert.match(c, /Something the user must DO \("re-pull before you restart"\) is not a dangling idea either: hand it to them under `steps:`/)
     assert.doesNotMatch(c, /that is the handoff, and it belongs in the prose/)
     // And the registered first cut is gone from the contract entirely.
     assert.doesNotMatch(c, /mcp__frizz__instruct|\buninstruct\b/)

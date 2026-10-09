@@ -332,7 +332,7 @@ test("loadWorkerPrompt(codex) carries codex's OWN session/wake + model/effort/sa
   assert.match(c, /`codex resume`/)
   assert.match(c, /## Own one task/)
   assert.match(c, /not the dashboard's portfolio orchestrator/)
-  assert.match(c, /Work solo unless the TASK or a later human follow-up explicitly asks/)
+  assert.match(c, /Work solo unless the TASK or a later user follow-up explicitly asks/)
   assert.match(c, /## Bounded native delegation/)
   assert.match(c, /### CI\/review monitor selection/)
   assert.match(c, /project-local `AGENTS\.md`/)
@@ -383,7 +383,7 @@ test("loadWorkerPrompt(codex) requests exactly one first-output invisible title 
   assert.match(c, /before any[\s\S]*commentary[\s\S]*tool call/)
   assert.match(c, /ONE or TWO words naming the SUBJECT/)
   assert.match(c, /strips this comment from visible chat/)
-  assert.match(c, /human rename always wins/)
+  assert.match(c, /user rename always wins/)
   assert.match(c, /Never use an H1\nfor the title signal/)
   assert.doesNotMatch(loadWorkerPrompt("claude"), /<!-- frizz-title:/)
 })
@@ -435,7 +435,7 @@ test("loadWorkerPrompt: the backend-AGNOSTIC core is present in BOTH contracts",
     assert.match(c, /let it run to its terminal return/)
     assert.match(c, /partially applied edits, tests, and owned processes/)
     assert.match(c, /only the affected service, never by stopping a writer/)
-    assert.match(raw, /## Showing the human pictures and video/)
+    assert.match(raw, /## Showing the user pictures and video/)
     assert.match(c, /reaches them only when you put it there, in a `lightbox` fence/)
   }
 })
@@ -492,9 +492,9 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /`status:` — REQUIRED: where does the thread sit while the work runs\?/)
     assert.match(c, /`working` — the work finishes BY ITSELF/)
     assert.match(c, /`watching` — NOTHING of yours is doing work, and the wait ends on someone else's act OUTSIDE/)
-    assert.match(c, /The HUMAN'S review of what you handed over is never `watching`/)
+    assert.match(c, /The USER'S review of what you handed over is never `watching`/)
     assert.match(c, /Answer in that order, top first/)
-    assert.match(c, /`needs_input` — the human can read, try or act on something NOW/)
+    assert.match(c, /`needs_input` — the user can read, try or act on something NOW/)
     assert.match(c, /`needs_input: true` and `needs_input: false`, the answer before 2026-10-05, are still read/)
     // A rest the human is not queued to read owes them nothing to read (maintainer 2026-10-01).
     assert.match(c, /A QUIET PARK NEEDS NO WRITE-UP/)
@@ -505,7 +505,7 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /sits in the queue meaning nothing/i)
     assert.match(c, /(?:question|permission)[\s\S]{0,100}higher.priority/i)
     assert.match(c, /checked success card[^.]*queue/)
-    assert.match(c, /until the human (?:explicitly )?(?:A|a)rchives? it/)
+    assert.match(c, /until the user (?:explicitly )?(?:A|a)rchives? it/)
     // done is gated on LANDED work — landed as far as asked (a PR the human wants merged parks
     // on awaiting until it merges); a pre-fix bug/issue investigation never earns it, while a
     // commissioned research/audit effort's finished report does (done-requires-landed-work)
@@ -514,11 +514,11 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // …and how far to follow a landed change tracks what the human wants next (2026-10-07): only
     // merge-requested work parks to the merge, CI is watched only when its result matters, and the
     // human's own review is never the worker's wait
-    assert.match(c, /HOW FAR TO FOLLOW A LANDED CHANGE IS JUDGMENT ABOUT WHAT THE HUMAN WANTS NEXT/)
+    assert.match(c, /HOW FAR TO FOLLOW A LANDED CHANGE IS JUDGMENT ABOUT WHAT THE USER WANTS NEXT/)
     assert.match(c, /Code they asked to MERGE[^]*?is not done until it merges/)
     assert.match(c, /Code they asked only to PUSH[^]*?is finished once pushed/)
     // …and following its PR or issue is the human's click on the done card, so the card must name it.
-    assert.match(c, /sign off\s+`done` naming each PR or issue as `#N` or `owner\/repo#N`: the human can watch it from the\s+card, so never park on it yourself/)
+    assert.match(c, /sign off\s+`done` naming each PR or issue as `#N` or `owner\/repo#N`: the user can watch it from the\s+card, so never park on it yourself/)
     assert.doesNotMatch(c, /whether to mark the thread done or watch it/)
     assert.match(c, /review or merge is never a reason to watch/)
     // …but WHETHER to land is the human's call: a worker asked for one PR opened a second, unasked, for
@@ -536,7 +536,7 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.doesNotMatch(c, /changes sitting uncommitted/)
     assert.match(c, /investigat(?:ed|ing|ion)[\s\S]{0,300}NOT `?done`?/i)
     assert.match(c, /research or audit EFFORT[\s\S]{0,200}earns `done`/)
-    assert.match(c, /awaiting[\s\S]{0,140}(?:human|timestamp)/i)
+    assert.match(c, /awaiting[\s\S]{0,140}(?:user|timestamp)/i)
     assert.match(c, /(?:CI|automatable)[\s\S]{0,180}(?:stay ACTIVE|stay active|active wait|live operation)/i)
     // `done` is taught as a DISMISSAL, not a summary: its card is the one-click path into Inactive
     // (groups.ts), so anything living only in the conversation dies with the thread. The rule is the
@@ -579,7 +579,7 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     assert.match(c, /Read that carve-out\s+narrowly: its subject is a running process, and nothing else/)
     assert.match(c, /Follow-up work you DISCOVERED blocks[\s\S]{0,120}even when it is someone else's to do/)
     assert.match(c, /"not mine" is not "not owed"/)
-    assert.match(c, /Neither\s+exception stretches to a report that ENDS IN A DECISION the human has yet to make/)
+    assert.match(c, /Neither\s+exception stretches to a report that ENDS IN A DECISION the user has yet to make/)
     // The deadlock's exit, in order: do it, hand it to its own card, ask. Never stretch `done`.
     assert.match(c, /### When the work is finished but the thread found more/)
     assert.match(c, /HAND IT OFF TO ITS OWN CARD[\s\S]{0,120}`mcp__frizz__spawn_thread`/)
@@ -679,7 +679,7 @@ test("runtime release gate: WIPED — no worker surface carries browser-QA opini
     // The generic, repo-agnostic verification rule stays — it names no browser.
     assert.match(c, /Verify behavior end-to-end before calling anything done/i)
     // …as does the guidance for SHOWING the human the screenshots a worker does produce.
-    assert.match(c, /Showing the human pictures and video/)
+    assert.match(c, /Showing the user pictures and video/)
     assert.match(c, /End-of-turn signals/)
   }
 })

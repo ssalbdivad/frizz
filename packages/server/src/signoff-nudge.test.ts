@@ -808,7 +808,7 @@ test("a rest behind a running shell gets the short variant: the shell by its run
     await h.s.tick()
     assert.equal(h.nudges().length, 1)
     const msg = h.nudges()[0].message
-    assert.ok(msg.startsWith("**This message is from frizz, not from the human.**"), "the transcript collapses it on this marker")
+    assert.ok(msg.startsWith("**This message is from frizz, not from the user.**"), "the transcript collapses it on this marker")
     assert.match(msg, /^- `bzvtnt3ig` — nub run typecheck$/m, "led by the shell, named by the id the runtime showed the worker")
     assert.match(msg, /```awaiting\nshells: \[bzvtnt3ig\]\nfor: 1h\n---\n/, "the fence, ready to copy")
     assert.match(msg, /```done instead/, "and the way out when the work is in fact finished")

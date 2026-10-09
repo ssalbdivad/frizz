@@ -195,7 +195,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     assert.deepEqual(scheduleTool.inputSchema.required, ["action"])
     assert.deepEqual(scheduleTool.inputSchema.properties.action.enum, ["create", "dry_run", "update", "list", "pause", "skip_next", "move_next"])
     assert.ok(!("slug" in scheduleTool.inputSchema.properties) && !("thread" in scheduleTool.inputSchema.properties))
-    for (const cue of ["RELAY IT TO THE HUMAN VERBATIM", "DOES NOT RUN UNTIL THE HUMAN CLICKS TURN ON", "ALWAYS include BYHOUR and BYMINUTE", "`model` and `effort` are REQUIRED"]) {
+    for (const cue of ["RELAY IT TO THE USER VERBATIM", "DOES NOT RUN UNTIL THE USER CLICKS TURN ON", "ALWAYS include BYHOUR and BYMINUTE", "`model` and `effort` are REQUIRED"]) {
       assert.ok(scheduleTool.description.includes(cue), cue)
     }
     // `editor` READS the human's editor and takes nothing: no window to pick, no project to name — the
@@ -504,13 +504,13 @@ test("`editor` reads the window on this project as text, and says why when there
     // Windows on other projects are counted, never described — and an OLDER server's listing of their
     // folders (it sent `elsewhere` until 2026-10-02) is not repeated to the worker either.
     const elsewhere = await call({ windows: [], connected: 2, elsewhere: [{ app: "Cursor", folders: ["/home/me/other"] }] })
-    assert.match(elsewhere.text, /^2 editor windows are connected to Frizz, but none has this project open, so what the human has in front of them is in another project\./)
+    assert.match(elsewhere.text, /^2 editor windows are connected to Frizz, but none has this project open, so what the user has in front of them is in another project\./)
     assert.doesNotMatch(elsewhere.text, /\/home\/me\/other/)
     const empty = await call({ windows: [{ ...front, editor: { ...front.editor, active: null, open: [], diagnostics: [], problems: { errors: 0, warnings: 0 } } }], connected: 1 })
     assert.match(empty.text, /No file is in front/)
     assert.match(empty.text, /Problems: no errors or warnings\./)
     for (const reply of [off, silent, none, elsewhere]) {
-      assert.match(reply.text, /Ask the human to paste the code, or to name the file and lines they mean\.$/)
+      assert.match(reply.text, /Ask the user to paste the code, or to name the file and lines they mean\.$/)
       assert.equal(reply.isError, undefined, "having nothing to read is an answer, not a failure")
     }
 
@@ -581,7 +581,7 @@ test("`editor` tells a thread in a worktree that the human's editor shows the ma
       "Visual Studio Code (focused now, folder /home/me/repo), last changed just now.",
       "",
       "You are working in your own worktree, /home/me/repo/.frizz/worktrees/tidy-loop, but this window shows the project's main checkout, /home/me/repo. " +
-        "A file below under /home/me/repo is the human's copy, and what they selected is its text; the same relative path under " +
+        "A file below under /home/me/repo is the user's copy, and what they selected is its text; the same relative path under " +
         "/home/me/repo/.frizz/worktrees/tidy-loop is your copy, which may differ. Read and edit yours.",
       "",
       "In front: /home/me/repo/src/a.ts (typescript), lines 2-3 selected. Your copy: /home/me/repo/.frizz/worktrees/tidy-loop/src/a.ts.",
@@ -1484,7 +1484,7 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
     // …and the rest is never bought by a stub: the card holds only the choice, so the final message must
     // carry the findings (a PR review once ended "The decision on PR #1673 is in the card below.").
     assert.match(asked.result.content[0].text, /never shorten the write-up/)
-    assert.doesNotMatch(asked.result.content[0].text, /on the human's board now/)
+    assert.doesNotMatch(asked.result.content[0].text, /on the (?:user|human)'s board now/)
 
     rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "unask", arguments: { id: "qst_aaa111" } } })
     const withdrawn = await rpc.next(3)

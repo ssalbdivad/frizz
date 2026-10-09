@@ -408,7 +408,7 @@ test("the human's acts on the next run: done skips it, a snooze moves it, Wake n
     const third = got.schedule.nextRun!
     await h.router.setThreadSnooze.handler({ input: { slug: third.slug, sessionId: third.sessionId, until: null } as never })
     assert.equal(h.spawned.length, 2)
-    assert.match(h.spawned[1]!.prompt, /This run is for Wed Oct 7, 9am; the human started it early\./)
+    assert.match(h.spawned[1]!.prompt, /This run is for Wed Oct 7, 9am; the user started it early\./)
     got = h.service.get(view.id)
     assert.equal(got.history[0]!.reason, "started by you")
     assert.equal(got.schedule.nextRun!.occurrenceAt, new Date(MON_9AM + 3 * 86_400_000).toISOString(), "that occurrence is spent")
@@ -499,7 +499,7 @@ test("a worker proposes; only the human turns it on; skip_next and move_next act
     assert.equal(made.schedule!.state, "proposed")
     assert.equal(made.schedule!.attention, true)
     assert.equal(made.schedule!.nextRun, undefined, "a proposal materializes nothing")
-    assert.match(made.text, /does NOT run until the human clicks Turn on/)
+    assert.match(made.text, /does NOT run until the user clicks Turn on/)
     assert.match(made.text, /Next: Mon Nov 2 · Tue Dec 1 · Fri Jan 1/)
     // It may refine its own proposal…
     const id = made.schedule!.id

@@ -411,7 +411,7 @@ if (mode === 'nudge') {
           'in `' + relPath + '`. Top the notes up in passing if you still want them current (a goal ' +
           'armed with post_compaction: true can link them). This is a background note, NOT a task and ' +
           'NOT a reason to pause: do not stop working to service it, and never end a turn on it while ' +
-          'the human\'s instruction still has parts left.'
+          'the user\'s instruction still has parts left.'
       : '⟦scratch directory empty⟧ This session is ~' + k + 'k tokens deep and `' + relPath + '` is ' +
           'empty. That is fine — notes are optional and writing them is not doing the work. The ' +
           'directory is available if you want notes, and mcp__frizz__goal with ' +

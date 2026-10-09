@@ -370,7 +370,7 @@ test("build*Command: extraSystemPrompt is appended AFTER the worker norms in the
 // (dispatch.ts workerCapabilities): the tool it names is listed under the same condition, and without one
 // the paragraph is a cost on every turn for a tool the worker cannot see (plans/upstream-superset.md §5).
 test("dispatch: the editor section rides the contract only while an editor has the project open", async () => {
-  const EDITOR_SECTION = "## The human's editor"
+  const EDITOR_SECTION = "## The user's editor"
   const asked: string[] = []
   let windows: unknown[] = []
   const h = dispatcherHarness(defaultSettings(), { editorState: (dir) => (asked.push(dir), { windows: windows as never, connected: 1 }) })
