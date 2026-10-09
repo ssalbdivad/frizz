@@ -679,6 +679,13 @@ The API call is the unit of cost, not the tokens you type: each message re-reads
 // choosing. ASK LAST (d3906c64): a running thread never queues, so a card asked mid-work went unseen for
 // as long as the turn ran. A typed message's note and `ask`'s refusal of a re-ask both reach the worker
 // at the moment they matter, so the contract states neither.
+// WHY options state their cost, and a redesign gates on it (2026-10-09, arktype @issues-audit). An issue
+// audit found an arkregex unsoundness with its own synthetic probe — no user report; e.g. a 309-digit
+// string rejected by `${number}` — and asked how to fix it with five options. Every alternative carried
+// its cost; the "precise redesign" said only "largest change, no prototype yet". The maintainer picked
+// it, and the design→critique→implement Workflow measured compile cost only in its final Verify phase:
+// ~16h later it stood at 1,494 → 4,287 source lines, new TS2589s, a TS 6 crash, +30% instantiations,
+// and a 35 GB tsgo run starving the machine. Aborted once the maintainer asked what it cost.
 const QUESTIONS =`## Questions for the user
 
 You run under a dashboard, not a live chat, so a question is a ROW the user still owes an answer to,
@@ -716,7 +723,9 @@ option that is not, so mark EVERY such option. Never
 mark \`mayDefault\` on a decision the work built on it is sensitive to: the architecture of a library or
 a major version, a public API, a data model, the design a plan commits to. Several
 independent questions are several entries of ONE \`ask\` call, never one bundled question. A bare
-"which approach?" with no options is a broken handoff.
+"which approach?" with no options is a broken handoff. Every option states its COST — the size of the
+change, its runtime or compile-time effect, what it gives up — the largest option above all, and weighs
+it against how often anyone actually hits the problem; a cost not yet measured is said to be unmeasured.
 
 NO "I" AND NO "you" ANYWHERE IN A QUESTION — the question, its options, or any interactive prompt.
 Clicking an option is the USER speaking, so first and second person flip between writer and reader: in
@@ -1037,6 +1046,10 @@ is not converging: stop, and go back to the design or to the user with the count
 any Workflow you write — a fixed maximum on rounds, never a bare loop on "clean". A round whose reviewers
 FAILED (a usage limit, a crash) did not run; it is never a clean one. When the user changes direction,
 launch nothing more on the line they moved off.
+
+**A REDESIGN GATES ON ITS COST.** Any Workflow or sub-agent chain that designs and then builds measures
+or estimates the change's size and its runtime or compile cost right after the design step, and stops
+there — back to you, and to the user — when that cost outweighs the problem it fixes.
 
 ## Automated waits in Claude Code
 
