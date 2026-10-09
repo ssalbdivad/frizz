@@ -117,6 +117,12 @@ function sourceVersion(): string | undefined {
 
 const argv = process.argv.slice(2);
 const sourceCommand = process.env.FRIZZ_SOURCE_COMMAND ?? "frizz-dev";
+// `top` reads the machine and exits; it touches no workspace, lock or artifact, so it runs before any of
+// them are resolved and works from any directory. Shared with src/production.ts.
+if (argv[0] === "top") {
+  const { runTop } = await import("@frizz/server/top");
+  process.exit(await runTop(argv.slice(1)));
+}
 /**
  * build/promote/restart are ARTIFACT verbs: they suppress the readout and the foreground hold, do one
  * job and exit. Launching is not one of them — there is exactly one way to start Frizz, and it is the

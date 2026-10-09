@@ -104,6 +104,12 @@ if (rawArgs.includes(PRODUCTION_PRINT_LAUNCHER_FLAG)) {
   console.log(fileURLToPath(import.meta.url));
   process.exit(0);
 }
+// `top` reads the machine and exits: no project, lock or Node floor, so it works from any directory.
+// Shared with src/index.ts.
+if (rawArgs[0] === "top") {
+  const { runTop } = await import("@frizz/server/top");
+  process.exit(await runTop(rawArgs.slice(1)));
+}
 // A re-exec'd launch was started by the PREVIOUS release, whose argv may carry a project directory this
 // release refuses (0.7.0–0.12.10 all append one); see reexecArgv. A human's argv is parsed as written.
 const args = reexec ? reexecArgv(rawArgs) : rawArgs;
@@ -125,6 +131,9 @@ Run it in the directory you want to work in. One server serves EVERY project on 
 each on its own board, so a second run joins the one already going. Runs the
 npm-resolved immutable Frizz package, then opens it in your default browser. Use frizz-dev only
 for a source checkout.
+
+Commands:
+  top                    memory on this machine and Frizz's share of it (--json, --watch)
 
 Options:
   --no-app               print the URL without opening a browser

@@ -475,6 +475,7 @@ Commands:
   build                  build a new immutable candidate from the configured Frizz source checkout
   promote <digest>       explicitly select a verified candidate for this workspace
   restart                restart the currently promoted artifact without building
+  top                    memory on this machine and Frizz's share of it (--json, --watch)
 
 To reach the board from a phone or another machine, press R in the terminal running it: a short
 walkthrough sets up a private frizz.sh name (no account needed), a custom one, a Cloudflare
