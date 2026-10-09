@@ -5379,6 +5379,10 @@ export function createRouter(ctx: AppContext) {
           if (!child) return { sent: false, handle: address, refusal: `@${threadHandle} has no sub-agent called ${childPath.join(".")}.`, known: subAgentAddresses(threadHandle, agents) }
           const named = agents.find((a) => a.id === child.id)?.address ?? address
           if (input.awaitReply) return { sent: false, handle: named, refusal: "a sub-agent answers in its report to its own thread, not to you, so there is no reply to wait for. Send without awaitReply, and read its report later with read_thread." }
+          if (ctx.tailer.subAgent(hit.slug, child.id)?.workflow) {
+            const inRun = agents.filter((a) => a.parentId === child.id && a.state === "running" && a.address).map((a) => `@${a.address}`)
+            return { sent: false, handle: named, refusal: `@${named} is a Workflow run, not an agent; message one of its agents instead${inRun.length ? `: ${inRun.join(", ")}` : ", but none is running now"}.` }
+          }
           const box = childMailbox(hit.slug, child.id)
           if (!box) return { sent: false, handle: named, refusal: `@${named} is not running, so there is nobody to deliver to. Read its report with read_thread.` }
           const nowMs = Date.now()
