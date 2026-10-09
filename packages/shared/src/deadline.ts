@@ -204,6 +204,23 @@ export const SetThreadDeadlineInput = z.object({
 }).strict()
 export type SetThreadDeadlineInput = z.infer<typeof SetThreadDeadlineInput>
 
+/** The human's machine-wide wrap-up (the palette's "Time limit for running threads"): one deadline on
+ *  every Running thread in every open project, with an optional note each worker reads beside it —
+ *  "restarting the machine in 15m, leave the work easy to resume". A thread already due sooner keeps
+ *  its own deadline. Refused to a worker's shim, like `setThreadDeadline`. */
+export const SetRunningDeadlinesInput = z.object({
+  deadline: IsoInstant,
+  note: z.string().trim().max(2_000).optional(),
+}).strict()
+export type SetRunningDeadlinesInput = z.infer<typeof SetRunningDeadlinesInput>
+export const SetRunningDeadlinesResult = z.object({
+  /** Running threads that now carry the deadline (or kept a sooner one) and were told. */
+  threads: z.number().int(),
+  /** How many distinct projects those threads are in. */
+  projects: z.number().int(),
+})
+export type SetRunningDeadlinesResult = z.infer<typeof SetRunningDeadlinesResult>
+
 /** `mcp__frizz__deadline`: the worker's own read / set / extend / clear. */
 export const OwnDeadlineInput = z.object({
   slug: ThreadSlug,

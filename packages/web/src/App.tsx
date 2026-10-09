@@ -22,6 +22,7 @@ import { NewThreadDialog } from "./components/NewThreadModal.tsx"
 import { GithubPickerModal } from "./components/GithubPickerModal.tsx"
 import { useGithubStatus } from "./components/GithubTrigger.tsx"
 import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
+import { RunningTimeLimitHost } from "./components/RunningTimeLimitDialog.tsx"
 import { CommandPalette } from "./components/CommandPalette.tsx"
 import { ErrorBoundary } from "./components/ErrorBoundary.tsx"
 import { RestartOverlay } from "./components/RestartOverlay.tsx"
@@ -180,7 +181,7 @@ export function App() {
 
   // While ANY overlay is open (thread sheet, doc drawer, settings, new-thread modal, palette), the
   // PAGE must not scroll — only the overlay's own pane does.
-  const overlayOpen = snap.drawers.length > 0 || snap.showSettings || snap.showNewThread || snap.showGithubPicker || snap.showPalette || snap.showShortcuts
+  const overlayOpen = snap.drawers.length > 0 || snap.showSettings || snap.showNewThread || snap.showGithubPicker || snap.showPalette || snap.showShortcuts || snap.showRunningTimeLimit
   useEffect(() => {
     // Scroll lock via the body-fixed dance, NOT overflow:hidden on the root — hiding root overflow
     // dropped the scrollbar (and with it the layout width) every time a drawer opened. With the
@@ -321,6 +322,7 @@ export function App() {
       {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false }} />}
       {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}
       <CommandPalette />
+      <RunningTimeLimitHost />
     </div>
     </>
   )

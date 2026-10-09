@@ -33,7 +33,7 @@ function harness() {
   }
   const ctx = { project, storage, board, tailer, getSettings: () => ({ permissionMode: "auto" }) as unknown as Settings } as unknown as AppContext
   const notices = () => createWakeDeliveryStore(storage.scope).listOpen().filter((d) => d.fenceId.startsWith("deadline-notice:"))
-  return { storage, notices, router: createRouter(ctx), close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) } }
+  return { storage, snapshot, notices, router: createRouter(ctx), close: () => { storage.close(); rmSync(dir, { recursive: true, force: true }) } }
 }
 
 function row(slug: string): SessionRow {
@@ -151,6 +151,49 @@ test("a re-dispatch over the slug drops the old session's deadline; a resume kee
     assert.ok(h.storage.getSession("t")!.deadline_at, "same session spread back keeps it")
     h.storage.upsertSession({ ...row("t"), session_id: "sid-fresh" })
     assert.equal(h.storage.getSession("t")!.deadline_at, null)
+  } finally {
+    h.close()
+  }
+})
+
+test("the machine-wide wrap-up: every Running thread gets the deadline and the note; queued, snoozed and done ones are left alone", async () => {
+  const h = harness()
+  try {
+    for (const slug of ["run", "soon", "queued", "snoozed", "done"]) h.storage.upsertSession(row(slug))
+    h.storage.setState("done", "archived")
+    const view = (id: string, extra: Record<string, unknown>) => ({ id, kind: "session", state: "open", needsYou: false, ...extra }) as never
+    h.snapshot.threads.push(
+      view("run", {}),
+      view("soon", {}),
+      view("queued", { needsYou: true }),
+      view("snoozed", { snoozedUntil: inMs(3_600_000), awaiting: { kind: "timer" } }),
+      view("done", { state: "archived" }),
+    )
+    const soonAt = inMs(5 * 60_000)
+    await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug: "soon", deadline: soonAt } }))
+    const at = inMs(15 * 60_000)
+    const got = await asBrowser(() => h.router.setRunningDeadlines.handler({ input: { deadline: at, note: "Restarting the machine in 15m.\nOptimize resumability." } }))
+    assert.deepEqual(got, { threads: 2, projects: 1 })
+    assert.equal(h.storage.getSession("run")!.deadline_at, new Date(at).toISOString())
+    assert.equal(h.storage.getSession("soon")!.deadline_at, new Date(soonAt).toISOString(), "a sooner deadline is kept")
+    for (const slug of ["queued", "snoozed", "done"]) assert.equal(h.storage.getSession(slug)!.deadline_at ?? null, null, slug)
+    const bySlug = new Map(h.notices().map((n) => [n.slug, n.message]))
+    assert.match(bySlug.get("run")!, /set a time limit/)
+    assert.match(bySlug.get("run")!, /> Restarting the machine in 15m\.\n> Optimize resumability\./)
+    assert.match(bySlug.get("soon")!, /kept your deadline/)
+    assert.match(bySlug.get("soon")!, /> Restarting the machine/)
+  } finally {
+    h.close()
+  }
+})
+
+test("the machine-wide wrap-up is the user's: a worker's transport is refused", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("run"))
+    h.snapshot.threads.push({ id: "run", kind: "session", state: "open", needsYou: false } as never)
+    await assert.rejects(asWorker(() => h.router.setRunningDeadlines.handler({ input: { deadline: inMs(15 * 60_000) } })), /Only the user/)
+    assert.equal(h.storage.getSession("run")!.deadline_at ?? null, null)
   } finally {
     h.close()
   }

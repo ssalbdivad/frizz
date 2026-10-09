@@ -148,6 +148,8 @@ import type {
   OwnDeadlineInput,
   OwnDeadlineResult,
   SetThreadDeadlineInput,
+  SetRunningDeadlinesInput,
+  SetRunningDeadlinesResult,
   ThreadDeadlineView,
   ExtendOwnShellResult,
   DropOwnWatchInput,
@@ -310,6 +312,7 @@ export interface Api {
   threadDeadline(input: { slug: string }): Promise<OwnDeadlineResult>
   // The drawer's time-limit control: set, move or clear (`deadline: null`) the thread's deadline.
   setThreadDeadline(input: SetThreadDeadlineInput): Promise<{ deadline: ThreadDeadlineView | null }>
+  setRunningDeadlines(input: SetRunningDeadlinesInput): Promise<SetRunningDeadlinesResult>
   upsertOwnLink(input: UpsertOwnLinkInput): Promise<UpsertOwnLinkResult>
   dropOwnLink(input: DropOwnLinkInput): Promise<DropOwnLinkResult>
   dropOwnWatch(input: DropOwnWatchInput): Promise<DropOwnWatchResult>
@@ -598,6 +601,7 @@ export const PROCEDURES = {
   ownDeadline: "mutation",
   threadDeadline: "query",
   setThreadDeadline: "mutation",
+  setRunningDeadlines: "mutation",
   upsertOwnLink: "mutation",
   dropOwnLink: "mutation",
   dropOwnWatch: "mutation",

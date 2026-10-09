@@ -140,6 +140,9 @@ export function CommandPalette() {
                 <Item value="take the tour onboarding help introduction walkthrough" onSelect={() => run(startTour)}>
                   Take the tour
                 </Item>
+                <Item value="time limit for running threads deadline wrap up restart reboot shutdown all" onSelect={() => run(() => (store.showRunningTimeLimit = true))}>
+                  Time limit for running threads…
+                </Item>
                 <Item
                   value="schedules scheduled recurring repeat every cron routines"
                   onSelect={() => {

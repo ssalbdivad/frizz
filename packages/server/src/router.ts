@@ -10,6 +10,8 @@ import {
   AdoptThreadResult,
   DispatchInput,
   SetThreadDeadlineInput,
+  SetRunningDeadlinesInput,
+  SetRunningDeadlinesResult,
   OwnDeadlineInput,
   OwnDeadlineResult,
   ThreadDeadlineView,
@@ -1706,10 +1708,11 @@ export function createRouter(ctx: AppContext) {
    *  (its system prompt states the deadline as of the last time it was composed). Mid-turn, like a typed
    *  steer; scheduler `deadline-notice:` has the delivery rules. A thread that has not started has no
    *  worker to tell: its first prompt will carry the deadline. */
-  function noticeDeadline(slug: string, change: Parameters<typeof deadlineNoticeMessage>[0], nowMs: number): void {
-    const row = ctx.storage.getSession(slug)
+  // `target`: the project the thread lives in — another tenant's for setRunningDeadlines, this one otherwise.
+  function noticeDeadline(slug: string, change: Parameters<typeof deadlineNoticeMessage>[0], nowMs: number, target: AppContext = ctx): void {
+    const row = target.storage.getSession(slug)
     if (!row || row.state === "archived" || row.archived === 1 || isHeldRow(row)) return
-    enqueueDeadlineNoticeWake(ctx.storage, {
+    enqueueDeadlineNoticeWake(target.storage, {
       slug,
       sessionId: row.session_id,
       setAt: change.kind === "set" ? row.deadline_set_at ?? null : null,
@@ -4367,6 +4370,55 @@ export function createRouter(ctx: AppContext) {
         ctx.board.refresh()
         ctx.scheduler?.kick?.()
         return { deadline: deadlineView(input.slug) }
+      },
+    }),
+
+    // THE MACHINE-WIDE WRAP-UP: one deadline, and the human's note, on every Running thread in every open
+    // project — the way to say "restarting in 15m" before a reboot ends the broker daemons a Frizz restart
+    // would not. Running means the rail's own band (`activeBandThread`): a queued thread is already at rest
+    // and a snoozed one is parked on a registration that outlives the reboot, so neither is woken. A thread
+    // already due SOONER keeps its time, but still gets a new generation so the note reaches it.
+    setRunningDeadlines: mutation({
+      input: SetRunningDeadlinesInput,
+      output: SetRunningDeadlinesResult,
+      handler: async ({ input }) => {
+        if (dispatchCaller() === "worker") throw new Error("Only the user can set a time limit on every running thread.")
+        const nowMs = Date.now()
+        const atMs = Date.parse(input.deadline)
+        if (atMs - nowMs < DEADLINE_MIN_MS) throw new Error("A time limit must end at least 1m from now.")
+        if (atMs - nowMs > DEADLINE_MAX_MS) throw new Error("A time limit can be at most 7d from now.")
+        const setAt = new Date(nowMs).toISOString()
+        const note = input.note || undefined
+        let threads = 0
+        let projects = 0
+        const open = ctx.activeTenants?.() ?? [{ project: ctx.project, board: ctx.board, ctx }]
+        for (const { project, board, ctx: tenant } of open) {
+          const target = tenant ?? (project.id === ctx.project.id ? ctx : undefined)
+          if (!target) continue
+          let snapshot: BoardSnapshot
+          try {
+            snapshot = await board.snapshot()
+          } catch {
+            continue // a board stopping mid-walk, as in projectsRailCounts
+          }
+          let here = 0
+          for (const thread of snapshot.threads) {
+            if (!activeBandThread(thread)) continue
+            const row = target.storage.getSession(thread.id)
+            if (!row || row.state === "archived" || row.archived === 1 || isHeldRow(row)) continue
+            const before = rowDeadline(row)
+            const due = before && before.atMs < atMs ? before.atMs : atMs
+            if (!target.storage.setDeadline(thread.id, { deadlineAt: new Date(due).toISOString(), setAt, setBy: "human" })) continue
+            noticeDeadline(thread.id, { kind: "set", deadline: { atMs: due, setAtMs: nowMs }, previousAtMs: before?.atMs, note }, nowMs, target)
+            here++
+          }
+          if (here === 0) continue
+          threads += here
+          projects++
+          target.board.refresh()
+          target.scheduler?.kick?.()
+        }
+        return { threads, projects }
       },
     }),
 

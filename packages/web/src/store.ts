@@ -73,6 +73,8 @@ export const store = proxy({
   // The keyboard-shortcuts sheet (`?`, or the keyboard icon in the status row). Rendered by
   // <KeyboardLayer/>, which every page shell mounts — so it opens on Everything and /full alike.
   showShortcuts: false,
+  // The command palette's "Time limit for running threads" dialog (RunningTimeLimitDialog.tsx).
+  showRunningTimeLimit: false,
   // The anywhere-modal behind the "New thread" pill (Gmail-compose style).
   showNewThread: false,
   // The PHONE layout's New thread sheet (components/PhonePage.tsx), open or not — and whether it takes

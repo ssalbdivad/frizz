@@ -104,15 +104,21 @@ export function deadlineCheckInMessage(stage: DeadlineStage, d: Pick<ThreadDeadl
 /** What the worker is told when the HUMAN sets, moves or removes its deadline after dispatch — the one
  *  change the worker did not make itself and cannot otherwise see (its system prompt states the deadline
  *  as of the last time it was composed). */
-export function deadlineNoticeMessage(change: { kind: "set"; deadline: Pick<ThreadDeadline, "atMs" | "setAtMs">; previousAtMs?: number } | { kind: "cleared" }, nowMs: number): string {
+/** `note`: the human's own words, sent with a machine-wide wrap-up (router setRunningDeadlines) — quoted
+ *  verbatim, because the reason ("restarting in 15m") changes what the best handoff is. */
+export function deadlineNoticeMessage(change: { kind: "set"; deadline: Pick<ThreadDeadline, "atMs" | "setAtMs">; previousAtMs?: number; note?: string } | { kind: "cleared" }, nowMs: number): string {
   if (change.kind === "cleared") {
     return "⏰ The user removed your time limit. There is no deadline any more: work to the best deliverable, not to a clock."
   }
   const d = change.deadline
   const left = preciseSpanLabel(Math.max(0, d.atMs - nowMs))
-  const verb = change.previousAtMs === undefined ? "set a time limit" : d.atMs > change.previousAtMs ? "extended your deadline" : "moved your deadline earlier"
+  const verb = change.previousAtMs === undefined
+    ? "set a time limit"
+    : d.atMs > change.previousAtMs ? "extended your deadline" : d.atMs < change.previousAtMs ? "moved your deadline earlier" : "kept your deadline"
+  const note = change.note?.trim()
   return (
     `⏰ The user ${verb}: your deadline is now ${deadlineClock(d.atMs, nowMs)}, ${left} from now.\n\n` +
+    (note ? `${note.split("\n").map((line) => `> ${line}`).join("\n")}\n\n` : "") +
     "Plan to the best deliverable you can hand over by then, not the complete one eventually. Frizz checks in " +
     "at half-time, at 80% and shortly before the deadline."
   )
