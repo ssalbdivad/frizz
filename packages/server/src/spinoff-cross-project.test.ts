@@ -85,7 +85,7 @@ test("a spinoff into another project starts there on Frizz's context, and each e
     assert.equal(h.alpha.dispatched.length, 0, "nothing starts in the parent's project")
     assert.equal(h.beta.dispatched.length, 1)
     const prompt = h.beta.dispatched[0]!.prompt
-    assert.match(prompt, /^A spinoff of @parent, at the human's request\. Their instructions:\n\n> port it to beta\n\nContext from @parent:\n\n/)
+    assert.match(prompt, /^A spinoff of @parent, at the user's request\. Their instructions:\n\n> port it to beta\n\nContext from @parent:\n\n/)
     assert.ok(prompt.includes(`@parent is in the alpha project (\`${h.alpha.ctx.project.dir}\`), not this one`), prompt)
     assert.match(prompt, /`read_thread` tool on `parent`/)
     assert.ok(h.beta.refreshes() > 0, "the child's board learns of its edge")

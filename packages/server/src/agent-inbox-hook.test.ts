@@ -70,7 +70,7 @@ test("a queued message reaches the agent after its next tool call, once, in orde
   const out = JSON.parse(runHook(postToolUse(s.transcript, AGENT)))
   assert.equal(out.hookSpecificOutput.hookEventName, "PostToolUse")
   const ctx: string = out.hookSpecificOutput.additionalContext
-  assert.match(ctx, /⟦Frizz mailbox: message from the human operating Frizz⟧ first/)
+  assert.match(ctx, /⟦Frizz mailbox: message from the user operating Frizz⟧ first/)
   assert.match(ctx, /⟦Frizz mailbox: message from the agent that dispatched you⟧ second/)
   assert.ok(ctx.indexOf("first") < ctx.indexOf("second"), "oldest first")
 
