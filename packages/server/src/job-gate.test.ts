@@ -328,11 +328,15 @@ test("a signal to the wrapper reaches the job's whole tree, and the wrapper dies
   const exited = new Promise<[number | null, NodeJS.Signals | null]>((r) => child.on("exit", (code, signal) => r([code, signal])))
   child.kill("SIGTERM")
   assert.deepEqual(await exited, [null, "SIGTERM"])
-  let alive = true
-  for (let i = 0; i < 40 && alive; i++) {
-    try { process.kill(grandchild, 0); await new Promise((r) => setTimeout(r, 50)) } catch { alive = false }
+  // The wrapper signals the tree before it dies, so the grandchild is already signalled here; what is
+  // left is the kernel ending it and its new parent reaping it. A zombie has died, so it counts as
+  // gone (kill(pid, 0) still succeeds on one). Bounded generously: under load reaping can lag.
+  const gone = () => {
+    try { return readFileSync(`/proc/${grandchild}/stat`, "utf8").split(") ")[1]?.[0] === "Z" } catch { return true }
   }
-  assert.equal(alive, false, "the grandchild got the signal too")
+  const until = Date.now() + 10_000
+  while (!gone() && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+  assert.ok(gone(), "the grandchild got the signal too")
 })
 
 test("a second heavy job from a session at its cap queues, says why once, and starts when the first ends", async () => {

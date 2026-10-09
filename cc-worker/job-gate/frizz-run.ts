@@ -155,11 +155,12 @@ async function run(argv: string[], hook: boolean): Promise<never> {
   } catch (error) {
     say(`gate unavailable (${(error as Error).message}); running now`)
     try { updateState(settings.dir, (state) => { state.jobs = state.jobs.filter((j) => j.id !== job.id) }) } catch {}
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.removeListener(signal, leaveQueue)
+    // Inert from here rather than removed: removing the last listener hands SIGTERM back to its
+    // default until exec() installs its own, and a signal in that gap kills this wrapper un-forwarded.
+    admitted = true
     return exec(argv, process.env, null)
   }
-  admitted = true
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"] as const) process.removeListener(signal, leaveQueue)
+  admitted = true // leaveQueue stays installed but inert, for the same reason
   const queueWaitMs = Date.now() - job.enqueuedAt
   if (announced) say(`started after ${duration(queueWaitMs)} in the queue`)
 
@@ -210,23 +211,34 @@ function exec(argv: string[], env: NodeJS.ProcessEnv, tracked: Tracked | null): 
   return new Promise<never>(() => {
     const t0 = Date.now()
     let child: ChildProcess
+
+    // Forward to every process in the job's tree, not just its root: a package manager does not
+    // always pass a signal on, and an orphaned suite keeps its memory.
+    //
+    // Installed BEFORE the spawn. Once the job exists a signal can arrive at any moment, and with no
+    // listener SIGTERM keeps its default, which kills this wrapper and leaves the whole tree running
+    // un-signalled. Under load the gap between spawn() returning and a listener installed after it
+    // was wide enough to hit (job-gate.test.ts, 2 of 30 runs with every core busy). A JS listener
+    // only runs on a later event-loop turn, so `child` is always assigned by the time this does.
+    //
+    // ROOT FIRST (treeOf's preorder). Leaves first let a parent shell see its child die and carry on
+    // before its own signal landed: `a; b` ran `b`, and the job exited 0 of a forwarded SIGTERM
+    // (1 of the same 30 runs).
+    const forward = (signal: NodeJS.Signals) => {
+      if (!child?.pid) return
+      const procs = scanProcs()
+      for (const pid of treeOf(child.pid, procs)) {
+        try { process.kill(pid, signal) } catch {}
+      }
+    }
+    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const) process.on(signal, () => forward(signal))
+
     try {
       child = spawn(argv[0], argv.slice(1), { stdio: "inherit", env })
     } catch (error) {
       say(`${argv[0]}: ${(error as Error).message}`)
       return finish(127, null)
     }
-
-    // Forward to every process in the job's tree, not just its root: a package manager does not
-    // always pass a signal on, and an orphaned suite keeps its memory.
-    const forward = (signal: NodeJS.Signals) => {
-      if (!child.pid) return
-      const procs = scanProcs()
-      for (const pid of treeOf(child.pid, procs).reverse()) {
-        try { process.kill(pid, signal) } catch {}
-      }
-    }
-    for (const signal of ["SIGINT", "SIGTERM", "SIGHUP", "SIGQUIT"] as const) process.on(signal, () => forward(signal))
 
     let peakMB = 0
     let rssMB = 0
