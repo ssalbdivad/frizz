@@ -343,12 +343,36 @@ export function isDirectHookExecution(argv1, moduleUrl, realpath = realpathSync)
 // `src/index.js`. esbuild rewrites `import.meta.url` to that bundle URL, so URL equality alone would
 // mistake the whole server for this executable and block startup reading hook JSON from stdin.
 if (isDirectHookExecution(process.argv[1], import.meta.url)) {
+  /** @type {any} */
+  let input;
+  /** @type {Record<string, any>} */
+  let result = {};
   try {
     const env = process.argv.includes('--frizz-thread')
       ? { ...process.env, FRIZZ_THREAD: process.env.FRIZZ_THREAD || 'codex-worker' }
       : process.env;
-    emit(evaluateBashBackgroundHook(JSON.parse(readFileSync(0, 'utf8')), env));
+    input = JSON.parse(readFileSync(0, 'utf8'));
+    result = evaluateBashBackgroundHook(input, env);
   } catch {
     emit({});
   }
+  // THE JOB GATE (cc-worker/job-gate/hook.ts) rides this hook rather than registering its own: Claude
+  // Code keeps one `updatedInput` per call, so a second Bash hook would race this one's timeout patch.
+  // It is a `.ts` module loaded on demand, and every way that can fail — a Node that cannot strip
+  // types, a copy installed under node_modules (where Node refuses to), a throw inside the rewrite —
+  // lands in the catch and emits this hook's own result unchanged. Never for a denied call, never for
+  // Codex (`--frizz-thread`: it has no `updatedInput`), never outside a Frizz thread.
+  if (
+    result.hookSpecificOutput?.permissionDecision === 'deny' ||
+    process.argv.includes('--frizz-thread') ||
+    !String(process.env.FRIZZ_THREAD ?? '').trim()
+  ) emit(result);
+  import(new URL('../job-gate/hook.ts', import.meta.url).href)
+    .then((gate) => {
+      const command = gate.jobGateCommand(input);
+      if (typeof command !== 'string') return emit(result);
+      const out = result.hookSpecificOutput ?? { hookEventName: 'PreToolUse' };
+      emit({ ...result, hookSpecificOutput: { ...out, updatedInput: { ...(out.updatedInput ?? input.tool_input), command } } });
+    })
+    .catch(() => emit(result));
 }
