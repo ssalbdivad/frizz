@@ -123,7 +123,7 @@ export interface Grouping {
  * parents; then an unmarked process takes the slug of its nearest attributed ancestor. A slug with a
  * live session root is a thread; a slug without one is an orphan.
  */
-export function groupThreadTrees(procs: readonly TopProc[], opts: { selfPid?: number } = {}): Grouping {
+export function groupThreadTrees(procs: readonly TopProc[], opts: { selfPid?: number; protectedPids?: ReadonlySet<number> } = {}): Grouping {
   const byPid = new Map(procs.map((p) => [p.pid, p]))
   const owner = new Map<number, string>()
   for (const p of procs) if (p.slug) owner.set(p.pid, p.slug)
@@ -161,7 +161,7 @@ export function groupThreadTrees(procs: readonly TopProc[], opts: { selfPid?: nu
   const tagged: ProcRow[] = procs.map((p) => ({ ...p, slug: owner.get(p.pid) ?? null }))
   const reap = new Set(decideOrphans(tagged, {
     minAgeMs: ORPHAN_MIN_AGE_MS,
-    protectedPids: opts.selfPid ? selfAndAncestors(tagged, opts.selfPid) : new Set(),
+    protectedPids: opts.protectedPids ?? (opts.selfPid ? selfAndAncestors(tagged, opts.selfPid) : new Set()),
   }).reap)
 
   const threads: ThreadTree[] = []
@@ -195,6 +195,24 @@ export function groupThreadTrees(procs: readonly TopProc[], opts: { selfPid?: nu
   threads.sort((a, b) => b.rssKB - a.rssKB || a.slug.localeCompare(b.slug))
   orphans.sort((a, b) => b.rssKB - a.rssKB || a.slug.localeCompare(b.slug))
   return { threads, orphans, owner }
+}
+
+/**
+ * This readout and the launcher processes that exist only to run it — each ancestor carrying a bare
+ * `top` argument — so `frizz top` run from a worker's shell does not count its own ~150MB against that
+ * worker's thread. Measured 2026-10-09: without it, the thread that ran it read +37% against `ps`.
+ */
+export function readoutChain(procs: readonly TopProc[], selfPid: number): Set<number> {
+  const byPid = new Map(procs.map((p) => [p.pid, p]))
+  const out = new Set([selfPid])
+  let cur = byPid.get(selfPid)
+  while (cur) {
+    const parent = byPid.get(cur.ppid)
+    if (!parent || parent.pid <= 1 || out.has(parent.pid) || !/(?:^|\s)top(?:\s|$)/.test(parent.command)) break
+    out.add(parent.pid)
+    cur = parent
+  }
+  return out
 }
 
 /** The server's own processes: the pid in server.lock, its launcher ancestors, and their untagged descendants. */
@@ -361,8 +379,10 @@ export async function readTop(opts: { home?: string; sampleMs?: number } = {}): 
 
   const [rows, address] = [await enumerateProcs(), readServerAddress(opts.home)]
   const stats: Map<number, ProcEntry> = scanProcs()
-  const procs: TopProc[] = rows.map((r) => ({ ...r, rssKB: stats.get(r.pid)?.rssKB ?? 0 }))
-  const grouping = groupThreadTrees(procs, { selfPid: process.pid })
+  const everything: TopProc[] = rows.map((r) => ({ ...r, rssKB: stats.get(r.pid)?.rssKB ?? 0 }))
+  const readout = readoutChain(everything, process.pid)
+  const procs = everything.filter((p) => !readout.has(p.pid))
+  const grouping = groupThreadTrees(procs, { protectedPids: selfAndAncestors(everything, process.pid) })
   const nowMs = Date.now()
 
   // ── the server's view

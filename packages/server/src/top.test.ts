@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import { test } from "node:test"
 import {
-  groupThreadTrees, hibernatedThreads, isBrokerDaemon, parseMeminfo, renderTop, rowsFromBoards, serverTree, sessionIdOf,
+  groupThreadTrees, hibernatedThreads, readoutChain, isBrokerDaemon, parseMeminfo, renderTop, rowsFromBoards, serverTree, sessionIdOf,
   sizeLabel, swapInRate, type ProjectBoard, type TopProc, type TopReading,
 } from "./top.ts"
 import { classifyUnownedBrokers } from "./unowned-brokers.ts"
@@ -73,6 +73,19 @@ test("the reaper's own ancestry is never reapable", () => {
   const { orphans } = groupThreadTrees(rows, { selfPid: 800 })
   // 400 is top's parent and 800 is top itself; 401 is aged and unprotected, 402 too young.
   assert.equal(orphans[0]!.reapable, 1)
+})
+
+test("the readout leaves itself and its launcher out, and stops at the first ancestor that is not running it", () => {
+  const rows = [
+    ...ROWS,
+    p(810, 203, "/bin/bash -c frizz-dev top", 4_000, "thread-a"),
+    p(811, 810, "/bin/sh /home/u/.local/bin/frizz-dev top", 1_000, "thread-a"),
+    p(812, 811, "nub --no-env-file /home/u/frizz/src/index.ts top --json", 150_000, "thread-a"),
+  ]
+  assert.deepEqual([...readoutChain(rows, 812)].sort(), [810, 811, 812])
+  assert.deepEqual([...readoutChain(ROWS, 999)], [999], "a self missing from the rows is still excluded")
+  const ancestorNamedTop = [...ROWS, p(820, 203, "htop", 3_000, "thread-a"), p(821, 820, "node top-child", 1_000, "thread-a")]
+  assert.deepEqual([...readoutChain(ancestorNamedTop, 821)], [821], "`htop` is not a `top` argument")
 })
 
 test("a broker with no live session root belongs to no thread", () => {
