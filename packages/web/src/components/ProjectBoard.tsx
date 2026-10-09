@@ -146,12 +146,11 @@ export function ProjectBoard({
   // THE THREADS OPENED LATELY, kept under a folded Snoozed or Done header (prefs `showRecentThreads`). An open
   // thread is touched on arrival and again on leaving, so the half hour runs from when the human last had it.
   const { showRecentThreads } = useSnapshot(prefs)
-  const openKey = openSlug ? threadKey(project.id, openSlug) : null
   useEffect(() => {
-    if (!openKey) return
-    touchThread(openKey)
-    return () => touchThread(openKey)
-  }, [openKey])
+    if (!openSlug) return
+    touchThread(openSlug)
+    return () => touchThread(openSlug)
+  }, [openSlug])
   const [, tick] = useState(0)
   useEffect(() => {
     if (!showRecentThreads) return
@@ -159,7 +158,7 @@ export function ProjectBoard({
     return () => clearInterval(timer)
   }, [showRecentThreads])
   const recentSlots = (band: "snoozed" | "done") =>
-    showRecentThreads ? recentOf(slots(band), (slot) => threadKey(project.id, slot.item.id)) : []
+    showRecentThreads ? recentOf(slots(band), (slot) => slot.item.id) : []
 
   const bandNow = new Map(target.flatMap((band) => band.items.map((t) => [t.id, band.id] as const)))
   const slots = (band: BoardBand) => bands.find((section) => section.id === band)?.slots ?? []

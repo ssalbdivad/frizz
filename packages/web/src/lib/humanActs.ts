@@ -13,6 +13,8 @@
 // woke on its own — to the reader of this page those are all things that happened TO the card they were
 // looking at, so it stays where it was, as a ghost, until they scroll it away.
 
+import { touchThread } from "./recentThreads.ts"
+
 /** How long an act keeps its thread's card from ghosting: past the round trip and the board push behind it. */
 const ACT_MS = 30_000
 
@@ -23,9 +25,11 @@ const acted = new Map<string, number>()
 
 /** Called by the RPC client for every mutation, before it is sent — and with its result, which names a dispatched thread. */
 export function noteRpcMutation(name: string, input: unknown, now = Date.now()): void {
-  if (PASSIVE.has(name) || name.startsWith("list") || name.startsWith("get")) return
   // Every thread-scoped mutation names its thread `slug` (api/contract.ts).
   const slug = (input as { slug?: unknown } | null | undefined)?.slug
+  // A read counts as a touch for the folded bands' recent rows (lib/recentThreads.ts), though not as an act.
+  if (typeof slug === "string" && !name.startsWith("list") && !name.startsWith("get")) touchThread(slug, now)
+  if (PASSIVE.has(name) || name.startsWith("list") || name.startsWith("get")) return
   if (typeof slug === "string") acted.set(slug, now)
 }
 

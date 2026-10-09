@@ -4,7 +4,9 @@
 // having to expand to interact with threads again"). The row stays IN its band, under that band's header —
 // never lifted into Queue or Running, which would put a thread outside the one band it is in.
 //
-// Keyed by threadKey (project + slug). Per tab and in memory: what this screen touched, not an account fact.
+// Keyed by SLUG alone: thread names are unique across every open project, and the one place that sees every
+// touch — the RPC client (lib/humanActs.ts), through which every read and act on a thread goes — knows the
+// slug but not the project. Per tab and in memory: what this screen touched, not an account fact.
 
 /** How long a touched thread stays under its folded band's header. */
 export const RECENT_MS = 30 * 60_000
@@ -12,16 +14,16 @@ export const RECENT_MS = 30 * 60_000
 const touched = new Map<string, number>()
 
 /** Records that the human opened, read or acted on this thread now. */
-export function touchThread(key: string, now = Date.now()): void {
-  touched.set(key, now)
+export function touchThread(slug: string, now = Date.now()): void {
+  touched.set(slug, now)
 }
 
 /** When the human last touched this thread, if within the window. */
-export function touchedAt(key: string, now = Date.now()): number | undefined {
-  const at = touched.get(key)
+export function touchedAt(slug: string, now = Date.now()): number | undefined {
+  const at = touched.get(slug)
   if (at === undefined) return undefined
   if (now - at >= RECENT_MS) {
-    touched.delete(key)
+    touched.delete(slug)
     return undefined
   }
   return at

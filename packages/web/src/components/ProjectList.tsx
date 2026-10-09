@@ -51,6 +51,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { ChevronDown, ChevronRight, ChevronUp, Ellipsis, Pin, Plus, Repeat } from "lucide-react"
 import { useLocation, useNavigate } from "react-router"
 import { useSnapshot } from "valtio"
+import { prefs } from "../lib/prefs.ts"
+import { recentOf } from "../lib/recentThreads.ts"
 import type { BoardSnapshot, ProjectCard, ScheduleView, ThreadView } from "@frizz/shared"
 import { projectRpc, rpc } from "../api/rpc.ts"
 import { ThreadProjectScope } from "../api/threadApi.tsx"
@@ -602,7 +604,9 @@ function ProjectGroupRows({
   const onPage = snap.board?.projectSlug === project.slug && project.slug === focus
   const live = onPage ? (snap.board as BoardSnapshot) : null
   const opened = collapsed ? [] : QUIET_BANDS.filter((band) => open.has(bandKey(project.id, band)))
-  const cached = useProjectBoard(project.id, opened.length > 0 && !onPage && project.open)
+  // Recent rows under folded quiet bands (prefs `showRecentThreads`) need the Done rows, so the board is read then too.
+  const { showRecentThreads } = useSnapshot(prefs)
+  const cached = useProjectBoard(project.id, (opened.length > 0 || (showRecentThreads && !collapsed)) && !onPage && project.open)
   const [donePage, setDonePage] = useState(DONE_PAGE)
   const board = onPage ? live : cached
   const quiet = useMemo(() => quietBands(project, board), [project, board])
@@ -710,6 +714,8 @@ function ProjectGroupRows({
           {slots("pinned").map(row)}
           {slots("ready").map(row)}
           {slots("working").map(row)}
+          {showRecentThreads &&
+            (["snoozed", "done"] as const).filter((band) => !opened.includes(band)).flatMap((band) => recentOf(slots(band), (slot) => slot.item.id)).map(row)}
           {opened.length > 0 && <QuietBands project={project} quiet={quiet} slots={slots} opened={opened} row={row} donePage={donePage} />}
         </ThreadProjectScope>
       )}
