@@ -1320,7 +1320,7 @@ function ReplyBox({ project, thread, onSent, onLanded, onFailed }: { project: Qu
         value={text}
         onChange={(value) => draftStore.set(key, value)}
         onSubmit={submit}
-        placeholder={answering?.staged ? "Add a note to your answers…" : (thread.questions?.length ?? 0) > 0 ? "Or reply — the questions stay open…" : "Reply to the agent…"}
+        placeholder={answering?.staged ? "Add a note to your answers…" : (thread.questions?.length ?? 0) > 0 ? "Or reply without answering…" : "Reply to the agent…"}
         attachBase={projectApiBase(project.id)}
         mentionCandidates={mentions}
         ownMention={ownMention}
