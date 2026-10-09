@@ -14,6 +14,8 @@ import {
 } from "./project-launch.ts"
 import { ShutdownTimeoutError } from "./shutdown.ts"
 import { log as frizzLog } from "./logging.ts"
+import { sessionEpochLogLine } from "./access-codes.ts"
+import { signOutOlderSessionEpoch } from "./session-epoch-child.ts"
 
 // A control-plane child that dies must leave its reason in the run log, not only on a terminal the
 // launcher may have already repainted past. Its stdio is still inherited, so an uncaught stack would
@@ -120,6 +122,17 @@ try {
     port: server.port,
     bootId: server.ctx.bootId,
   })
+  // After ready, never before: the launcher has to be answering for the sign-out request to land, and
+  // a slow or failed request must not hold up the board. A launcher that applied SESSION_EPOCH at its
+  // own start makes this a no-op; one older than the bump is why it exists (see the module).
+  if (process.connected) {
+    void signOutOlderSessionEpoch({ stateDir: target.stateDir, supervisorPid: process.ppid })
+      .then(({ advance, signedOut }) => {
+        const line = sessionEpochLogLine(advance, signedOut)
+        if (line) frizzLog.warn("dev-child", `${line} (a launcher older than this release refuses the rest from its next start)`)
+      })
+      .catch((error) => frizzLog.warn("dev-child", `session epoch: ${error instanceof Error ? error.message : error}`))
+  }
 
   let shuttingDown = false
   const stop = async () => {

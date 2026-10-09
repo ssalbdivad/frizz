@@ -156,6 +156,11 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     () => (editing.size === 0 ? open : [...open.filter((q) => !editing.has(q.id)), ...editing.values()]),
     [open, editing],
   )
+  // A SECRET's typed value, keyed by question id. In React state and nowhere else: the draft store
+  // mirrors into sessionStorage, and a pasted credential must not outlive the tab in a cache (lib/drafts
+  // says so for the typed interaction cards too). The cost is that a reload loses a half-pasted code,
+  // which is the right way round for a one-time code.
+  const [secrets, setSecrets] = useState<ReadonlyMap<string, string>>(() => new Map())
   const [error, setError] = useState<string>()
   // What this state has sent, by id — kept until the server refuses it, so a question is never staged or
   // sent twice however long the board takes to drop it, and so a surface can grey it where it stood.
@@ -175,7 +180,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   // Every free-text box of every question, subscribed as one batch — the draft store's own hook takes a
   // key list, and the set only changes when a question is registered or settled.
   const textKeys = useMemo(
-    () => (slug ? questions.flatMap((q) => allPaths(q).map((path) => draftKey.question(projectDir, slug, q.id, path))) : []),
+    () => (slug ? questions.flatMap((q) => (q.spec.secret ? [] : allPaths(q).map((path) => draftKey.question(projectDir, slug, q.id, path)))) : []),
     [projectDir, slug, questions],
   )
   const persistedText = useDraftValues(textKeys)
@@ -195,6 +200,7 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     draftStore.clearMany(allPaths(q).flatMap((path) => [draftKey.question(projectDir, slug, q.id, path), draftKey.questionPick(projectDir, slug, q.id, path)]))
   }
   const answerFor = (q: RegisteredQuestionView, path: string): BlockAnswer => {
+    if (q.spec.secret) return { chosen: null, chosenSet: [], text: secrets.get(q.id) ?? "" }
     const pick = slug ? parsePick(persistedPicks.get(draftKey.questionPick(projectDir, slug, q.id, path))) : NO_PICK
     return {
       chosen: pick.chosen,
@@ -220,7 +226,13 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
       // dropping the drafts too keeps a re-asked question from opening pre-filled with a stale answer.
       for (const id of result.answered) {
         const q = questions.find((entry) => entry.id === id)
-        if (q) clearStaged(q)
+        if (q?.spec.secret) setSecrets((prev) => {
+          if (!prev.has(id)) return prev
+          const next = new Map(prev)
+          next.delete(id)
+          return next
+        })
+        else if (q) clearStaged(q)
       }
       // A changed answer has landed: its slot draws the settled card again, with the new answer.
       const landed = new Set(result.answered)
@@ -329,7 +341,12 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     const key = settledQuestionsKey(slug, scope?.projectId)
     void queryClient.cancelQueries({ queryKey: key })
     const settledAt = new Date().toISOString()
-    const settled = pairs.map(({ q, answer }): SettledQuestion => ({ id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, answer, pending: true }))
+    // A secret's settled card never draws the value, not even for the beat before the server's own
+    // stored text (where the file went) replaces this.
+    const settled = pairs.map(({ q, answer }): SettledQuestion => ({
+      id: q.id, spec: q.spec, askedAt: q.askedAt, settledAt, pending: true,
+      answer: q.spec.secret ? { ...answer, text: "(secret sent)" } : answer,
+    }))
     queryClient.setQueryData<SettledQuestion[]>(key, (prev) => [...(prev ?? []).filter((s) => !ids.has(s.id)), ...settled])
     setSent((prev) => new Map([...prev, ...settled.map((s) => [s.id, s] as const)]))
     setInFlight((n) => n + 1)
@@ -412,7 +429,10 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
   // it is answered. ISO stamps of one clock, so they compare as strings.
   const newestAsk = [...open, ...settledList].reduce((max, q) => (q.askedAt > max ? q.askedAt : max), "")
   const changeFrom = open.reduce((min, q) => (q.askedAt < min ? q.askedAt : min), newestAsk)
-  const canChange = (s: SettledQuestion) => Boolean(slug) && s.askedAt >= changeFrom && settledList.some((entry) => entry.id === s.id)
+  // Never a SENT secret: reopening it would stage the stored placeholder, and the value itself is gone by
+  // design. A skipped one can still be answered after all.
+  const canChange = (s: SettledQuestion) =>
+    Boolean(slug) && (!s.spec.secret || s.answer.skipped === true) && s.askedAt >= changeFrom && settledList.some((entry) => entry.id === s.id)
   const forget = (id: string) => {
     const q = editing.get(id)
     if (q) clearStaged(q)
@@ -462,6 +482,10 @@ export function useRegisteredAnswering(thread: ThreadView | undefined, scope?: R
     onText: (q, path, isMulti, text) => {
       if (!slug) return
       engage(q)
+      if (q.spec.secret) {
+        setSecrets((prev) => (prev.get(q.id) === text ? prev : new Map(prev).set(q.id, text)))
+        return
+      }
       draftStore.set(draftKey.question(projectDir, slug, q.id, path), text)
       // SINGLE: the free-text box taking over — a keystroke OR just focusing it — drops the chosen chip,
       // as the fence producer does. The card's onFocus calls this with the text unchanged for exactly
@@ -585,8 +609,9 @@ export function SettledQuestionCard({ s, wrap, answering: given }: { s: SettledQ
       question={node.question}
       // THE TITLE SAYS IT WENT. "Question" on a greyed card read as a question gone inert, not one
       // answered, so whether a click had sent anything was a guess (David 2026-10-08). Never "Select
-      // multiple" either: that is an instruction nobody can act on any more.
-      label={node.depth > 1 ? "Follow-up" : skipped ? "Skipped" : "Answered"}
+      // multiple" either: that is an instruction nobody can act on any more. A secret says it was sent,
+      // never what it was.
+      label={node.depth > 1 ? "Follow-up" : skipped ? "Skipped" : node.question.secret ? "Secret sent" : "Answered"}
       settled={node.settled}
       wrap={wrap}
       // CHANGE, on the root's title row: the human moving through a set can take an answer back

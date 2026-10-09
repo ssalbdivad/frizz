@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import type { BoardSnapshot } from "@frizz/shared"
-import { markDrawerClosing, noteStandaloneThreadRender, registerRoutedLanding, resolveRoutedThread, store } from "../store.ts"
+import { markDrawerClosing, noteStandaloneThreadRender, pushDrawer, registerRoutedLanding, resolveRoutedThread, store } from "../store.ts"
 import { applyLocation, appPushedCurrentEntry, noteRouterTransition, primeReturnFromFullscreen, primeRoute, startRouter } from "./router.ts"
 
 function resetStore(): void {
@@ -410,6 +410,57 @@ test("a drawer the return from /full opened, closed before the route caught up, 
   } finally {
     globals.location = previous.location
     globals.window = previous.window
+    resetStore()
+  }
+})
+
+// Back after a LATERAL move — thread A, then a transcript link or a sidebar row to thread B. The
+// one-drawer policy replaced A with B, so Back lands on A's entry with A gone and B still on top. The
+// router used to park A and leave B up, and the store→URL sync then pushed B's URL over A's (and
+// settling A pushed A's over that): every Back press grew the history by two and flipped between the
+// threads, on the phone and the desktop alike. Back must be a pure pop: no write, and A on top.
+test("Back onto a thread a lateral move replaced pops without writing history", async () => {
+  resetStore()
+  const globals = globalThis as typeof globalThis & { location?: Location }
+  const previous = globals.location
+  const writes: Array<{ path: string; replace: boolean }> = []
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0))
+  globals.location = { pathname: "/" } as unknown as Location
+  const stop = startRouter((path, { replace }) => {
+    writes.push({ path, replace })
+    globals.location = { pathname: path } as unknown as Location
+  })
+  try {
+    boardWith([{ id: "thread-a" }, { id: "thread-b" }])
+    pushDrawer("thread", "thread-a")
+    await settle()
+    applyLocation("/thread/thread-a")
+    pushDrawer("thread", "thread-b")
+    await settle()
+    applyLocation("/thread/thread-b")
+    assert.deepEqual(writes, [{ path: "/thread/thread-a", replace: false }, { path: "/thread/thread-b", replace: false }])
+    assert.deepEqual(store.drawers.filter((d) => !d.closing).map((d) => d.slug), ["thread-b"], "the lateral move replaced A")
+
+    // Back: the browser is already on A's entry; the route tree applies it (routes.tsx useRouteToStore),
+    // then App settles the parked slug once the board is there (resolveRoutedThread).
+    writes.length = 0
+    globals.location = { pathname: "/thread/thread-a" } as unknown as Location
+    primeRoute("/thread/thread-a")
+    await settle()
+    resolveRoutedThread()
+    await settle()
+    assert.deepEqual(writes, [], "Back pushes nothing — it was a pop")
+    assert.deepEqual(store.drawers.filter((d) => !d.closing).map((d) => d.slug), ["thread-a"])
+
+    // And the next Back reaches the page, again without a write.
+    globals.location = { pathname: "/" } as unknown as Location
+    primeRoute("/")
+    await settle()
+    assert.deepEqual(writes, [])
+    assert.equal(store.drawers.filter((d) => !d.closing).length, 0)
+  } finally {
+    stop()
+    globals.location = previous
     resetStore()
   }
 })

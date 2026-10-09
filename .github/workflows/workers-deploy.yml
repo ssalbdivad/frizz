@@ -1,0 +1,108 @@
+name: workers-deploy
+
+# Deploys the frizz.sh Workers — packages/relay (`*.frizz.sh`) and packages/registrar
+# (`registrar.frizz.sh`) — and is the ONLY thing that should. Nobody runs `wrangler deploy` from a
+# laptop any more.
+#
+# WHY (2026-10-08). From 2026-09-21 an attacker holding a Cloudflare API token replaced both Workers
+# with backdoored builds of our own source: the relay copied every visitor's session cookie and
+# keystrokes, and the registrar copied the GitHub token every named claim sends. Every one of those
+# uploads looked like a laptop deploy, because that is how the Workers had always shipped, so nothing
+# could tell them apart. Now there is exactly one way in, and workers-drift.yml fails, and GitHub
+# emails, the moment anything else is running.
+#
+# Each deploy stamps `ci:<sha> run:<run id>` on the version and the deployment. The drift check
+# reads that back and holds it against this run: the run must exist, be this workflow on main at that
+# sha, and have been live when the upload happened. Keep the format in step with
+# scripts/workers-drift.mjs.
+#
+# THE TOKEN lives in the `workers-deploy` environment, which only main may use and which waits for a
+# maintainer's approval. It is an account-owned Cloudflare token with Editor on these two Workers and
+# Workers Routes Edit on the frizz.sh zone, nothing more; the registrar README says why routes need
+# Edit. It is never in a file and never on a laptop.
+
+on:
+  # DISPATCH ONLY, as release.yml and for the same reason: a `workflow_dispatch` needs a GitHub
+  # session or token with write access, which a stolen git push credential does not carry. A push to
+  # main deploys nothing.
+  #
+  #   gh workflow run workers-deploy.yml --ref main -f target=both
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Which Worker to deploy
+        type: choice
+        options: [both, relay, registrar]
+        default: both
+
+# Two deploys of one Worker racing would leave whichever finished last; let one finish first.
+concurrency:
+  group: workers-deploy
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: workers-deploy
+    steps:
+      # A step rather than a job-level `if:`, because a skipped job is silent — the run would go green
+      # having deployed nothing. The environment's branch rule refuses other refs too; this says why.
+      - name: Refuse to deploy from any ref but main
+        run: |
+          [ "$GITHUB_REF" = "refs/heads/main" ] || { echo "::error::workers-deploy.yml deploys from main only, got $GITHUB_REF"; exit 1; }
+
+      # Third-party actions are pinned to commits, not tags: a tag can be moved, and this job holds a
+      # token that can rewrite frizz.sh. The comment names the release each commit is.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+
+      - uses: pnpm/action-setup@fc06bc1257f339d1d5d8b3a19a8cae5388b55320 # v4.4.0
+        with:
+          version: 10
+
+      # No dependency cache. A cache is shared with every other workflow on this repository, and a
+      # poisoned one would run inside the job that holds the deploy token. A cold install costs a
+      # minute.
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "26.x"
+
+      # pnpm 10 runs install scripts only for the packages root package.json allows by name, so
+      # nothing wrangler pulls in (workerd, sharp) runs code at install time. wrangler itself is an
+      # exact devDependency of both Worker packages, held to the lockfile's integrity hashes.
+      - name: Install workspace
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      # The Workers' own unit tests, on plain Node's type stripping — so the three packages they load
+      # keep to erasable TypeScript (their tsconfigs enforce it). The e2e harnesses need a real workerd
+      # and a board, and stay a local step (see each package's README).
+      - name: Test the Workers
+        run: node --test packages/relay/src/*.test.ts packages/registrar/src/*.test.ts
+
+      # The registrar first: it is off the data plane, so if a deploy is going to break something, the
+      # first one breaks signup rather than every running board. A failure stops the run there.
+      - name: Deploy
+        env:
+          TARGET: ${{ inputs.target }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: dde3ec1f6b1f0a397ea82a9ed322f5ce
+          WRANGLER_SEND_METRICS: "false"
+        run: |
+          case "$TARGET" in
+            both) packages="registrar relay" ;;
+            relay|registrar) packages="$TARGET" ;;
+            *) echo "::error::unknown target $TARGET"; exit 1 ;;
+          esac
+          for package in $packages; do
+            echo "::group::deploy packages/$package"
+            pnpm --dir "packages/$package" exec wrangler deploy --message "ci:$GITHUB_SHA run:$GITHUB_RUN_ID"
+            echo "::endgroup::"
+          done

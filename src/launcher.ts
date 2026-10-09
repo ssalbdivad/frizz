@@ -376,9 +376,9 @@ export function prepareSandbox(env: NodeJS.ProcessEnv = process.env, realHome: s
 /**
  * What a sandbox SHARES with the real home: credentials, never state.
  *
- * The cloud screens read credentials out of $HOME too — `gh` its config dir, cloudflared its cert and
- * tunnel credentials, the agents their sessions — and a sandbox with none of them would say "not
- * signed in" on every screen. So those are linked in. The one that MATTERS is the claim identity key:
+ * The board reads credentials out of $HOME too — `gh` its config dir (for the GitHub cards and the
+ * workers; a frizz.sh claim never reads it), cloudflared its cert and tunnel credentials, the agents
+ * their sessions — and a sandbox with none of them would say "not signed in" on every screen. So those are linked in. The one that MATTERS is the claim identity key:
  * the registrar knows a name's holder by that key alone, so a name claimed with a throwaway key would
  * be "taken" against the real board for the length of a lease. Linking the real key makes a sandbox
  * claim the machine's claim, which the real board then renews as its own.

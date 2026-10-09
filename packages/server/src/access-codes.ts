@@ -1,16 +1,16 @@
 import { randomBytes, timingSafeEqual, createHmac } from "node:crypto"
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { dirname, join } from "node:path"
 
 /**
- * Single-use access codes, and the long-lived sessions they mint.
+ * Single-use access codes, and the longer-lived sessions they mint.
  *
  * The split is the whole point. Before this, one standing secret was printed at launch and traded for a
  * year-long cookie: every copy of it — scrollback, shell history, an email — stayed valid forever, and
  * it only rotated on the restart that is least convenient to perform. Separating the two fixes that:
  *
  *   CODE     single-use, short-lived, authorizes exactly ONE exchange. Safe to show on a screen.
- *   SESSION  what the code mints. Long-lived, signed, and independently revocable.
+ *   SESSION  what the code mints. Lasts 30 days, signed, and independently revocable.
  *
  * A leaked code is worthless the moment it is used (or five minutes pass), and a leaked session can be
  * revoked without disturbing anything else. GitHub minting the session instead of a code is policy on
@@ -28,8 +28,27 @@ const SESSION_BYTES = 32
 /** Short enough to read off a terminal and type back into `--sign-out`; still 2^48 of space. */
 const SESSION_ID_BYTES = 6
 export const DEFAULT_CODE_TTL_MS = 5 * 60_000
-/** A photographed QR is a real vector, so codes expire on a human timescale, not a session one. */
-export const DEFAULT_SESSION_TTL_MS = 365 * 24 * 60 * 60_000
+/**
+ * How long a signed-in device stays signed in. A photographed QR is a real vector, so codes expire on a
+ * human timescale (DEFAULT_CODE_TTL_MS); this is the session one.
+ *
+ * 30 days, down from 365 on 2026-10-08. A session cookie crossed a compromised frizz.sh relay for over
+ * two weeks (2026-09-21 to 2026-10-08), and a year-long cookie copied there would have stayed good for
+ * a year. A month bounds what any copied cookie is worth, at the cost of one QR scan a month per device.
+ */
+export const DEFAULT_SESSION_TTL_MS = 30 * 24 * 60 * 60_000
+
+/**
+ * The generation of remote sessions this code accepts. Raising it signs out every device that signed in
+ * before, on every board, once, at the next start: see advanceSessionEpoch. That is the whole response
+ * to a leak of session cookies — bump this and release — with nothing for an operator to run.
+ *
+ *   1  2026-10-08  the frizz.sh relay was serving a backdoored build that copied every visitor's
+ *                  `frizz_session` cookie (2026-09-21 to 2026-10-08).
+ *
+ * Never lower it. A board that recorded a higher epoch than its code knows (a downgrade) is left alone.
+ */
+export const SESSION_EPOCH = 1
 
 export interface AccessCode {
   code: string
@@ -52,10 +71,15 @@ export interface AccessStoreOptions {
    * HMAC key for sessions. Supply a PERSISTED one so sessions outlive a restart.
    *
    * Defaulting to a fresh random key means every restart silently signs out every device — and a
-   * board restarts often (artifact updates, crashes, an ordinary ctrl-C), so in practice a "one year"
-   * cookie lasted until the next one. Rotating this key is what revocation looks like.
+   * board restarts often (artifact updates, crashes, an ordinary ctrl-C), so in practice a 30-day
+   * cookie would last until the next one. Rotating this key is what revocation looks like.
    */
   signingKey?: Buffer
+  /**
+   * Make and persist a replacement for `signingKey`; signOutAll() calls it. Without one the new key is
+   * held in memory only, so the next start goes back to the old key and the old sessions with it.
+   */
+  rotateSigningKey?: () => Buffer
   /** Called when a code is successfully consumed, so a launcher can repaint its QR. */
   onConsumed?: (code: string) => void
   /** Where sign-outs and device labels live. In-memory by default, which forgets them on restart. */
@@ -71,6 +95,8 @@ export interface SessionRecord {
   id: string
   label: string
   createdAt: number
+  /** When the session stops verifying on its own. Absent on records written before 2026-10-08. */
+  expiresAt?: number
   revokedAt?: number
 }
 
@@ -86,7 +112,7 @@ export interface SessionDirectory {
   list(): SessionRecord[]
   /** False when the id is unknown or already revoked, so a caller can say which. */
   revoke(id: string): boolean
-  /** Returns how many live sessions were signed out. */
+  /** Returns how many live sessions were signed out; one already past its expiry is not counted. */
   revokeAll(): number
 }
 
@@ -107,7 +133,13 @@ export function memorySessionDirectory(seed: SessionRecord[] = []): SessionDirec
     },
     revokeAll() {
       let n = 0
-      for (const r of records.values()) if (r.revokedAt === undefined) { r.revokedAt = Date.now(); n++ }
+      const now = Date.now()
+      for (const r of records.values()) {
+        if (r.revokedAt !== undefined) continue
+        r.revokedAt = now
+        // Marked either way, so the list reads the same; counted only if it could still sign in.
+        if (r.expiresAt === undefined || r.expiresAt > now) n++
+      }
       return n
     },
   }
@@ -155,14 +187,18 @@ export function secretsMatch(a: string, b: string): boolean {
 
 export class AccessStore {
   private readonly codes = new Map<string, StoredCode>()
-  private readonly options: Required<Omit<AccessStoreOptions, "onConsumed" | "signingKey" | "sessions">> &
+  private readonly options: Required<
+    Omit<AccessStoreOptions, "onConsumed" | "signingKey" | "rotateSigningKey" | "sessions">
+  > &
     Pick<AccessStoreOptions, "onConsumed">
   readonly sessions: SessionDirectory
   /** Signing key for sessions. Persisted by the caller; a fresh one signs every device out. */
-  private readonly signingKey: Buffer
+  private signingKey: Buffer
+  private readonly rotateSigningKey: () => Buffer
 
   constructor(options: AccessStoreOptions = {}) {
     this.signingKey = options.signingKey ?? randomBytes(32)
+    this.rotateSigningKey = options.rotateSigningKey ?? (() => randomBytes(32))
     this.sessions = options.sessions ?? memorySessionDirectory()
     this.options = {
       codeTtlMs: options.codeTtlMs ?? DEFAULT_CODE_TTL_MS,
@@ -212,8 +248,22 @@ export class AccessStore {
     this.sweep()
     this.options.onConsumed?.(code)
     const minted = this.mintSession(now)
-    this.sessions.record({ id: minted.id, label: device ?? "unknown device", createdAt: now })
-    return { ok: true, session: minted.session, expiresAt: now + this.options.sessionTtlMs, id: minted.id }
+    const expiresAt = now + this.options.sessionTtlMs
+    this.sessions.record({ id: minted.id, label: device ?? "unknown device", createdAt: now, expiresAt })
+    return { ok: true, session: minted.session, expiresAt, id: minted.id }
+  }
+
+  /**
+   * Sign out EVERY device: `frizz --sign-out all`, and what a session-epoch bump asks of a running board.
+   *
+   * The denylist alone is not enough for that. It names only the ids it recorded, so a session minted
+   * before ids existed (2026-08-25), or while the directory was held in memory, would survive it. A new
+   * key kills every outstanding session whatever it carries; the denylist entries are what make
+   * `frizz --sessions` stop listing those devices as signed in. Returns how many recorded devices that was.
+   */
+  signOutAll(): number {
+    this.signingKey = this.rotateSigningKey()
+    return this.sessions.revokeAll()
   }
 
   /**
@@ -225,7 +275,8 @@ export class AccessStore {
    * device's. Rotating the key still revokes everything at once; this is the scalpel beside that axe.
    *
    * A session minted before ids existed has a two-part payload and still verifies — it simply has no id
-   * to revoke individually. Upgrading must not sign every device out.
+   * to revoke individually. Adding ids was not meant to sign every device out; when that IS the intent,
+   * SESSION_EPOCH does it on purpose, by rotating the key.
    */
   private mintSession(now: number): { session: string; id: string } {
     const expiresAt = now + this.options.sessionTtlMs
@@ -233,6 +284,11 @@ export class AccessStore {
     const nonce = this.options.randomToken(SESSION_BYTES)
     const payload = `${expiresAt}.${id}.${nonce}`
     return { session: `${payload}.${this.sign(payload)}`, id }
+  }
+
+  /** The expiry a session carries in its own payload. Only called on a session that already verified. */
+  private static expiryOf(session: string): number {
+    return Number(session.slice(0, session.indexOf(".")))
   }
 
   /** The id inside a session payload, or null for a legacy two-part one. */
@@ -271,7 +327,7 @@ export class AccessStore {
    *
    * - `revoked`: the id is on the denylist now, so a surviving copy of this cookie is refused too.
    * - `legacy`: a session minted before ids existed verifies but has no id to revoke on its own. The
-   *   caller can still clear the cookie; rotating the key remains the way to kill a copy of it.
+   *   caller can still clear the cookie; signOutAll(), which rotates the key, is the way to kill a copy.
    * - `no-session`: nothing valid was presented — absent, forged, expired, or already signed out.
    */
   signOutSession(session: string | undefined):
@@ -285,7 +341,7 @@ export class AccessStore {
     // started without a persisted one) is unknown after a restart even though the key still verifies it.
     // Record it first, or revoke() refuses the unknown id and the sign-out silently does nothing.
     if (!this.sessions.revoke(id)) {
-      this.sessions.record({ id, label: "unknown device", createdAt: this.options.now() })
+      this.sessions.record({ id, label: "unknown device", createdAt: this.options.now(), expiresAt: AccessStore.expiryOf(session) })
       this.sessions.revoke(id)
     }
     return this.sessions.isRevoked(id) ? { result: "revoked", id } : { result: "no-session" }
@@ -363,6 +419,20 @@ export function fileSessionDirectory(stateDir: string, now: () => number = Date.
   }
 }
 
+const SESSION_KEY_FILE = "session-key"
+const SESSION_EPOCH_FILE = "session-epoch"
+
+function writeSessionKey(path: string, key: Buffer): void {
+  mkdirSync(dirname(path), { recursive: true })
+  writeFileSync(path, key, { mode: 0o600 })
+  try {
+    // writeFileSync's mode is ignored when the file already exists, so state it again.
+    chmodSync(path, 0o600)
+  } catch {
+    // Best effort: a key readable only by this user is the goal, not a hard gate.
+  }
+}
+
 /**
  * Load this board's session-signing key, creating it on first use.
  *
@@ -372,7 +442,7 @@ export function fileSessionDirectory(stateDir: string, now: () => number = Date.
  * fresh one.
  */
 export function loadOrCreateSessionKey(stateDir: string): Buffer {
-  const path = join(stateDir, "session-key")
+  const path = join(stateDir, SESSION_KEY_FILE)
   try {
     const existing = readFileSync(path)
     // A truncated or empty file would silently produce a weak key; treat it as absent and rewrite.
@@ -380,14 +450,103 @@ export function loadOrCreateSessionKey(stateDir: string): Buffer {
   } catch {
     // Missing on first run, which is the ordinary path.
   }
+  return rotateSessionKey(stateDir)
+}
+
+/** Write a fresh session key over this board's old one. Every session signed by the old key dies. */
+export function rotateSessionKey(stateDir: string): Buffer {
   const key = randomBytes(32)
-  mkdirSync(dirname(path), { recursive: true })
-  writeFileSync(path, key, { mode: 0o600 })
-  try {
-    // writeFileSync's mode is ignored when the file already exists, so state it again.
-    chmodSync(path, 0o600)
-  } catch {
-    // Best effort: a key readable only by this user is the goal, not a hard gate.
-  }
+  writeSessionKey(join(stateDir, SESSION_KEY_FILE), key)
   return key
+}
+
+/** The session epoch this board last advanced to; 0 for a board that predates epochs. */
+export function readSessionEpoch(stateDir: string): number {
+  try {
+    const parsed = JSON.parse(readFileSync(join(stateDir, SESSION_EPOCH_FILE), "utf8")) as { epoch?: unknown }
+    return Number.isInteger(parsed?.epoch) && (parsed.epoch as number) >= 0 ? (parsed.epoch as number) : 0
+  } catch {
+    // Missing or unreadable reads as 0. That errs towards one more sign-out, never towards keeping a
+    // session the code meant to end.
+    return 0
+  }
+}
+
+export type SessionEpochAdvance =
+  | { advanced: false; epoch: number }
+  /** `rotatedKey` is false on a first run: there was no key, so nothing was signed in to sign out. */
+  | { advanced: true; from: number; to: number; rotatedKey: boolean }
+
+/**
+ * Bring this board's sessions up to `epoch`: if the board last recorded an older one, rotate the
+ * signing key so every session minted before it stops verifying, then record the new epoch.
+ *
+ * Once per epoch, not once per start: the record is what stops a second start rotating again. The key
+ * is written BEFORE the record, so a crash between the two rotates once more on the next start rather
+ * than recording an epoch whose sessions were never ended. Nothing local is touched — loopback is
+ * never gated by a session, so the operator's own tabs and CLI keep working throughout.
+ *
+ * Callable from either process. The launcher calls it before it loads the key (loadSessionState). A
+ * server child calls it too (signOutOlderSessionEpoch), because an in-app update replaces the child and
+ * leaves an older launcher running: that launcher reads the rotated file at its next start.
+ */
+export function advanceSessionEpoch(stateDir: string, epoch: number = SESSION_EPOCH): SessionEpochAdvance {
+  const from = readSessionEpoch(stateDir)
+  if (from >= epoch) return { advanced: false, epoch: from }
+  const keyPath = join(stateDir, SESSION_KEY_FILE)
+  const rotatedKey = existsSync(keyPath)
+  if (rotatedKey) rotateSessionKey(stateDir)
+  mkdirSync(stateDir, { recursive: true })
+  writeFileSync(
+    join(stateDir, SESSION_EPOCH_FILE),
+    JSON.stringify({ epoch, advancedAt: new Date().toISOString() }),
+    { mode: 0o600 },
+  )
+  return { advanced: true, from, to: epoch, rotatedKey }
+}
+
+/**
+ * The one line an operator reads when an epoch bump signed `count` devices out, or null when it signed
+ * out none. Without it, a phone that suddenly needs a new QR looks like a bug.
+ *
+ * Keyed on the count, not on "the key rotated": every board writes a key on its first start, remote or
+ * not, so a loopback-only operator would otherwise be told about devices they never had.
+ */
+export function sessionEpochNotice(count: number): string | null {
+  if (count <= 0) return null
+  const devices = count === 1 ? "1 remote device" : `${count} remote devices`
+  return `Security update: signed out ${devices} (a phone or browser reaching this board through frizz.sh or a tunnel). Each must sign in again with a fresh link.`
+}
+
+/**
+ * The run-log record of an epoch advance that ended sessions, or null when there is nothing worth a
+ * record (no advance, or a first run that had no key to rotate). `signedOut` of null means the count
+ * could not be learned.
+ */
+export function sessionEpochLogLine(advance: SessionEpochAdvance, signedOut: number | null): string | null {
+  if (!advance.advanced || !advance.rotatedKey) return null
+  const count = signedOut === null ? "an unknown number of" : String(signedOut)
+  return `session epoch ${advance.from} -> ${advance.to}: rotated the session key and signed out ${count} recorded remote device(s); every older remote session is refused`
+}
+
+/**
+ * Everything a launcher needs to gate its public origin: the key, the persisted directory, and the
+ * epoch advance it applied on the way. One call, so the two launchers cannot disagree on the order —
+ * the epoch MUST be applied before the key is read, or this start would load the key it just retired.
+ */
+export function loadSessionState(stateDir: string, epoch: number = SESSION_EPOCH): {
+  key: Buffer
+  directory: SessionDirectory
+  rotateKey: () => Buffer
+  advance: SessionEpochAdvance
+  /** How many recorded devices the advance signed out; feed it to sessionEpochNotice. */
+  signedOut: number
+} {
+  const advance = advanceSessionEpoch(stateDir, epoch)
+  const key = loadOrCreateSessionKey(stateDir)
+  const directory = fileSessionDirectory(stateDir)
+  // The rotated key already refuses every old session. Marking them in the directory as well is what
+  // stops `frizz --sessions` listing those devices as still signed in.
+  const signedOut = advance.advanced ? directory.revokeAll() : 0
+  return { key, directory, rotateKey: () => rotateSessionKey(stateDir), advance, signedOut }
 }

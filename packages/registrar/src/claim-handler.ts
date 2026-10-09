@@ -51,8 +51,13 @@ export interface GithubIdentity {
   createdAt: number
 }
 
+/**
+ * Resolve a token to its account. `null` means GitHub did not accept it; `"scoped"` means it is a token
+ * that can do more than name its account — a `gh` CLI token from a Frizz older than the device flow —
+ * and is refused whoever it belongs to, so the registrar never again accepts one worth stealing.
+ */
 export interface GithubVerifier {
-  (token: string): Promise<GithubIdentity | null>
+  (token: string): Promise<GithubIdentity | null | "scoped">
 }
 
 export interface CloudflareApi {
@@ -113,6 +118,7 @@ export type ClaimFailure =
   | "one-name-per-key"
   | "github-required"
   | "github-rejected"
+  | "github-token-scoped"
   | "github-too-new"
   | "one-name-per-account"
   | "namespace-full"
@@ -138,8 +144,10 @@ const MESSAGES: Record<ClaimFailure, string> = {
   "provisioning-failed": "the name could not be provisioned; nothing was left behind",
   "one-name-per-key":
     "this machine already holds a name — release it first, or claim from a different Frizz identity",
-  "github-required": "claiming a name needs a signed-in GitHub CLI — run `gh auth login` and try again",
-  "github-rejected": "GitHub did not recognise that login — run `gh auth login` and try again",
+  "github-required": "claiming a custom name needs a GitHub sign-in — update Frizz and try again",
+  "github-rejected": "GitHub did not recognise that sign-in — try again",
+  "github-token-scoped":
+    "this claim carried a GitHub token with more access than a name needs; the registrar accepts only a sign-in that grants no permissions — update Frizz and try again",
   "github-too-new": "that GitHub account is too new to claim a name",
   "one-name-per-account": "that GitHub account already holds a name",
   "namespace-full": "frizz.sh has no free names left — this is our limit to raise, not yours",
@@ -194,6 +202,7 @@ export async function handleClaim(body: unknown, deps: ClaimDeps): Promise<Claim
   } else if (deps.github) {
     if (!verdict.payload.github) return reject("github-required")
     const who = await deps.github(verdict.payload.github)
+    if (who === "scoped") return reject("github-token-scoped")
     if (!who) return reject("github-rejected")
     if (deps.minAccountAgeMs && now - who.createdAt < deps.minAccountAgeMs) {
       return reject("github-too-new")

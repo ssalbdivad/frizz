@@ -122,6 +122,8 @@ export interface DevSupervisorOptions {
   onCodeConsumed?: () => void
   /** Persisted session-signing key, so devices stay signed in across restarts. */
   sessionKey?: Buffer
+  /** Persists a replacement for `sessionKey` when every device is signed out. See RestartSupervisorProxyOptions. */
+  rotateSessionKey?: () => Buffer
   /** Forwarded to the proxy so a sign-out survives a restart. See RestartSupervisorProxyOptions. */
   sessionDirectory?: SessionDirectory
   launchTarget: ProjectLaunchTarget
@@ -708,6 +710,7 @@ class Supervisor implements DevSupervisor {
       publicOrigin: opts.publicOrigin,
       onCodeConsumed: opts.onCodeConsumed,
       sessionKey: opts.sessionKey,
+      rotateSessionKey: opts.rotateSessionKey,
       sessionDirectory: opts.sessionDirectory,
       childPort: () => this.childPort,
       restart: () => this.restartFromBrowser(),

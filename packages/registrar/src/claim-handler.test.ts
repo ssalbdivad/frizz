@@ -441,6 +441,25 @@ function fakeGithub(accounts: Record<string, { id: number; login: string; create
 
 const ACCOUNT = { id: 4242, login: "colin", createdAt: NOW - 365 * 24 * 60 * 60_000 }
 
+test("a token that can do more than name its account is refused, and nothing is recorded", async () => {
+  // 2026-10-08: a compromised registrar collected the `gh` tokens old clients sent. The verifier now
+  // answers "scoped" for any such token; the claim must stop there, distinctly from an unknown login,
+  // so an old client is told to update rather than to sign in again.
+  const cf = fakeCloudflare()
+  const st = fakeStore()
+  const identity = await generateClaimIdentity()
+  const d = deps({ api: cf.api, store: st.store, github: async (token) => (token === "gho_ghcli" ? "scoped" : ACCOUNT) })
+  const result = await handleClaim(
+    await signClaim({ name: "colin", port: 9393, issuedAt: NOW, github: "gho_ghcli" }, identity),
+    d
+  )
+  assert.equal(result.status, 400)
+  assert.equal("error" in result.body && result.body.error, "github-token-scoped")
+  assert.match("message" in result.body ? result.body.message : "", /update Frizz/)
+  assert.deepEqual(cf.calls, [], "nothing was provisioned")
+  assert.equal(st.rows.size, 0, "nothing was recorded")
+})
+
 test("with the gate on, a claim without a GitHub token is refused before provisioning", async () => {
   // Reading a username locally proves nothing — the CLI could send any string. The token is what lets
   // the registrar check with GitHub, which is the only thing that makes this a limit at all.

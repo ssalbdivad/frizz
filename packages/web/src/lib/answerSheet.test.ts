@@ -3,7 +3,7 @@ import assert from "node:assert/strict"
 import type { RegisteredQuestionView } from "@frizz/shared"
 import type { BlockAnswer } from "./questionBlocks.ts"
 import { ROOT_PATH, childPath } from "./registeredQuestion.ts"
-import { answerSteps, answerSummary, firstOpenStep, oneLineDescription, stepAfter, stepAfterPick, stepKey } from "./answerSheet.ts"
+import { SECRET_MASK, answerSteps, answerSummary, firstOpenStep, oneLineDescription, stepAfter, stepAfterPick, stepKey } from "./answerSheet.ts"
 
 const blank: BlockAnswer = { chosen: null, chosenSet: [], text: "" }
 const pick = (i: number): BlockAnswer => ({ chosen: i, chosenSet: [], text: "" })
@@ -81,4 +81,10 @@ test("only a one-line description is a muted line; a multi-line one is the optio
   assert.equal(oneLineDescription(" Round half to even. "), "Round half to even.")
   assert.equal(oneLineDescription("- one\n- two"), undefined)
   assert.equal(oneLineDescription(undefined), undefined)
+})
+
+test("a SECRET's review row says it is filled and never what it is", () => {
+  const spec = { question: "The npm one-time code.", kind: "question" as const, secret: true }
+  assert.equal(answerSummary(spec, { ...blank, text: "493817" }), SECRET_MASK)
+  assert.equal(answerSummary(spec, blank), null, "an empty secret is still Skipped")
 })

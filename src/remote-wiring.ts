@@ -3,9 +3,10 @@ import { type AccessLink, type AccessPane, createAccessPane } from "./access-pan
 import { type CloudConfig, establishCloudConfig } from "./cloud.ts";
 import { installPaneHost, type PaneHost } from "./pane-host.ts";
 import { createRemoteController, type RemoteController, type RemoteLog } from "./remote-controller.ts";
-import { probeCloudflared, probeGithub, probeTailscale } from "./remote-detect.ts";
+import { deviceCodeMessage, githubDeviceFlow } from "./github-device-flow.ts";
+import { probeCloudflared, probeTailscale } from "./remote-detect.ts";
 import { createRemotePane } from "./remote-pane.ts";
-import { createRemoteControlHandler } from "./remote-setup.ts";
+import { type ClaimSignIn, createRemoteControlHandler } from "./remote-setup.ts";
 
 /**
  * Remote access on a running board, wired the same way by every launcher that owns one: `frizz-dev`
@@ -57,12 +58,15 @@ export async function wireRemote(options: RemoteWiringOptions): Promise<RemoteWi
     port,
     current: () => remote.current(),
     apply: (next: CloudConfig | null, applyOptions?: { justClaimed?: boolean }) => remote.apply(next, applyOptions),
-    claim: (name: string) => establishCloudConfig(name, port),
+    // A custom name signs in through GitHub's zero-scope device flow; each surface shows its code (the R
+    // pane on its own screen, Settings in the page, which also gets a terminal line via onDeviceCode).
+    claim: (name: string, signIn: ClaimSignIn) =>
+      establishCloudConfig(name, port, undefined, undefined, githubDeviceFlow({ onPrompt: signIn.onDeviceCode, signal: signIn.signal })),
     issueLink: () => supervisor.issueAccessLink(),
-    probes: { github: probeGithub, cloudflared: probeCloudflared, tailscale: probeTailscale },
+    probes: { cloudflared: probeCloudflared, tailscale: probeTailscale },
     onChanged: (config: CloudConfig | null) => log.info("remote", config ? `reached at https://${config.hostname}` : "loopback only"),
   };
-  supervisor.setRemoteControl(createRemoteControlHandler(setup));
+  supervisor.setRemoteControl(createRemoteControlHandler({ ...setup, onDeviceCode: (prompt) => options.say(deviceCodeMessage(prompt)) }));
   const accessPane = createAccessPane({ issue: () => supervisor.issueAccessLink() });
   const remotePane = createRemotePane({ ...setup, sandbox: options.sandbox ?? false });
   const paneHost = installPaneHost({ bindings: { l: accessPane, L: accessPane, r: remotePane, R: remotePane } });

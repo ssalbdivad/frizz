@@ -6,7 +6,7 @@ import { dirname, join } from "node:path";
 import { frizzPaths } from "@frizz/server/frizz-paths";
 import { claimNameIsValid, generateAnonymousClaimName, isAnonymousClaimName, normalizeClaimName } from "@frizz/shared";
 import { loadOrCreateClaimIdentity } from "./identity.ts";
-import { githubCli, type GithubIdentity } from "./github-identity.ts";
+import { deviceCodeMessage, githubDeviceFlow, type GithubAuthorizer } from "./github-device-flow.ts";
 import { ClaimError, claimName } from "./registrar-client.ts";
 import { connectRelay } from "./relay-connection.ts";
 
@@ -28,6 +28,7 @@ import { connectRelay } from "./relay-connection.ts";
  *
  *   (empty)            -> CLAIM a private unguessable name on frizz.sh — no account, no sign-in
  *   colin              -> CLAIM `colin.frizz.sh` from the registrar, bound to your GitHub account
+ *                         through a no-permission GitHub sign-in (github-device-flow.ts)
  *   board.example.com  -> a tunnel you made yourself, which Frizz only runs
  *
  * The claimed path exists because creating a tunnel and its DNS record needs a zone-scoped Cloudflare
@@ -144,7 +145,9 @@ export async function reconcileCloudConfig(
   home = homedir(),
   onNotice?: (message: string) => void,
   origin?: string,
-  github: GithubIdentity = githubCli,
+  // A reconcile runs at launch, before any pane is open, so the sign-in code is shown the way every
+  // other launch notice is.
+  github: GithubAuthorizer = githubDeviceFlow(onNotice ? { onPrompt: (prompt) => onNotice(deviceCodeMessage(prompt)) } : {}),
 ): Promise<CloudConfig> {
   if (isRelayConfig(config)) return config;
   const label = config.claim ?? zoneClaimLabel(config.hostname);
@@ -292,7 +295,7 @@ export async function establishCloudConfig(
   port: number,
   home = homedir(),
   origin?: string,
-  github: GithubIdentity = githubCli,
+  github: GithubAuthorizer = githubDeviceFlow(),
 ): Promise<CloudConfig> {
   if (answer.includes(".")) {
     // A hostname: the operator owns the tunnel, so ASK which one. Deriving it from the hostname's
@@ -312,8 +315,8 @@ export async function establishCloudConfig(
   }
 
   // An EMPTY answer is the auth-free default: mint an unguessable name and claim it with the keypair
-  // alone. The registrar recognises the shape and asks for no GitHub identity, so this path works on a
-  // machine with no `gh` at all — which is the whole point of it. A name that already HAS the
+  // alone. The registrar recognises the shape and asks for no GitHub identity, so this path needs no
+  // GitHub account at all — which is the whole point of it. A name that already HAS the
   // anonymous shape rides the same path, so reconciling or re-entering one never demands GitHub.
   const anonymous = answer === "" || isAnonymousClaimName(answer);
   if (!anonymous && !claimNameIsValid(answer)) {
@@ -325,10 +328,11 @@ export async function establishCloudConfig(
   let token: string | undefined;
   if (!anonymous) {
     // A name is bound to a GitHub account, so say WHICH one before binding it. Someone signed in as a
-    // work account would otherwise find out only when they wanted the name somewhere else.
-    token = await github.accessToken();
-    const login = await github.login();
-    if (login) console.log(`  claiming ${name}.frizz.sh for GitHub user ${login}`);
+    // work account would otherwise find out only when they wanted the name somewhere else. The token is
+    // the zero-scope one the device flow mints — never the `gh` CLI's, which can push to every repo.
+    const authorization = await github.authorize();
+    token = authorization.token;
+    if (authorization.login) console.log(`  claiming ${name}.frizz.sh for GitHub user ${authorization.login}`);
   } else {
     console.log("  claiming a private name on frizz.sh — no account needed");
   }

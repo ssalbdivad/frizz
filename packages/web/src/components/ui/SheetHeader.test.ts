@@ -11,11 +11,34 @@ test("SheetHeader renders the title and a lucide close button (never a typograph
   }))
   assert.match(html, /Fix the flip-surface width/)
   assert.match(html, /aria-label="Close"/)
-  // The lucide <X> renders an <svg class="lucide lucide-x"> sized to 15; never the bare × glyph the
-  // MissingThread fallback still uses (D12 follow-up).
+  // The lucide <X> renders an <svg class="lucide lucide-x"> sized to 15; never a bare × glyph.
   assert.match(html, /lucide-x/)
   assert.match(html, /width="15"/)
   assert.doesNotMatch(html, /×/)
+})
+
+// Every sheet slides out to the right, so its X leads the bar, ruled off from the title, and the right
+// end belongs to `actions`.
+test("SheetHeader leads with the close button and ends with the actions", () => {
+  const html = renderToStaticMarkup(createElement(SheetHeader, {
+    title: "Settings",
+    actions: createElement("span", { "data-testid": "actions" }, "● unsaved"),
+    onClose: () => undefined,
+  }))
+  const close = html.indexOf('aria-label="Close"')
+  const rule = html.indexOf("data-close-rule")
+  const title = html.indexOf("Settings")
+  const actions = html.indexOf('data-testid="actions"')
+  assert.ok(close >= 0 && close < rule && rule < title, "the close button, then its rule, come before the title")
+  assert.ok(title < actions, "the actions come after the title")
+})
+
+// A programmatically focused button matches :focus-visible, so a close button that took the sheet's
+// initial focus drew a ring every time a drawer opened from the keyboard. The sheet takes it instead.
+test("the close button never claims the sheet's initial focus and draws no hover edge", () => {
+  const html = renderToStaticMarkup(createElement(SheetHeader, { title: "Settings", onClose: () => undefined }))
+  assert.doesNotMatch(html, /data-dialog-initial-focus/)
+  assert.doesNotMatch(html, /icon-hover-outline/)
 })
 
 test("SheetHeader renders subtitle, icon, meta, and actions when provided", () => {
@@ -41,19 +64,4 @@ test("SheetHeader omits subtitle/icon/meta/actions markers when not provided", (
     onClose: () => undefined,
   }))
   assert.doesNotMatch(html, /data-testid=/)
-})
-
-test("initialFocus stamps data-dialog-initial-focus on the close button; omitted, it is absent", () => {
-  const withFocus = renderToStaticMarkup(createElement(SheetHeader, {
-    title: "Thread unavailable",
-    onClose: () => undefined,
-    initialFocus: true,
-  }))
-  assert.match(withFocus, /data-dialog-initial-focus/)
-
-  const withoutFocus = renderToStaticMarkup(createElement(SheetHeader, {
-    title: "Thread unavailable",
-    onClose: () => undefined,
-  }))
-  assert.doesNotMatch(withoutFocus, /data-dialog-initial-focus/)
 })

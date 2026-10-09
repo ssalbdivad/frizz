@@ -17,7 +17,9 @@ import {
   SUPERVISOR_SIGN_OUT_PATH,
   type RestartResult,
 } from "./restart-supervisor.ts"
-import { fileSessionDirectory } from "./access-codes.ts"
+import { createHmac } from "node:crypto"
+import { fileSessionDirectory, loadOrCreateSessionKey, readSessionEpoch, rotateSessionKey, SESSION_EPOCH } from "./access-codes.ts"
+import { signOutOlderSessionEpoch } from "./session-epoch-child.ts"
 
 async function listen(handler: RequestListener) {
   const server = createServer(handler)
@@ -1202,5 +1204,97 @@ test("remote access is changed from this machine only: a live session through th
   } finally {
     await proxy.close().catch(() => undefined)
     await current.close().catch(() => undefined)
+  }
+})
+
+test("an epoch bump reaches a RUNNING launcher: the server child signs every older session out, once", async () => {
+  // An in-app update replaces only the child, so the launcher holding the key keeps running. The child's
+  // half (signOutOlderSessionEpoch) must end every pre-bump session on that live board — including a
+  // pre-id one no denylist can name — leave new ones alone, and do nothing on the next start.
+  const current = await child("only")
+  const port = await freePort()
+  const dir = mkdtempSync(join(tmpdir(), "frizz-epoch-live-"))
+  const key = loadOrCreateSessionKey(dir)
+  const proxy = new RestartSupervisorProxy({
+    port,
+    publicOrigin: "https://colin.frizz.sh",
+    sessionKey: key,
+    rotateSessionKey: () => rotateSessionKey(dir),
+    sessionDirectory: fileSessionDirectory(dir),
+    childPort: () => current.port,
+    restart: async () => ({ state: "ready" }),
+  })
+  try {
+    await proxy.listen()
+    const publicHeaders = { host: "colin.frizz.sh", origin: "https://colin.frizz.sh" }
+    const redeem = async () => {
+      const exchange = await proxied(port, `/?frizz_code=${proxy.issueAccessCode()!.code}`, publicHeaders)
+      return String(exchange.headers?.["set-cookie"])
+    }
+    const phoneHeader = await redeem()
+    // The cookie lives exactly as long as the session it carries: 30 days, not the old year.
+    assert.match(phoneHeader, /; Max-Age=(2591999|2592000)(;|$)/)
+    const phone = phoneHeader.split(";")[0]!
+    const payload = `${Date.now() + 60 * 24 * 60 * 60_000}.legacy-nonce`
+    const legacy = `frizz_session=${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: phone })).status, 200)
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: legacy })).status, 200)
+
+    // The launcher's own status file is how the child finds it; a different pid is not trusted.
+    writeFileSync(join(dir, "dev-supervisor.lock"), JSON.stringify({ pid: process.pid, port }))
+    const first = await signOutOlderSessionEpoch({ stateDir: dir, supervisorPid: process.pid })
+    assert.deepEqual(first, { advance: { advanced: true, from: 0, to: SESSION_EPOCH, rotatedKey: true }, signedOut: 1 })
+    assert.equal(readSessionEpoch(dir), SESSION_EPOCH)
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: phone })).status, 401, "a pre-epoch session still works")
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: legacy })).status, 401, "a pre-id session survived")
+    assert.equal(await upgradeStatus(port, { ...publicHeaders, cookie: phone }), "401")
+    assert.equal((await proxied(port, "/", { host: `127.0.0.1:${port}`, origin: `http://127.0.0.1:${port}` })).status, 200, "loopback was signed out")
+
+    const tablet = (await redeem()).split(";")[0]!
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: tablet })).status, 200)
+    // The next child start: the record is there, so nothing is rotated or revoked again.
+    const second = await signOutOlderSessionEpoch({ stateDir: dir, supervisorPid: process.pid })
+    assert.deepEqual(second, { advance: { advanced: false, epoch: SESSION_EPOCH }, signedOut: 0 })
+    assert.equal((await proxied(port, "/", { ...publicHeaders, cookie: tablet })).status, 200, "a second start signed the new device out")
+    // And the key the launcher would load on ITS next start is the one it is signing with now.
+    const restartedPort = await freePort()
+    const restarted = new RestartSupervisorProxy({
+      port: restartedPort,
+      publicOrigin: "https://colin.frizz.sh",
+      sessionKey: loadOrCreateSessionKey(dir),
+      sessionDirectory: fileSessionDirectory(dir),
+      childPort: () => current.port,
+      restart: async () => ({ state: "ready" }),
+    })
+    await restarted.listen()
+    try {
+      assert.equal((await proxied(restartedPort, "/", { ...publicHeaders, cookie: tablet })).status, 200)
+      assert.equal((await proxied(restartedPort, "/", { ...publicHeaders, cookie: legacy })).status, 401)
+    } finally {
+      await restarted.close().catch(() => undefined)
+    }
+  } finally {
+    await proxy.close().catch(() => undefined)
+    await current.close()
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("the server child trusts only its own launcher's status file to name the port", async () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-epoch-pid-"))
+  try {
+    loadOrCreateSessionKey(dir)
+    writeFileSync(join(dir, "dev-supervisor.lock"), JSON.stringify({ pid: process.pid + 1, port: 1 }))
+    let asked = false
+    const result = await signOutOlderSessionEpoch({
+      stateDir: dir,
+      supervisorPid: process.pid,
+      fetcher: (async () => { asked = true; return new Response("{}") }) as typeof fetch,
+    })
+    assert.equal(asked, false)
+    // The file is still rotated, so the launcher's next start refuses every older session regardless.
+    assert.deepEqual(result, { advance: { advanced: true, from: 0, to: SESSION_EPOCH, rotatedKey: true }, signedOut: null })
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })

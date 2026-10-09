@@ -4,7 +4,7 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { SUPERVISOR_STATUS_KEY } from "../api/supervisorStatus.ts"
-import { isBadgeRelease, PANEL_ARROW_GEOMETRY, RestartActionButton, RestartFailureNotice, RestartFrizzButton, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
+import { isBadgeRelease, PANEL_ARROW_GEOMETRY, showsUpdateBadge, RestartActionButton, RestartFailureNotice, RestartFrizzButton, UPDATE_RESTART_ICON_ROTATION, UpdateRestartPopover } from "./RestartFrizzButton.tsx"
 
 test("Update Frizz presents one calm sentence whose highlight is that threads are untouched", () => {
   const html = renderToStaticMarkup(createElement(UpdateRestartPopover, { open: true, update: true }))
@@ -100,6 +100,32 @@ test("release-line comparison handles pre-1.0 minors, majors, and unknown versio
   assert.equal(isBadgeRelease("0.4.2", "0.4.3"), false)
   assert.equal(isBadgeRelease("v0.4.2", "v0.5.0"), true)
   assert.equal(isBadgeRelease("checkout", "0.5.0"), false)
+})
+
+// The phone board's gear (MobileBoard.tsx) is a passive mark on a control that is not the update, so it
+// follows the desktop button's dot rule exactly: frizz-server ships patches most days.
+test("a passive update mark lights only for a new release line the supervisor can install", () => {
+  assert.equal(showsUpdateBadge({ updateRestart: true, updateAvailable: true, version: "0.13.8", updateVersion: "0.14.0" }), true)
+  for (const [name, status] of [
+    ["a routine patch", { updateRestart: true, updateAvailable: true, version: "0.13.8", updateVersion: "0.13.9" }],
+    ["frizz-dev, which names no version", { updateRestart: true }],
+    ["an up-to-date install", { updateRestart: true, updateAvailable: false, version: "0.14.0" }],
+    ["a supervisor with no update verb", { updateAvailable: true, version: "0.13.8", updateVersion: "0.14.0" }],
+    ["no supervisor", null],
+  ] as [string, Parameters<typeof showsUpdateBadge>[0]][]) {
+    assert.equal(showsUpdateBadge(status), false, name)
+  }
+})
+
+test("the phone's failure card renders inline under its row, without the desktop anchor or arrow", () => {
+  const html = renderToStaticMarkup(createElement(RestartFailureNotice, { mobile: true, update: true, message: "boom", onDismiss: () => undefined }))
+  const surface = html.match(/role="alert" class="([^"]*)"/)?.[1] ?? ""
+  // The phone Settings page's 18px gutter, in flow: nothing fixed, absolute or `sm:`-anchored.
+  assert.match(surface, /\bmx-\[18px\]/)
+  assert.doesNotMatch(surface, /\bfixed\b|\babsolute\b|sm:/)
+  assert.doesNotMatch(html, /rotate-45/)
+  assert.match(html, /Update failed/)
+  assert.match(html, /aria-label="Dismiss"/)
 })
 
 test("busy Update and restart keeps only the clockwise spinner inside the button", () => {

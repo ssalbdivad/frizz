@@ -3,8 +3,9 @@
  *
  * Each probe is best-effort and bounded: a missing binary, a signed-out CLI or a hung daemon must
  * turn into a line on the screen ("cloudflared: not found"), never a pane that does not open. Nothing
- * here is trusted for anything but display — the claim path re-asks GitHub itself, and a tunnel that
- * is not really there fails where it fails today, at launch.
+ * here is trusted for anything but display — a tunnel that is not really there fails where it fails
+ * today, at launch. There is no GitHub probe: a custom-name claim signs in through its own device flow
+ * (github-device-flow.ts) and never reads the `gh` CLI.
  */
 import { execFile } from "node:child_process";
 
@@ -16,19 +17,6 @@ function run(command: string, args: string[]): Promise<string | null> {
       resolve(error ? null : stdout);
     });
   });
-}
-
-export interface GithubProbe {
-  /** Signed-in login, or null when `gh` is missing or signed out. */
-  login: string | null;
-  installed: boolean;
-}
-
-export async function probeGithub(): Promise<GithubProbe> {
-  const version = await run("gh", ["--version"]);
-  if (version === null) return { login: null, installed: false };
-  const login = await run("gh", ["api", "user", "--jq", ".login"]);
-  return { login: login?.trim() || null, installed: true };
 }
 
 export interface CloudflaredProbe {

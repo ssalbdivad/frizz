@@ -3,15 +3,15 @@ import type { AccessLink } from "./access-pane.ts";
 import { ALT_SCREEN_OFF, ALT_SCREEN_ON, CLEAR, DIM, fitScreen, HIDE_CURSOR, type OptionalLine, RESET, SHOW_CURSOR } from "./access-pane.ts";
 import { type CloudConfig, describeCloudConfig } from "./cloud.ts";
 import type { Pane } from "./pane-host.ts";
-import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-detect.ts";
-import { applyRemoteChoice, kindOf, type RemoteChoice, type RemoteKind } from "./remote-setup.ts";
+import type { CloudflaredProbe, TailscaleProbe } from "./remote-detect.ts";
+import { applyRemoteChoice, type ClaimSignIn, kindOf, type RemoteChoice, type RemoteKind } from "./remote-setup.ts";
 
 /**
  * "Press R to reach this board from a phone or another machine" — the whole remote-access setup, in
  * the terminal that is already running the board, remembered on disk.
  *
  * Why here and not in flags: the choice is made once, and it is a walkthrough, not a switch. Each
- * setup has a prerequisite (a signed-in `gh`, a tunnel created in another terminal, a Tailscale
+ * setup has a prerequisite (a GitHub sign-in, a tunnel created in another terminal, a Tailscale
  * daemon) that a flag can only fail on, while a screen can check it, print the commands, and ask for
  * exactly the one or two values Frizz cannot find out for itself. What it saves is served by every
  * later plain launch; "Off" clears it.
@@ -31,13 +31,13 @@ export interface RemotePaneOptions {
   apply: (next: CloudConfig | null, options?: { justClaimed?: boolean }) => Promise<void>;
   /**
    * Claim `<name>.frizz.sh`. An empty name mints a private unguessable one with no account; a word
-   * claims that word for the signed-in GitHub account. Rejects with a message.
+   * claims that word for a GitHub account, confirmed through a device code the pane shows via
+   * `signIn.onDeviceCode`. Escape on that screen aborts `signIn.signal`. Rejects with a message.
    */
-  claim: (name: string) => Promise<CloudConfig>;
+  claim: (name: string, signIn: ClaimSignIn) => Promise<CloudConfig>;
   /** A fresh single-use link for the origin now in force, for the done screen. */
   issueLink: () => AccessLink | null;
   probes: {
-    github: () => Promise<GithubProbe>;
     cloudflared: () => Promise<CloudflaredProbe>;
     tailscale: () => Promise<TailscaleProbe>;
   };
@@ -48,6 +48,10 @@ export interface RemotePaneOptions {
   output?: NodeJS.WriteStream;
 }
 
+/** How a word claim shows its GitHub device code, and how the person backs out of it. Defined beside
+ *  applyRemoteChoice, which both surfaces claim through. */
+export type { ClaimSignIn } from "./remote-setup.ts";
+
 interface Choice {
   kind: RemoteKind;
   title: string;
@@ -56,7 +60,7 @@ interface Choice {
 
 const CHOICES: Choice[] = [
   { kind: "private", title: "Private name", blurb: "an unguessable name on frizz.sh — no account, nothing to install" },
-  { kind: "frizz", title: "Custom name", blurb: "<name>.frizz.sh of your choosing; needs the GitHub CLI" },
+  { kind: "frizz", title: "Custom name", blurb: "<name>.frizz.sh of your choosing; needs a GitHub account" },
   { kind: "cloudflare", title: "Cloudflare Tunnel", blurb: "a domain you own on Cloudflare; cloudflared on this machine" },
   { kind: "tailscale", title: "Tailscale", blurb: "your tailnet; tailscale serve does the TLS" },
   { kind: "other", title: "Something else", blurb: "any proxy or tunnel you run — tell Frizz its address" },
@@ -74,7 +78,8 @@ const SHIFT_TAB = "\x1b[Z";
 type Screen =
   | { name: "menu"; index: number }
   | { name: "form"; kind: FormKind; fields: Field[]; focus: number; note?: string }
-  | { name: "busy"; message: string }
+  /** `cancel` makes escape back out — only while waiting on something the person can abandon. */
+  | { name: "busy"; message: string; detail?: string[]; cancel?: () => void }
   | { name: "done"; message: string; link: AccessLink | null; config: CloudConfig | null }
   | { name: "error"; message: string; back: Screen };
 
@@ -108,7 +113,6 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
   let open = false;
   let screen: Screen = { name: "menu", index: 0 };
   // Probe results arrive after the screen opens; a repaint shows them the moment they do.
-  let github: GithubProbe | "pending" | null = null;
   let cloudflared: CloudflaredProbe | "pending" | null = null;
   let tailscale: TailscaleProbe | "pending" | null = null;
 
@@ -158,6 +162,10 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
       return;
     }
     if (s.name === "busy") {
+      if (s.detail) {
+        write([s.message, "", ...s.detail, "", `${DIM}waiting for GitHub… · esc cancel${RESET}`]);
+        return;
+      }
       write([s.message, "", `${DIM}working…${RESET}`]);
       return;
     }
@@ -192,13 +200,6 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
 
   const formHead = (kind: FormKind): string[] => {
     if (kind === "frizz") {
-      const gh = github === "pending" || github === null
-        ? `${DIM}GitHub CLI   checking…${RESET}`
-        : !github.installed
-          ? "GitHub CLI   not installed — see https://cli.github.com, then `gh auth login`"
-          : github.login
-            ? check(true, `GitHub CLI   signed in as ${github.login}`)
-            : "GitHub CLI   not signed in — run `gh auth login` in another terminal";
       return [
         "Custom frizz.sh name",
         "",
@@ -209,7 +210,9 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
           ? ["", ...wrap("This is a sandbox, but a claim is real: it binds this machine's one name to your account, and your real board keeps it. Only the setup saved here is thrown away.")]
           : []),
         "",
-        gh,
+        ...wrap(
+          "When you claim, Frizz shows a code to enter at github.com/login/device. The sign-in grants Frizz no permissions: it only tells the registrar which account you are.",
+        ),
       ];
     }
     if (kind === "cloudflare") {
@@ -270,14 +273,6 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
     const same = kindOf(current) === kind ? current : null;
     let fields: Field[];
     if (kind === "frizz") {
-      github = "pending";
-      void options.probes.github().then((result) => {
-        github = result;
-        if (screen.name === "form" && screen.kind === "frizz" && !screen.fields[0]!.value && result.login) {
-          screen.fields[0]!.placeholder = result.login;
-        }
-        paint();
-      });
       fields = [{ label: "Name", value: same?.claim ?? "" }];
     } else if (kind === "cloudflare") {
       cloudflared = "pending";
@@ -312,12 +307,31 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
   // access takes, so the two surfaces cannot drift on what a choice means.
   const run = async (choice: RemoteChoice, back: Screen) => {
     try {
+      const name = choice.kind === "frizz" ? choice.name.trim() : "";
+      const abort = new AbortController();
       const next = await applyRemoteChoice(choice, {
         apply: options.apply,
         claim: options.claim,
         progress: (message) => {
           screen = { name: "busy", message };
           paint();
+        },
+        signIn: {
+          signal: abort.signal,
+          onDeviceCode: (prompt) => {
+            screen = {
+              name: "busy",
+              message: `Confirm your GitHub account to claim ${name}.frizz.sh`,
+              detail: [
+                `Open      ${prompt.verificationUri}`,
+                `Enter     ${prompt.userCode}`,
+                "",
+                ...wrap("on this or any other device. Frizz asks GitHub for no permissions; the sign-in only names your account to the registrar."),
+              ],
+              cancel: () => abort.abort(),
+            };
+            paint();
+          },
         },
       });
       options.onChanged?.(next);
@@ -358,7 +372,13 @@ export function createRemotePane(options: RemotePaneOptions): Pane {
     },
     key(key) {
       const s = screen;
-      if (s.name === "busy") return "keep";
+      if (s.name === "busy") {
+        if (key === ESC && s.cancel) {
+          s.cancel();
+          s.cancel = undefined;
+        }
+        return "keep";
+      }
       if (s.name === "done") return "close";
       if (s.name === "error") {
         screen = s.back;

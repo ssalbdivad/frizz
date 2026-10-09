@@ -48,7 +48,7 @@ $ npx frizz
 A browser tab opens on acme's board. The first time, a short tour points out the four things on it. Frizz listens on port 9393 (19393 if something else holds it), and one server serves every project on the machine: running `npx frizz` in a second repo adds that project to the server already running. Runs on macOS, Linux and Windows.
 
 <p align="center">
-  <img src="assets/board.png" alt="Frizz focused on one project: the prompt box and the project's threads on the left, and on the right the first queue card, where an agent asks whether the settings store should use SQLite or a JSON file, with lettered options and a countdown to the recommended pick." width="100%">
+  <img src="assets/board.png" alt="Frizz focused on one project: the prompt box and the project's threads on the left, and on the right the first queue card, where an agent asks whether the settings store should use SQLite or a JSON file, with numbered options and a countdown to the recommended pick." width="100%">
 </p>
 
 <br/>
@@ -98,7 +98,7 @@ Colin designed Frizz around a few commitments. Every feature, this fork's includ
 - 📁 **Projects.** Every directory you run it in gets its own board at `/project/<name>`, all on one server.
 - 🔌 **Headless.** Every agent runs in its own detached background process. Close the tab, ctrl-c the server, reboot: your threads are still there, and Frizz reconnects to the ones still running.
 - 🤖 **Claude Code, Codex and any ACP agent.** Pick the agent per thread and run several against the same repo at once, on your sign-in, your settings and your skills.
-- ❓ **Answerable questions.** An agent hands back lettered options with its own recommendation, so the common answer is one keystroke.
+- ❓ **Answerable questions.** An agent hands back numbered options with its own recommendation, so the common answer is one keystroke.
 - 😴 **Snooze.** Park a card for an hour, until tomorrow morning, or until a date you pick, optionally with a follow-up prompt it wakes up working on.
 - 🎯 **Goals.** A standing prompt Frizz re-sends at every rest, on a clock, or both: "keep going until CI is green" without re-asking.
 - 🐙 **GitHub.** Turn issues and pull requests into threads from the composer. Workers read issues, diffs and CI, and never write unless you ask.
@@ -139,10 +139,10 @@ The queue is strict about what earns a card, which is what keeps it a real to-do
 **Threads are built to run without you.** A worker keeps going until it reaches something only you can settle — a product call, a fork where guessing wrong is expensive, an irreversible action — and then hands back an answerable question rather than a wall of text.
 
 <p align="center">
-  <img src="assets/question.png" alt="A question card asking whether the settings store should use SQLite or a JSON file, with option A marked recommended, a row for typing something else, and below it a countdown to the recommended pick." width="100%">
+  <img src="assets/question.png" alt="A question card asking whether the settings store should use SQLite or a JSON file, with option 1 marked recommended, a row for typing something else, and below it a countdown to the recommended pick." width="100%">
 </p>
 
-Options are lettered, and a worker marks the one it recommends. There is always a row for writing something else, and a typed reply leaves the question open. When the answer isn't one thing, the card takes several: check any combination and add a note. When the agent needs you to *do* something it can't — sign in, press a button — the card lists the steps over one **Done** button.
+Options are numbered — press a number or click to pick, Enter to send — and a worker marks the one it recommends. There is always a row for writing something else, and a typed reply leaves the question open. When the answer isn't one thing, the card takes several: check any combination and add a note. When the agent needs you to *do* something it can't — sign in, press a button — the card lists the steps over one **Done** button.
 
 <br/>
 
@@ -280,7 +280,7 @@ In the terminal running Frizz, **R** sets up remote access and **L** shows a fre
 | **Sub-agent** | A helper a worker dispatches for one prong of its task, listed under its parent as `@parent.child`. |
 | **Handle** | A thread's short name, `@port-the-parser`, used to mention, read and message it. |
 | **Bands** | **Pinned** (your shelf), **Queue** (resting, needs you), **Running** (working now), **Snoozed** (parked until a time or an event), **Done**. |
-| **Question** | An answerable choice an agent hands back, with lettered options and a recommendation. |
+| **Question** | An answerable choice an agent hands back, with numbered options and a recommendation. |
 | **Goal** | A standing prompt a thread receives at every rest, on a clock, or both. |
 | **Schedule** | A prompt plus a recurrence, in plain words. Each run starts a fresh thread. |
 | **Time limit** | A deadline a thread plans around and its card counts down to. |

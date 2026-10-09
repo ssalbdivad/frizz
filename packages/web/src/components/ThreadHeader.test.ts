@@ -26,8 +26,15 @@ test("drawer thread header reserves a separate, unbroken control row before the 
   assert.ok(tokens(THREAD_HEADER_TITLE_CLASS).includes("min-w-0"))
   assert.ok(tokens(THREAD_HEADER_TITLE_CLASS).includes(`${narrowPrefix}basis-full`))
   assert.ok(tokens(THREAD_HEADER_CONTROLS_CLASS).includes(`${narrowPrefix}w-full`))
-  assert.ok(tokens(THREAD_HEADER_CONTROLS_CLASS).includes(`${narrowPrefix}justify-between`))
   assert.doesNotMatch(THREAD_HEADER_CLASS, /provider/i)
+})
+
+// The drawer's Close-X leads the title rather than closing the action strip, so the title group must
+// lay it out on the title's own line — in the narrow two-row header too, where the group wraps onto a
+// row of its own.
+test("the title group lays the drawer's leading close button out on the title's line", () => {
+  assert.ok(tokens(THREAD_HEADER_TITLE_CLASS).includes("flex"))
+  assert.ok(tokens(THREAD_HEADER_TITLE_CLASS).includes("items-center"))
 })
 
 // The wrap is the DRAWER's call, not the window's. A viewport variant (`max-[640px]`) always applied

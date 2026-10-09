@@ -5,7 +5,7 @@
 //   2. a NATIVE AskUserQuestion tool call from the Claude session broker, whose interaction record is
 //      converted to the same model by lib/interactionQuestion.ts.
 //
-// They share a data model, which is why they can share a component: a question, lettered options each
+// They share a data model, which is why they can share a component: a question, numbered options each
 // with a one-line trade-off, an optional "select several" mode, and a free-text box at the bottom. The
 // tool call's `multiSelect` IS the fence's `multi` tag; its `options[].label/description` ARE the
 // fence's option lines. Anything that reads as a difference between them is a bug in a producer, not a
@@ -14,11 +14,12 @@
 // It lives in its own module rather than in ChatView so BOTH producers can reach it: the interaction
 // surface (InteractionCards.tsx) is imported BY ChatView, so a question card defined inside ChatView
 // could only have been shared through a module cycle.
-import { Fragment, type ReactNode, useId, useLayoutEffect, useMemo, useRef } from "react"
+import { Fragment, type ReactNode, useEffect, useId, useLayoutEffect, useMemo, useRef } from "react"
 import { AlertTriangle, Check } from "lucide-react"
 import { useInlineMarkdownHtml, useMarkdownHtml } from "../lib/useMarkdown.ts"
 import { shouldSubmitStagedEnter } from "../lib/composerKeyboard.ts"
-import { parseQuestionBlock, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
+import { parseQuestionBlock, splitOptionId, type BlockAnswer, type ParsedQuestion, type QuestionKind } from "../lib/questionBlocks.ts"
+import { registerQuestionKeys, type QuestionKeyResult } from "../lib/questionKeys.ts"
 import { LinkedHtml } from "./LinkedHtml.tsx"
 import { QUEUE_WRAP, TranscriptCard } from "./TranscriptCard.tsx"
 import { TextareaCodeFences } from "./TextareaCodeFences.tsx"
@@ -39,10 +40,10 @@ export interface BlockInteractive {
   onEnter?: (grid: HTMLElement) => void
 }
 
-/** Put the caret in a question node: its free-text box when it has one, else its options grid, scrolled
+/** Put the caret in a question node: its free-text box (a secret's password field) when it has one, else its options grid, scrolled
  *  just into view. `node` is a `[data-answerable-question]` grid. */
 export function focusQuestionNode(node: HTMLElement) {
-  const target = node.querySelector<HTMLElement>("textarea[data-surface='questionAnswer']") ?? node
+  const target = node.querySelector<HTMLElement>("[data-surface='questionAnswer']") ?? node
   target.focus({ preventScroll: true })
   target.scrollIntoView({ block: "nearest" })
 }
@@ -161,6 +162,40 @@ export function QuestionBlockCard({
     // hidden). `offsetHeight - clientHeight` is the vertical border delta measured at height:auto.
     ta.style.height = `${ta.scrollHeight + ta.offsetHeight - ta.clientHeight}px`
   }, [freetext])
+  // NUMBER KEYS (lib/questionKeys.ts): key n picks option n, the key one past the last option takes the
+  // caret to the free-text row. Registered once per mount; `keysRef` hands the router the latest render's
+  // controller, so a pick never acts on the answer as it stood when the card mounted.
+  const keysRef = useRef({ interactive, isMulti, chosen, chosenSet, freetext, count: parsed.options.length })
+  keysRef.current = { interactive, isMulti, chosen, chosenSet, freetext, count: parsed.options.length }
+  const answerable = !!interactive
+  useEffect(() => {
+    const grid = gridRef.current
+    if (!grid || !answerable) return
+    return registerQuestionKeys(grid, {
+      press: (n): QuestionKeyResult => {
+        const k = keysRef.current
+        if (!k.interactive || k.count === 0) return false
+        if (n === k.count + 1 && taRef.current) {
+          taRef.current.focus()
+          return "text"
+        }
+        if (n > k.count) return false
+        k.interactive.onChip(n - 1, parsed.options[n - 1] ?? "")
+        return k.isMulti ? "toggled" : "picked"
+      },
+      keyed: () => keysRef.current.count > 0,
+      row: (n) => {
+        const k = keysRef.current
+        if (!k.interactive || k.count === 0) return null
+        if (n === k.count + 1) return taRef.current?.parentElement ?? null
+        return n <= k.count ? grid.querySelectorAll<HTMLElement>(":scope > [data-question-option]")[n - 1] ?? null : null
+      },
+      answered: () => {
+        const k = keysRef.current
+        return k.isMulti ? k.chosenSet.length > 0 || !!k.freetext.trim() : k.chosen !== null || !!k.freetext.trim()
+      },
+    })
+  }, [answerable, parsed])
   // NO corner glyph on an answerable question (dropped 2026-08-31). The registered-question × rides
   // the same corner, and beside it a full-strength HelpCircle/ListChecks read as the actionable thing
   // while the actual control read as chrome (maintainer: "the actionable thing is gray and light,
@@ -170,7 +205,7 @@ export function QuestionBlockCard({
   const KindIcon = isDanger ? AlertTriangle : undefined
   // Sentence case, because the shared chrome renders this as a real TITLE now rather than as an
   // uppercased eyebrow — a lowercase "question" beside the card's glyph reads as a typo.
-  const kindLabel = label ?? (isMulti ? "Select multiple" : "Question")
+  const kindLabel = label ?? (parsed.secret ? "Secret" : isMulti ? "Select multiple" : "Question")
   // `risk`, not `danger`: the neutral border with a red title. A destructive gate is a question nobody
   // has answered wrongly yet, not a thing that has broken, and it wore the same lit red border as a dead
   // sign-in until 2026-08-26 (maintainer: they "look way too scary"). The tag's CRITERIA are unchanged
@@ -218,7 +253,8 @@ export function QuestionBlockCard({
           }}
           data-answerable-question={interactive ? "" : undefined}
           data-answered={interactive ? String(answered) : undefined}
-          className="mt-2 grid grid-cols-1 gap-1.5 outline-none"
+          data-question-grid
+          className="group/qgrid mt-2 grid grid-cols-1 gap-1.5 outline-none"
         >
           {parsed.options.map((opt, i) => (
             <Fragment key={i}>
@@ -230,6 +266,7 @@ export function QuestionBlockCard({
               {parsed.optionHeadings?.[i] && <OptionHeading md={parsed.optionHeadings[i]!} wrap={wrap} />}
             <Chip
               label={opt}
+              index={i}
               // The option's BODY — a multi-line trade-off, the diff, the mockup, the message that
               // would actually be posted — rendered INSIDE the chip, ALWAYS, read-only cards included.
               // It was `optionPreviews`, revealed only once the option was picked, until 2026-09-01:
@@ -271,73 +308,135 @@ export function QuestionBlockCard({
               below the multi-column options, and is an auto-growing textarea (see taRef effect above)
               rather than a one-line input, so a long "something else…" answer stays fully visible. */}
           {interactive && (
+            // The free-text row takes the next number's keycap when the question has options, laid over
+            // the box's left padding so the box itself keeps its own border and focus treatment. It sits
+            // on the BASELINE of the box's first line (a textarea is a baseline item in Chrome and
+            // Safari), the same rule the option rows use, so the browser places the digit and the text on
+            // one line at every zoom. A hand-set `top-[7px]` measured 0.8px high at 110% zoom and 0.4px
+            // low at 600%: the two snapped to device pixels independently. The -mr cancels the cap's
+            // 13px + 16px, so the box still starts at the row's left edge.
+            <div className={`relative col-span-full${parsed.options.length > 0 ? " flex items-baseline" : ""}`}>
+            {parsed.options.length > 0 && (
+              <span className="pointer-events-none relative z-10 ml-[13px] -mr-[29px] flex">
+                <OptionKey n={parsed.options.length + 1} live />
+              </span>
+            )}
+            {parsed.secret ? (
+              // A SECRET IS A PASSWORD FIELD, not a masked textarea: `type="password"` is what tells a
+              // phone keyboard to stop predicting and learning what is typed, and a password manager to
+              // offer a fill. One line, because a code or a token is one line. Its value lives in the
+              // answering state's memory, never the draft store (RegisteredQuestionCards).
+              <>
+                <input
+                  type="password"
+                  data-secret-answer
+                  data-claims-escape
+                  data-surface="questionAnswer"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  aria-label="Secret value"
+                  value={freetext}
+                  onChange={(e) => interactive.onText(e.target.value)}
+                  onKeyDown={(e) => {
+                    e.stopPropagation()
+                    if (e.key === "Escape") {
+                      e.preventDefault()
+                      gridRef.current?.focus()
+                      return
+                    }
+                    if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+                      e.preventDefault()
+                      if (gridRef.current && interactive.onEnter) interactive.onEnter(gridRef.current)
+                      else if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
+                      else interactive.onSubmit()
+                    }
+                  }}
+                  placeholder="Paste the value…"
+                  className={`block w-full rounded-md border py-1.5 pl-3 pr-3 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
+                    freetext.trim() ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
+                  }`}
+                />
+                <div className="mt-1.5 text-[11px] leading-snug text-muted-70">
+                  Held in memory on the machine running Frizz and handed to one command, once. The worker never sees it.
+                </div>
+              </>
+            ) : (
             <>
-              <textarea
-                ref={taRef}
-                data-1p-ignore
-                rows={1}
-                // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
-                // separate free-form prompt box at the bottom of the card. Escape BLURS (climb out, same
-                // semantics as the shared Composer) and stops here rather than reaching the drawer
-                // stack's window handler; a second Escape, from outside the box, closes the drawer.
-                //
-                // Stopping the key alone does NOT keep an enclosing thread drawer open — Radix's
-                // DismissableLayer takes Escape on the document in the CAPTURE phase, before this
-                // bubble-phase handler runs (verified 2026-07-26). `data-claims-escape` is what does:
-                // ThreadSheet's onEscapeKeyDown refuses the dismiss for a target inside it, as it does
-                // for the prompt box and the title editor. Without it one Escape in an answer closed the
-                // whole drawer — on the desktop and in VS Code's sidebar alike, where the drawer is the
-                // only place to answer and the human landed back on the queue (draft kept).
-                data-claims-escape
-                data-surface="questionAnswer"
-                value={freetext}
-                onChange={(e) => interactive.onText(e.target.value)}
-                onKeyDown={(e) => {
-                  e.stopPropagation()
-                  if (e.key === "Escape") {
-                    e.preventDefault()
-                    e.currentTarget.blur()
-                    return
-                  }
-                  // Enter (or ⌘/Ctrl-Enter) sends the staged answers; Shift/Option-Enter write a
-                  // NEWLINE (the browser default) — the three Enter keys every box shares since
-                  // 2026-08-26. See shouldSubmitStagedEnter.
-                  if (shouldSubmitStagedEnter({
-                    key: e.key,
-                    altKey: e.altKey,
-                    ctrlKey: e.ctrlKey,
-                    metaKey: e.metaKey,
-                    shiftKey: e.shiftKey,
-                    isComposing: e.nativeEvent.isComposing,
-                    keyCode: e.nativeEvent.keyCode,
-                  })) {
-                    e.preventDefault()
-                    if (gridRef.current && interactive.onEnter) interactive.onEnter(gridRef.current)
-                    else if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
-                    else interactive.onSubmit()
-                  }
-                }}
-                // SINGLE: clicking into the input MOVES the selection here — any chosen chip deselects (its
-                // accent border must not linger once the user commits to typing). MULTI keeps its toggled
-                // set (the freetext only appends color), so don't disturb it on focus. Keeps typed text.
-                onFocus={() => {
-                  if (!isMulti && chosen !== null) interactive.onText(freetext)
-                }}
-                placeholder={
-                  isMulti ? "Add a note…" : parsed.options.length ? `${nextOptionId(parsed.options)} Something else…` : "Type your answer…"
+            <textarea
+              ref={taRef}
+              data-1p-ignore
+              rows={1}
+              // Its own surface tag — deliberately NOT the queue card's `queueComposer`, which is the
+              // separate free-form prompt box at the bottom of the card. Escape climbs out onto this
+              // question's own options grid (where the number keys answer it) and stops here rather
+              // than reaching the drawer stack's window handler; a second Escape, from the grid,
+              // closes the drawer.
+              //
+              // Stopping the key alone does NOT keep an enclosing thread drawer open — Radix's
+              // DismissableLayer takes Escape on the document in the CAPTURE phase, before this
+              // bubble-phase handler runs (verified 2026-07-26). `data-claims-escape` is what does:
+              // ThreadSheet's onEscapeKeyDown refuses the dismiss for a target inside it, as it does
+              // for the prompt box and the title editor. Without it one Escape in an answer closed the
+              // whole drawer — on the desktop and in VS Code's sidebar alike, where the drawer is the
+              // only place to answer and the human landed back on the queue (draft kept).
+              data-claims-escape
+              data-surface="questionAnswer"
+              value={freetext}
+              onChange={(e) => interactive.onText(e.target.value)}
+              onKeyDown={(e) => {
+                e.stopPropagation()
+                if (e.key === "Escape") {
+                  e.preventDefault()
+                  // Climb out onto this question's own options, where the number keys answer it.
+                  gridRef.current?.focus()
+                  return
                 }
-                // Styled as the FINAL option row (same shape as a chip) that SPANS both grid columns.
-                // resize-none + overflow-hidden hand height control to the auto-grow effect (no manual
-                // drag handle, no inner scrollbar). The tinted bg marks the EFFECTIVE answer: content
-                // with no chip chosen (a chosen chip beats the text, so text beside one is an unselected
-                // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
-                // accent border — the selection moves here the moment the box is entered.
-                className={`col-span-full w-full resize-none overflow-hidden rounded-md border px-3 py-1.5 text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
-                  freetext.trim() && (isMulti || chosen === null) ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
-                }`}
-              />
-              <TextareaCodeFences value={freetext} />
+                // Enter (or ⌘/Ctrl-Enter) sends the staged answers; Shift/Option-Enter write a
+                // NEWLINE (the browser default) — the three Enter keys every box shares since
+                // 2026-08-26. See shouldSubmitStagedEnter.
+                if (shouldSubmitStagedEnter({
+                  key: e.key,
+                  altKey: e.altKey,
+                  ctrlKey: e.ctrlKey,
+                  metaKey: e.metaKey,
+                  shiftKey: e.shiftKey,
+                  isComposing: e.nativeEvent.isComposing,
+                  keyCode: e.nativeEvent.keyCode,
+                })) {
+                  e.preventDefault()
+                  if (gridRef.current && interactive.onEnter) interactive.onEnter(gridRef.current)
+                  else if (gridRef.current) advanceOrSubmit(gridRef.current, interactive.onSubmit)
+                  else interactive.onSubmit()
+                }
+              }}
+              // SINGLE: clicking into the input MOVES the selection here — any chosen chip deselects (its
+              // accent border must not linger once the user commits to typing). MULTI keeps its toggled
+              // set (the freetext only appends color), so don't disturb it on focus. Keeps typed text.
+              onFocus={() => {
+                if (!isMulti && chosen !== null) interactive.onText(freetext)
+              }}
+              // No identifier in the placeholder: the row's keycap carries the next number.
+              placeholder={
+                isMulti ? "Add a note…" : parsed.options.length ? "Something else…" : "Type your answer…"
+              }
+              // Styled as the FINAL option row (same shape as a chip) that SPANS both grid columns.
+              // resize-none + overflow-hidden hand height control to the auto-grow effect (no manual
+              // drag handle, no inner scrollbar). The tinted bg marks the EFFECTIVE answer: content
+              // with no chip chosen (a chosen chip beats the text, so text beside one is an unselected
+              // draft and the box goes quiet, exactly like an unselected chip). Focus always shows the
+              // accent border — the selection moves here the moment the box is entered.
+              className={`block w-full min-w-0 flex-1 resize-none overflow-hidden rounded-md border py-1.5 pr-3 ${parsed.options.length > 0 ? OPTION_TEXT_INSET : "pl-3"} text-[12px] leading-snug text-fg/90 outline-none placeholder:text-muted-80 transition-colors ${
+                freetext.trim() && (isMulti || chosen === null) ? "border-selection-border bg-selection" : "border-border bg-transparent hover:bg-panel-2 focus:border-accent"
+              }`}
+            />
+            {/* The mirror is the textarea's NEXT sibling and absolutely positioned, so the row's flex
+                line still holds only the keycap and the box. */}
+            <TextareaCodeFences value={freetext} />
             </>
+            )}
+            </div>
           )}
         </div>
       )}
@@ -387,13 +486,6 @@ function OptionHeading({ md, wrap }: { md: string; wrap?: boolean }) {
   )
 }
 
-// The free-text row's identifier: one past the last option ("A. B. C." → "D.", "1. 2." → "3.").
-function nextOptionId(options: string[]): string {
-  const last = options[options.length - 1]?.match(/^\s*([A-Za-z]|\d+)([.)])\s/)
-  if (!last) return `${String.fromCharCode(65 + options.length)}.`
-  const [, id, punct] = last
-  return /\d/.test(id) ? `${Number(id) + 1}${punct}` : `${String.fromCharCode(id.toUpperCase().charCodeAt(0) + 1)}${punct}`
-}
 
 // recommendedIndex (rec-line → option index) now lives in ../lib/questionBlocks.ts alongside the rest
 // of the question parsing, so it's covered by the pure-logic unit tests.
@@ -416,6 +508,7 @@ function nextOptionId(options: string[]): string {
 // to flatten links to spans (`inertInteractive`), which is why a file named in an option never opened.
 function Chip({
   label,
+  index,
   bodyMd,
   wrap,
   selected,
@@ -426,7 +519,10 @@ function Chip({
   recTitle,
   onClick,
 }: {
+  /** The option line as the producer wrote it, identifier included ("2. SQLite — …"). */
   label: string
+  /** Position in the option list: the KEY that picks it is `index + 1`. */
+  index: number
   /** Block markdown rendered INSIDE the chip, under the label line, ALWAYS — the multi-line trade-off,
    *  the diff, the message that would be posted. Part of the answer, so it shows before anything is
    *  picked and survives into read-only and settled cards. */
@@ -444,7 +540,13 @@ function Chip({
 }) {
   // Inline-only: the label line is one line, so no `<p>`/list block chrome. Raw `label` used to leak
   // `**bold**`/backticks. The body below it is the opposite — FULL markdown, blocks and all.
-  const labelHtml = useInlineMarkdownHtml(label)
+  // The identifier comes OFF the label line and goes into the gutter, as the keycap that picks it. A live
+  // card's key is always the POSITION (the router presses `index + 1`), so its keycap must be too — a
+  // worker's fence numbered from 2, or lettered, still answers to 1. Only a READ-ONLY card shows the
+  // label's own number: a settled card keeps just the picked options, and "3" must still say which one.
+  const { id, rest } = splitOptionId(label)
+  const labelHtml = useInlineMarkdownHtml(rest)
+  const n = disabled && id && /^\d+$/.test(id) ? Number(id) : index + 1
   const bodyHtml = useMarkdownHtml(bodyMd ?? "")
   const labelId = useId()
   return (
@@ -464,7 +566,7 @@ function Chip({
         if (window.getSelection()?.toString()) return
         onClick()
       }}
-      className={`relative flex items-start gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
+      className={`relative flex items-baseline gap-2 rounded-md border px-3 py-1.5 text-[12px] leading-snug transition-colors ${
         selected
           ? "border-selection-border bg-selection text-fg"
           : settledPick
@@ -489,14 +591,16 @@ function Chip({
         disabled={disabled}
         aria-labelledby={labelId}
         aria-pressed={selected}
+        aria-keyshortcuts={disabled || n > 9 ? undefined : String(n)}
         onClick={onClick}
         onMouseDown={(e) => e.preventDefault()}
         className="absolute inset-0 rounded-md outline-none focus-visible:inset-ring-1 focus-visible:inset-ring-focus-ink-60"
       />
+      <OptionKey n={n} live={!disabled} selected={selected} />
       {multi && (
         <span
           aria-hidden
-          className={`mt-px flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-[3px] border ${
+          className={`mt-px flex h-3.5 w-3.5 shrink-0 self-start items-center justify-center rounded-[3px] border ${
             selected ? "border-accent bg-accent-fill text-on-accent" : settledPick ? "border-control-strong text-fg" : "border-control-strong"
           }`}
         >
@@ -533,5 +637,39 @@ function Chip({
         )}
       </div>
     </div>
+  )
+}
+
+// Where an option's TEXT starts: the row's 12px padding, the 16px keycap, the row's 8px gap. The
+// free-text row lays its keycap over its own padding, so it insets its text by the same sum to line up
+// (and places the cap at 13px, not 12: the cap sits outside the box's 1px border, a chip's inside it).
+const OPTION_TEXT_INSET = "pl-9"
+
+// An option's number in its gutter. LIVE (an answerable card) it is a KEYCAP — a key-shaped mark reads as
+// "press this" with nothing to explain, and the key on screen is the key the card binds (questionKeys).
+// Read-only it is the plain number: a settled card answers no key. Past 9 there is no key to name, so
+// those stay plain too. On a touch screen there is no keyboard to point at, so the cap drops its border
+// and fill and reads as a plain number. The SELECTED cap fills with the accent, the same fill the multi
+// checkbox uses, so a keyboard pick shows where it landed. Inside the focused options grid every cap
+// steps up a tone: the question that holds the keyboard says so. The row is `items-baseline`, so the
+// digit stands on the label's baseline and the browser does the aligning, with the same result at every
+// zoom (measured in sans at 1x, 1.1x, 2x, 2.2x and 6x: the digit's foot on the label's baseline in every
+// row, the free-text row included). Leave the cap's own padding alone: a `pt-px` that lifts the cap half
+// a pixel rounded up in the option rows and down in the free-text row, 1px apart.
+function OptionKey({ n, live, selected = false }: { n: number; live: boolean; selected?: boolean }) {
+  if (!live || n > 9) {
+    return <span aria-hidden className="w-4 shrink-0 text-center text-[11px] tabular-nums text-muted">{n}.</span>
+  }
+  return (
+    <span
+      aria-hidden
+      className={`pointer-events-none flex size-4 shrink-0 items-center justify-center rounded-[4px] border border-b-2 text-[10.5px] font-medium leading-none tabular-nums transition-colors ${
+        selected
+          ? "border-accent bg-accent-fill text-on-accent"
+          : "border-border-strong bg-panel text-muted group-focus-visible/qgrid:border-control-strong group-focus-visible/qgrid:text-fg"
+      } pointer-coarse:border-transparent pointer-coarse:bg-transparent pointer-coarse:font-normal ${selected ? "pointer-coarse:text-fg" : "pointer-coarse:text-muted"}`}
+    >
+      {n}
+    </span>
   )
 }

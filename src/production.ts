@@ -10,7 +10,7 @@ import { homedir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { launchApp, launchBrowserTab } from "./browser.ts";
-import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { loadSessionState, sessionEpochLogLine, sessionEpochNotice } from "@frizz/server/access-codes";
 import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
@@ -179,6 +179,8 @@ const globalInstall = process.env[GLOBAL_INSTALL_ENV] === "1" || isGlobalInstall
 let accessPane: AccessPane | null = null;
 /** The single-use link this launch minted, read by the readout below. */
 let activeAccessLink: { url: string } | null = null;
+/** Set when this start's session-epoch advance signed remote devices out; the readout says so. */
+let sessionNotice: string | null = null;
 let serverOwner: ServerOwnerLease | undefined;
 // Cold-install errors and signals also release the lease. Live registered control-plane delegates
 // retain its draining fence until their exact process generations are gone.
@@ -460,6 +462,7 @@ async function openOrPrint(port: number, reused: boolean, path = ""): Promise<vo
   const publicOrigin = reused ? undefined : remote?.origin();
   const warnings: string[] = [];
   if (sandbox) warnings.push(`Sandbox: everything here is throwaway (${sandbox.home}) and is deleted when this terminal closes.`);
+  if (sessionNotice && !reused) warnings.push(sessionNotice);
   if (!readout) {
     console.log(`${reused ? "reusing" : "started"} Frizz for ${workspace.root}`);
     console.log(url);
@@ -549,17 +552,23 @@ async function runSupervisor(port: number, token: string, onPrepared: () => void
   const updateAvailablePoll = setInterval(() => void refreshUpdateAvailable(), 30 * 60 * 1000);
   updateAvailablePoll.unref();
 
+  // Persisted beside the project's other state, so a restart does not sign every device out.
+  // Always, not only when public: the origin can be switched on later (press R), and a phone signed
+  // in through one name stays signed in through the next. Loading it also applies SESSION_EPOCH, which
+  // signs out every device from before a security bump, once.
+  const sessions = loadSessionState(workspace.stateDir);
+  const epochRecord = sessionEpochLogLine(sessions.advance, sessions.signedOut);
+  if (epochRecord) logger.warn("launcher", epochRecord);
+  sessionNotice = sessionEpochNotice(sessions.signedOut);
   const supervisor = await startDevSupervisor({
     port,
     host: LOOPBACK_BIND_HOST,
     allowedHosts: [],
       // A spent code repaints the open QR pane as stale, so nobody photographs a dead link.
       onCodeConsumed: () => accessPane?.markConsumed(),
-    // Persisted beside the project's other state, so a restart does not sign every device out.
-    // Always, not only when public: the origin can be switched on later (press R), and a phone signed
-    // in through one name stays signed in through the next.
-    sessionKey: loadOrCreateSessionKey(workspace.stateDir),
-    sessionDirectory: fileSessionDirectory(workspace.stateDir),
+    sessionKey: sessions.key,
+    rotateSessionKey: sessions.rotateKey,
+    sessionDirectory: sessions.directory,
     cwd: workspace.root,
     stateDir: workspace.stateDir,
     launchTarget: target,

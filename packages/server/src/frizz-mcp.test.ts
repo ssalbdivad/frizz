@@ -83,7 +83,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     rpc.send({ jsonrpc: "2.0", method: "notifications/initialized" })
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
-    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "editor", "schedule", "deadline"])
+    assert.deepEqual(list.result.tools.map((t: { name: string }) => t.name), ["spawn_thread", "goal", "timer", "watch_pr", "watch", "unwatch", "ask", "unask", "done", "title", "activity", "link", "unlink", "watch_issue", "extend_shell", "read_thread", "message_thread", "editor", "schedule", "deadline", "secret"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "link").inputSchema.required, ["label", "target"])
     assert.deepEqual(list.result.tools.find((t: { name: string }) => t.name === "unlink").inputSchema.required, ["id"])
     for (const required of ["prompt", "model", "effort"]) {
@@ -178,7 +178,7 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // `wch_…` id of any watch holding one. It takes NOTHING: there is no thread parameter and no filter,
     // because the only correct answer is "everything you have running", and a worker that has lost its
     // ids cannot be trusted to name them.
-    assert.equal(list.result.tools.length, 20)
+    assert.equal(list.result.tools.length, 21)
     // `deadline` — the thread's time limit. `action` alone is required and there is NO thread parameter:
     // the slug comes from the env, so a worker reads and sets only its own.
     const deadlineTool = list.result.tools[19]
@@ -210,6 +210,12 @@ test("the frizz MCP server identifies as `frizz` and exposes its worker tools", 
     // env, so a message is always signed by the thread that really sent it.
     assert.deepEqual(list.result.tools[15].inputSchema.required, ["handle"])
     assert.deepEqual(list.result.tools[16].inputSchema.required, ["handle", "message"])
+    // `secret` — one masked question. NO thread parameter, and nothing that could carry the value itself:
+    // the user types it into the card, never the worker into the call.
+    const secretTool = list.result.tools[20]
+    assert.equal(secretTool.name, "secret")
+    assert.deepEqual(secretTool.inputSchema.required, ["question"])
+    assert.deepEqual(Object.keys(secretTool.inputSchema.properties), ["question", "header"])
     assert.deepEqual(list.result.tools[10].inputSchema.required, [])
     assert.deepEqual(Object.keys(list.result.tools[10].inputSchema.properties), [])
     // `watch_issue` — the issue twin of `watch_pr`, same shape: `action` alone is required, and NO thread
@@ -264,7 +270,7 @@ test("`editor` is listed only while an editor has the project open, and the list
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const first = names(await rpc.next(2))
     assert.ok(!first.includes("editor"), "no editor has the project open, so the tool is not listed")
-    assert.equal(first.length, 19)
+    assert.equal(first.length, 20)
     // Asked of OUR project, naming the calling thread (a window on its own checkout counts).
     assert.deepEqual(asked[0], { url: "/_frizz/proj/rpc/workerCapabilities", body: { slug: "caller" } })
 
@@ -313,7 +319,7 @@ test("a server that cannot report capabilities keeps every tool listed", async (
     rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/list" })
     const list = await rpc.next(2)
     assert.ok(list.result.tools.some((t: { name: string }) => t.name === "editor"))
-    assert.equal(list.result.tools.length, 20)
+    assert.equal(list.result.tools.length, 21)
     await new Promise((r) => setTimeout(r, 400))
     assert.deepEqual(rpc.notifications, [], "an unreadable report never changes the list")
   } finally {
@@ -1503,6 +1509,52 @@ test("`ask` and `unask` register and withdraw the CALLING thread's questions, tr
     assert.equal(noId.result.isError, true)
     assert.match(noId.result.content[0].text, /`id` is required/)
     assert.equal(seen.length, before, "neither reached the server")
+  } finally {
+    rpc.kill()
+    http.close()
+  }
+})
+
+test("`secret` registers ONE masked question on the CALLING thread and hands back the quoted pipe path", async () => {
+  const seen: Array<{ url: string; body: any }> = []
+  const path = "/Users/x/Library/Application Support/Frizz/projects/p/secrets/asking-thread/qst_sec111"
+  const spec = { question: "The npm one-time code for the maintainer account.", kind: "question", secret: true, header: "npm OTP" }
+  const view = { id: "qst_sec111", spec, askedAt: "2026-10-08T00:00:00.000Z", secretPath: path }
+  const replies: any[] = [{ registered: [view], open: [view] }]
+  const http = createServer((req, res) => {
+    let body = ""
+    req.on("data", (c) => (body += c))
+    req.on("end", () => {
+      seen.push({ url: req.url ?? "", body: JSON.parse(body) })
+      res.writeHead(200, { "content-type": "application/json" })
+      res.end(JSON.stringify({ result: replies.shift() ?? null }))
+    })
+  })
+  await new Promise<void>((resolve) => http.listen(0, "127.0.0.1", resolve))
+  const port = (http.address() as { port: number }).port
+  const stateDir = mkdtempSync(join(tmpdir(), "frizz-mcp-"))
+  writeFileSync(join(stateDir, "server.lock"), JSON.stringify({ port }))
+  const rpc = startServer({ FRIZZ_STATE_DIR: stateDir, FRIZZ_THREAD_SLUG: "asking-thread" })
+  try {
+    rpc.send({ jsonrpc: "2.0", id: 1, method: "initialize", params: {} })
+    await rpc.next(1)
+    rpc.send({ jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "secret", arguments: { question: ` ${spec.question} `, header: "npm OTP" } } })
+    const asked = await rpc.next(2)
+    assert.equal(asked.result.isError, undefined)
+    // It rides the `ask` RPC — the card, the wake and the `done` gate are a question's.
+    assert.deepEqual(seen[0], { url: "/_frizz/rpc/ask", body: { slug: "asking-thread", questions: [spec] } })
+    const text = asked.result.content[0].text
+    assert.match(text, /Registered secret request qst_sec111/)
+    // QUOTED: the macOS state dir has a space in it, and an unquoted `$(cat …)` splits there.
+    assert.ok(text.includes(`"$(cat '${path}')"`), text)
+    assert.match(text, /read ONCE, within 15 minutes/)
+
+    const before = seen.length
+    rpc.send({ jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "secret", arguments: { question: "  " } } })
+    const blank = await rpc.next(3)
+    assert.equal(blank.result.isError, true)
+    assert.match(blank.result.content[0].text, /`question` is required/)
+    assert.equal(seen.length, before, "a blank request never reaches the server")
   } finally {
     rpc.kill()
     http.close()

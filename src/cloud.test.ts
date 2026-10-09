@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { execFileSync } from "node:child_process";
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
@@ -29,11 +30,10 @@ import {
 // would point the writes at the operator's real `$XDG_DATA_HOME/frizz`, where the cleanup never looks.
 for (const name of ["XDG_DATA_HOME", "XDG_STATE_HOME", "XDG_CACHE_HOME"]) delete process.env[name];
 
-// Claiming a NAME binds it to a GitHub account, which establishCloudConfig reads from the `gh` CLI.
-// The claim tests hand in this stand-in instead, so the path runs on a machine with no `gh` at all
-// (the Windows suite has none, and these four were skipped there until 2026-08-25) and no test ever
-// sends the operator's real token to the fake registrar below.
-const fakeGithub = { accessToken: async () => "gho_testtoken", login: async () => "tester" };
+// Claiming a NAME binds it to a GitHub account, which establishCloudConfig confirms through GitHub's
+// device flow. The claim tests hand in this stand-in for the finished sign-in, so no test waits on a
+// person entering a code at github.com (github-device-flow.test.ts drives the flow itself).
+const fakeGithub = { authorize: async () => ({ token: "gho_testtoken", login: "tester" }) };
 
 /** A registrar that answers every claim, so the CLI side can be driven without one deployed. */
 async function claimServer(
@@ -206,8 +206,7 @@ test("a claimed name stores the token at 0600, apart from the world-readable con
     const config = await establishCloudConfig("colin", 9393, home, server.origin, fakeGithub);
     assert.deepEqual(config, { hostname: "colin.frizz.sh", claim: "colin", serve: "tunnel" });
     assert.equal(readTunnelToken(home), "run-token");
-    // The first claim is the one that carries the GitHub token, and it is the injected one — not
-    // whatever `gh` on this machine would have said.
+    // The first claim is the one that carries the GitHub token, and it is the device-flow one.
     assert.equal(server.claims[0]?.github, "gho_testtoken", "the claim carries the injected token");
     // The mode bits only — the claim, the token round trip and the config separation below are asserted
     // on every platform. Windows has no POSIX permission bits (NTFS access is an ACL, `fs.chmod` sets
@@ -409,13 +408,12 @@ test("reconciling leaves a relay claim and an operator's own hostname exactly as
 });
 
 test("an EMPTY answer claims a private unguessable name, and GitHub is never consulted", async () => {
-  // The auth-free default: no `gh`, no account, no sign-in. The stand-in below throws on any touch,
-  // so this also proves the anonymous path works on a machine with no GitHub CLI at all.
+  // The auth-free default: no account, no sign-in. The stand-in below throws on any touch,
+  // so this also proves the anonymous path never starts a GitHub sign-in.
   const home = tempHome();
   const server = await claimServer({ hostname: "x.frizz.sh", leaseExpiresAt: 0, renewed: false });
   const untouchable = {
-    accessToken: async (): Promise<string> => { throw new Error("GitHub must not be consulted"); },
-    login: async (): Promise<string | null> => { throw new Error("GitHub must not be consulted"); },
+    authorize: async (): Promise<never> => { throw new Error("GitHub must not be consulted"); },
   };
   try {
     const config = await establishCloudConfig("", 9393, home, server.origin, untouchable);
@@ -432,12 +430,11 @@ test("an EMPTY answer claims a private unguessable name, and GitHub is never con
 
 test("a name that already HAS the anonymous shape re-claims without GitHub too", async () => {
   // reconcileCloudConfig re-claims a saved label through establishCloudConfig, so an anonymous label
-  // arriving as TEXT must ride the anonymous path — or a reconcile would suddenly demand `gh`.
+  // arriving as TEXT must ride the anonymous path — or a reconcile would suddenly demand a GitHub sign-in.
   const home = tempHome();
   const server = await claimServer({ hostname: "x.frizz.sh", leaseExpiresAt: 0, renewed: true });
   const untouchable = {
-    accessToken: async (): Promise<string> => { throw new Error("GitHub must not be consulted"); },
-    login: async (): Promise<string | null> => { throw new Error("GitHub must not be consulted"); },
+    authorize: async (): Promise<never> => { throw new Error("GitHub must not be consulted"); },
   };
   try {
     const label = "abcdefghjkmnpqrstuvw";
@@ -447,5 +444,37 @@ test("a name that already HAS the anonymous shape re-claims without GitHub too",
   } finally {
     await server.close();
     rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// 2026-10-08: a compromised registrar collected the `gh auth token` every named claim sent — a token
+// that can push to every repository its owner can. The claim path no longer runs `gh` at all. This
+// puts a `gh` on PATH that would hand over a secret and record being run, then claims a name: the body
+// carries only the device-flow token, and the `gh` was never touched.
+test("a named claim never runs `gh` and never sends its token", { skip: process.platform === "win32" && "a shell-script gh needs a POSIX shell" }, async () => {
+  const home = tempHome();
+  const bin = mkdtempSync(join(tmpdir(), "frizz-fake-gh-"));
+  const ran = join(bin, "ran");
+  writeFileSync(join(bin, "gh"), `#!/bin/sh\necho "$@" >> "${ran}"\necho gho_SECRET_FROM_GH_CLI\n`, { mode: 0o755 });
+  const path = process.env.PATH;
+  process.env.PATH = `${bin}:${path}`;
+  const server = await claimServer({ hostname: "colin.frizz.sh", leaseExpiresAt: 0, renewed: false });
+  try {
+    // The fake `gh` is live: a control proving the test could see it if the claim path used it.
+    assert.equal(execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim(), "gho_SECRET_FROM_GH_CLI");
+    rmSync(ran, { force: true });
+
+    await establishCloudConfig("colin", 9393, home, server.origin, {
+      authorize: async () => ({ token: "gho_zeroScopeDeviceToken", login: "tester" }),
+    });
+    const sent = JSON.stringify(server.claims);
+    assert.equal(server.claims[0]?.github, "gho_zeroScopeDeviceToken", "the claim carries the device-flow token");
+    assert.equal(sent.includes("gho_SECRET_FROM_GH_CLI"), false, "the gh token never reaches the registrar");
+    assert.equal(existsSync(ran), false, "the claim path never ran gh");
+  } finally {
+    process.env.PATH = path;
+    await server.close();
+    rmSync(home, { recursive: true, force: true });
+    rmSync(bin, { recursive: true, force: true });
   }
 });

@@ -15,6 +15,7 @@ import { SNOOZE_PRESETS, isSnoozePreset } from "../lib/snooze.ts"
 import { EDITOR_OPENER_LABEL, connectedOpeners } from "../lib/editorWindows.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { isRemoteSession } from "../api/signOut.ts"
+import { RestartFailureNotice, useUpdateRestart } from "./RestartFrizzButton.tsx"
 import { SignOutThisDeviceRow } from "./SignOutThisDeviceRow.tsx"
 import { RemoteAccessField } from "./RemoteAccessField.tsx"
 import { QuotaMeters } from "./QuotaBar.tsx"
@@ -45,7 +46,14 @@ function currentPerm(): NotifPerm {
 // header (GithubPromptPopover). A "Project settings" tab stood here for a few hours on 2026-09-19
 // carrying that prompt a second time; the maintainer's call was that moving a setting to its context
 // means it no longer lives here at all, so the tab strip went with it.
-export function SettingsDrawer() {
+export function SettingsDrawer({ offerUpdate = false }: {
+  /**
+   * Show the phone page's "Update Frizz" row. Only the board passes it: an update is finished by App's
+   * supervisor monitor and RestartOverlay (App.tsx), which mount with the board and not with the Projects
+   * page (`/`), so the same row there would raise no overlay and never reload onto the new version.
+   */
+  offerUpdate?: boolean
+} = {}) {
   const { draft, update, saveState, flush } = useSettingsDraft()
   const isMobile = useIsMobile()
   // AN EDITOR'S SIDEBAR GETS THIS DRAWER, the desktop's, the frame's full width (lib/mobile.ts: a sidebar is
@@ -110,6 +118,7 @@ export function SettingsDrawer() {
         notifications={draft ? draft.notifications : null}
         onNotifications={toggleNotifications}
         perm={perm}
+        offerUpdate={offerUpdate}
       />
     )
   }
@@ -131,8 +140,15 @@ export function SettingsDrawer() {
       onMouseDown={(e) => e.target === e.currentTarget && close()}
     >
       <OverDrawersFocusLayer panelRef={panelRef}>
+      {/* A real modal dialog, not just a panel that looks like one: assistive tech reads it as one, and
+          the number keys (lib/questionKeys.ts) treat an open `aria-modal` dialog with no question in it
+          as owning the keyboard, so a digit cannot answer a card behind the scrim. The focus layer's
+          Radix Content (asChild) already makes it `role="dialog"`; it is non-modal to Radix only so it
+          can stack over a thread's dialog, which is why `aria-modal` is stated here. */}
       <div
         ref={panelRef}
+        role="dialog"
+        aria-modal="true"
         aria-label="Settings"
         className={`${SHEET_PANEL_CLASS} w-[560px] max-w-[94vw] outline-none ${shown ? "translate-x-0" : "translate-x-full"}`}
       >
@@ -265,6 +281,10 @@ export function SettingsDrawer() {
 //     board's swipe and the ⋯ sheet use, and the phone has no other place to choose it.
 //
 // Plain full-width rows under section labels — no grouped-inset cards, no iOS chrome.
+//
+// ADDED 2026-10-08 (maintainer, on #52): "Update Frizz", as a row beside the `Frizz {version}` footer.
+// The phone had no way to update at all; #52 proposed bringing back a ⋯ sheet on the board to hold it,
+// and the maintainer kept the gear instead, with a dot on it when a new release line is out.
 
 /** The live connection, in the words the board's ⋯ sheet used before this page took its reading over. */
 const CONNECTION_WORD: Record<ConnectionState, { dot: string; word: string }> = {
@@ -380,6 +400,7 @@ function MobileSettingsPage({
   notifications,
   onNotifications,
   perm,
+  offerUpdate,
 }: {
   shown: boolean
   onClose: () => void
@@ -388,6 +409,7 @@ function MobileSettingsPage({
   notifications: boolean | null
   onNotifications: (on: boolean) => void
   perm: NotifPerm
+  offerUpdate: boolean
 }) {
   const { connection } = useSnapshot(store)
   const { queueOrder, snoozePreset } = useSnapshot(prefs)
@@ -397,6 +419,10 @@ function MobileSettingsPage({
   return (
     <div
       data-mobile-settings-page
+      // A modal dialog for the same reasons as the desktop drawer's panel (see SettingsDrawer).
+      role="dialog"
+      aria-modal="true"
+      aria-label="Settings"
       className={`fixed inset-0 z-50 flex flex-col bg-bg pt-[env(safe-area-inset-top)] transition-transform duration-200 ease-out motion-reduce:transition-none ${
         shown ? "translate-x-0" : "translate-x-full"
       }`}
@@ -481,6 +507,8 @@ function MobileSettingsPage({
           </MobileSection>
         ) : null}
 
+        {offerUpdate ? <MobileUpdateRow /> : null}
+
         {version ? (
           <div data-mobile-version className="px-[18px] py-[14px] text-[12.5px] text-faint">Frizz {version}</div>
         ) : null}
@@ -488,6 +516,64 @@ function MobileSettingsPage({
     </div>
   )
 }
+
+/**
+ * The phone's update verb: the desktop status row's button as a Settings row (same hook, same request,
+ * same blocking overlay). The label says what a tap does, the right column names the step it installs
+ * (`0.13.8 → 0.14.0`, the desktop popover's line), and a dot rides the label whenever a newer version
+ * has been OBSERVED — a patch included, unlike the board gear's dot, which the desktop badge rule keeps
+ * to a new release line (`isBadgeRelease`). Inside Settings the dot only says which row is the news.
+ * frizz-dev rebuilds from source and names no version, so its row is live but undotted.
+ *
+ * Up to date, it stays as a muted, inert "Frizz is up to date", the desktop's grey state; the version
+ * itself is the footer under it. A rejected request leaves its failure card inline under the row,
+ * dismissible, rather than anchored to a button the phone does not have.
+ */
+export function MobileUpdateRow() {
+  const control = useUpdateRestart()
+  if (!control.visible) return null
+  const label = control.busy
+    ? control.update ? "Updating…" : "Restarting…"
+    : control.current ? "Frizz is up to date" : control.update ? "Update Frizz" : "Restart Frizz"
+  const newer = control.update ? control.updateVersion : undefined
+  return (
+    <div data-mobile-update>
+      <MobileSection label="Version">
+        <button
+          type="button"
+          data-mobile-update-row
+          disabled={control.busy || control.current}
+          aria-busy={control.busy || undefined}
+          onClick={() => void control.run()}
+          // Muted, not faded, when inert: opacity would fade the row's rule with its words.
+          className={`${MOBILE_ROW} w-full text-left active:bg-hover disabled:text-muted`}
+        >
+          <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+            <span className="truncate">{label}</span>
+            {newer && !control.busy ? (
+              <span data-mobile-update-row-notification aria-hidden className={UPDATE_DOT} />
+            ) : null}
+          </span>
+          {newer && control.version ? (
+            <span data-mobile-update-step className="shrink-0 text-[14px] tabular-nums text-muted">
+              {control.version} → {newer}
+            </span>
+          ) : null}
+        </button>
+      </MobileSection>
+      {control.shownError ? (
+        <RestartFailureNotice mobile update={control.update} message={control.shownError} outcome={control.outcome} onDismiss={control.dismiss} />
+      ) : null}
+    </div>
+  )
+}
+
+// The row's dot: the board gear's 5px dot (MobileBoard.tsx GEAR_DOT), so the two read as one mark.
+// It sits on the label's CAP BAND, not its line box: an empty flex item's baseline is its bottom edge,
+// so `self-baseline` puts that edge on the text baseline, and the translate lifts the dot by half the
+// resolved cap height less its own radius — centred on the capitals in any font, at any size. The
+// 6px box gap draws ~6.8px of ink after the label's last letter (sans, 15.5px, 2026-10-08).
+const UPDATE_DOT = "size-[5px] shrink-0 self-baseline translate-y-[calc(2.5px_-_0.5cap)] rounded-full bg-accent"
 
 function AppearanceControl() {
   const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeSnapshot)

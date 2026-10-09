@@ -21,6 +21,7 @@ import { rpc } from "./api/rpc.ts"
 import { primeRoute } from "./lib/router.ts"
 import { installViewTransitionRejectionFilter } from "./lib/viewTransitionRejections.ts"
 import { PENDING_SEND_REPLAY_DELAY_MS, replayPendingSends } from "./lib/eagerComposerSubmission.ts"
+import { stepOffStaleLayerEntries } from "./lib/backDismiss.ts"
 import { innerPath } from "./lib/base-path.ts"
 import { projectScopedQueryKeyHash } from "./lib/queryKeyScope.ts"
 import { parseStandaloneThreadPath } from "./lib/standaloneThreadRoute.ts"
@@ -39,6 +40,10 @@ if (import.meta.env.DEV && typeof performance !== "undefined") {
 const settingsFixture = typeof window !== "undefined" && window.location.pathname.endsWith("/settings-formatting-fixture.html")
 // innerPath, not location.pathname: under a project prefix the deep link is `/all/nub/thread/x/full`.
 const standaloneThreadSlug = typeof window !== "undefined" ? parseStandaloneThreadPath(innerPath()) : null
+
+// A reload with a phone sheet up restores the sheet's same-URL history entry with no sheet to own it.
+// Step off it before anything pushes, so the page sits on the router's own entry (see lib/backDismiss).
+if (!settingsFixture) stepOffStaleLayerEntries()
 
 if (!settingsFixture && !standaloneThreadSlug) {
   // Adopt a cold/deep URL before React takes its first store snapshot — still SYNCHRONOUS, and still

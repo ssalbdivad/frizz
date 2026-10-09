@@ -276,14 +276,24 @@ function stacksOver(below: Drawer, next: Pick<Drawer, "kind" | "slug">): boolean
   return false
 }
 
+// ONE-DRAWER POLICY (maintainer 2026-07-21): opening a layer REPLACES every live layer it doesn't
+// logically stack over, so lateral moves (sidebar sibling thread/sub-agent clicks) swap the
+// open drawer instead of piling up; only drilling into the open thread's own child/doc stacks.
+//
+// Exported for the router, which applies the same displacement when Back or Forward lands on a thread
+// the stack no longer holds (lib/router applyPath). That thread was REPLACED by this policy when the
+// lateral move happened, so the layer that replaced it is still on top; left there, it kept the store
+// saying "the other thread" while the address bar said this one, and the store→URL sync pushed the
+// other thread's URL straight back — every Back press grew the history and flipped between the two.
+export function closeLayersDisplacedBy(next: Pick<Drawer, "kind" | "slug" | "path" | "subId">): void {
+  const displaced = store.drawers.filter((d) => !d.closing && !sameDrawer(d, next) && !stacksOver(d, next)).map((d) => d.id)
+  if (displaced.length) closeDrawersById(displaced)
+}
+
 function openOrRaiseDrawer(next: Omit<Drawer, "id" | "closing" | "openedAt">, opts?: { drillIn?: boolean }): void {
-  // ONE-DRAWER POLICY (maintainer 2026-07-21): opening a layer REPLACES every live layer it doesn't
-  // logically stack over, so lateral moves (sidebar sibling thread/sub-agent clicks) swap the
-  // open drawer instead of piling up; only drilling into the open thread's own child/doc stacks.
   // `drillIn` is a caller that KNOWS it is opening from inside the top layer — a schedule's history row
   // opening its run, a run's transcript opening its schedule — so nothing is displaced and Esc goes back.
-  const displaced = opts?.drillIn ? [] : store.drawers.filter((d) => !d.closing && !sameDrawer(d, next) && !stacksOver(d, next)).map((d) => d.id)
-  if (displaced.length) closeDrawersById(displaced)
+  if (!opts?.drillIn) closeLayersDisplacedBy(next)
 
   const matches = store.drawers.filter((drawer) => sameDrawer(drawer, next))
   if (!matches.length) {

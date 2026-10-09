@@ -1,7 +1,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { activeBandThread, workingThread, type ThreadView } from "@frizz/shared"
-import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, restIsWorking, titleIsProvisional, displayTitle, displayName, threadHandleOf, subAgentName, subAgentAddressOf, subAgentTitle, UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
+import { bandOf, doneButRunning, needsAction, queued, orderQueue, partitionActive, sectionOf, sectionThreads, isSnoozed, sessionIndicatorKind, offersRetry, restIsWorking, workingWithOpenQuestion, titleIsProvisional, displayTitle, displayName, threadHandleOf, subAgentName, subAgentAddressOf, subAgentTitle, UNNAMED_SUB_AGENT_LABEL, lastActiveLabelAt, queueLabelAt, queueLabelWord, SPINNING_UP_TITLE, UNTITLED_THREAD_TITLE } from "./groups.ts"
 
 // Minimal ThreadView fixture — the same shape board-delta.test.ts uses, defaulting to a live/active
 // thread; each case overrides only the fields under test.
@@ -202,6 +202,20 @@ test("sessionIndicatorKind: a REGISTERED question wears the ? at rest, never the
   assert.equal(sessionIndicatorKind(thread({ ...asked, needsYou: false, runtime: "running" })), "working")
   // A queued rest with live children AND an open row is the ask, not the 2026-07-27 ellipsis.
   assert.equal(sessionIndicatorKind(thread({ ...asked, subAgents: liveSub })), "needs-input")
+})
+
+// …and while it spins, the "?" rides INSIDE the spinner (2026-10-08): the plain spinner hid the ask from
+// everyone who did not open the thread, for the whole stretch the worker kept working after asking.
+test("workingWithOpenQuestion: a running thread with an open registered question, and nothing else", () => {
+  const running = thread({ kind: "session", state: "open", needsYou: false, runtime: "running", questions: regQuestion })
+  assert.equal(workingWithOpenQuestion(running), true)
+  // A parent resting on its sub-agents is still `working`, and the ask outranks the ellipsis there.
+  assert.equal(workingWithOpenQuestion(thread({ ...running, runtime: "turn-idle", subAgents: liveSub })), true)
+  // At rest the kind is already needs-input — the static [?] — so this never fires there.
+  assert.equal(workingWithOpenQuestion(thread({ ...running, needsYou: true, runtime: "turn-idle" })), false)
+  // No open row, no badge: a running thread keeps the empty spinner.
+  assert.equal(workingWithOpenQuestion(thread({ ...running, questions: [] })), false)
+  assert.equal(workingWithOpenQuestion(thread({ ...running, questions: undefined })), false)
 })
 
 // A USER SNOOZE OUTRANKS THE ASK MARKS, because the SERVER already dequeued the thread on it

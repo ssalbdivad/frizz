@@ -106,13 +106,38 @@ test("the empty-message predicates take the settled case", () => {
   }
   const blank = source.match(/function blankText\([\s\S]*?\n}/)?.[0]
   assert.ok(blank, "blankText must exist")
-  assert.match(
-    blank.replace(/^\s*\/\/.*$/gm, ""),
-    /if \(!m\.fenceRefused && !staleAwaiting && !cardOwned\) return !text\.trim\(\)/,
-    "a settled fence must reach the fence-aware test, as a refused one does",
-  )
-  // …and a settled fence with a BODY still renders (its note), so it is not blank; one without is.
-  assert.match(blank, /const drawsNothing = \(body: string\) => m\.fenceRefused \|\| cardOwned \|\| !body\.trim\(\)/)
+  const code = blank.replace(/^\s*\/\/.*$/gm, "")
+  assert.match(code, /if \(!m\.fenceRefused && !staleAwaiting && !cardOwned\) \{\n\s*if \(!text\.includes\("```awaiting"\)\) return !text\.trim\(\)/, "a settled fence must reach the fence-aware test, as a refused one does")
+  // …and a LIVE fence that names questions with no prose is as empty: renderText draws nothing for it.
+  assert.match(code, /awaitingDefersToQuestions\(s\.hints\) && !awaitingProseBlock\(s\.body\)/)
+  // …and a settled fence with a BODY still renders (its note), as does one that handed the human steps
+  // (its card); one with neither is blank, and so is any the resting card owns or a refusal took.
+  assert.match(code, /m\.fenceRefused \|\| cardOwned \|\| \(!settledFenceDraws\(s\.hints\) && !s\.body\.trim\(\)\)/)
+})
+
+// A FENCE THAT NAMES QUESTIONS DRAWS NO CARD (maintainer 2026-10-08: "if there are questions that are
+// getting rendered, we don't even need to bother rendering the awaiting card"). Its prose stays as the
+// message's own text, and the branch sits before the card push so no slot is spent on a card.
+test("a fence that names questions renders its prose and no card", () => {
+  const render = renderText()
+  const branch = render.indexOf('if (fseg.fenceKind === "awaiting" && awaitingDefersToQuestions(fseg.hints))')
+  assert.ok(branch >= 0, "the branch must exist")
+  assert.ok(branch < render.indexOf("<FenceCard"), "it must come before the card push")
+  assert.match(render.slice(branch), /^[^]*?const prose = awaitingProseBlock\(fseg\.body\)\n\s*if \(prose\) push\(<ProseHtml [^\n]*\/>\)\n\s*continue/)
+})
+
+// A SETTLED STEPS FENCE KEEPS ITS CARD (2026-10-08, maintainer: "We need to continue showing the to do
+// instructions even after they are complete & the thread has moved on"). Drawn with NO thread, so it
+// carries no live rows and no Done; settledSteps.e2e.test.ts drives it in the real drawer.
+test("a settled fence that handed the human steps keeps its card, with no thread behind it", () => {
+  const render = renderText()
+  const keep = render.indexOf("settledFenceDraws(fseg.hints)")
+  assert.ok(keep >= 0, "the exception must exist")
+  assert.ok(keep < render.indexOf("(m.fenceRefused || restingCardShown)) continue"), "…ahead of the skip it excepts")
+  assert.ok(keep < render.indexOf("<SettledAwaitingNote"), "…and ahead of the settled note, which it replaces")
+  assert.match(render, /staleAwaiting && !m\.fenceRefused && !restingCardShown && settledFenceDraws\(fseg\.hints\)/, "never for a refused fence, nor one the resting card states")
+  assert.match(render, /push\(<AwaitingBackgroundCard key=\{`[^`]+`\} fence=\{\{ body: fseg\.body, hints: fseg\.hints \}\} \/>\)/, "no `thread`, so no rows and no verb")
+  assert.match(source, /function settledFenceDraws\(hints: readonly AwaitingHint\[\]\): boolean \{\n\s*return awaitingSteps\(hints\)\.length > 0\n\}/)
 })
 
 // ONE CUT, SHARED. The renderer marks a fence settled by comparing its index against the last assistant

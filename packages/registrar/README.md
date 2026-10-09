@@ -18,30 +18,28 @@ re-attributed by swapping it. Ownership moves between machines the way an SSH ke
 registrar recognizes that shape and waives the GitHub gate. Unauthenticated creation is capped at 10
 names an hour per network address, and renewals never count against it.
 
-**A custom name also needs a GitHub account, and that is the only thing standing between it and a
-squatter.** The CLI asks `gh` for a token; the registrar spends it on `api.github.com/user`, keeps the
-numeric id and discards the token. One name per account, and an account younger than 30 days cannot
-claim. Nothing afterwards touches GitHub — the keypair alone renews the lease, so a name keeps working
-whether or not GitHub does. Set `REQUIRE_GITHUB=0` to lift the gate on a test deployment; never on the
-one anybody can reach.
+**Claiming a custom name also needs a GitHub account, and that is the only thing standing between this and a squatter.** The CLI signs the person in through GitHub's device flow against Frizz's own OAuth App, which requests no scopes, and sends the resulting token with the first claim. The registrar spends it on `api.github.com/user`, keeps the numeric id and discards the token. One name per account, and an account younger than 30 days cannot claim. Nothing afterwards touches GitHub — the keypair alone renews the lease, so a name keeps working whether or not GitHub does. Set `REQUIRE_GITHUB=0` to lift the gate on a test deployment; never on the one anybody can reach.
+
+**Only a token with no scopes is accepted.** Until 2026-10-08 the CLI sent its `gh auth token`, which can push to every repository its owner can, and a compromised build of this Worker collected those tokens. The verifier (`githubVerifier` in [`worker.ts`](src/worker.ts)) now refuses, as `github-token-scoped`, any token that is not an OAuth App user token (`gho_…`) without sending it anywhere, and any token whose `X-OAuth-Scopes` header lists a scope. An old CLI is told to update.
+
+The OAuth App's client id lives in [`src/github-device-flow.ts`](../../src/github-device-flow.ts) (`FRIZZ_GITHUB_CLIENT_ID`; the `FRIZZ_GITHUB_CLIENT_ID` environment variable overrides it). It is public, and device flow needs no client secret, so this Worker holds no GitHub credential at all.
 
 A name is a **30-day lease**, renewed on every launch. An unrenewed name is released — on demand when
 someone else asks for it, and by a daily sweep for names nobody wants.
 
 ## Deploying
 
-Relay mode — the default — creates no Cloudflare resources, so it needs no API token. The secrets
-below are read only when `CLOUD_MODE=tunnel` puts the old per-name tunnel path back.
+Only GitHub Actions deploys this Worker, never a laptop. Dispatch [`workers-deploy.yml`](../../.github/workflows/workers-deploy.yml) from `main`; it waits for a maintainer's approval on the `workers-deploy` environment, typechecks, runs the unit tests below and deploys:
 
 ```sh
-cd packages/registrar
-
-# 1. the registry: one small JSON row per claimed name
-wrangler kv namespace create CLAIMS      # paste the id into wrangler.toml
-
-# 2. ship it
-wrangler deploy
+gh workflow run workers-deploy.yml --ref main -f target=both
 ```
+
+`target` takes `relay`, `registrar` or `both`. [`workers-drift.yml`](../../.github/workflows/workers-drift.yml) checks every 30 minutes that everything this Worker runs came from a real run of that workflow, and a failed check is the alarm, emailed by GitHub. From 2026-09-21 to 2026-10-08 an attacker holding a Cloudflare token ran a build of this Worker that copied the GitHub token every named claim sends, and those uploads looked exactly like a laptop deploy. See the [relay README](../relay/README.md#deploying) for how the check works.
+
+**A secret change raises the alarm too.** `wrangler secret put` and `wrangler secret delete` each create a version and a deployment that CI did not make, and the check cannot tell the maintainer's from an attacker's. After changing a secret, dispatch the deploy workflow; the alarm clears once the CI deployment is active and the secret change is more than two hours old. Relay mode, the default, reads no secrets: the ones in `wrangler.toml` are read only when `CLOUD_MODE=tunnel` puts the old per-name tunnel path back.
+
+The registry is one KV namespace, created once and already in `wrangler.toml`. To recreate it, run `wrangler kv namespace create CLAIMS`, paste the new id into both this package's and the relay's `wrangler.toml`, and deploy through the workflow.
 
 Three things that will waste your time otherwise:
 

@@ -13,6 +13,7 @@ import { Bus, Emitter } from "./bus.ts"
 import { resolveProject, permRequestDir, workDirOf, type Project } from "./project.ts"
 import { isHomeWorkspace } from "./home-workspace.ts"
 import { createStorage, isBrokerClaudeRow, isHeadlessRow, type Storage } from "./storage.ts"
+import { clearSecrets } from "./secret-files.ts"
 import type Database from "./sqlite.ts"
 import { getSettings, setSettings, resetSettings } from "./settings.ts"
 import { getDispatchPreferences, setDispatchPreference } from "./dispatch-preferences.ts"
@@ -624,6 +625,9 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   // supervisor/child/reexec ownership.
   const storage = createStorage(opts.database ?? join(project.stateDir, "ui.db"), project.id)
   resources.storage = storage
+  // A secret is served from memory through a named pipe (secret-files.ts), so any pipe a previous
+  // process left has no writer behind it and would hang its reader: clear them before anything can ask.
+  clearSecrets(project.stateDir)
   const bus = new Bus()
   const transcriptChange = new Emitter<string[]>()
   const bootId = randomUUID()

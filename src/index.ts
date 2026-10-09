@@ -2,7 +2,7 @@
 import type { RemoteController } from "./remote-controller.ts";
 import { wireRemote } from "./remote-wiring.ts";
 import { bindHostIsExposed } from "@frizz/server/local-origin";
-import { fileSessionDirectory, loadOrCreateSessionKey } from "@frizz/server/access-codes";
+import { loadSessionState, sessionEpochLogLine, sessionEpochNotice } from "@frizz/server/access-codes";
 import { qrAreaOf, renderQrLines } from "@frizz/server/qr";
 import { listSessions, signOutSession } from "./sessions-cli.ts";
 import { SUPERVISOR_ACCESS_CODE_PATH } from "@frizz/server/restart-supervisor";
@@ -283,6 +283,8 @@ const launchTarget = workspaceLaunchTarget(workspace);
  * in another function entirely, and threading one nullable string through that call chain buys nothing.
  */
 let activeAccessLink: { code: string; url: string; expiresAt: number } | null = null;
+/** Set when this start's session-epoch advance signed remote devices out; the readout says so. */
+let sessionNotice: string | null = null;
 /** The keyboard: L for a link, R for the remote-access walkthrough. Held so shutdown can restore the shell. */
 let paneHost: PaneHost | null = null;
 let accessPane: AccessPane | null = null;
@@ -519,6 +521,14 @@ async function runSupervisor(
             }
           : {}),
       };
+  // Persisted beside the project's other state so a restart does not sign every device out.
+  // Always, not only when public: the origin can be switched on later (press R), and a phone signed
+  // in through one name stays signed in through the next. Loading it also applies SESSION_EPOCH, which
+  // signs out every device from before a security bump, once.
+  const sessions = loadSessionState(workspace.stateDir);
+  const epochRecord = sessionEpochLogLine(sessions.advance, sessions.signedOut);
+  if (epochRecord) logger.warn("launcher", epochRecord);
+  sessionNotice = sessionEpochNotice(sessions.signedOut);
   try {
     // First run only. Asking here rather than at import keeps the question off every other launch.
     supervisor = await startDevSupervisor({
@@ -527,11 +537,9 @@ async function runSupervisor(
       allowedHosts: [],
       // A spent code repaints the open QR pane as stale, so nobody photographs a dead link.
       onCodeConsumed: () => accessPane?.markConsumed(),
-      // Persisted beside the project's other state so a restart does not sign every device out.
-      // Always, not only when public: the origin can be switched on later (press R), and a phone signed
-      // in through one name stays signed in through the next.
-      sessionKey: loadOrCreateSessionKey(workspace.stateDir),
-      sessionDirectory: fileSessionDirectory(workspace.stateDir),
+      sessionKey: sessions.key,
+      rotateSessionKey: sessions.rotateKey,
+      sessionDirectory: sessions.directory,
       cwd: workspace.root,
       env: supervisorEnv,
       stateDir: workspace.stateDir,
@@ -907,6 +915,7 @@ async function openOrPrint(
   const accessLink = publicOrigin && !reused ? activeAccessLink : null;
   const warnings: string[] = [];
   if (sandbox) warnings.push(`Sandbox: everything here is throwaway (${sandbox.home}) and is deleted when this terminal closes.`);
+  if (sessionNotice && !reused) warnings.push(sessionNotice);
   if (!readout) {
     // `--status`, internal launches and pipes keep the plain, parseable records.
     console.log(`${reused ? "reusing" : "started"} Frizz for ${workspace.root}`);

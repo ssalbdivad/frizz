@@ -16,8 +16,13 @@ import { BoardSocket } from "./board-socket.ts"
  * tunnel design could never get past.
  *
  * WE ARE ON THE DATA PATH HERE, unlike the registrar. That is the trade this design makes deliberately:
- * unlimited names cost us the traffic. Nothing in the board is trusted to us — the visitor still meets
- * Frizz's own single-use access gate on the far side — but the bytes do pass through.
+ * unlimited names cost us the traffic. The visitor still meets Frizz's own single-use access gate on
+ * the far side, but every byte passes through here in plaintext — the access code as it is redeemed,
+ * the session cookie on every request after it, prompts, transcripts and terminal keystrokes. So
+ * whoever controls this Worker controls every board behind it: between 2026-09-21 and 2026-10-08 a
+ * stolen Cloudflare token was used to deploy a build of this file that copied all of that out and
+ * drove a board with a copied cookie. Deploys go through CI only (packages/relay/README.md), and
+ * plans/blind-relay.md is the design that takes the plaintext away from this hop.
  */
 
 export interface RelayEnv {
@@ -141,7 +146,10 @@ export class Board {
   private readonly adapters = new WeakMap<WorkerWebSocket, { send: (data: string) => void; close: (code?: number, reason?: string) => void }>()
   private restored = false
 
-  constructor(private readonly state: DurableObjectState) {
+  private readonly state: DurableObjectState
+
+  constructor(state: DurableObjectState) {
+    this.state = state
     // The board's keep-alive is answered by the RUNTIME, not by this object: an exact-match
     // auto-response works while the object is hibernated and does not wake it. Answering in
     // webSocketMessage instead would bill a wake per beat — thousands a day per idle board.

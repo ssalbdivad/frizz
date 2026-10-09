@@ -10,6 +10,7 @@
     "@frizz/shared": "workspace:*"
   },
   "devDependencies": {
-    "typescript": "^5.7"
+    "typescript": "^5.7",
+    "wrangler": "4.147.0"
   }
 }

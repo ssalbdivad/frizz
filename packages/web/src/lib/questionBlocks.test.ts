@@ -1,6 +1,6 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { splitQuestionBlocks, hasQuestionBlock, parseQuestionBlock, composeBlockAnswer, optionId, recommendedIndex } from "./questionBlocks.ts"
+import { splitQuestionBlocks, hasQuestionBlock, parseQuestionBlock, composeBlockAnswer, optionId, optionNumber, recommendedIndex, splitOptionId } from "./questionBlocks.ts"
 
 // ---- splitQuestionBlocks ----
 
@@ -707,4 +707,19 @@ test("a marker a worker QUOTES — showing the form, or pasting the contract's o
   // The contract prints the sample indented by four spaces, which is a code block, not an opener.
   const indented = "Here is the form:\n\n    ```question qst_aaaaaaaaaaaa\n    ```\n\nThat is all."
   assert.deepEqual(splitQuestionBlocks(indented).map((s) => s.kind), ["prose"])
+})
+
+test("optionNumber: frizz-built options are numbered from 1, the key that picks them", () => {
+  assert.deepEqual([0, 1, 8, 9, 25].map(optionNumber), ["1.", "2.", "9.", "10.", "26."])
+})
+
+test("splitOptionId: the identifier comes off the label for the keycap, the rest stays verbatim", () => {
+  assert.deepEqual(splitOptionId("2. SQLite — transactional"), { id: "2", rest: "SQLite — transactional" })
+  assert.deepEqual(splitOptionId("12) Twelve"), { id: "12", rest: "Twelve" })
+  // A worker's lettered fence: the letter comes off too; the card shows the option's position instead.
+  assert.deepEqual(splitOptionId("b. lowercase"), { id: "B", rest: "lowercase" })
+  assert.deepEqual(splitOptionId("AA. Past twenty-six"), { id: "AA", rest: "Past twenty-six" })
+  // No identifier, or a word that merely starts like one, is left alone.
+  assert.deepEqual(splitOptionId("SQLite. Transactional"), { rest: "SQLite. Transactional" })
+  assert.deepEqual(splitOptionId("just prose"), { rest: "just prose" })
 })

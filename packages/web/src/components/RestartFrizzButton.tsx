@@ -13,6 +13,7 @@ import {
   UPDATE_RESTART_FROM_VERSION,
   type RestartFailureOutcome,
   frizzBuildIdentity,
+  type FrizzSupervisorStatus,
 } from "../api/restart.ts"
 import { useSupervisorStatus } from "../api/supervisorStatus.ts"
 import { showToast, store } from "../store.ts"
@@ -35,6 +36,15 @@ export function isBadgeRelease(currentVersion: string | undefined, updateVersion
   const current = releaseLine(currentVersion)
   const update = releaseLine(updateVersion)
   return current !== null && update !== null && (current[0] !== update[0] || current[1] !== update[1])
+}
+
+/**
+ * Should a PASSIVE update mark show — a dot on a control that is not itself the update? The phone board's
+ * gear wears one (MobileBoard.tsx); the rule is the desktop button's, so a patch, a version-less
+ * frizz-dev build and a supervisor with no update verb all stay dark.
+ */
+export function showsUpdateBadge(status: Pick<FrizzSupervisorStatus, "updateRestart" | "updateAvailable" | "version" | "updateVersion"> | null): boolean {
+  return canUpdateRestart(status as FrizzSupervisorStatus | null) && isBadgeRelease(status?.version, status?.updateVersion)
 }
 
 // The generic spelling, kept for the launchers that cannot name versions: frizz-dev (an update
@@ -61,6 +71,8 @@ const currentCopy = "There is no newer version of Frizz to install."
 // shell (700px) never shows it, but an editor's sidebar does: VS Code's renders this desktop shell 300-
 // 600px wide with the status row at the top, so the strip hangs just under the button (48px against a
 // 36px bottom, at 300 and 450). The strip draws NO arrow — see PANEL_ARROW.
+// The phone's update lives on its Settings page (MobileUpdateRow in SettingsDrawer.tsx), and its failure
+// card renders inline there (`mobile`), not off this anchor.
 //
 // `sm:-left-[17px]` is DERIVED from the arrow, not chosen: PANEL_ARROW below carries the arithmetic
 // and the readings. It is not the offset that lines the panel's own edge up with anything — the panel
@@ -204,16 +216,19 @@ export function RestartFailureNotice({
   message,
   outcome = PREVIOUS_KEPT,
   onDismiss,
+  mobile = false,
 }: {
   update: boolean
   message: string
   /** Judged from the failed status's version against the version at click — api/restart.ts. */
   outcome?: RestartFailureOutcome
   onDismiss: () => void
+  /** The phone Settings page: the card sits inline under its row, at the page's 18px gutter, with no arrow. */
+  mobile?: boolean
 }) {
   return (
-    <div role="alert" className={`${ANCHORED_PANEL} ${NOTICE_WIDTH} ${PANEL_SURFACE} border border-danger-fill/45`}>
-      <span aria-hidden="true" className={`${PANEL_ARROW} border-danger-fill/45`} />
+    <div role="alert" className={`${mobile ? "mx-[18px] my-3 text-left font-sans" : `${ANCHORED_PANEL} ${NOTICE_WIDTH}`} ${PANEL_SURFACE} border border-danger-fill/45`}>
+      {!mobile && <span aria-hidden="true" className={`${PANEL_ARROW} border-danger-fill/45`} />}
       <div className="relative flex items-center gap-2.5">
         <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg bg-danger-fill/15 text-danger-soft">
           <AlertTriangle aria-hidden="true" size={14} strokeWidth={2.25} />
@@ -292,14 +307,18 @@ export function RestartActionButton({
 }
 
 /**
- * The update action. It is live only while there is something to install; on a current Frizz it stays
- * in the row, greyed and inert, rather than offering a plain restart that changes nothing (maintainer
- * 2026-09-25: hidden first, then "Actually, just gray it out"). A click in flight or a failure on screen
- * keeps it live, so neither greys out mid-read.
+ * The update control's state and its one verb, shared by the desktop status-row button below and the
+ * phone Settings page's "Update Frizz" row (SettingsDrawer.tsx), so a click means the same thing on
+ * both: the same request, the same blocking RestartOverlay (App.tsx), the same reload-after-ready
+ * hand-off and the same failure reading. Only the markup differs.
+ *
+ * The control is live only while there is something to install; on a current Frizz it stays greyed and
+ * inert rather than offering a plain restart that changes nothing (maintainer 2026-09-25: hidden first,
+ * then "Actually, just gray it out"). A click in flight or a failure on screen keeps it live, so neither
+ * greys out mid-read.
  */
-export function RestartFrizzButton() {
+export function useUpdateRestart() {
   const snap = useSnapshot(store)
-  const [open, setOpen] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | undefined>()
   // The dismissed message, not a boolean: the supervisor keeps reporting "failed" on every poll, so a
@@ -309,10 +328,9 @@ export function RestartFrizzButton() {
   // Set at click, with the version that was running THEN: a later "failed" is read against it to
   // tell "the old launcher gave up" from "the new version came up and failed" (finding 11).
   const requested = useRef<{ version?: string } | null>(null)
-  const controlRef = useRef<HTMLDivElement>(null)
 
   // Read straight off the shared supervisor poll (api/supervisorStatus.ts) rather than a private probe
-  // copied into local state on mount. Two things follow. This button no longer contributes one of the
+  // copied into local state on mount. Two things follow. This control no longer contributes one of the
   // three /_frizz/control/status requests a single navigation used to make (t+58/61/63ms, 2026-09-04).
   // And it now tracks a status that CHANGES: a registry launcher starts update-optimistic and
   // versionless, so the version pair that decides whether to light the badge dot normally lands after
@@ -336,18 +354,14 @@ export function RestartFrizzButton() {
     ? restartFailureOutcome(requested.current.version, { version: status?.version })
     : PREVIOUS_KEPT
 
-  // Nothing to show until a supervisor has affirmatively answered — an unreachable one and a poll that
-  // has not landed yet read the same.
-  if (!canRestart(status)) return null
   // Greyed once it says the running version is the newest. A click in flight or a failure on screen
   // keeps the control live, so the answer that flips `updateAvailable` cannot grey out the spinner or
-  // leave the failure card hanging off an inert button.
+  // leave the failure card hanging off an inert control.
   const current = !updateAvailable && !busy && !shownError
 
   const updateAndRestart = async () => {
     if (busy || current) return
     requested.current = { version: status?.version }
-    setOpen(false)
     setBusy(true)
     setError(undefined)
     setDismissed(undefined)
@@ -401,20 +415,45 @@ export function RestartFrizzButton() {
     }
   }
 
+  return {
+    /** Nothing to show until a supervisor has affirmatively answered — an unreachable one and a poll that has not landed yet read the same. */
+    visible: canRestart(status),
+    update: updateAvailable,
+    busy,
+    current,
+    version: versions.version,
+    updateVersion: versions.updateVersion,
+    shownError,
+    outcome,
+    dismiss: () => setDismissed(shownError),
+    run: updateAndRestart,
+  }
+}
+
+/** The desktop status row's update action: an icon button, its hover popover, and its anchored failure card. */
+export function RestartFrizzButton() {
+  const [open, setOpen] = useState(false)
+  const controlRef = useRef<HTMLDivElement>(null)
+  const control = useUpdateRestart()
+  if (!control.visible) return null
+
   return (
     <div ref={controlRef} className="relative" onMouseEnter={() => setOpen(true)} onMouseLeave={() => setOpen(false)}>
       <RestartActionButton
-        update={updateAvailable}
-        busy={busy}
-        current={current}
-        version={versions.version}
-        updateVersion={versions.updateVersion}
+        update={control.update}
+        busy={control.busy}
+        current={control.current}
+        version={control.version}
+        updateVersion={control.updateVersion}
         onFocus={() => setOpen(true)}
         onBlur={() => setOpen(false)}
-        onClick={() => void updateAndRestart()}
+        onClick={() => {
+          setOpen(false)
+          void control.run()
+        }}
       />
-      {shownError && <RestartFailureNotice update={updateAvailable} message={shownError} outcome={outcome} onDismiss={() => setDismissed(shownError)} />}
-      <UpdateRestartPopover open={open && !shownError} update={updateAvailable} current={current} version={versions.version} updateVersion={versions.updateVersion} />
+      {control.shownError && <RestartFailureNotice update={control.update} message={control.shownError} outcome={control.outcome} onDismiss={control.dismiss} />}
+      <UpdateRestartPopover open={open && !control.shownError} update={control.update} current={control.current} version={control.version} updateVersion={control.updateVersion} />
     </div>
   )
 }

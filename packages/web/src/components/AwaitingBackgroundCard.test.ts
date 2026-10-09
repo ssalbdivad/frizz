@@ -2,7 +2,7 @@ import assert from "node:assert/strict"
 import test from "node:test"
 import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
-import { AgentRow, AwaitingBackgroundCard, AwaitingWaitTable, BgShellRow, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
+import { AgentRow, AwaitingBackgroundCard, AwaitingWaitTable, BgShellRow, awaitingBackgroundLabel, awaitingBackgroundSubject, hasAwaitingWaitRows, restingOnSteps, showsRestingCard, stoppableShellIds } from "./AwaitingBackgroundCard.tsx"
 import { CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
 import type { ThreadView } from "@frizz/shared"
 
@@ -543,4 +543,15 @@ test("the steps' Done is offered only while the thread rests on exactly those st
   assert.equal(restingOnSteps(resting, [...steps].reverse()), false)
   assert.equal(restingOnSteps(resting, []), false, "no steps, no Done")
   assert.equal(restingOnSteps(undefined, steps), false, "a sub-agent's transcript has no thread to reply to")
+})
+
+// A REST WHOSE FENCE NAMES QUESTIONS DRAWS NO RESTING CARD (2026-10-08): the question cards are its ending,
+// and the live work it also names is in the ops summary beside the prompt box.
+test("showsRestingCard stands down for a fence that names questions, and only for that", () => {
+  const rest = (hints: { kind: string; value: string }[]) =>
+    ({ awaitingBackground: true, runtime: "turn-idle", lastFence: { kind: "awaiting", body: "CI passes.", hints } }) as Parameters<typeof showsRestingCard>[0]
+  const pr = { kind: "pr", value: "acme/app#1480" }
+  assert.equal(showsRestingCard(rest([pr])), true, "the control: the same rest with no question keeps its card")
+  assert.equal(showsRestingCard(rest([pr, { kind: "question", value: "qst_466f9d6ee188" }])), false)
+  assert.equal(showsRestingCard(rest([pr, { kind: "question", value: "qst_466f9d6ee188" }, { kind: "step", value: "Run `npm login`" }])), true, "steps keep the card and its Done")
 })

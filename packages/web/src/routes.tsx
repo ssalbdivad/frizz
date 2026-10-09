@@ -1,4 +1,5 @@
 import { useContext, useEffect, useLayoutEffect, useState } from "react"
+import { useSnapshot } from "valtio"
 import { Navigate, Outlet, UNSAFE_ViewTransitionContext, createBrowserRouter, useLocation, useNavigate, useParams } from "react-router"
 import { useQuery } from "@tanstack/react-query"
 import { App } from "./App.tsx"
@@ -24,6 +25,7 @@ import { projectsQueuesQuery } from "./lib/projectsQueuesRead.ts"
 import { LightboxHost } from "./components/Lightbox.tsx"
 import { feedIsBoundTo, rebindProject } from "./api/socket.ts"
 import { noteStandaloneThreadRender, resetProjectState, showToast, store } from "./store.ts"
+import { ownedByThisPage } from "./lib/projectOwnership.ts"
 
 // THE ROUTE TREE — and, more to the point, the LAYOUT that outlives a navigation.
 //
@@ -101,7 +103,8 @@ function RootLayout() {
 }
 
 /**
- * Re-bind everything that belongs to one project, whenever the project changes.
+ * Re-bind everything that belongs to one project, whenever the project changes — and say whether the
+ * tree below may render yet.
  *
  * THE CONDITION IS ASKED OF THE FEED, and that is the whole point. This hook used to keep its own note
  * of the project it had bound, in a `useRef` — a second copy of a fact it did not own. Every switch
@@ -112,15 +115,47 @@ function RootLayout() {
  * it (2026-08-11: every board on the machine rendered the launching project's threads).
  *
  * `feedIsBoundTo` asks the module that HOLDS the connection. It has nothing to remember and therefore
- * nothing to get wrong on a remount, and being called redundantly is free — which is what lets this stay
- * an ordinary effect instead of something that has to fire exactly once.
+ * nothing to get wrong on a remount, and being called redundantly is free.
+ *
+ * THE RETURN VALUE IS A GATE, and the caller renders nothing project-scoped until it is true. The reset
+ * cannot happen before the first render under the new URL — it is a side effect, and a render must not
+ * have one — so for one commit the store still holds the project you left: its board, its drawer stack,
+ * its composer drafts. Rendering the remounted `<App/>` in that commit was the bug: every per-thread
+ * hook in it ran against the NEW project's API with the OLD project's slugs. Most were wasted reads
+ * (`threadTranscript`, `threadSettledQuestions`); one was a 500 (`threadProfileOptions`, which #50 gated
+ * on its own until this made that redundant); and one was a WRITE — a thread drawer left open across
+ * the switch sent `threadSeen` for its slug to the new project, marking that project's same-slug thread
+ * read when nobody had opened it (2026-10-08). Gating each hook covers the hooks someone has noticed;
+ * gating the tree covers the class.
+ *
+ * Two conditions open it:
+ *   · BOUND — the feed is on this project, or this hook has just reset and rebound for this slug.
+ *     `settled` is the second half rather than a second `feedIsBoundTo` read because the feed records
+ *     the project from the PATH while `slug` comes from the route's params: a catch-all match can make
+ *     the two disagree for good, and a gate waiting on that would be a blank page forever.
+ *   · OWNED — the board in the store is stamped with this page's project (lib/projectOwnership.ts), on
+ *     the payload's own evidence. Once bound this holds by construction (the reset nulled the board, and
+ *     setBoard / seedBoard refuse a foreign one), so on a correct path it never closes the gate. It is
+ *     here because the binding is bookkeeping, and bookkeeping is what has failed before; a closed gate
+ *     re-runs the reset rather than waiting, so a bookkeeping miss costs a reconnect, not a blank page.
+ *
+ * The reset is a LAYOUT effect so the gated commit and the one that reopens it land in the same task.
+ * Frame-sampled across a rail switch (2026-10-08, headless): the ordinary effect painted the old board
+ * under the new URL for 2–3 frames, then an empty board area for 2; the gate paints no stale frame and 1
+ * empty one.
  */
-function useProjectBinding(slug: string | undefined) {
-  useEffect(() => {
-    if (feedIsBoundTo(slug)) return
+function useProjectBinding(slug: string | undefined): boolean {
+  const owned = ownedByThisPage(useSnapshot(store).board?.projectSlug)
+  const [settled, setSettled] = useState<{ slug: string | undefined } | null>(null)
+  const bound = feedIsBoundTo(slug) || (settled !== null && settled.slug === slug)
+  const ready = bound && owned
+  useLayoutEffect(() => {
+    if (ready) return
     resetProjectState()
     rebindProject()
-  }, [slug])
+    setSettled({ slug })
+  }, [slug, ready])
+  return ready
 }
 
 // ONE PAGE, AND ITS PATH NAMES ITS VIEW (lib/pageView.ts): one project's board at `/project/<slug>` (the
@@ -222,6 +257,11 @@ function CrossProjectPage() {
   const slug = routeSlug ?? (page.kind === "page" ? page.slug : undefined)
   // Render-phase, before anything below asks base-path which project `/all` (or a phone's `/`) is.
   if (routeSlug === undefined) setHomeFocus(slug)
+  // The gate useProjectBinding returns is NOT applied here, unlike /full below. Upstream's board is keyed
+  // by its slug and remounts on every switch anyway, so rendering nothing for one commit costs it nothing;
+  // this page is keyed by a constant precisely so a switch never remounts it, and the cross-project open
+  // keeps its drawer frame (PendingThreadSheet, inside <App/>) on screen through the rebind. Returning
+  // null would unmount that frame mid-slide. The layout-effect reset still lands before the first paint.
   useProjectBinding(slug)
   useRouteToStore()
   useRouterTransition()
@@ -378,7 +418,7 @@ function StandaloneRoute() {
   const { thread, slug } = useParams()
   useRegisterNavigate()
   useRouterTransition()
-  useProjectBinding(slug)
+  const ready = useProjectBinding(slug)
   // Any drawer stack left by the page we came from is cleared HERE, on this route's first render —
   // deliberately NOT in the fullscreen door's click handler, and deliberately not in an effect. The
   // door's navigation runs inside a view transition, which snapshots the OLD page two renders after
@@ -392,6 +432,9 @@ function StandaloneRoute() {
   // page knows its first render is the return leg of the fullscreen door and should prime the reverse
   // morph's target.
   noteStandaloneThreadRender(thread!)
+  // Reached from another project, this page must not read that project's board for its first commit
+  // (useProjectBinding's gate).
+  if (!ready) return null
   return (
     <>
       <StandaloneThreadPage slug={thread!} />

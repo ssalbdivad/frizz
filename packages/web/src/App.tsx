@@ -318,7 +318,7 @@ export function App() {
           standalone `/thread/<slug>/full` page can mount the identical thing. See DrawerStack.tsx. */}
       <DrawerStack />
       <PendingThreadSheet />
-      {snap.showSettings && <SettingsDrawer />}
+      {snap.showSettings && <SettingsDrawer offerUpdate />}
       {snap.showNewThread && <NewThreadDialog onClose={() => { store.showNewThread = false }} />}
       {snap.showGithubPicker && <GithubPickerModal onClose={closeGithubPicker} />}
       <CommandPalette />

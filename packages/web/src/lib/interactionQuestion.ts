@@ -5,7 +5,7 @@
 //
 // The two shapes line up one-for-one, which is why one component can serve both:
 //     AskUserQuestion   { question, header, options:[{label, description}], multiSelect }  + free text
-//     ```question fence   a question line, lettered options with one-line trade-offs, an optional
+//     ```question fence   a question line, numbered options with one-line trade-offs, an optional
 //                         `multi` tag, and a free-text box at the bottom
 // `multiSelect` IS `multi`; `options[].label — description` IS an option line.
 //
@@ -22,7 +22,7 @@ import {
   type InteractionValue,
   type InteractionValues,
 } from "@frizz/shared"
-import type { BlockAnswer, ParsedQuestion } from "./questionBlocks.ts"
+import { optionNumber, type BlockAnswer, type ParsedQuestion } from "./questionBlocks.ts"
 
 export interface InteractionQuestion {
   /** The neutral model the shared card renders. */
@@ -35,12 +35,6 @@ export interface InteractionQuestion {
   notesFieldId?: string
 }
 
-/** `A.`, `B.`, … then `AA.` past 26 — the fence convention's option identifiers. */
-function optionLetter(index: number): string {
-  let n = index, out = ""
-  do { out = String.fromCharCode(65 + (n % 26)) + out; n = Math.floor(n / 26) - 1 } while (n >= 0)
-  return `${out}.`
-}
 
 function questionFor(optionField: InteractionField | undefined, notesField: InteractionField | undefined): InteractionQuestion | null {
   const anchor = optionField ?? notesField
@@ -55,11 +49,10 @@ function questionFor(optionField: InteractionField | undefined, notesField: Inte
       // The question itself is the field's description (the provider's full question text); the label
       // is the short header chip, used only when a producer supplied no description.
       contextMd: anchor.description ?? anchor.label,
-      // Lettered exactly as a fence's option lines are (`- A. …`). This is not decoration: the card
-      // derives the free-text row's own identifier from the last option's prefix, and an operator
-      // answering in the composer refers to options by letter. Without it a native question read as
-      // a fence question with its letters missing — the one visible difference left between them.
-      options: options.map((option, index) => `${optionLetter(index)} ${option.label}`),
+      // Numbered exactly as a registered question's options are (`1. …`). Not decoration: the card
+      // draws the identifier as the keycap that picks it, and an operator answering in the composer
+      // refers to options by number.
+      options: options.map((option, index) => `${optionNumber(index)} ${option.label}`),
       // A tool call has no notion of a recommended option — that is a frizz fence convention — so the
       // badge simply does not appear rather than being faked.
       recommendedIdx: null,
@@ -105,7 +98,7 @@ export function interactionQuestions(record: Pick<InteractionRecord, "payload">)
 // transcript (TranscriptToolCall.ask/askAnswers). The pending copy of the same call rendered through
 // producer 2 above while it was answerable; this is its durable, read-only afterlife — the record that
 // keeps a question on screen after the operator steered past it instead of answering (or answered it,
-// in which case the choice renders settled). Options are lettered exactly as producer 2 letters them,
+// in which case the choice renders settled). Options are numbered exactly as producer 2 numbers them,
 // and the option's one-line description rides the line the way a fence option carries its trade-off.
 export interface SettledAskView {
   /** The neutral model the shared card renders. */
@@ -135,7 +128,7 @@ export function settledAskView(q: AskQuestion, answer: string | null | undefined
       kind: q.multiSelect ? "multi" : "question",
       danger: false,
       contextMd: q.question,
-      options: q.options.map((option, index) => `${optionLetter(index)} ${option.label}${option.description ? ` — ${option.description}` : ""}`),
+      options: q.options.map((option, index) => `${optionNumber(index)} ${option.label}${option.description ? ` — ${option.description}` : ""}`),
       recommendedIdx: null,
     },
     chosenIdxs,

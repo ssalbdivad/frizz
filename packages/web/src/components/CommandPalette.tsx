@@ -70,6 +70,9 @@ export function CommandPalette() {
     <RadixDialog.Root open onOpenChange={(open) => { if (!open) close() }}>
       <RadixDialog.Portal>
         <RadixDialog.Overlay className="fixed inset-0 bg-scrim-50" style={{ zIndex: z }} />
+        {/* A modal dialog (Radix: role="dialog", data-state="open"), so assistive tech reads it as one and the
+            number keys (lib/questionKeys.ts) treat it as owning the keyboard — with the input blurred, a
+            digit must not answer a card behind the palette. */}
         <RadixDialog.Content
           aria-describedby={undefined}
           // Escape closes ONLY the palette. Radix dismisses it from a document-capture listener; without

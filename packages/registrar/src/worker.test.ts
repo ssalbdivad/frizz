@@ -1,7 +1,7 @@
 import assert from "node:assert/strict"
 import test from "node:test"
 import { generateAnonymousClaimName, generateClaimIdentity, signClaim } from "@frizz/shared"
-import worker, { kvAnonymousBudget, kvClaimStore, type KvNamespace, type RegistrarEnv } from "./worker.ts"
+import worker, { githubVerifier, kvAnonymousBudget, kvClaimStore, type KvNamespace, type RegistrarEnv } from "./worker.ts"
 
 function fakeKv(seed: Record<string, string> = {}): KvNamespace & { rows: Map<string, string>; ttls: Map<string, number | undefined> } {
   const rows = new Map(Object.entries(seed))
@@ -164,4 +164,89 @@ test("an over-budget anonymous claim is a 429 through the worker, naming the wai
   const body = (await response.json()) as { error: string }
   assert.equal(body.error, "too-many-claims")
   assert.equal([...kv.rows.keys()].filter((k) => k.startsWith("claim:")).length, 0, "nothing was recorded")
+})
+
+/**
+ * GitHub's `GET /user`, faked: answers for one token, with whatever `X-OAuth-Scopes` the case needs
+ * (`null` leaves the header off). Records every token it was shown.
+ */
+function fakeGithubApi(scopes: string | null, user: Record<string, unknown> = { id: 4242, login: "ada", created_at: "2020-01-01T00:00:00Z" }) {
+  const seen: string[] = []
+  const fetchImpl = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input instanceof Request ? input.url : input)
+    assert.equal(url, "https://api.github.com/user")
+    seen.push(new Headers(init?.headers).get("authorization") ?? "")
+    return new Response(JSON.stringify(user), {
+      status: 200,
+      headers: { "content-type": "application/json", ...(scopes === null ? {} : { "x-oauth-scopes": scopes }) },
+    })
+  }) as typeof fetch
+  return { fetchImpl, seen }
+}
+
+test("the verifier refuses a token with any scope, and accepts one with none", async () => {
+  // The `gh` CLI's token: what an old Frizz sends, and what a compromised registrar collected.
+  const gh = fakeGithubApi("gist, read:org, repo, workflow")
+  assert.equal(await githubVerifier(gh.fetchImpl)("gho_ghcli"), "scoped")
+  assert.equal(await githubVerifier(fakeGithubApi("read:user").fetchImpl)("gho_x"), "scoped", "even a harmless-looking scope")
+
+  // The device-flow token from Frizz's own OAuth App: GitHub lists no scopes for it.
+  const zero = fakeGithubApi("")
+  assert.deepEqual(await githubVerifier(zero.fetchImpl)("gho_zero"), { id: 4242, login: "ada", createdAt: Date.parse("2020-01-01T00:00:00Z") })
+  assert.deepEqual(zero.seen, ["Bearer gho_zero"])
+  assert.equal(typeof (await githubVerifier(fakeGithubApi(null).fetchImpl)("gho_zero")), "object", "an absent header is no scopes too")
+})
+
+test("a token that is not an OAuth App user token is refused before GitHub is asked anything", async () => {
+  // A classic PAT, a fine-grained one, a GitHub App token: none is what the CLI mints, and a
+  // fine-grained token's powers do not show in X-OAuth-Scopes at all — so they are never sent on.
+  for (const token of ["ghp_classic", "github_pat_11ABC_def", "ghu_app", "ghs_install", "not-a-token"]) {
+    const api = fakeGithubApi("")
+    assert.equal(await githubVerifier(api.fetchImpl)(token), "scoped", token)
+    assert.deepEqual(api.seen, [], `${token} never reached GitHub`)
+  }
+})
+
+test("a token GitHub refuses is rejected, not refused as scoped", async () => {
+  const fetchImpl = (async () => new Response("{}", { status: 401 })) as typeof fetch
+  assert.equal(await githubVerifier(fetchImpl)("gho_revoked"), null)
+})
+
+test("through the worker, a scoped token is refused with advice to update, and a zero-scope one claims", async () => {
+  // The worker's own wiring: claimDeps hands the real verifier the global fetch, faked here as GitHub.
+  const kv = fakeKv()
+  const identity = await generateClaimIdentity()
+  const realFetch = globalThis.fetch
+  let scopes = "repo, workflow"
+  const shown: string[] = []
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    shown.push(new Headers(init?.headers).get("authorization") ?? "")
+    return fakeGithubApi(scopes).fetchImpl(input, init)
+  }) as typeof fetch
+  try {
+    const claim = async (token: string) =>
+      worker.fetch(
+        new Request("https://r.frizz.sh/claim", {
+          method: "POST",
+          body: JSON.stringify(await signClaim({ name: "colin", port: 9393, issuedAt: Date.now(), github: token }, identity)),
+        }),
+        env(kv)
+      )
+    const refused = await claim("gho_ghcli")
+    assert.equal(refused.status, 400)
+    const body = (await refused.json()) as { error: string; message: string }
+    assert.equal(body.error, "github-token-scoped")
+    assert.match(body.message, /update Frizz/)
+    assert.equal(kv.rows.size, 0, "nothing was recorded for the scoped token")
+
+    scopes = ""
+    const accepted = await claim("gho_zero")
+    assert.equal(accepted.status, 200)
+    assert.equal(JSON.parse(kv.rows.get("claim:colin")!).githubId, 4242)
+    assert.equal(kv.rows.get("gh:4242"), "colin", "the one-name-per-account index is kept")
+    assert.equal(JSON.stringify([...kv.rows.values()]).includes("gho_"), false, "no token is stored")
+    assert.deepEqual(shown, ["Bearer gho_ghcli", "Bearer gho_zero"])
+  } finally {
+    globalThis.fetch = realFetch
+  }
 })

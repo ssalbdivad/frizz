@@ -55,6 +55,9 @@ const STATES: { kind: string; t: ThreadView }[] = [
   // A PARENT AT REST WITH ITS SUB-AGENTS OUT: the spinner around the ellipsis. `needsYou: false` because
   // the server excuses a rest on live own work from the queue, so the row sits in the Running band.
   { kind: "children", t: { ...base, id: "children", runtime: "turn-idle", needsYou: false, subAgents: liveChild } as unknown as ThreadView },
+  // A RUNNING THREAD WITH AN OPEN REGISTERED QUESTION (2026-10-08): the static "?" inside the spinner.
+  // The worker kept going after it asked, so the server holds it out of the queue (`needsYou: false`).
+  { kind: "working-asking", t: { ...base, id: "working-asking", runtime: "running", needsYou: false, questions: [{ id: "qst_ab12cd34", spec: { question: "Merge it?", kind: "question" }, askedAt: "2026-10-08T09:00:00.000Z" }] } as unknown as ThreadView },
   // Shell-only, deliberately: a live sub-agent resolves to `working`, not to this mark. `needsYou: false`
   // because the server excuses a rest on live own work from the queue outright.
   { kind: "background", t: { ...base, id: "background", runtime: "turn-idle", needsYou: false, awaitingBackground: true, bgShells: [{ label: "nub run dev", startedAt: "2026-08-01T09:02:00.000Z", state: "running" }] } as unknown as ThreadView },

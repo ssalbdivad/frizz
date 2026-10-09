@@ -129,7 +129,7 @@ test("references inside a question card are live, and clicking one does not pick
       const id = b.getAttribute("aria-labelledby") ?? ""
       return (document.getElementById(id)?.textContent ?? "").replace(/\s+/g, " ").trim()
     })
-    assert.match(named, /^Recommended ?A\. Yes — it's in cloudflare-ask\.md/)
+    assert.match(named, /^Recommended ?Yes — it's in cloudflare-ask\.md/)
 
     // ── A PAST question: the row is inert, its references are not ──
     const ro = "[data-case='readonly']"

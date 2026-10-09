@@ -69,6 +69,20 @@ test("a parent whose OWN turn runs keeps the empty spinner even with a child out
   assert.ok(!html.includes("lucide-ellipsis"), "the ellipsis says 'at rest', and this thread is not")
 })
 
+// AN OPEN REGISTERED QUESTION ON A THREAD THAT KEPT WORKING (2026-10-08): the "?" inside the spinner,
+// so the ask is visible from the rail rather than only from inside the thread.
+const regQuestion = [{ id: "qst_ab12cd34", spec: { question: "Merge it?", kind: "question" as const }, askedAt: "2026-10-08T09:00:00.000Z" }]
+
+test("running with an open question: the ? inside the spinner, outranking the sub-agent ellipsis", () => {
+  const html = markup({ runtime: "running", questions: regQuestion })
+  assert.ok(spins(html), "the worker kept going, so the box still traces")
+  assert.ok(html.includes("frizz-rail-glyph") && html.includes(">?<"), "and the ? stands inside it")
+  assert.equal(sessionIndicatorFor({ ...base, runtime: "running", questions: regQuestion } as ThreadView).tip, "Working — a question is waiting on your answer")
+  const withChild = markup({ questions: regQuestion, subAgents: liveChild })
+  assert.ok(spins(withChild) && withChild.includes(">?<"), "a parent resting on its sub-agents shows the ask")
+  assert.ok(!withChild.includes("lucide-ellipsis"), "not the ellipsis — the ask is what the human can act on")
+})
+
 test("resting on a live background shell: the solid blue dot, inside the spinner only on a `working` rest", () => {
   const working = markup({ awaitingBackground: true, bgShells: liveShell, waitStatus: "working" })
   assert.ok(spins(working), "the work finishes by itself, so the box traces")

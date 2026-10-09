@@ -37,11 +37,28 @@ export interface KvNamespace {
  *
  * Only the numeric id is kept. A login can be renamed and reused by someone else, so binding a name
  * to one would let the limit be laundered through a rename.
+ *
+ * ONLY A ZERO-SCOPE TOKEN IS ACCEPTED. Until 2026-10-08 the CLI sent its `gh` token, which can push to
+ * every repository its owner can, and a compromised build of this Worker collected them. The CLI now
+ * signs in through Frizz's own OAuth App, which asks for no scopes, so its token can read only the
+ * public profile. Two checks hold every client to that, an old one above all:
+ *
+ * - The shape, BEFORE GitHub is asked anything: an OAuth App user token is `gho_…`. A classic PAT
+ *   (`ghp_`), a fine-grained one (`github_pat_`) or a GitHub App token (`ghu_`, `ghs_`) is not what
+ *   the CLI mints, and their powers are not all visible in the header below, so they are refused unread.
+ * - The scopes: GitHub lists an OAuth token's scopes in `X-OAuth-Scopes` on every API answer. Any scope
+ *   at all — `gh` holds `repo`, `workflow`, `read:org`, `gist` — refuses the claim. An empty or absent
+ *   header is a token with no scopes.
  */
-export function githubVerifier(): (token: string) => Promise<GithubIdentity | null> {
+export function githubVerifier(
+  // Wrapped, not passed bare: workerd throws "Illegal invocation" for a `fetch` called off its global.
+  fetchImpl: typeof fetch = (input, init) => fetch(input, init),
+  apiOrigin = "https://api.github.com"
+): (token: string) => Promise<GithubIdentity | null | "scoped"> {
   return async (token) => {
+    if (!/^gho_[A-Za-z0-9_]+$/.test(token)) return "scoped"
     try {
-      const response = await fetch("https://api.github.com/user", {
+      const response = await fetchImpl(`${apiOrigin}/user`, {
         headers: {
           authorization: `Bearer ${token}`,
           accept: "application/vnd.github+json",
@@ -50,6 +67,7 @@ export function githubVerifier(): (token: string) => Promise<GithubIdentity | nu
         },
       })
       if (!response.ok) return null
+      if ((response.headers.get("x-oauth-scopes") ?? "").trim() !== "") return "scoped"
       const user = (await response.json()) as { id?: unknown; login?: unknown; created_at?: unknown }
       if (typeof user.id !== "number" || typeof user.login !== "string") return null
       const createdAt = typeof user.created_at === "string" ? Date.parse(user.created_at) : Number.NaN

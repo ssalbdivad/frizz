@@ -3,7 +3,7 @@ import { useQueryClient } from "@tanstack/react-query"
 import { AlarmClock, Bot, Check, ChevronRight, Ellipsis, Github, Hourglass, Loader2, Pin, PinOff, Repeat, RotateCcw } from "lucide-react"
 import type { ThreadView } from "@frizz/shared"
 import { pushSubAgentDrawer, showToast } from "../store.ts"
-import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents, restIsWorking } from "../groups.ts"
+import { displayTitle, subAgentName, titleIsProvisional, isPinned, isSnoozed, sessionIndicatorKind, offersRetry, futureSnoozedUntil, queueLabelAt, waitNamesPr, prChecksRunning, restingOnSubAgents, restIsWorking, workingWithOpenQuestion } from "../groups.ts"
 import { ageSpan, relativeAge } from "../lib/activityTime.ts"
 import { limitPauseResume, limitPauseTitle } from "../lib/limitPause.ts"
 import { useNowMs } from "../lib/liveClock.ts"
@@ -940,9 +940,8 @@ export function ThreadIndicator({ t, status }: { t: ThreadView; status?: string 
 //   […] at rest     — an ordinary rest with no concrete ask, INCLUDING a queued thread whose own
 //                     dispatched sub-agents are still running (they spin on their own child rows)
 // Attention (needs-input / stalled) wears the accent; everything else is muted.
-/** Exported for TESTS ONLY. The tip is a Radix tooltip, so it renders nothing until it opens — static
- *  markup cannot see it, and asserting on the icon alone would pass a popover that said the wrong thing.
- *  This is the seam that lets the popover's TEXT be pinned directly. */
+/** Shared mark and state description: desktop uses a hover tooltip, mobile speaks the state as its
+ *  accessible label. Tests can also pin the text directly without opening a tooltip. */
 export function sessionIndicatorFor(t: ThreadView): { node: ReactElement; tip: string | null } {
   const base = sessionStateIndicatorFor(t)
   // The tooltip is now the ONLY place a snooze is legible on the rail (the subtitle no longer names it),
@@ -1104,6 +1103,9 @@ function sessionStateIndicatorFor(t: ThreadView): { node: ReactElement; tip: str
     // says a child's return will re-invoke it, the ellipsis says the parent itself has stopped. Same
     // kind, same band — only the mark inside changes — because the motion is real either way and the
     // kind is what offersRetry and the band read. A thread whose own turn is running keeps the empty box.
+    // A REGISTERED QUESTION STILL OPEN puts the "?" in that frame instead (groups.workingWithOpenQuestion,
+    // 2026-10-08): the worker kept going after it asked, and the answer would steer what it does next.
+    if (workingWithOpenQuestion(t)) return { node: <BoxSpinner><Glyph ch="?" muted /></BoxSpinner>, tip: "Working — a question is waiting on your answer" }
     if (restingOnSubAgents(t)) return { node: <BoxSpinner>{ellipsisGlyph}</BoxSpinner>, tip: "At rest — waiting on its sub-agents" }
     return { node: <BoxSpinner />, tip: "Working" }
   }

@@ -8,11 +8,12 @@
 // not do that, and these tests are about the ways a question could still go missing.
 import { test } from "node:test"
 import assert from "node:assert/strict"
-import { mkdtempSync, rmSync } from "node:fs"
+import { existsSync, lstatSync, mkdtempSync, rmSync, statSync } from "node:fs"
+import { execFile } from "node:child_process"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
 import type { AskedQuestion, BoardSnapshot, Settings } from "@frizz/shared"
-import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, CHANGED_ANSWER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage } from "@frizz/shared"
+import { AnswerQuestionsInput, AskInput, BURIED_ANSWERS_HEADER, CHANGED_ANSWER, parseQuestionsCancelledWake, questionAnswerMessage, questionsCancelledWakeMessage, secretAnswerText } from "@frizz/shared"
 import type { BoardManager } from "./board.ts"
 import { createRouter } from "./router.ts"
 import { createStorage, type SessionRow } from "./storage.ts"
@@ -51,6 +52,7 @@ function harness() {
   } as unknown as AppContext
   return {
     storage,
+    stateDir: dir,
     router: createRouter(ctx),
     refreshes: () => refreshes,
     kicks: () => kicks,
@@ -649,5 +651,102 @@ test("a question the worker withdrew after the human's message, or the human dis
     await h.router.dismissQuestions.handler({ input: { slug: "t", ids: [dismissible.id] } })
     await assert.rejects(h.router.ask.handler({ input: { slug: "t", questions: [simple("Rename the package first?")] } }), /which the user dismissed/)
     assert.equal(h.storage.listThreadQuestions("t").filter((q) => q.state === "open").length, 1, "nothing refused was stored")
+  } finally { h.close() }
+})
+
+// ---- SECRET requests (`mcp__frizz__secret`) --------------------------------------------------------
+// A credential the human pastes — a one-time code, a token — goes to a private file, and every surface
+// that reads the answer row (the settled card, the in-flight card, the worker's wake) sees only where
+// it went. These pin the one property that matters: the value is in the file and NOWHERE in the row.
+
+/** Read a secret's path the way a worker's `$(cat …)` does: a real `cat`, blocking on the pipe until the
+ *  server's writer finds it. */
+const catPath = (path: string) => new Promise<string>((resolve, reject) =>
+  execFile("cat", [path], { timeout: 5_000 }, (error, stdout) => (error ? reject(error) : resolve(stdout))))
+
+const secretAsk = (question = "The npm one-time code for the maintainer account."): AskedQuestion => ({ question, kind: "question", secret: true })
+
+test("a SECRET answer is served once from memory through its pipe, and the row keeps only the path", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const asked = await h.router.ask.handler({ input: { slug: "t", questions: [secretAsk()] } })
+    const q = asked.registered[0]
+    // The path is known at REGISTRATION, so the worker can prepare its command before the answer.
+    assert.ok(q.secretPath, "the ask result names the path")
+    assert.equal(q.secretPath, join(h.stateDir, "secrets", "t", q.id))
+    assert.equal(existsSync(q.secretPath!), false, "nothing exists until the human answers")
+    assert.equal(asked.open[0].secretPath, q.secretPath, "the read-back names it too")
+
+    const value = "493817"
+    const result = await h.router.answerQuestions.handler({ input: { slug: "t", answers: [
+      { questionId: q.id, question: q.spec.question, chosen: [], text: `  ${value}\n` },
+    ] } })
+    assert.deepEqual(result.answered, [q.id])
+    const stat = lstatSync(q.secretPath!)
+    assert.ok(stat.isFIFO(), "a named pipe, not a file: the value is never on disk")
+    assert.equal(stat.mode & 0o777, 0o600, "readable by this user alone")
+    assert.equal(statSync(join(h.stateDir, "secrets")).mode & 0o777, 0o700)
+    assert.equal(await catPath(q.secretPath!), value, "the reader gets the value, trimmed")
+
+    const stored = h.storage.getThreadQuestion(q.id)!
+    assert.equal(stored.state, "answered")
+    assert.ok(!stored.answer!.includes(value), "the database row never holds the value")
+    const answer = JSON.parse(stored.answer!)
+    assert.equal(answer.text, secretAnswerText(q.secretPath!))
+    // The wake is composed from the row, so it cannot carry the value either — and it says how to use it.
+    const wake = questionAnswerMessage([answer])
+    assert.ok(!wake.includes(value))
+    assert.ok(wake.includes(`secret ready at '${q.secretPath}'`), "the path is single-quoted for the shell")
+    assert.match(wake, /read ONCE, within 15m/)
+  } finally { h.close() }
+})
+
+test("a BLANK secret answers nothing — the request stays open rather than waking the worker to an empty file", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const q = (await h.router.ask.handler({ input: { slug: "t", questions: [secretAsk()] } })).registered[0]
+    const result = await h.router.answerQuestions.handler({ input: { slug: "t", answers: [
+      { questionId: q.id, question: q.spec.question, chosen: [], text: "   " },
+    ] } })
+    assert.deepEqual(result.answered, [])
+    assert.equal(h.storage.getThreadQuestion(q.id)?.state, "open")
+    assert.equal(existsSync(q.secretPath!), false)
+  } finally { h.close() }
+})
+
+test("a secret request is allowed on an autonomous thread, and arming a Goal does not cancel one", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    const open = await h.router.ask.handler({ input: { slug: "t", questions: [secretAsk("Token?"), simple("A?")] } })
+    await h.router.setOwnThreadRecurringPrompt.handler({
+      input: { slug: "t", prompt: "Keep going.", stopHook: true, heartbeat: false, postCompaction: false },
+    })
+    // The ordinary question is the worker's to decide now; the credential is not something it can decide.
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }).map((q) => q.id), [open.registered[0].id])
+    // And a NEW secret request is accepted on the now-autonomous thread, while a mixed batch is not.
+    assert.equal((await h.router.ask.handler({ input: { slug: "t", questions: [secretAsk("Another?")] } })).registered.length, 1)
+    await assert.rejects(() => h.router.ask.handler({ input: { slug: "t", questions: [secretAsk("B?"), simple("C?")] } }), /running autonomously/)
+  } finally { h.close() }
+})
+
+test("a secret request takes no options and cannot be a follow-up", async () => {
+  const h = harness()
+  try {
+    h.storage.upsertSession(row("t"))
+    await assert.rejects(
+      () => h.router.ask.handler({ input: { slug: "t", questions: [{ ...secretAsk(), options: [{ label: "123456" }] }] } }),
+      /a secret request takes no options/,
+    )
+    await assert.rejects(
+      () => h.router.ask.handler({ input: { slug: "t", questions: [{
+        question: "Publish?", kind: "question",
+        options: [{ label: "Yes", followUps: [secretAsk()] }, { label: "No" }],
+      }] } }),
+      /a secret request cannot be a follow-up/,
+    )
+    assert.deepEqual(h.storage.listThreadQuestions("t", { openOnly: true }), [])
   } finally { h.close() }
 })

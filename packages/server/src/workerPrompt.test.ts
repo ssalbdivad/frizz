@@ -181,6 +181,12 @@ test("the contract teaches steps: as the wait on a human's act, and routes to it
     assert.match(c, /anything else they need to tell you — a step that failed, the account they used — comes as a message of their own/)
     assert.doesNotMatch(c, /Couldn't do it/)
     assert.match(c, /\(`steps:` and `questions:` count: they name the user\.\)/)
+    // Every step is clickable and complete (maintainer 2026-10-08): links to the pages it names, taught
+    // by a bad/good pair, and the example fence itself carries a link.
+    assert.match(c, /EVERY STEP IS CLICKABLE AND COMPLETE — A STEP THAT MAKES THE USER GO LOOKING IS A BROKEN STEP/)
+    assert.match(c, /every page it names is a real Markdown link to that exact page/)
+    assert.match(c, /Good: `Open the \[Frizz account audit log\]\(https:\/\/dash\.cloudflare\.com\/<account-id>\/audit-log\)/)
+    assert.match(prompt, /steps:\n {4}- Run `npm login --auth-type=web`[^\n]*\n {4}- [^\n]*\[npmjs\.com\/login\]\(https:\/\/www\.npmjs\.com\/login\)/)
     // A decision is still a question; an act is steps — at every place the two used to blur.
     assert.match(c, /A DECISION you need from them is a question, never a fence/)
     assert.match(c, /WAITING ON ONE TO ACT IS `steps:`/)

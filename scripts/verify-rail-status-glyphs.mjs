@@ -139,11 +139,12 @@ try {
     // resting on its sub-agents and a PR with checks running all draw their mark INSIDE the BoxSpinner
     // (its SVG has the 15-unit viewBox; nothing else in the family does). It is the box, traced, so it is
     // hidden the same way the border is — but only when a mark stands inside it. An empty spinner
-    // (`working`) has nothing else to measure and stays visible, as it always has.
+    // (`working`) has nothing else to measure and stays visible, as it always has. A TEXT mark counts as
+    // standing inside it too (2026-10-08, the running thread's "?"), or the frame would paint over it.
     await mark.evaluate((root) => {
       for (const el of [root, ...root.querySelectorAll("*")]) el.style.borderColor = "transparent"
       const frames = [...root.querySelectorAll('svg[viewBox="0 0 15 15"]')]
-      const inner = [...root.querySelectorAll("svg, .frizz-rail-dot")].filter((el) => !frames.includes(el))
+      const inner = [...root.querySelectorAll("svg, .frizz-rail-dot, .frizz-rail-glyph")].filter((el) => !frames.includes(el))
       if (inner.length) for (const f of frames) f.style.visibility = "hidden"
     })
     await new Promise((r) => setTimeout(r, 60))

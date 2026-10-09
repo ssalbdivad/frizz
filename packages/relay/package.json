@@ -5,5 +5,5 @@
   "type": "module",
   "exports": { ".": "./src/worker.ts" },
   "dependencies": { "@frizz/shared": "workspace:*" },
-  "devDependencies": { "typescript": "^5.7" }
+  "devDependencies": { "typescript": "^5.7", "wrangler": "4.147.0" }
 }

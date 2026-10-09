@@ -1,8 +1,11 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { createRoot } from "react-dom/client"
 import { MemoryRouter } from "react-router"
+import { useSnapshot } from "valtio"
 import type { BoardSnapshot, RegisteredQuestionView, ThreadHandoff, ThreadView as ThreadViewModel } from "@frizz/shared"
 import { AllQueuesCard } from "./components/AllQueuesCard.tsx"
+import { SettingsDrawer } from "./components/SettingsDrawer.tsx"
+import { CommandPalette } from "./components/CommandPalette.tsx"
 import { TooltipProvider } from "./components/Tooltip.tsx"
 import type { QueuesProject } from "./lib/allQueues.ts"
 import { store } from "./store.ts"
@@ -30,7 +33,7 @@ import "./styles.css"
 //                 whole handoff.
 //   ?table=1    — an option whose body carries a TABLE, a blockquote and a code fence: the blocks whose
 //                 opaque panel fills clashed with a selected chip's accent tint (screenshot 2026-09-02).
-//   ?wide=1     — a `multi` over THIRTY options: no count cap (2026-09-03), and lettering past `Z.`.
+//   ?wide=1     — a `multi` over THIRTY options: no count cap (2026-09-03), and numbering past the 1–9 keys.
 //   ?placed=1   — RETIRED PLACEMENT (2026-09-28): two questions open at one rest, and the handoff carries
 //                 a legacy marker for ONE of them mid-prose, with a paragraph under it. The marker must
 //                 draw NOTHING (lib/allQueues handoffParts): both cards render together UNDER the whole
@@ -40,6 +43,11 @@ import "./styles.css"
 //                 must render at the BOTTOM, under the newer handoff — not frozen above the wake.
 //   ?default=1  — the question will take its recommended option in ~7m unless answered: the countdown
 //                 caption under the card, with its own × that turns the default off (2026-10-05).
+//   ?keys=1     — the NUMBER KEYS (lib/questionKeys.ts): TWO queue cards, the first asking the settings
+//                 store and the land-it tree, the second the commit gates, with the real Settings drawer
+//                 and ⌘K palette mounted off the store (`window.fixtureStore` opens them). What it is for
+//                 is WHICH question a bare digit answers, and above all that it never answers one the
+//                 operator cannot see.
 //   ?font=sans  — the other of the two fonts this app renders in; mono is the default and the wider.
 const params = new URLSearchParams(location.search)
 document.documentElement.dataset.font = params.get("font") === "sans" ? "sans" : "mono"
@@ -116,8 +124,9 @@ const GATES: RegisteredQuestionView = {
 }
 
 // A `multi` over a LONG list — thirty options, past the `.max(8)` the schema carried until 2026-09-03
-// and past the 26 the card letters `A.`–`Z.`, so the tail reads `AA.`…`AD.`. What is worth looking at is
-// that the run stays one even column and the free-text row still follows the last option.
+// and past the 9 the keys can name, so rows 10…30 read as plain `10.`…`30.` beside the 1–9 keycaps.
+// What is worth looking at is that the run stays one even column and the free-text row still follows
+// the last option.
 const WIDE: RegisteredQuestionView = {
   id: "qst_0006ffff",
   askedAt: ago(4),
@@ -188,7 +197,9 @@ const MERGE: RegisteredQuestionView = {
 
 const placed = params.get("placed") === "1"
 const woken = params.get("woken") === "1"
+const keys = params.get("keys") === "1"
 const questions = params.get("danger") === "1" ? [GATE]
+  : keys ? [SETTINGS, TREE]
   : placed ? [SETTINGS, GATES]
   : woken ? [MERGE]
   : params.get("wide") === "1" ? [WIDE]
@@ -256,7 +267,11 @@ const thread = {
   lastAssistant: tail,
 } as unknown as ThreadViewModel
 
-store.board = { projectDir: "/fixture/frizz", threads: [thread] } as BoardSnapshot
+// ?keys=1's second card: the same rest, asking only the commit gates.
+const gatesThread = { ...thread, id: "registered-question-gates", title: "Pick the commit gates", questions: [GATES], lastActivityAt: ago(2) } as ThreadViewModel
+
+store.board = { projectDir: "/fixture/frizz", threads: keys ? [thread, gatesThread] : [thread] } as BoardSnapshot
+Object.assign(window, { fixtureStore: store })
 
 const project: QueuesProject = {
   id: "fixture",
@@ -268,7 +283,7 @@ const project: QueuesProject = {
   projectDir: "/fixture/frizz",
   homeDir: "/fixture",
   githubRepo: undefined,
-  queued: [thread],
+  queued: keys ? [thread, gatesThread] : [thread],
   running: [],
   snoozed: [],
   pinnedDone: [],
@@ -289,12 +304,16 @@ window.fetch = async (input, init) => {
   }
   // The two writes the card makes, echoed onto the window so a probe can assert the exact payload the
   // worker would receive — above all that an answer RESTATES the question and carries the option's own
-  // label rather than the lettered chip text.
+  // label rather than the numbered chip text.
   if (rpc === "answerQuestions" || rpc === "dismissQuestions" || rpc === "holdQuestionDefault") {
     const body = JSON.parse(String(init?.body ?? "{}"))
     window.dispatchEvent(new CustomEvent("fixture-rpc", { detail: { rpc, body } }))
     const ids: string[] = body.ids ?? (body.answers ?? []).map((a: { questionId: string }) => a.questionId)
     return new Response(JSON.stringify({ result: { answered: ids, dismissed: ids, open: [] } }), { headers: { "content-type": "application/json" } })
+  }
+  // The Settings drawer (?keys=1) reads the machine's settings; any plausible object will do.
+  if (rpc === "settingsGet") {
+    return new Response(JSON.stringify({ result: { permissionMode: "auto", notifications: false, projectRail: false } }), { headers: { "content-type": "application/json" } })
   }
   if (rpc !== null) {
     return new Response(JSON.stringify({ result: null }), { headers: { "content-type": "application/json" } })
@@ -302,13 +321,30 @@ window.fetch = async (input, init) => {
   return originalFetch(input, init)
 }
 
+// Settings and the palette mount the way App mounts them: off the store flags.
+function Overlays() {
+  const snap = useSnapshot(store)
+  return (
+    <>
+      {snap.showSettings && <SettingsDrawer />}
+      <CommandPalette />
+    </>
+  )
+}
+
 createRoot(document.getElementById("root")!).render(
   <QueryClientProvider client={new QueryClient()}>
     <MemoryRouter>
       <TooltipProvider>
-        <div className="mx-auto w-[min(680px,calc(100%-32px))] py-8">
-          <AllQueuesCard project={project} thread={thread} leaving={false} onLeave={() => {}} onReturn={() => {}} />
+        <div className="mx-auto flex w-[min(680px,calc(100%-32px))] flex-col gap-4 py-8">
+          {/* Each card in a wrapper naming its thread, so a probe can address one card of ?keys=1's two. */}
+          {(keys ? [thread, gatesThread] : [thread]).map((t) => (
+            <div key={t.id} data-queue-card-root={t.id}>
+              <AllQueuesCard project={project} thread={t} leaving={false} onLeave={() => {}} onReturn={() => {}} />
+            </div>
+          ))}
         </div>
+        {keys && <Overlays />}
       </TooltipProvider>
     </MemoryRouter>
   </QueryClientProvider>,

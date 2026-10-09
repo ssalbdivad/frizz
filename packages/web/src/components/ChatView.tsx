@@ -3,8 +3,8 @@ import { createPortal } from "react-dom"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { useSnapshot } from "valtio"
-import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, Repeat, TerminalSquare, X } from "lucide-react"
-import { parseRecurringPrompt, parseScheduledRunPrompt, parseThreadMessage, questionFencesLive } from "@frizz/shared"
+import { AlertTriangle, ArrowDown, ArrowUp, Bot, Check, ChevronRight, FileText, HelpCircle, Hourglass, KeyRound, Loader2, Repeat, TerminalSquare } from "lucide-react"
+import { awaitingSteps, parseRecurringPrompt, parseScheduledRunPrompt, parseThreadMessage, questionFencesLive } from "@frizz/shared"
 import type { AskQuestion, AwaitingHint, BgShellView, PendingAsk, ThreadWatchView, RegisteredQuestionView, SubAgentView, ThreadView as ThreadViewData, TranscriptEdit, TranscriptMessage, TranscriptPart, TranscriptTodo, TranscriptToolCall } from "@frizz/shared"
 import { store, threadBySlug, pushDrawer, pushScheduleDrawer, pushSubAgentDrawer, pushBackgroundShellDrawer, showToast } from "../store.ts"
 import { scheduledRunFacts } from "../lib/schedules.ts"
@@ -64,6 +64,7 @@ import { getThemeSnapshot, subscribeTheme } from "../lib/theme.ts"
 import { isVisualizationThemeAck, visualizationThemeMessage } from "../lib/visualizationThemeProtocol.ts"
 import { canAdoptThread } from "../lib/adoption.ts"
 import { THREAD_HEADER_CLASS, THREAD_HEADER_CONTAINER_CLASS, THREAD_HEADER_CONTROLS_CLASS, THREAD_HEADER_TITLE_CLASS } from "../lib/threadHeaderLayout.ts"
+import { SheetClose } from "./ui/SheetHeader.tsx"
 import { ThreadActionBar } from "./ThreadActionBar.tsx"
 import { MobileThreadHeader } from "./MobileThreadHeader.tsx"
 import { HeaderActions } from "./HeaderActions.tsx"
@@ -83,6 +84,7 @@ import { CHILD_OPEN_TITLE, CHILD_RESTED_DOT_CLASS, CHILD_RESTED_TITLE, CHILD_STA
 import { childOpDismisser } from "../lib/dismissChildOp.ts"
 import { agentCompletionCall, subAgentCompletionOutcome } from "../lib/subAgentCompletion.ts"
 import { agentReading } from "../lib/agentReading.ts"
+import { awaitingDefersToQuestions, awaitingProseBlock } from "../lib/awaitingPresentation.ts"
 import { ChildOpRow } from "./ChildOpRow.tsx"
 import { ThreadLinks } from "./ThreadLinks.tsx"
 import { MessageRow } from "./MessageTimestamp.tsx"
@@ -1831,12 +1833,19 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
       className={THREAD_HEADER_CLASS}
     >
       <div className={THREAD_HEADER_TITLE_CLASS}>
-        {/* NOTHING BEFORE THE TITLE. The way out of /full used to be an ArrowLeft standing here, which
-            put a whole-thread verb at the one end of the header no other verb lives at, and said
+        {/* NO THREAD VERB BEFORE THE TITLE. The way out of /full used to be an ArrowLeft standing here,
+            which put a whole-thread verb at the one end of the header no other verb lives at, and said
             "previous page" about a control whose job is to change how this thread is SHOWN. It is now
             the closing half of the fullscreen door, in the door's own slot in the action strip below
-            (HeaderActions `collapse`). */}
-        <div className="min-w-0 leading-tight">
+            (HeaderActions `collapse`).
+            The drawer's close is the one thing that does stand here, because it is not a thread verb:
+            it is the sheet's own chrome, the same SheetClose every drawer's SheetHeader leads with (see
+            there for why it leads, and for its spacing). Wired to the SAME animated close() as the
+            backdrop/Esc path (markDrawerClosing + the 210ms slide-out), never an instant unmount.
+            Absent in the main workpane (no onClose → no drawer to close). Inside the title group, so
+            the ≤640px wrap keeps it on the title's line. */}
+        {onClose && <SheetClose onClose={onClose} />}
+        <div className="min-w-0 flex-1 leading-tight">
           {/* The name and both rename verbs — click to type, hover for the Claude refresh — are the
               shared ThreadTitle, the same element the queue card's header renders. */}
           <ThreadTitle thread={thread} />
@@ -1883,29 +1892,6 @@ export function ThreadHeader({ slug, onStatusApplied, onClose, showReturnToQueue
           {/* The two lifecycle verbs close the strip after a rule (ThreadLifecycle.tsx). */}
           <ThreadLifecycleActions thread={thread} onArchived={onStatusApplied} />
         </div>
-        {/* Close-X for the DRAWER context (onClose passed by ThreadSheet) — parity with the Settings,
-            sub-agent, and Doc drawers, all of which carry a corner "Close". Wired to the SAME animated
-            close() as the backdrop/Esc path (markDrawerClosing + the 210ms slide-out), never an instant
-            unmount. Absent in the main workpane (no onClose → no drawer to close). */}
-        {/* RULED OFF from the thread's verbs: the drawer's own chrome, not the thread's. Mark as done
-            closes the strip to its left, and with only `ml-0.5` between them the two squares sat 2px
-            apart — a near miss on Close archived the thread and shut the drawer, which looks exactly
-            like a close. Hidden at 640px and below, where the row spreads and the X already sits alone
-            at its far end. `ml-3`, not the lifecycle rule's `mx-2.5`: that one also gets the strip's
-            `gap-0.5`, which this one, outside the strip, does not. Ink, dsf 4: 19.75px from the check and
-            19px to the X, against the lifecycle rule's 20 and 19.5 (scripts/ink-gaps.mjs, 2026-10-05). */}
-        {onClose && <span aria-hidden data-close-rule className="ml-3 mr-2.5 h-4 w-px shrink-0 bg-border max-[640px]:hidden" />}
-        {onClose && (
-          <button
-            type="button"
-            aria-label="Close"
-            data-dialog-initial-focus
-            onClick={onClose}
-            className="icon-hover-outline shrink-0 rounded-md p-1.5 text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg"
-          >
-            <X size={15} />
-          </button>
-        )}
       </div>
     </header>
     </div>
@@ -2058,7 +2044,8 @@ export function lastAssistantIndex(messages: readonly ChatMessage[]): number {
 //
 // `restingCardShown` is the same cut from the other side: when the resting card at the tail states the
 // LAST message's wait (showsRestingCard), that message's fence draws nothing at all — the card owns it,
-// body included — where a settled fence keeps its body as a note. So it is a set of its own.
+// body included — where a settled fence keeps its body as a note, or its card when it handed the human
+// steps. So it is a set of its own rather than one more member of `stale`.
 //
 // `awaitingCut` is the index a fence goes stale BELOW — past every message while the thread is running,
 // else the last assistant message (ChatView's `awaitingCut`).
@@ -2075,20 +2062,34 @@ export function rendersNothingIn<T extends { message: ChatMessage; messageIndex:
 }
 // Does this text draw NOTHING? Ordinarily that is "is it blank", but an ```awaiting fence that is not a
 // LIVE wait draws nothing either (see renderText) — and neither does a live one whose thread is at rest
-// on it, because the resting card below states it; callers fold that case into `staleAwaiting` too —
+// on it, because the resting card below states it; callers pass that case as `restingCardShown` —
 // and the contract invites a worker to reply with the
 // fence ALONE, so a whole message can be one such fence and no prose. Left un-stripped it reports as
 // visible, which spends an adjacency spacer on an empty slot and saves a rest divider with nothing under
 // it. That was already true of a REFUSED fence; it became true of a SETTLED one when the settled body
 // stopped rendering, and 99 of the 6,999 awaiting fences in this machine's transcripts are fence-only,
 // so the case is ordinary rather than theoretical.
+// A LIVE fence that names questions with no prose of its own draws nothing as well (renderText, 2026-10-08):
+// its card is gone and the question cards render after the message, not inside it.
+//
+// A SETTLED fence that handed the human `steps:` keeps its card (renderText), so it is not blank — unless
+// the resting card owns it, which is why that reason arrives as its own flag rather than folded in.
 function blankText(m: ChatMessage, text: string, staleAwaiting?: boolean, cardOwned?: boolean): boolean {
-  if (!m.fenceRefused && !staleAwaiting && !cardOwned) return !text.trim()
+  if (!m.fenceRefused && !staleAwaiting && !cardOwned) {
+    if (!text.includes("```awaiting")) return !text.trim()
+    return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting" && awaitingDefersToQuestions(s.hints) && !awaitingProseBlock(s.body))
+  }
   // splitFenceBlocks already drops whitespace-only prose runs, so "every segment is an awaiting fence
   // that draws nothing" is the whole test. A ```done fence still draws its card and keeps the message
-  // visible, and so does a SETTLED fence with a body, which draws as its note.
-  const drawsNothing = (body: string) => m.fenceRefused || cardOwned || !body.trim()
-  return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting" && drawsNothing(s.body))
+  // visible, and so does a SETTLED fence with a body, which draws as its note, or with steps, its card.
+  const drawsNothing = (s: { body: string; hints: readonly AwaitingHint[] }) =>
+    m.fenceRefused || cardOwned || (!settledFenceDraws(s.hints) && !s.body.trim())
+  return splitFenceBlocks(text).every((s) => s.kind === "fence" && s.fenceKind === "awaiting" && drawsNothing(s))
+}
+// Does a SETTLED ```awaiting fence still draw its card? Only one that handed the human steps — they are a
+// record of what the human did, not a wait (renderText).
+function settledFenceDraws(hints: readonly AwaitingHint[]): boolean {
+  return awaitingSteps(hints).length > 0
 }
 // The leading gap for the shimmer that tails a live transcript. The shimmer is a quiet single-line row
 // — the LIVE continuation of the very meta column that the reasoning rows and tool bands form above
@@ -3783,9 +3784,28 @@ export const Message = memo(function Message({ m, answering, dense, paired, show
         // by the resting card at the tail (AwaitingBackgroundCard opens on this very body), so this block
         // goes too, for the spacer reason above: FenceCard returning null would still leave its slot's
         // spacer standing between the prose and that card.
+        //
+        // EXCEPT A SETTLED FENCE THAT HANDED THE HUMAN STEPS (2026-10-08, maintainer: "We need to continue
+        // showing the to do instructions even after they are complete & the thread has moved on"). Its
+        // steps are a record of what the human DID — the sign-in, the approval — not a wait, and its card
+        // is the only place they were ever written down. So it keeps the card, stated with no thread: no
+        // live rows, and no Done (nobody is waiting on these steps any more, and a later fence restating
+        // the same steps must not grow a second verb). A refused fence still goes — its re-fence restates it.
+        if (fseg.fenceKind === "awaiting" && staleAwaiting && !m.fenceRefused && !restingCardShown && settledFenceDraws(fseg.hints)) {
+          push(<AwaitingBackgroundCard key={`${keyBase}-f${fi}`} fence={{ body: fseg.body, hints: fseg.hints }} />)
+          continue
+        }
         if (fseg.fenceKind === "awaiting" && (m.fenceRefused || restingCardShown)) continue
         if (fseg.fenceKind === "awaiting" && staleAwaiting) {
           if (fseg.body.trim()) push(<SettledAwaitingNote key={`${keyBase}-f${fi}`} body={fseg.body} wrap={dense} />)
+          continue
+        }
+        // A FENCE THAT NAMES QUESTIONS DRAWS NO CARD — the question cards after this rest are its ending
+        // (lib/awaitingPresentation awaitingDefersToQuestions). Its prose is the worker's handoff, so it
+        // stays, as the message's own text.
+        if (fseg.fenceKind === "awaiting" && awaitingDefersToQuestions(fseg.hints)) {
+          const prose = awaitingProseBlock(fseg.body)
+          if (prose) push(<ProseHtml key={`${keyBase}-f${fi}`} md={prose} wrap={dense} />)
           continue
         }
         push(

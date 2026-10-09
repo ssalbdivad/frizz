@@ -32,7 +32,7 @@ import { awaitingFenceTitle, awaitingSteps, isDirectSubAgent, replyWaitOf } from
 import { subAgentName } from "../groups.ts"
 import { githubRefUrl } from "../lib/githubRef.ts"
 import { noteGithubRefs } from "../lib/githubHovercards.ts"
-import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingProseBlock, prWatchRefs, STEPS_CHIP } from "../lib/awaitingPresentation.ts"
+import { AWAITING_FALLBACK_TITLE, AWAITING_NO_PROSE, awaitingDefersToQuestions, awaitingProseBlock, prWatchRefs, STEPS_CHIP } from "../lib/awaitingPresentation.ts"
 import { compactElapsedSince, formatCompactElapsed, liveAgeSince } from "../lib/durationLabels.ts"
 import { shellBudgetLabel } from "../lib/shellBudget.ts"
 import { AGENT_GLYPH_STROKE, CHILD_DISMISS_NOUN, CHILD_DISMISS_TITLE, CHILD_DISMISS_VERB, CHILD_STALE_DOT_CLASS, CHILD_STALE_SHELL_TITLE, CHILD_STALE_TITLE } from "../lib/childOps.ts"
@@ -1095,10 +1095,13 @@ export function AwaitingWaitTable({ thread, divider, hints }: {
  *  - NOT EVENT-SNOOZED. This one reverses a dated decision rather than extending it: the snooze was
  *    deliberately confined to the queue, because the drawer showing NOTHING at rest reads as "the agent
  *    died". That argument is about a thread nobody has parked. Once the human has parked THIS rest, the
- *    same card with the same button one surface over is not information. */
+ *    same card with the same button one surface over is not information.
+ *  - NOT A FENCE THAT NAMES QUESTIONS (2026-10-08, lib/awaitingPresentation awaitingDefersToQuestions):
+ *    the question cards at this rest are the ending, and the live work is in the ops summary. */
 export function showsRestingCard(
-  thread: Pick<ThreadView, "awaitingBackground" | "runtime" | "bgSnoozed"> | undefined,
+  thread: Pick<ThreadView, "awaitingBackground" | "runtime" | "bgSnoozed" | "lastFence"> | undefined,
 ): boolean {
+  if (thread?.lastFence?.kind === "awaiting" && awaitingDefersToQuestions(thread.lastFence.hints)) return false
   return thread?.awaitingBackground === true && thread.runtime === "turn-idle" && thread.bgSnoozed !== true
 }
 

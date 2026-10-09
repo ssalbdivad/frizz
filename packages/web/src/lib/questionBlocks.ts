@@ -209,6 +209,9 @@ export function hasQuestionBlock(text: string): boolean {
 export interface ParsedQuestion {
   kind: QuestionKind
   danger: boolean
+  // A SECRET request (registered via `mcp__frizz__secret`): the free-text box is masked, and what is
+  // typed in it never enters the draft store. Only a registered question carries it.
+  secret?: boolean
   contextMd: string
   // Option labels with any inline "recommended" marker stripped out (the badge conveys it instead).
   options: string[]
@@ -459,6 +462,23 @@ export function recommendedIndex(recommendation: string | undefined, options: st
     return om ? om[1].toUpperCase() === id : false
   })
   return idx === -1 ? null : idx
+}
+
+// THE identifier every frizz-built option carries: `1.`, `2.`, `3.` (letters until 2026-10-07). Numbers
+// because a number is a KEY: the card binds 1–9 to its options, and the identifier on screen is the key
+// that picks it (requested 2026-10-07, so an option can be picked straight from the keyboard). A
+// worker-written fence keeps whatever it wrote — its text is the worker's — and the card shows its
+// POSITION on the keycap regardless (see splitOptionId).
+export function optionNumber(index: number): string {
+  return `${index + 1}.`
+}
+
+// Split an option line into its leading identifier and the rest ("2. SQLite — …" → "2" + "SQLite — …",
+// "AA) Ten" → "AA" + "Ten"). The card draws the identifier as a keycap in the option's gutter rather
+// than as text, so the label must arrive without it. No identifier ⇒ `id` undefined, text untouched.
+export function splitOptionId(opt: string): { id?: string; rest: string } {
+  const m = opt.match(/^\s*([A-Za-z]{1,2}|\d+)[.)]\s+/)
+  return m ? { id: m[1].toUpperCase(), rest: opt.slice(m[0].length) } : { rest: opt }
 }
 
 // An option's leading identifier ("A. SQLite …" → "A", "3) Ten" → "3"), used to compose a multi-select

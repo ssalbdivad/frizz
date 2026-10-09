@@ -43,9 +43,12 @@ async function call(port: number, init?: RequestInit): Promise<Record<string, un
 export async function listSessions(port: number): Promise<never> {
   const body = await call(port);
   const sessions = (body?.sessions ?? []) as SessionRecord[];
-  const live = sessions.filter((s) => s.revokedAt === undefined);
+  // A record past its own expiry cannot sign in any more, so listing it would invite a pointless
+  // --sign-out. Records written before 2026-10-08 carry no expiry and stay listed until signed out.
+  const now = Date.now();
+  const live = sessions.filter((s) => s.revokedAt === undefined && (s.expiresAt === undefined || s.expiresAt > now));
   if (live.length === 0) {
-    console.log("No device has redeemed an access link.");
+    console.log("No device is signed in.");
     process.exit(0);
   }
   // The id is what the operator types back into --sign-out, so it leads.

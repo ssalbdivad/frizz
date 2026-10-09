@@ -9,7 +9,7 @@ import { RegisteredAnsweringContext } from "./RegisteredQuestionCards.tsx"
 
 // ON A PHONE THE TRANSCRIPT'S QUESTIONS ARE ANSWERED WHERE THEY STAND (2026-10-03). Each open registered
 // question draws compactly — its number, its text, and each option as a full-width tap target carrying
-// its letter, label and one-line trade-off. A plain single-choice question is answered by ONE TAP on its
+// its number, label and one-line trade-off. A plain single-choice question is answered by ONE TAP on its
 // option: the pick goes through the thread's shared RegisteredAnswering, whose "a pick that completes its
 // question sends it" rule is the send, exactly as a click on the desktop card is.
 //
@@ -109,7 +109,7 @@ function CompactQuestion({ q, n }: { q: RegisteredQuestionView; n: number }) {
               className={`${OPTION} ${on ? "border-fg/50 bg-hover" : "border-border bg-bg"}`}
             >
               <span className={`${KEY} ${on ? "border-fg bg-fg text-bg" : "border-border-strong text-muted"}`}>
-                {multi && on ? <Check aria-hidden size={12} strokeWidth={3} /> : letter(i)}
+                {multi && on ? <Check aria-hidden size={12} strokeWidth={3} /> : i + 1}
               </span>
               <span className="min-w-0 flex-1">
                 <span className="block font-medium text-fg">
@@ -150,10 +150,10 @@ function CompactQuestion({ q, n }: { q: RegisteredQuestionView; n: number }) {
   )
 }
 
-/** A tap target at least 40px tall, the label on the letter's line. */
+/** A tap target at least 40px tall, the label on the number's line. */
 const OPTION = "flex w-full items-start gap-2.5 rounded-[10px] border px-3 py-2.5 text-left outline-none transition-colors active:bg-hover focus-visible:border-fg/50 disabled:opacity-60"
-/** The option's letter, in a key-cap that fills when picked — the same letters every surface uses. */
-const KEY = "flex size-5 shrink-0 items-center justify-center rounded-[6px] border text-[11px] font-bold"
+/** The option's number, in a key-cap that fills when picked — the same numbers every surface uses. */
+const KEY = "flex size-5 shrink-0 items-center justify-center rounded-[6px] border text-[11px] font-bold tabular-nums"
 
 /** A question's markdown at the SURROUNDING type, not the transcript's prose scale: `md-body` pins its
  *  own 14px/1.7 and outranks any utility here (it is unlayered CSS), so the question is rendered bare —
@@ -161,13 +161,6 @@ const KEY = "flex size-5 shrink-0 items-center justify-center rounded-[6px] bord
  *  paragraphs or a list. `md-inline` keeps inline code monospace. Shared with the sheet. */
 export const QUESTION_PROSE =
   "md-inline break-words [&_p+*]:mt-2 [&_ul]:list-disc [&_ul]:pl-5 [&_ol]:list-decimal [&_ol]:pl-5 [&_li+li]:mt-1 [&_pre]:overflow-x-auto [&_pre]:text-[0.85em] [&_code]:text-[0.9em] [&_a]:underline"
-
-/** `A`, `B`, … then `AA` past 26 — the letters every other question surface uses. */
-export function letter(index: number): string {
-  let n = index, out = ""
-  do { out = String.fromCharCode(65 + (n % 26)) + out; n = Math.floor(n / 26) - 1 } while (n >= 0)
-  return out
-}
 
 /** THE BOTTOM BAR'S THIRD STATE (mockup v2 §2–3): on a thread with open questions the resting row is
  *  [keyboard] + "Answer N questions". The keyboard button is for a free reply instead — it switches the

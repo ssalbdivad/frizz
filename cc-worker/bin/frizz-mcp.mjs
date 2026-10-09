@@ -661,7 +661,7 @@ function questionSchema(depth) {
           "public API, a data model, or the design a plan commits to.",
       },
       // No `maxItems`: the count is the worker's to choose (maintainer 2026-09-03 — "allow arbitrary
-      // numbers of options"). A `multi` over a long list is a real shape, and the card letters past 26.
+      // numbers of options"). A `multi` over a long list is a real shape; the card numbers every row (1–9 are its keys).
       options: {
         type: "array",
         description:
@@ -770,6 +770,43 @@ const UNASK = {
       id: { type: "string", description: "The question id `ask` returned, or that `activity` lists. Only your own thread's." },
     },
     required: ["id"],
+  },
+}
+
+const SECRET = {
+  name: "secret",
+  description:
+    "ASK THE USER FOR A SECRET VALUE — a one-time 2FA code, an API token, a password — that a command " +
+    "needs and you must never see. The user may be on a phone, far from this machine: this is how a " +
+    "code reaches a command without anyone typing into a terminal here.\n\n" +
+    "It registers a question like `ask`, drawn as a card with ONE MASKED BOX. What the user pastes is " +
+    "held in Frizz's memory — never on disk — and served through a private named pipe whose path this " +
+    "tool returns NOW. It never enters the transcript, the database or your context: the answer you are " +
+    "woken with names the path, not the value.\n\n" +
+    "THE PATH CAN BE READ ONCE, within 15 minutes of the answer; then it is gone. So read it INSIDE the " +
+    "command that uses it: `npm publish --otp \"$(cat '<path>')\"`, `<cmd> < '<path>'`. A value several " +
+    "commands need goes into a variable at the start of ONE Bash call: " +
+    "`T=\"$(cat '<path>')\"; cmd1 --token \"$T\"; cmd2 --token \"$T\"`. Never `cat` it bare, echo it, " +
+    "copy it into a file, or paste it into a message — any of those spends the one read and puts the " +
+    "value in the transcript. To discard an unread value, `rm` the path.\n\n" +
+    "A one-time code expires in about thirty seconds, so have the command ready BEFORE you rest: when the " +
+    "answer wakes you, run it at once.\n\n" +
+    "Like a question, it is your rest's sign-off and it gates `done` until answered; name it under " +
+    "`questions:` at later rests, withdraw it with `unask`. It is allowed on an autonomous thread — a " +
+    "credential is not something you can decide.",
+  inputSchema: {
+    type: "object",
+    properties: {
+      question: {
+        type: "string",
+        description:
+          "What to paste, said so the user can answer cold: which account or service, which kind of " +
+          "value, and what it unlocks — \"The npm one-time code for the maintainer account, to publish " +
+          "frizz 0.16.0.\" NO \"I\" AND NO \"you\": name the actor outright.",
+      },
+      header: { type: "string", description: "A very short chip label for the card, 12 characters or so — \"npm OTP\", \"API token\"." },
+    },
+    required: ["question"],
   },
 }
 
@@ -1084,8 +1121,9 @@ const DEADLINE = {
 // WATCH_ISSUE rides at the END (2026-09-14): the tool list is read by position in frizz-mcp.test.ts, and a
 // worker's runtime reads it by name, so the order costs nothing and appending breaks nothing.
 // EXTEND_SHELL is appended after it for the same reason (2026-09-29), EDITOR after MESSAGE_THREAD (2026-10-02), and
-// SCHEDULE after EDITOR (2026-10-05), DEADLINE after SCHEDULE (2026-10-06).
-const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, EDITOR, SCHEDULE, DEADLINE]
+// SCHEDULE after EDITOR (2026-10-05), DEADLINE after SCHEDULE (2026-10-06), and upstream's SECRET after
+// DEADLINE (2026-10-08).
+const TOOLS = [SPAWN_THREAD, GOAL, TIMER, WATCH_PR, WATCH, UNWATCH, ASK, UNASK, DONE, TITLE, ACTIVITY, LINK, UNLINK, WATCH_ISSUE, EXTEND_SHELL, READ_THREAD, MESSAGE_THREAD, EDITOR, SCHEDULE, DEADLINE, SECRET]
 
 // A TOOL IS LISTED ONLY WHILE ITS CAPABILITY EXISTS (2026-10-06, plans/upstream-superset.md §5). Every
 // listed tool is paid for on every turn, and a tool whose feature is absent can only answer "there is
@@ -1198,6 +1236,7 @@ const HANDLERS = {
   [WATCH.name]: watch,
   [ASK.name]: ask,
   [UNASK.name]: unask,
+  [SECRET.name]: secret,
   [DONE.name]: done,
   [TITLE.name]: title,
   [UNWATCH.name]: unwatch,
@@ -2460,6 +2499,33 @@ async function ask(args) {
     "own wake, restating what was asked.\n\n" +
     "WITHDRAW ONE THE MOMENT IT STOPS MATTERING (`unask`), above all if you work the answer out " +
     `yourself.\n\n${openQuestionList(result)}`
+  )
+}
+
+/** The `secret` handler: register ONE masked question, and hand back the pipe its value will be read from.
+ *  It rides the `ask` RPC with `secret: true` — the card, the wake, the `done` gate and the `questions:`
+ *  naming are all a question's — and the server is what keeps the value out of every one of them.
+ * @param {Record<string, unknown>} args @returns {Promise<string>} */
+async function secret(args) {
+  const slug = threadSlug()
+  const question = typeof args.question === "string" ? args.question.trim() : ""
+  if (!question) throw new Error("`question` is required — say what the user should paste, and for what")
+  const header = typeof args.header === "string" && args.header.trim() ? args.header.trim() : undefined
+  const result = (await callRpc("ask", { slug, questions: [{ question, kind: "question", secret: true, ...(header ? { header } : {}) }] }))?.result
+  const registered = Array.isArray(result?.registered) ? result.registered[0] : undefined
+  const path = typeof registered?.secretPath === "string" ? registered.secretPath : ""
+  if (!registered?.id || !path) throw new Error("Frizz did not return the secret's file — this server predates `secret`; restart Frizz and retry")
+  // Quoted, because the macOS state dir is `~/Library/Application Support/…` and an unquoted path
+  // splits at the space.
+  const quoted = `'${path.replace(/'/g, `'\\''`)}'`
+  return (
+    `Registered secret request ${registered.id}. The user sees a masked box on the board.\n\n` +
+    `Once answered, the value can be read ONCE, within 15 minutes, at:\n  ${path}\n\n` +
+    `Read it INSIDE the command that uses it — \`--otp "$(cat ${quoted})"\` — and never cat, echo or copy ` +
+    "it on its own: that spends the one read. Several commands share it through a variable set at the " +
+    "start of ONE Bash call. Get the command ready now: the answer wakes you, and a one-time code expires " +
+    "within a minute.\n\n" +
+    `${openQuestionList(result)}`
   )
 }
 

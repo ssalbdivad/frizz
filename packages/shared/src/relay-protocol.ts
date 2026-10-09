@@ -153,7 +153,10 @@ export class WsMessageAssembler {
    * lighter and corrupt. The run stays poisoned until the frame that terminates it.
    */
   private readonly poisoned = new Set<string>()
-  constructor(private readonly maxBytes = 8 * 1024 * 1024) {}
+  private readonly maxBytes: number
+  constructor(maxBytes = 8 * 1024 * 1024) {
+    this.maxBytes = maxBytes
+  }
 
   /** Returns the complete message, or null while more is still to come (or once the run overflowed). */
   push(id: string, data: string, more?: boolean): string | null {

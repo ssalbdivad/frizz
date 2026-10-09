@@ -44,7 +44,7 @@ test("answering a one-question ask renders the Answers card, not a flat bubble",
     // Nothing answered yet: the live thread holds the ask and no answers card.
     assert.equal(await page.$$eval("[data-live-thread] [data-answers-card]", (n) => n.length), 0)
 
-    await page.evaluate(clickByText("[data-live-thread]", "A. Yes, delete them"))
+    await page.evaluate(clickByText("[data-live-thread]", "Yes, delete them"))
     await page.evaluate(clickByText("[data-live-thread]", "Send answers"))
     await page.waitForSelector("[data-live-thread] [data-answers-card]", { timeout: 10_000 })
 

@@ -3,8 +3,9 @@ import test from "node:test"
 
 // Runtime coverage for a REGISTERED `multi` over a LONG option list. The `ask` tool's option count
 // carried `.max(8)` until 2026-09-03 (maintainer: "allow arbitrary numbers of options"), so nothing past
-// eight had ever reached the card, and nothing past 26 had ever reached the lettering (`AA.` after `Z.`
-// in registeredQuestion.ts). The fixture's `?wide=1` is thirty options; this drives the real card end
+// eight had ever reached the card. Options were lettered until 2026-10-07, which ran past `Z.` into `AA.`;
+// they are numbered now, and only 1–9 are keys, so rows 10 and on carry a plain `10.` rather than a
+// keycap. The fixture's `?wide=1` is thirty options; this drives the real card end
 // to end — every chip toggled, Send answers, the payload the worker would receive — so the answer that
 // picks the whole list is OBSERVED rather than inferred from the schema alone. Skipped unless a Vite
 // URL serving the fixtures is provided (same pattern as the other *.e2e.test.ts here): start `vite` in
@@ -25,19 +26,19 @@ async function launch() {
 const CARD = "[data-question-id='qst_0006ffff']"
 const OPTION = `${CARD} [data-question-option]`
 
-test("a registered multi over thirty options letters past Z, toggles every chip, and sends all thirty", { skip: !baseUrl, timeout: 60_000 }, async () => {
+test("a registered multi over thirty options numbers every row past the 1–9 keys, toggles every chip, and sends all thirty", { skip: !baseUrl, timeout: 60_000 }, async () => {
   const { browser, page, errors } = await launch()
   try {
     await page.goto(`${baseUrl}/registered-question-fixture.html?wide=1`, { waitUntil: "networkidle0" })
     await page.waitForSelector(OPTION)
 
-    // All thirty rows render, in order, and the lettering runs `A.`…`Z.` then `AA.`…`AD.`.
+    // All thirty rows render, in order: keycaps `1`…`9`, then plain `10.`…`30.` (no key names them).
     const rows = await page.$$eval(OPTION, (ns) => ns.map((n) => (n.textContent ?? "").replace(/\s+/g, " ").trim()))
     assert.equal(rows.length, 30)
-    assert.match(rows[0], /^A\. Finding 1\b/)
-    assert.match(rows[25], /^Z\. Finding 26\b/)
-    assert.match(rows[26], /^AA\. Finding 27\b/)
-    assert.match(rows[29], /^AD\. Finding 30\b/)
+    assert.match(rows[0], /^1 ?Finding 1\b/)
+    assert.match(rows[25], /^26\. ?Finding 26\b/)
+    assert.match(rows[26], /^27\. ?Finding 27\b/)
+    assert.match(rows[29], /^30\. ?Finding 30\b/)
 
     // The card's writes are echoed onto the window by the fixture; collect them before anything is sent.
     await page.evaluate(() => {
@@ -62,7 +63,7 @@ test("a registered multi over thirty options letters past Z, toggles every chip,
     assert.equal(calls[0].rpc, "answerQuestions")
     const answer = calls[0].body.answers?.[0]
     assert.equal(answer?.questionId, "qst_0006ffff")
-    // The payload carries the worker's OWN labels — thirty of them, in option order — not the lettered
+    // The payload carries the worker's OWN labels — thirty of them, in option order — not the numbered
     // chip text. `chosen` carried the same `.max(8)` the options did and had to go with it.
     assert.deepEqual(answer?.chosen, Array.from({ length: 30 }, (_, i) => `Finding ${i + 1}`))
 

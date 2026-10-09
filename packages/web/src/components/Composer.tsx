@@ -8,6 +8,7 @@ import { clipFenceRuns, scanInputFences } from "../lib/inputCodeFences.ts"
 import { renderInputFenceRun } from "./TextareaCodeFences.tsx"
 import { shouldInterruptSubmitComposerEnter, shouldPushQueuedComposerEnter, shouldRestoreOptionEnterNewline, shouldSubmitComposerEnter } from "../lib/composerKeyboard.ts"
 import { queueComposerHandlesOptionEnter } from "../lib/queueComposerKeyboard.ts"
+import { focusQuestionFrom } from "../lib/questionKeys.ts"
 import { RAIL_ACTION_OFFSET, RAIL_LEAD_OFFSET, RAIL_LEAD_WITH_ACTION_OFFSET, RAIL_PAPERCLIP_OFFSET, RAIL_PAPERCLIP_PLAIN_OFFSET, RAIL_RESERVE_PLAIN, RAIL_RESERVE_WITH_ACTION, RAIL_RESERVE_WITH_BOTH, RAIL_SEND_OFFSET } from "../lib/iconRhythm.ts"
 import { apiBase } from "../lib/base-path.ts"
 import { detectPlatform } from "../lib/keybindings.ts"
@@ -1059,7 +1060,9 @@ export function Composer({
       // Mid-IME-composition Esc is the IME's own cancel — leave it to the editor, don't blur.
       e.preventDefault()
       e.stopPropagation()
-      el.blur()
+      // With a question open on this composer's own surface (its drawer, its queue card), the climb out
+      // lands ON the question, so the next key is a number that answers it (lib/questionKeys.ts).
+      if (!focusQuestionFrom(el)) el.blur()
     }
     // Arrow keys just move the caret — no boundary semantics (the nav walk they used to drive is gone).
   }

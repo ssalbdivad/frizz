@@ -10,6 +10,10 @@
  * Cloudflare itself stays faked, deliberately: provisioning a real tunnel needs a zone token, and this
  * must be runnable by anyone, on any machine, without one. Whether cloudflare.ts speaks the real API
  * correctly is a different question, answered by running it against the real zone — done 2026-08-24.
+ *
+ * GitHub is faked the same way, on its own loopback port, for the last legs: the CLI runs the REAL
+ * device flow against it and the registrar runs the REAL verifier against it, so the token that crosses
+ * the wire is the one the flow minted, and a `gh`-style scoped token is refused by the real check.
  */
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -17,6 +21,9 @@ import { CLAIM_LEASE_MS } from "@frizz/shared";
 import { handleClaim } from "../packages/registrar/src/claim-handler.ts";
 import { loadOrCreateClaimIdentity } from "../src/identity.ts";
 import { claimName, ClaimError } from "../src/registrar-client.ts";
+import { githubVerifier } from "../packages/registrar/src/worker.ts";
+import { establishCloudConfig } from "../src/cloud.ts";
+import { runDeviceFlow } from "../src/github-device-flow.ts";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -65,10 +72,21 @@ function fakeCloudflare() {
 function memoryStore() {
   const rows = new Map();
   const owners = new Map();
+  const githubOwners = new Map();
   return {
     rows,
     owners,
+    githubOwners,
     store: {
+      async readGithubOwner(id) {
+        return githubOwners.get(id) ?? null;
+      },
+      async writeGithubOwner(id, name) {
+        githubOwners.set(id, name);
+      },
+      async removeGithubOwner(id) {
+        githubOwners.delete(id);
+      },
       async readOwner(pubkey) {
         return owners.get(pubkey) ?? null;
       },
@@ -100,6 +118,42 @@ const st = memoryStore();
 let clock = 1_800_000_000_000;
 // Off for the first legs, armed for the anonymous one — the waiver only means anything with a gate up.
 let gate = null;
+/** Every claim body the registrar was sent, so the last legs can say exactly which token crossed. */
+const received = [];
+
+/**
+ * github.com and api.github.com on one port. The device flow answers pending once, then a token with
+ * no scope; `/user` answers that token with an EMPTY X-OAuth-Scopes, and the `gh`-style token with the
+ * scopes the real `gh` holds.
+ */
+const ZERO = "gho_e2eZeroScopeDeviceToken";
+const GH_CLI = "gho_e2eGhCliTokenWithRepoScope";
+const githubSeen = [];
+let polls = 0;
+const github = createServer((req, res) => {
+  let raw = "";
+  req.on("data", (c) => (raw += c));
+  req.on("end", () => {
+    githubSeen.push({ path: req.url, form: Object.fromEntries(new URLSearchParams(raw)), auth: req.headers.authorization ?? null });
+    const send = (status, body, headers = {}) => {
+      res.writeHead(status, { "content-type": "application/json", ...headers });
+      res.end(JSON.stringify(body));
+    };
+    if (req.url === "/login/device/code") {
+      return send(200, { device_code: "dev-e2e", user_code: "E2E0-CODE", verification_uri: "https://github.com/login/device", expires_in: 900, interval: 1 });
+    }
+    if (req.url === "/login/oauth/access_token") {
+      return send(200, polls++ === 0 ? { error: "authorization_pending" } : { access_token: ZERO, token_type: "bearer", scope: "" });
+    }
+    if (req.url === "/user") {
+      const user = { id: 777, login: "e2e-user", created_at: "2015-01-01T00:00:00Z" };
+      if (req.headers.authorization === `Bearer ${ZERO}`) return send(200, user, { "x-oauth-scopes": "" });
+      if (req.headers.authorization === `Bearer ${GH_CLI}`) return send(200, user, { "x-oauth-scopes": "gist, read:org, repo, workflow" });
+      return send(401, { message: "Bad credentials" });
+    }
+    send(404, { message: "Not Found" });
+  });
+});
 
 const server = createServer((req, res) => {
   const chunks = [];
@@ -111,6 +165,7 @@ const server = createServer((req, res) => {
     } catch {
       body = null;
     }
+    received.push(body);
     const outcome = await handleClaim(body, {
       api: cf.api,
       store: st.store,
@@ -212,11 +267,64 @@ try {
   } finally {
     rmSync(anonHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
   }
+
+  // 7. A CUSTOM NAME THROUGH THE DEVICE FLOW, with the real verifier as the gate. The CLI side is the
+  // launcher's own establishCloudConfig, signing in through the real runDeviceFlow; the registrar side
+  // is the real githubVerifier, asking the fake GitHub what the token is and what scopes it holds.
+  github.listen(0, "127.0.0.1");
+  await once(github, "listening");
+  const githubOrigin = `http://127.0.0.1:${github.address().port}`;
+  gate = githubVerifier(fetch, githubOrigin);
+  // establishCloudConfig signs with the real clock, so the registrar's clock joins it here.
+  clock = Date.now();
+  const deviceHome = mkdtempSync(join(tmpdir(), "frizz-claim-e2e-device-"));
+  try {
+    const prompts = [];
+    received.length = 0;
+    const config = await establishCloudConfig("device-word", 9393, deviceHome, origin, {
+      authorize: () =>
+        runDeviceFlow({
+          clientId: "Iv1.e2eclient",
+          githubOrigin,
+          apiOrigin: githubOrigin,
+          onPrompt: (prompt) => prompts.push(prompt),
+        }),
+    });
+    check("a custom name claims through the device flow", config.claim === "device-word" && config.hostname === "device-word.frizz.sh", JSON.stringify(config));
+    check("the code was shown to the person", prompts.length === 1 && prompts[0].userCode === "E2E0-CODE");
+    check("the flow asked GitHub for no scope", githubSeen[0]?.path === "/login/device/code" && !("scope" in githubSeen[0].form), JSON.stringify(githubSeen[0]?.form));
+    check("the claim carried the device-flow token and nothing else", received.length === 1 && received[0]?.github === ZERO, received[0]?.github ?? "(none)");
+    check("the registrar asked GitHub about that token", githubSeen.some((r) => r.path === "/user" && r.auth === `Bearer ${ZERO}`));
+    check("the name is bound to the account id", st.rows.get("device-word")?.githubId === 777, String(st.rows.get("device-word")?.githubId));
+
+    // 8. AN OLD CLIENT, sending what `gh auth token` prints: the real verifier reads the scopes and refuses.
+    const oldHome = mkdtempSync(join(tmpdir(), "frizz-claim-e2e-old-"));
+    try {
+      const oldIdentity = await loadOrCreateClaimIdentity(oldHome);
+      let refused = null;
+      try {
+        await claimName({ name: "old-client", port: 9393, identity: oldIdentity, origin, now: () => clock, github: GH_CLI });
+      } catch (error) {
+        refused = error;
+      }
+      check(
+        "a gh-scoped token is refused, telling the person to update",
+        refused instanceof ClaimError && refused.code === "github-token-scoped" && /update Frizz/.test(refused.message),
+        refused ? `${refused.code}: ${refused.message}` : "it was ALLOWED"
+      );
+      check("nothing was recorded for it", !st.rows.has("old-client"));
+    } finally {
+      rmSync(oldHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    }
+  } finally {
+    rmSync(deviceHome, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  }
 } catch (error) {
   check("harness completed", false, error instanceof Error ? error.message : String(error));
 } finally {
   server.close();
   await once(server, "close").catch(() => {});
+  if (github.listening) github.close();
   rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 }
 

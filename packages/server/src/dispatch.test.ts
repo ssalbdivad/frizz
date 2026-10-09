@@ -622,7 +622,7 @@ test("end-state contract: a fenceless rest is a DEFECT, done checks, awaiting pa
     // is the counter-pull that pushed zod #6022 away from a question. It only holds where the worker
     // CAN act; under a read-only boundary the recommendation IS the question, never a silent `done`.
     assert.match(c, /knowing the answer and being ABLE TO ACT ON IT come apart/)
-    assert.match(c, /It becomes the QUESTION, with the recommendation as option A/)
+    assert.match(c, /It becomes the QUESTION, with the recommendation as option 1/)
     // The planning thread type derives the same carve-out where a worker reads its deliverable —
     // codex-only now, since claude's lean contract drops ## Thread types. Claude still carries the
     // rule itself in End-of-turn signals (FULLY written and PERSISTED, asserted above).

@@ -26,5 +26,5 @@ export const THREAD_HEADER_CONTAINER_CLASS = "@container/thread-header sticky to
 // ThreadHeader.test checks each narrow token carries exactly this prefix, ThreadTitle's included.
 export const THREAD_HEADER_NARROW = "@max-[27.5rem]/thread-header"
 export const THREAD_HEADER_CLASS = `flex min-w-0 items-center gap-2.5 border-b border-border bg-panel px-3 ${PANE_HEADER_HEIGHT_CLASS} @max-[27.5rem]/thread-header:h-auto @max-[27.5rem]/thread-header:min-h-12 @max-[27.5rem]/thread-header:flex-wrap @max-[27.5rem]/thread-header:items-start @max-[27.5rem]/thread-header:gap-y-2 @max-[27.5rem]/thread-header:px-4 @max-[27.5rem]/thread-header:py-2.5`
-export const THREAD_HEADER_TITLE_CLASS = "min-w-0 flex-1 pl-1 @max-[27.5rem]/thread-header:basis-full"
-export const THREAD_HEADER_CONTROLS_CLASS = "flex shrink-0 items-center @max-[27.5rem]/thread-header:w-full @max-[27.5rem]/thread-header:justify-between"
+export const THREAD_HEADER_TITLE_CLASS = "flex min-w-0 flex-1 items-center gap-2.5 pl-1 @max-[27.5rem]/thread-header:basis-full"
+export const THREAD_HEADER_CONTROLS_CLASS = "flex shrink-0 items-center @max-[27.5rem]/thread-header:w-full"

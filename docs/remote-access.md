@@ -8,14 +8,14 @@ Press **R** in the terminal running Frizz. A walkthrough offers five ways to rea
   Reach this board from anywhere
 
   ❯ Private name        an unguessable name on frizz.sh — no account, nothing to install
-    Custom name         <name>.frizz.sh of your choosing; needs the GitHub CLI
+    Custom name         <name>.frizz.sh of your choosing; needs a GitHub account
     Cloudflare Tunnel   a domain you own on Cloudflare; cloudflared on this machine
     Tailscale           your tailnet; tailscale serve does the TLS
     Something else      any proxy or tunnel you run — tell Frizz its address
     Off                 loopback only  (current)
 ```
 
-Whichever you pick, the board stays bound to loopback. The readout then shows a QR: scanning it trades a single-use code for a session cookie, so the link stops working the moment it is used. Press **L** for a fresh one at any time.
+Whichever you pick, the board stays bound to loopback. The readout then shows a QR: scanning it trades a single-use code for a session cookie, so the link stops working the moment it is used. Press **L** for a fresh one at any time. A session lasts 30 days, after which the device needs a fresh link.
 
 ```sh
 npx frizz --link          # a fresh link for a board that is already running — over SSH, for a headless box
@@ -52,14 +52,15 @@ The done screen shows that link as a QR code. The name is the address, not the l
 The same transport with a name you choose. Pick a word and Frizz claims `<name>.frizz.sh`:
 
 ```
-  Custom frizz.sh name
+  Confirm your GitHub account to claim ada.frizz.sh
 
-  GitHub CLI   signed in as ada ✓
-
-  Name   ada█
+  Open      https://github.com/login/device
+  Enter     WDJB-MJHT
 ```
 
-Requires the [GitHub CLI](https://cli.github.com) signed in — chosen names can be squatted, so they cost an identity where random ones do not. Frizz asks `gh` for a token, the registrar exchanges it for your account id and discards it, and the name is bound to that account. Renewals afterwards need neither — your machine's key proves ownership, so the name keeps working whether or not GitHub does.
+Requires a GitHub account. Chosen names can be squatted, so they cost an identity where random ones do not. Frizz shows a code; enter it at [github.com/login/device](https://github.com/login/device) in any browser, on any device. The sign-in grants Frizz no permissions: the token it yields can read only your public profile. The registrar exchanges it for your account id, discards it, and binds the name to that account. Renewals afterwards need neither, because your machine's key proves ownership, so the name keeps working whether or not GitHub does.
+
+Frizz never reads the GitHub CLI's token. Versions before the device flow sent it with a claim; the registrar now refuses any token that carries a permission, and such a version is told to update.
 
 ## How a frizz.sh name behaves
 

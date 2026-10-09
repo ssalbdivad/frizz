@@ -8,9 +8,7 @@ Durable Object holding that socket and framed down it.
 per name, so the 200-record ceiling that bounded the original design is gone. The [registrar](../registrar)
 records who owns a name; this serves it.
 
-**This IS on the data path**, unlike the registrar, and that is the trade the design makes
-deliberately: unlimited names cost us the traffic. Nothing in a board is trusted to the relay — a
-visitor still meets Frizz's own single-use access gate on the far side — but the bytes do pass through.
+**This IS on the data path**, unlike the registrar, and that is the trade the design makes deliberately: unlimited names cost us the traffic. A visitor still meets Frizz's own single-use access gate on the far side, but every byte passes through the relay in plaintext — the access code as it is redeemed, the session cookie on every later request, prompts, transcripts and terminal keystrokes. **Whoever can deploy this Worker controls every board behind it.** That happened between 2026-09-21 and 2026-10-08: a stolen Cloudflare token was used to deploy a build that copied all of it out and drove a board with a copied cookie. That is why deploys go through CI only (below), and [`plans/blind-relay.md`](../../plans/blind-relay.md) is the design that takes the plaintext away from this hop.
 
 ## What it carries
 
@@ -36,10 +34,13 @@ believing a handshake older than five minutes.
 
 ## Deploying
 
+Only GitHub Actions deploys this Worker, never a laptop. Dispatch [`workers-deploy.yml`](../../.github/workflows/workers-deploy.yml) from `main`; it waits for a maintainer's approval on the `workers-deploy` environment, typechecks, runs the unit tests below and deploys:
+
 ```sh
-cd packages/relay
-wrangler deploy
+gh workflow run workers-deploy.yml --ref main -f target=both
 ```
+
+`target` takes `relay`, `registrar` or `both`. Each deploy is stamped `ci:<sha> run:<run id>`, and [`workers-drift.yml`](../../.github/workflows/workers-drift.yml) checks every 30 minutes that everything this Worker runs carries a stamp from a real run of that workflow. Anything else fails the check, and GitHub emails the failure. A deploy from a laptop, the dashboard or `wrangler rollback` therefore raises the alarm by design: from 2026-09-21 to 2026-10-08 an attacker holding a Cloudflare token ran backdoored builds of this Worker, and those uploads looked exactly like a laptop deploy. To recover from a bad deploy, revert it on `main` and dispatch the workflow again. The rules the check applies are in [`scripts/workers-drift.mjs`](../../scripts/workers-drift.mjs).
 
 Two things that will waste your time otherwise:
 

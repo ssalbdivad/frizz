@@ -61,11 +61,17 @@ export function firstOpenStep(steps: readonly AnswerStep[], answersOf: AnswersOf
   return steps.find((s) => !nodeAnswered(s.spec, answersOf(s.q).get(s.path)))?.key ?? null
 }
 
+/** How a staged secret reads wherever the value itself must not: a fixed run, so it says nothing about
+ *  the value's length either. */
+export const SECRET_MASK = "••••••••"
+
 /** What the review row says was answered, or null for a step nothing was staged on. Reads the answer the
  *  way the payload will (registeredAnswer): a single-select's chip wins over text left beside it, a
  *  multi's text rides after its picks, and a free-text question is its text. */
 export function answerSummary(spec: AskedQuestion, answer: BlockAnswer | undefined): string | null {
   if (!answer || !nodeAnswered(spec, answer)) return null
+  // The review row is on screen, so a secret shows only THAT it is filled, never what it is.
+  if (spec.secret) return SECRET_MASK
   const labels = (spec.options ?? []).map((o) => o.label)
   const text = answer.text.trim()
   if (spec.kind === "multi") {

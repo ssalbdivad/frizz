@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
 import {
   applyRemoteChoice,
+  cancelRemoteClaim,
   newRemoteSignInLink,
   readRemoteAccess,
   type RemoteAccessState,
@@ -91,13 +92,22 @@ function RemoteAccessForm({ state }: { state: RemoteAccessState }) {
 
   const choice = (): RemoteChoice => {
     if (kind === "off" || kind === "private") return { kind }
-    if (kind === "frizz") return { kind, name: field("name") || state.probes.github.login || "" }
+    if (kind === "frizz") return { kind, name: field("name") }
     if (kind === "cloudflare") return { kind, hostname: field("hostname"), tunnel: field("tunnel") }
     return { kind, origin: field("origin") || (kind === "tailscale" ? tailscaleOrigin : "") }
   }
 
   const unchanged = kind === current.kind && kind !== "frizz" && kind !== "cloudflare" && kind !== "tailscale" && kind !== "other"
   const busy = change.isPending
+  // A custom-name claim waits on a GitHub device code while its POST is pending; the launcher reports the
+  // code through the same reading, so poll it for as long as that wait can last.
+  const live = useQuery({
+    queryKey: REMOTE_ACCESS_KEY,
+    queryFn: () => readRemoteAccess(),
+    enabled: busy && kind === "frizz",
+    refetchInterval: busy && kind === "frizz" ? 1_500 : false,
+  })
+  const signIn = busy && kind === "frizz" && live.data?.kind === "ready" ? live.data.state.signIn ?? null : null
   const error = change.error instanceof Error ? change.error.message : fresh.error instanceof Error ? fresh.error.message : null
   const applyLabel = busy ? "Applying…" : kind === "off" ? "Turn off" : kind === "private" ? "Get a private name" : kind === "frizz" ? "Claim" : "Save"
 
@@ -137,6 +147,20 @@ function RemoteAccessForm({ state }: { state: RemoteAccessState }) {
         ) : null}
       </div>
 
+      {signIn ? (
+        <div className="flex flex-col gap-1.5" data-remote-device-code>
+          <p className={HINT}>
+            Open{" "}
+            <a className="text-fg underline" href={signIn.verificationUri} target="_blank" rel="noreferrer">
+              {signIn.verificationUri.replace(/^https:\/\//, "")}
+            </a>{" "}
+            on any device and enter <span className="font-mono text-fg">{signIn.userCode}</span>.
+          </p>
+          <button type="button" className={BUTTON} onClick={() => void cancelRemoteClaim().catch(() => undefined)}>
+            Cancel
+          </button>
+        </div>
+      ) : null}
       {error ? <p className="text-[11px] text-danger">{error}</p> : null}
       {link && current.kind !== "off" ? <SignInLink link={link} /> : null}
     </div>
@@ -162,19 +186,14 @@ function KindDetails({
     return <p className={HINT}>An unguessable name on frizz.sh. No account, nothing to install.</p>
   }
   if (kind === "frizz") {
-    const gh = !probes.github.installed
-      ? "Needs the GitHub CLI: install it, then run gh auth login."
-      : probes.github.login
-        ? `Claimed for GitHub account ${probes.github.login}. One name per account.`
-        : "Run gh auth login in a terminal first."
     return (
       <>
-        <p className={HINT}>{gh}</p>
+        <p className={HINT}>Claiming asks you to confirm a GitHub account with a one-time code. Frizz gets no GitHub permissions. One name per account.</p>
         <input
           aria-label="Name"
           className={INPUT}
           value={field("name")}
-          placeholder={probes.github.login ?? "name"}
+          placeholder="name"
           onChange={(event) => setField("name", event.target.value)}
           spellCheck={false}
           autoComplete="off"

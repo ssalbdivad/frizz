@@ -151,6 +151,7 @@ import {
   type SettledQuestionView,
   AskedQuestionSchema,
   askedQuestionFaults,
+  secretAnswerText,
   type AskedQuestion,
   type RegisteredQuestionView,
   DropOwnWatchInput,
@@ -187,6 +188,7 @@ import {
 } from "@frizz/shared"
 import { type AppContext } from "./context.ts"
 import { listAcpAgentsCached } from "./backend/acp-agents.ts"
+import { secretFilePath, serveSecret } from "./secret-files.ts"
 import { sessionTitleLocked } from "./storage.ts"
 import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitOf, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
@@ -253,8 +255,9 @@ import { clearProjectIcon, customIconPath, findById, forgetProject, ICON_SCAN_VE
 import { HOME_WORKSPACE_NAME, isHomeWorkspace, listWorkspaces, reorderWorkspaces } from "./home-workspace.ts"
 import { basename, dirname, isAbsolute, relative } from "node:path"
 import { existsSync, mkdirSync, rmSync, writeFileSync } from "node:fs"
-import { ProjectCard, ProjectQueue, ProjectRailCounts, activeBandThread, boardAskThread, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread } from "@frizz/shared"
+import { ProjectCard, ProjectQueue, ProjectRailCounts, activeBandThread, FrizzMdAnswers, FrizzMdStatus, boardAskThread, PROJECT_ICON_EXTENSIONS, PROJECT_ICON_MAX_BASE64_CHARS, queuedThread, ThreadHandoff, BURIED_ANSWERS_HEADER, parseParkWake, sectionOf, workingThread } from "@frizz/shared"
 import { EditorComposeInputSchema, EditorReviewTargetSchema, EditorSnapshotSchema, type EditorKind, type EditorReviewTarget, type EditorStateCheckout, type FilePosition } from "@frizz/shared"
+import { createFrizzMd, frizzMdStatus, skipFrizzMd } from "./frizz-md.ts"
 import { imageDimensions } from "./image-header.ts"
 import { homedir } from "node:os"
 import { chosenProjectRoot, ensureProjectIdFile, existingProjectId, isHomeDirectory, writeProjectIdFile } from "./project-root.ts"
@@ -1809,7 +1812,7 @@ export function createRouter(ctx: AppContext) {
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
       const spec = parseQuestionSpec(q.spec)
       if (!spec) continue
-      out.push({ id: q.id, spec, askedAt: new Date(q.asked_at).toISOString() })
+      out.push(questionView(slug, q.id, spec, q.asked_at))
     }
     return out
   }
@@ -1850,6 +1853,15 @@ export function createRouter(ctx: AppContext) {
     })
   }
 
+  function questionView(slug: string, id: string, spec: AskedQuestion, askedAtMs: number): RegisteredQuestionView {
+    return {
+      id,
+      spec,
+      askedAt: new Date(askedAtMs).toISOString(),
+      ...(spec.secret ? { secretPath: secretFilePath(ctx.project.stateDir, slug, id) } : {}),
+    }
+  }
+
   /** Arming a Goal is the human (or the worker) saying "decide the rest yourself", so anything still
    *  waiting on an answer is now the worker's to settle. Dismissing them here rather than leaving them
    *  on the board is what stops a thread from being autonomous and blocked at the same time — a card
@@ -1864,7 +1876,10 @@ export function createRouter(ctx: AppContext) {
     const now = Date.now()
     let cancelled = 0
     for (const q of ctx.storage.listThreadQuestions(slug, { openOnly: true })) {
-      if (parseQuestionSpec(q.spec)?.danger) continue
+      const spec = parseQuestionSpec(q.spec)
+      // A SECRET REQUEST SURVIVES IT TOO, for a plainer reason: there is nothing to decide. The worker
+      // cannot invent a one-time code, so cancelling the request strands the work it was for.
+      if (spec?.danger || spec?.secret) continue
       if (ctx.storage.dismissThreadQuestion(q.id, now)) cancelled++
     }
     return cancelled
@@ -4572,7 +4587,9 @@ export function createRouter(ctx: AppContext) {
         // being hidden: a worker that wants to ask and finds nowhere to put it fakes a question in prose
         // that nothing parses, and the human never sees it at all.
         const goal = autonomousGoal(row)
-        if (goal) {
+        // A batch of SECRET requests is exempt: a credential is not a call the worker can decide, it is
+        // a value only the human holds — the same footing as `steps:`, which autonomous mode allows.
+        if (goal && !input.questions.every((q) => q.secret)) {
           throw new Error(
             "This thread is running autonomously — decide it yourself and proceed. Its standing " +
             `instruction is:\n\n${goal}\n\nSay which way you went and why in your write-up, so the ` +
@@ -4613,7 +4630,7 @@ export function createRouter(ctx: AppContext) {
           // A question trumps a done — see setOwnThreadTimer.
           ctx.storage.clearThreadDone(input.slug)
           ctx.storage.askThreadQuestion({ id, slug: input.slug, spec: JSON.stringify(spec), askedAtMs: now })
-          return { id, spec, askedAt: new Date(now).toISOString() }
+          return questionView(input.slug, id, spec, now)
         })
         ctx.board.refresh()
         return { registered, open: openQuestionViews(input.slug) }
@@ -4642,19 +4659,29 @@ export function createRouter(ctx: AppContext) {
           // Scoped by reading the row first: an id belonging to another thread answers nothing here.
           const q = ctx.storage.getThreadQuestion(answer.questionId)
           if (!q || q.thread_slug !== input.slug) continue
+          if (q.state !== "answered" && q.state !== "open") continue
+          const { changed: _client, ...given } = answer
+          let stored: typeof given = given
+          // A SECRET'S VALUE STOPS HERE. It is served once, from memory, through its pipe
+          // (secret-files.ts), and the row — which the settled card, the in-flight card and the worker's
+          // wake all read — keeps only the path. Nothing below this line ever holds the value. A blank one
+          // answers nothing: the request stays open rather than waking the worker to an empty read.
+          if (parseQuestionSpec(q.spec)?.secret) {
+            const value = answer.text?.trim() ?? ""
+            if (!value) continue
+            const path = serveSecret(ctx.project.stateDir, input.slug, q.id, value)
+            stored = { questionId: answer.questionId, question: answer.question, chosen: [], text: secretAnswerText(path) }
+          }
           // A CHANGED ANSWER (the card's Change on an answered question). It replaces the stored one and is
           // delivered again; it says so only when the worker may already have the old one — received, or
           // riding a delivery already offered — since one it never saw is simply replaced.
           if (q.state === "answered") {
-            const { changed: _client, ...given } = answer
             const prior = parseStoredAnswer(q.answer)
             const changed = q.delivered === 1 || q.delivery_id != null || prior?.changed === true
-            if (ctx.storage.reviseThreadQuestionAnswer(answer.questionId, JSON.stringify(changed ? { ...given, changed } : given), now)) answered.push(answer.questionId)
+            if (ctx.storage.reviseThreadQuestionAnswer(answer.questionId, JSON.stringify(changed ? { ...stored, changed } : stored), now)) answered.push(answer.questionId)
             continue
           }
-          if (q.state !== "open") continue
-          const { changed: _ignored, ...fresh } = answer
-          if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(fresh), now)) answered.push(answer.questionId)
+          if (ctx.storage.answerThreadQuestion(answer.questionId, JSON.stringify(stored), now)) answered.push(answer.questionId)
         }
         // ANSWERING IS NOT DELIVERING. The row is stored answered-but-undelivered and the scheduler
         // hands it over (evalQuestionAnswers), so an answer given while the worker's process is down
@@ -6117,6 +6144,29 @@ export function createRouter(ctx: AppContext) {
       input: z.object({}),
       output: Settings,
       handler: async () => ctx.resetSettings(),
+    }),
+
+    // The first-run questionnaire (shared/frizz-md.ts): a project with no threads and no FRIZZ.md asks
+    // how its workers should land work and how independently they should act, and writes the answers
+    // as FRIZZ.md — which only Frizz workers ever read. Skipping is remembered per project.
+    frizzMdStatus: query({
+      output: FrizzMdStatus,
+      handler: async () => frizzMdStatus(ctx.project.dir, ctx.storage),
+    }),
+
+    frizzMdCreate: mutation({
+      input: FrizzMdAnswers,
+      output: z.object({ path: z.string() }),
+      handler: async ({ input }) => createFrizzMd(ctx.project.dir, input),
+    }),
+
+    frizzMdSkip: mutation({
+      input: z.object({}).strict(),
+      output: z.object({ skipped: z.literal(true) }),
+      handler: async () => {
+        skipFrizzMd(ctx.storage)
+        return { skipped: true as const }
+      },
     }),
 
     dispatchPreferencesGet: query({

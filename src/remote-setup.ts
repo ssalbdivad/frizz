@@ -2,7 +2,8 @@ import { isAnonymousClaimName } from "@frizz/shared";
 import { renderQrSvg } from "@frizz/server/qr";
 import type { RemoteControlHandler, RemoteControlReply } from "@frizz/server/restart-supervisor";
 import { type CloudConfig, isClaimedConfig, isExternalConfig, normalizeHostname } from "./cloud.ts";
-import type { CloudflaredProbe, GithubProbe, TailscaleProbe } from "./remote-detect.ts";
+import type { DeviceCodePrompt } from "./github-device-flow.ts";
+import type { CloudflaredProbe, TailscaleProbe } from "./remote-detect.ts";
 
 /**
  * Remote access as a set of CHOICES, shared by the two places an operator makes one: the R pane in
@@ -31,13 +32,27 @@ export function kindOf(config: CloudConfig | null): RemoteKind {
   return "cloudflare";
 }
 
+/** How a custom-name claim shows its GitHub device code, and how the person backs out of it. A private
+ *  name has no GitHub step, so neither is ever used for one. */
+export interface ClaimSignIn {
+  onDeviceCode: (prompt: DeviceCodePrompt) => void;
+  signal: AbortSignal;
+}
+
 export interface RemoteSetupDeps {
   /** Switch the running board to `next`, or to loopback-only with null. Rejects with a message. */
   apply: (next: CloudConfig | null, options?: { justClaimed?: boolean }) => Promise<void>;
-  /** Claim `<name>.frizz.sh`; an empty name mints a private one. Rejects with a message. */
-  claim: (name: string) => Promise<CloudConfig>;
+  /**
+   * Claim `<name>.frizz.sh`; an empty name mints a private one. A word claims that word for a GitHub
+   * account, confirmed through a zero-scope device flow whose code `signIn.onDeviceCode` shows (cloud.ts,
+   * github-device-flow.ts). Rejects with a message, and on `signIn.signal`.
+   */
+  claim: (name: string, signIn: ClaimSignIn) => Promise<CloudConfig>;
   /** Told before each slow step, so a caller with a screen can say what is happening. */
   progress?: (message: string) => void;
+  /** Where a custom-name claim shows its device code. Absent ⇒ the code goes nowhere and the claim waits
+   *  out GitHub's own expiry, so every caller that can claim a word passes one. */
+  signIn?: ClaimSignIn;
 }
 
 /**
@@ -58,7 +73,7 @@ export async function applyRemoteChoice(choice: RemoteChoice, deps: RemoteSetupD
     const name = choice.kind === "frizz" ? choice.name.trim() : "";
     if (choice.kind === "frizz" && !name) throw new Error("a name is needed");
     deps.progress?.(name ? `claiming ${name}.frizz.sh…` : "claiming a private name on frizz.sh…");
-    next = await deps.claim(name);
+    next = await deps.claim(name, deps.signIn ?? { signal: new AbortController().signal, onDeviceCode: () => {} });
     justClaimed = true;
   } else if (choice.kind === "cloudflare") {
     const hostname = normalizeHostname(choice.hostname);
@@ -116,17 +131,18 @@ export function viewOf(config: CloudConfig | null): RemoteSetupView {
   };
 }
 
-export interface RemoteControlOptions extends Omit<RemoteSetupDeps, "progress"> {
+export interface RemoteControlOptions extends Omit<RemoteSetupDeps, "progress" | "signIn"> {
   current: () => CloudConfig | null;
   port: number;
   /** A fresh single-use sign-in link for the origin in force. */
   issueLink: () => { url: string; expiresAt: number } | null;
   probes: {
-    github: () => Promise<GithubProbe>;
     cloudflared: () => Promise<CloudflaredProbe>;
     tailscale: () => Promise<TailscaleProbe>;
   };
   onChanged?: (config: CloudConfig | null) => void;
+  /** Also told a browser claim's device code — the launcher's terminal line, for an operator there. */
+  onDeviceCode?: (prompt: DeviceCodePrompt) => void;
 }
 
 /**
@@ -138,6 +154,9 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
   // One browser change at a time: two overlapping applies would each stop the other's transport
   // half-started. (The R pane is modal on its own terminal and an operator drives one surface at once.)
   let applying = false;
+  // A custom-name claim started from the browser: the GitHub code it is waiting on, read back by GET so
+  // the page can show it while its POST is still pending, and the switch `{ cancel: true }` throws.
+  let pendingSignIn: { prompt: DeviceCodePrompt | null; abort: AbortController } | null = null;
   const reply = (status: number, body: unknown): RemoteControlReply => ({ status, body });
 
   // A sign-in link with its QR drawn here, where the encoder already ships, so the browser needs no
@@ -149,8 +168,7 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
 
   return {
     async get() {
-      const [github, cloudflared, tailscale] = await Promise.all([
-        options.probes.github(),
+      const [cloudflared, tailscale] = await Promise.all([
         options.probes.cloudflared(),
         options.probes.tailscale(),
       ]);
@@ -159,7 +177,8 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
         current: viewOf(options.current()),
         port: options.port,
         applying,
-        probes: { github, cloudflared, tailscale },
+        signIn: pendingSignIn?.prompt ? { verificationUri: pendingSignIn.prompt.verificationUri, userCode: pendingSignIn.prompt.userCode } : null,
+        probes: { cloudflared, tailscale },
       });
     },
     async post(body) {
@@ -170,12 +189,29 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
           ? reply(200, { protocol: 1, current: viewOf(options.current()), link: issued })
           : reply(409, { protocol: 1, error: "remote access is off, so there is nothing to sign in to" });
       }
+      // `{ cancel: true }` abandons a custom-name claim still waiting on its GitHub code.
+      if (body && typeof body === "object" && (body as { cancel?: unknown }).cancel === true) {
+        pendingSignIn?.abort.abort();
+        return reply(200, { protocol: 1, current: viewOf(options.current()), cancelled: pendingSignIn !== null });
+      }
       const choice = parseRemoteChoice(body);
       if (typeof choice === "string") return reply(400, { protocol: 1, error: choice });
       if (applying) return reply(409, { protocol: 1, error: "another remote-access change is still being applied" });
       applying = true;
+      const signIn = { prompt: null as DeviceCodePrompt | null, abort: new AbortController() };
+      pendingSignIn = signIn;
       try {
-        const next = await applyRemoteChoice(choice, options);
+        const next = await applyRemoteChoice(choice, {
+          apply: options.apply,
+          claim: options.claim,
+          signIn: {
+            signal: signIn.abort.signal,
+            onDeviceCode: (prompt) => {
+              signIn.prompt = prompt;
+              options.onDeviceCode?.(prompt);
+            },
+          },
+        });
         options.onChanged?.(next);
         return reply(200, { protocol: 1, current: viewOf(next), link: next ? link() : null });
       } catch (error) {
@@ -188,6 +224,7 @@ export function createRemoteControlHandler(options: RemoteControlOptions): Remot
         });
       } finally {
         applying = false;
+        pendingSignIn = null;
       }
     },
   };

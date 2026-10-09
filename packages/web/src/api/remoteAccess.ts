@@ -29,8 +29,9 @@ export interface RemoteAccessState {
   current: RemoteSetupView
   /** The board's loopback port, for the commands a proxy or `tailscale serve` needs. */
   port: number
+  /** The GitHub device code a custom-name claim from this page is waiting on, while its change is pending. */
+  signIn?: { verificationUri: string; userCode: string } | null
   probes: {
-    github: { installed: boolean; login: string | null }
     cloudflared: { version: string | null }
     tailscale: { installed: boolean; dnsName: string | null }
   }
@@ -92,6 +93,11 @@ async function post(body: unknown, fetcher: typeof fetch): Promise<RemoteAccessC
 /** Switch the board to `choice`. Resolves with the setup now in force and, unless it is off, a sign-in link. */
 export function applyRemoteChoice(choice: RemoteChoice, fetcher: typeof fetch = fetch): Promise<RemoteAccessChange> {
   return post(choice, fetcher)
+}
+
+/** Abandon a custom-name claim still waiting on its GitHub code; the pending change then fails. */
+export function cancelRemoteClaim(fetcher: typeof fetch = fetch): Promise<RemoteAccessChange> {
+  return post({ cancel: true }, fetcher)
 }
 
 /** A fresh single-use sign-in link for the setup in force. */

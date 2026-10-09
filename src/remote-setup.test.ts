@@ -4,7 +4,6 @@ import type { CloudConfig } from "./cloud.ts";
 import { createRemoteControlHandler, parseRemoteChoice } from "./remote-setup.ts";
 
 const probes = {
-  github: async () => ({ installed: true, login: "ada" }),
   cloudflared: async () => ({ version: null }),
   tailscale: async () => ({ installed: false, dnsName: null }),
 };
@@ -52,4 +51,35 @@ test("a bad choice is refused before anything in force is stopped", async () => 
   assert.equal((await handler.post({ kind: "nope" })).status, 400);
   assert.deepEqual(applied, []);
   assert.equal(typeof parseRemoteChoice(null), "string");
+});
+
+test("a browser claim of a custom name shows its GitHub code through GET, and cancel abandons it", async () => {
+  const told: string[] = [];
+  const handler = createRemoteControlHandler({
+    port: 9393,
+    current: () => null,
+    apply: async () => {},
+    // Stands in for the device flow: show a code, then wait for GitHub until the signal aborts.
+    claim: (name, signIn) =>
+      new Promise((_resolve, reject) => {
+        signIn.onDeviceCode({ userCode: "ABCD-1234", verificationUri: "https://github.com/login/device", expiresAt: Date.now() + 60_000 });
+        signIn.signal.addEventListener("abort", () => reject(new Error(`the claim of ${name} was cancelled`)));
+      }),
+    issueLink: () => null,
+    probes,
+    onDeviceCode: (prompt) => told.push(prompt.userCode),
+  });
+  // Negative control: nothing pending, nothing shown.
+  assert.equal(((await handler.get()).body as { signIn: unknown }).signIn, null);
+  const pending = handler.post({ kind: "frizz", name: "ada" });
+  await new Promise((resolve) => setImmediate(resolve));
+  const reading = (await handler.get()).body as { applying: boolean; signIn: unknown };
+  assert.equal(reading.applying, true);
+  assert.deepEqual(reading.signIn, { verificationUri: "https://github.com/login/device", userCode: "ABCD-1234" });
+  assert.deepEqual(told, ["ABCD-1234"], "the terminal is told too");
+  assert.equal(((await handler.post({ cancel: true })).body as { cancelled: boolean }).cancelled, true);
+  const settled = await pending;
+  assert.equal(settled.status, 422);
+  assert.match((settled.body as { error: string }).error, /cancelled/);
+  assert.equal(((await handler.get()).body as { signIn: unknown }).signIn, null);
 });

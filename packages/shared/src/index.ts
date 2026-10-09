@@ -2237,9 +2237,10 @@ function signoffNudgeText(needsInput: boolean): string {
   "  `mcp__frizz__timer`; `mcp__frizz__activity` reads back everything you have running, with its id.",
   "- `` ```awaiting `` with `steps:` — the user must PERFORM something you cannot: sign in, approve,",
   "  merge, press a button you may not. List each step as a `- ` line under `steps:`, written to be",
-  "  followed cold; frizz reads them verbatim. Steps name the USER as the wait, so the fence needs no",
-  "  other name and no `for:`, and the thread goes into their queue. Their Done comes back to you as",
-  "  their reply; anything else they need to say comes as a message of their own.",
+  "  followed cold: a real Markdown link to every page and file it names, every command in a code span,",
+  "  every value the act needs written in. Frizz reads them verbatim. Steps name the USER as the wait,",
+  "  so the fence needs no other name and no `for:`, and the thread goes into their queue. Their Done",
+  "  comes back to you as their reply; anything else they need to say comes as a message of their own.",
   "- `` ```awaiting `` with `questions:` — a question you registered at an EARLIER rest is still open and",
   "  you still need its answer. Name every such question (`questions: [qst_…]`) and withdraw the rest with",
   "  `mcp__frizz__unask`: a fence that leaves an open question out is refused. A named card is drawn at",
@@ -2247,7 +2248,7 @@ function signoffNudgeText(needsInput: boolean): string {
   "",
   "**STILL OWED counts things you are not going to do yourself.** A decision you are RECOMMENDING, a",
   "draft you wrote but did not send, follow-up work you discovered — all of it dies with the card, even",
-  "the part that is someone else's to do. Each ends on a question with your recommendation as option A,",
+  "the part that is someone else's to do. Each ends on a question with your recommendation as option 1,",
   "or you DO it first — a sub-agent's result comes BACK to you, so it lands on your card; a new card via",
   "`mcp__frizz__spawn_thread` is the LAST resort, since nothing it learns returns to you or its siblings.",
   "None of them is a `done`. And what is not",
@@ -3206,6 +3207,12 @@ export interface AskedQuestion {
    *  fails safe when a worker forgets — `waitForHuman` is kept only so older workers' calls still parse,
    *  and now changes nothing a missing `mayDefault` does not already do. */
   mayDefault?: boolean
+  /** A SECRET request (`mcp__frizz__secret`): a free-text question whose answer is a credential — a
+   *  one-time code, a token, a password. The card masks the box and keeps the typed value out of every
+   *  draft cache; the server serves the value once, from memory, through a named pipe
+   *  (`secret-files.ts`) and stores and delivers only `secretAnswerText`, so the value never reaches
+   *  the disk, the database, the transcript or the model. Root questions only, and never with options. */
+  secret?: boolean
   /** Absent or empty ⇒ a free-text question. */
   options?: AskedOption[]
 }
@@ -3247,10 +3254,11 @@ export const AskedQuestionSchema: z.ZodType<AskedQuestion> = z.lazy(() => z.obje
   danger: z.boolean().optional(),
   waitForHuman: z.boolean().optional(),
   mayDefault: z.boolean().optional(),
+  secret: z.boolean().optional(),
   // UNBOUNDED, deliberately. This carried `.max(8)` from launch until 2026-09-03, when the maintainer
   // asked for the cap to go ("allow arbitrary numbers of options"): a `multi` over a long list — which
-  // gates to run, which of twenty findings to act on — is a real shape, and the card letters past 26
-  // (`AA.`) already. The count is the worker's to choose; the answer's `chosen` is unbounded to match.
+  // gates to run, which of twenty findings to act on — is a real shape, and the card numbers past 9
+  // (only 1–9 are keys) already. The count is the worker's to choose; the answer's `chosen` is unbounded to match.
   options: z.array(AskedOptionSchema).optional(),
 }).strict())
 
@@ -3269,6 +3277,12 @@ export function askedQuestionFaults(q: AskedQuestion): string[] {
   const faults: string[] = []
   const walk = (node: AskedQuestion, path: string) => {
     const options = node.options ?? []
+    // A SECRET IS A VALUE, NOT A CHOICE: its card is one masked box, and the server swaps that box's
+    // text for a file path — a picked label would reach the worker unmasked beside it.
+    if (node.secret && options.length > 0) faults.push(`${path}: a secret request takes no options — it is one masked box`)
+    // …and it is its own registration. A follow-up's answer rides inside its parent's, and the server
+    // redacts at the root, so a secret branch would deliver the value in the clear.
+    if (node.secret && path !== "question") faults.push(`${path}: a secret request cannot be a follow-up — register it on its own`)
     // A MULTI-SELECT WITH NO OPTIONS IS A FREE-TEXT BOX WEARING THE WRONG LABEL, and it renders as one —
     // silently, so the worker never learns its `multi` did nothing.
     if (node.kind === "multi" && options.length === 0) faults.push(`${path}: \`kind: "multi"\` needs options — a question with none is free text`)
@@ -3313,6 +3327,9 @@ export const RegisteredQuestionView = z.object({
    *  option — the recommendation acts outside this machine, so the default falls back (see
    *  recommendedDefaultAnswer) and the countdown names what it will actually take. */
   defaultsTo: z.string().optional(),
+  /** A `secret` question only: the path its value will be served at. Known at registration, so the
+   *  worker can prepare the command that reads it before the human has answered. */
+  secretPath: z.string().optional(),
 }).strict()
 export type RegisteredQuestionView = z.infer<typeof RegisteredQuestionView>
 
@@ -3451,6 +3468,24 @@ export function threadQuestionDefaults(
     if (answer) answers.set(q.id, answer)
   }
   return atMs === undefined || answers.size === 0 ? undefined : { atMs, answers }
+}
+
+/** What a SECRET answer is stored and delivered as, in place of the value: where to read it, and the
+ *  terms it is served on. ONE wording, because the settled card, the in-flight card and the
+ *  worker's wake all read this same stored text — which is also why it is SHORT: the human reads it on
+ *  the Answers card, often on a phone, and the `secret` tool already handed the worker the recipe. */
+export function secretAnswerText(path: string): string {
+  return `(secret ready at ${quotePath(path)} — it can be read ONCE, within ${SECRET_TTL_MS / 60_000}m; never print it)`
+}
+
+/** How long a secret waits to be read before the server drops it (`secret-files.ts`). Here rather than
+ *  beside the server, because the stored answer text names it to the worker. */
+export const SECRET_TTL_MS = 15 * 60_000
+
+/** POSIX single-quoting, so the path pastes into a command as-is. The macOS state dir is
+ *  `~/Library/Application Support/…`, and an unquoted `$(cat <path>)` splits at the space. */
+function quotePath(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`
 }
 
 export const AskResult = z.object({
@@ -6989,6 +7024,7 @@ export * from "./drainable-worker.ts"
 export * from "./editor-protocol.ts"
 export * from "./file-position.ts"
 export * from "./embed-protocol.ts"
+export * from "./frizz-md.ts"
 export * from "./interactions.ts"
 export * from "./receipt-bus.ts"
 export * from "./relay-protocol.ts"

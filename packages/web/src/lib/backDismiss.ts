@@ -32,11 +32,40 @@ import { useCallback, useEffect, useRef, useState } from "react"
 // tagged 5 by the previous document is still in the stack, and a fresh count from 1 would read it as
 // pushed ABOVE this document's layers.
 let seq = Date.now()
+// Every token this document mints is above this; every token a previous document minted is below it.
+const documentStart = seq
 
 type LayerHistoryState = { frizzLayer?: number } | null
 
 function currentToken(): number | undefined {
   return (history.state as LayerHistoryState)?.frizzLayer
+}
+
+/**
+ * A RELOAD ON A LAYER ENTRY. history.state outlives a document load, so reloading with a sheet or a
+ * reader up restores that layer's same-URL entry with nothing left to own it: the sheet is gone and its
+ * entry stays. The page then sits one dead step above the router's own entry for the same URL. Back
+ * did nothing visible, and the phone thread header's ← (which pops when the router pushed the entry,
+ * lib/router appPushedCurrentEntry) popped onto the SAME thread and looked broken.
+ *
+ * No layer survives a document load, so any layer entry the document boots on is stale. Step off it
+ * before anything else can push: a same-URL pop the router ignores (routes.tsx re-applies the URL
+ * only when the pathname changes) and no listener here hears (nothing is mounted yet). Stacked layers
+ * (a reader over a reader) left one entry each, so keep stepping while the entry under is another
+ * stale one. main.tsx calls this once, at boot.
+ *
+ * A stale entry is still FORWARD of the page afterwards: a Forward press straight after the reload
+ * lands on it as one dead step. The next push (opening anything) drops it from the history.
+ */
+export function stepOffStaleLayerEntries(): void {
+  const stale = (token: number | undefined) => token !== undefined && token < documentStart
+  if (!stale(currentToken())) return
+  const onPop = () => {
+    if (stale(currentToken())) history.back()
+    else window.removeEventListener("popstate", onPop)
+  }
+  window.addEventListener("popstate", onPop)
+  history.back()
 }
 
 // One same-URL entry carrying the router's state (so react-router sees the location it already has)

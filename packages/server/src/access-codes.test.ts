@@ -6,11 +6,17 @@ import { tmpdir } from "node:os"
 import { join } from "node:path"
 import {
   AccessStore,
+  advanceSessionEpoch,
   DEFAULT_CODE_TTL_MS,
+  DEFAULT_SESSION_TTL_MS,
   describeDevice,
   fileSessionDirectory,
   loadOrCreateSessionKey,
+  loadSessionState,
+  readSessionEpoch,
   secretsMatch,
+  SESSION_EPOCH,
+  sessionEpochNotice,
 } from "./access-codes.ts"
 
 /** A clock the test drives, so expiry is exercised without sleeping through it. */
@@ -330,4 +336,133 @@ test("a pre-id session cannot be put on the denylist, and says so rather than cl
   const legacy = `${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`
   assert.deepEqual(store.signOutSession(legacy), { result: "legacy" })
   assert.deepEqual(store.sessions.list(), [])
+})
+
+test("a session lasts 30 days, and the redeem result says so", () => {
+  assert.equal(DEFAULT_SESSION_TTL_MS, 30 * 24 * 60 * 60_000)
+  const time = clock()
+  const store = new AccessStore({ now: time.now, randomToken: counter() })
+  const phone = store.redeem(store.issue().code, "iPhone")
+  assert.ok(phone.ok)
+  assert.equal(phone.expiresAt, time.now() + 30 * 24 * 60 * 60_000)
+  assert.equal(store.sessions.list()[0]?.expiresAt, phone.expiresAt, "the directory records the expiry, so --sessions can drop dead rows")
+  time.advance(30 * 24 * 60 * 60_000 - 1)
+  assert.equal(store.verifySession(phone.session), true)
+  time.advance(1)
+  assert.equal(store.verifySession(phone.session), false, "a day-31 cookie still signed in")
+})
+
+/** A board that ran before session epochs existed: a key, a persisted directory, one signed-in phone. */
+function preEpochBoard(dir: string) {
+  const key = loadOrCreateSessionKey(dir)
+  const store = new AccessStore({ signingKey: key, sessions: fileSessionDirectory(dir) })
+  const phone = store.redeem(store.issue().code, "iPhone")
+  assert.ok(phone.ok)
+  // And one from before per-device ids, which no denylist can name: only a new key ends it.
+  const payload = `${Date.now() + 60 * 24 * 60 * 60_000}.legacy-nonce`
+  const legacy = `${payload}.${createHmac("sha256", key).update(payload).digest("base64url")}`
+  assert.equal(store.verifySession(legacy), true)
+  assert.equal(readSessionEpoch(dir), 0)
+  return { phone, legacy }
+}
+
+test("an epoch bump refuses every session from before it, once, and a new one works", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-epoch-"))
+  try {
+    const { phone, legacy } = preEpochBoard(dir)
+
+    // The upgraded launcher's start.
+    const upgraded = loadSessionState(dir)
+    assert.deepEqual(upgraded.advance, { advanced: true, from: 0, to: SESSION_EPOCH, rotatedKey: true })
+    assert.equal(upgraded.signedOut, 1)
+    assert.match(sessionEpochNotice(upgraded.signedOut) ?? "", /signed out 1 remote device/)
+    const board = new AccessStore({ signingKey: upgraded.key, sessions: upgraded.directory })
+    assert.equal(board.verifySession(phone.session), false, "a pre-epoch session still verifies")
+    assert.equal(board.verifySession(legacy), false, "a pre-id session survived the epoch")
+    assert.equal(board.sessions.list().every((r) => r.revokedAt !== undefined), true, "--sessions would still list the phone")
+
+    const laptop = board.redeem(board.issue().code, "Chrome on macOS")
+    assert.ok(laptop.ok)
+    assert.equal(board.verifySession(laptop.session), true)
+
+    // The next ordinary start: same epoch, so no rotation, and the new session lives on.
+    const restarted = loadSessionState(dir)
+    assert.deepEqual(restarted.advance, { advanced: false, epoch: SESSION_EPOCH })
+    assert.equal(restarted.signedOut, 0)
+    assert.equal(sessionEpochNotice(restarted.signedOut), null)
+    assert.equal(restarted.key.equals(upgraded.key), true, "a second start rotated the key again")
+    const after = new AccessStore({ signingKey: restarted.key, sessions: restarted.directory })
+    assert.equal(after.verifySession(laptop.session), true, "a second start signed the new device out")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a first run records the epoch without claiming to have signed anyone out", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-epoch-fresh-"))
+  try {
+    const fresh = loadSessionState(dir)
+    assert.deepEqual(fresh.advance, { advanced: true, from: 0, to: SESSION_EPOCH, rotatedKey: false })
+    assert.equal(fresh.signedOut, 0)
+    assert.equal(sessionEpochNotice(fresh.signedOut), null)
+    assert.equal(readSessionEpoch(dir), SESSION_EPOCH)
+    assert.equal(loadSessionState(dir).key.equals(fresh.key), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("a board that recorded a newer epoch than its code (a downgrade) is left alone", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-epoch-down-"))
+  try {
+    advanceSessionEpoch(dir, SESSION_EPOCH + 1)
+    const key = loadOrCreateSessionKey(dir)
+    assert.deepEqual(advanceSessionEpoch(dir, SESSION_EPOCH), { advanced: false, epoch: SESSION_EPOCH + 1 })
+    assert.equal(loadOrCreateSessionKey(dir).equals(key), true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("an unreadable epoch record errs towards one more sign-out, never towards keeping a session", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-epoch-bad-"))
+  try {
+    const key = loadOrCreateSessionKey(dir)
+    writeFileSync(join(dir, "session-epoch"), "{ not json")
+    assert.equal(readSessionEpoch(dir), 0)
+    assert.equal(advanceSessionEpoch(dir).advanced, true)
+    assert.equal(loadOrCreateSessionKey(dir).equals(key), false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("sign out all rotates the key, so a session the denylist cannot name dies too", () => {
+  const dir = mkdtempSync(join(tmpdir(), "frizz-signout-all-"))
+  try {
+    const { phone, legacy } = preEpochBoard(dir)
+    let rotated: Buffer | undefined
+    const board = new AccessStore({
+      signingKey: loadOrCreateSessionKey(dir),
+      sessions: fileSessionDirectory(dir),
+      rotateSigningKey: () => (rotated = Buffer.alloc(32, 5)),
+    })
+    assert.equal(board.signOutAll(), 1)
+    assert.ok(rotated)
+    assert.equal(board.verifySession(phone.session), false)
+    assert.equal(board.verifySession(legacy), false, "--sign-out all left a pre-id session signed in")
+    const next = board.redeem(board.issue().code, "iPad")
+    assert.ok(next.ok)
+    assert.equal(board.verifySession(next.session), true, "the board stopped minting usable sessions")
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test("an expired device is not counted as signed out", () => {
+  // The directory judges expiry by the wall clock (it stamps revokedAt with one too), so start there.
+  const store = new AccessStore({ randomToken: counter() })
+  store.sessions.record({ id: "old", label: "iPhone", createdAt: 1, expiresAt: 2 })
+  assert.ok(store.redeem(store.issue().code, "iPad").ok)
+  assert.equal(store.sessions.revokeAll(), 1)
 })

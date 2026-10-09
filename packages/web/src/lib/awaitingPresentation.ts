@@ -1,5 +1,21 @@
-import { RETIRED_AWAITING_KINDS, type AwaitingHint } from "@frizz/shared"
+import { awaitingQuestions, awaitingSteps, RETIRED_AWAITING_KINDS, type AwaitingHint } from "@frizz/shared"
 import { githubRefUrl } from "./githubRef.ts"
+
+/** AN ```awaiting FENCE THAT NAMES QUESTIONS DRAWS NO CARD (maintainer 2026-10-08: "if there are
+ *  questions that are getting rendered, we don't even need to bother rendering the awaiting card").
+ *
+ *  Since 2026-10-05 `questions:` is how a later rest keeps an old question's card (lib/questionAnchor),
+ *  so a worker woken by CI with two answers still owed re-fences on nothing new — and the rest drew an
+ *  hourglass card restating the ask directly above the question cards that ARE the ask. The cards are
+ *  the actionable thing and the handoff; what else the fence names is live work, which the ops summary
+ *  above the queue card's prompt box, the drawer's ops strip and the /full rail already list with the
+ *  same rows. So the card goes, and the fence's prose stays as plain handoff text (ChatView Message),
+ *  because it is the worker's own words.
+ *
+ *  NOT WHEN IT ALSO HANDS OVER `steps:` — the Done verb lives on that card and nowhere else. */
+export function awaitingDefersToQuestions(hints: readonly AwaitingHint[] | undefined): boolean {
+  return awaitingQuestions(hints).length > 0 && awaitingSteps(hints).length === 0
+}
 
 /** The awaiting card's TITLE when the worker named none — which is most fences. It is true of every
  *  park on the board and specific to none, so it is a LAST RESORT: a fence that wrote its own `title:`

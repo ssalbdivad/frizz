@@ -144,7 +144,8 @@ function QuestionStep({ a, step, writing, onWrite, onPick }: {
           )}
         </div>
       )}
-      {textOpen && (
+      {textOpen && step.spec.secret && <SecretText a={a} step={step} text={answer.text} />}
+      {textOpen && !step.spec.secret && (
         <FreeText
           a={a}
           step={step}
@@ -248,6 +249,34 @@ function FreeText({ a, step, autoFocus, placeholder }: { a: RegisteredAnswering;
         }}
         className="block max-h-[40vh] w-full resize-none overflow-y-auto rounded-[12px] border border-border-strong bg-bg px-3 py-[11px] text-[16px] leading-[22px] text-fg outline-none placeholder:text-faint focus:border-fg/40"
       />
+    </div>
+  )
+}
+
+/** A SECRET step's box: a password field, so the phone keyboard neither predicts nor learns what is
+ *  pasted, and its value stays in the answering state's memory (RegisteredQuestionCards). No autofocus,
+ *  for the same reason as a free-text question: the keyboard would cover the question. */
+function SecretText({ a, step, text }: { a: RegisteredAnswering; step: AnswerStep; text: string }) {
+  return (
+    <div className="px-[18px]">
+      <input
+        type="password"
+        data-answer-text
+        data-secret-answer
+        data-claims-escape
+        autoComplete="off"
+        autoCorrect="off"
+        autoCapitalize="off"
+        spellCheck={false}
+        aria-label="Secret value"
+        value={text}
+        placeholder="Paste the value…"
+        onChange={(e) => a.onText(step.q, step.path, false, e.target.value)}
+        className="block w-full rounded-[12px] border border-border-strong bg-bg px-3 py-[11px] text-[16px] leading-[22px] text-fg outline-none placeholder:text-faint focus:border-fg/40"
+      />
+      <div className="mt-2 text-[13px] leading-[18px] text-muted">
+        Held in memory on the machine running Frizz and handed to one command, once. The worker never sees it.
+      </div>
     </div>
   )
 }
@@ -358,7 +387,8 @@ function SheetFooter({ children }: { children: ReactNode }) {
       // focusout fires before the next element takes focus; read activeElement once it has settled.
       frame = requestAnimationFrame(() => {
         const el = document.activeElement
-        setTyping(el instanceof HTMLTextAreaElement && ref.current?.parentElement?.contains(el) === true)
+        // An <input> too: a secret step's box is a password field.
+        setTyping((el instanceof HTMLTextAreaElement || el instanceof HTMLInputElement) && ref.current?.parentElement?.contains(el) === true)
       })
     }
     check()

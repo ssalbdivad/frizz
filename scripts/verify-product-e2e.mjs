@@ -8,8 +8,10 @@
  * that is actually deployed, and reaches it the way a phone does: over the public internet, by
  * hostname, through Cloudflare.
  *
- * WHAT IT COSTS: a real claim against the operator's own GitHub account, and a 30-day lease on the
- * name. It renews rather than consuming anything new when re-run with the same identity.
+ * WHAT IT COSTS: a 30-day lease on the name. The seeded config is a relay claim, so the launch RENEWS
+ * it with the owning key alone — no GitHub sign-in, nothing new consumed. The name must therefore be
+ * held by that key already; a custom name nobody holds yet is claimed once through the R pane, which
+ * asks for a GitHub device-flow sign-in this harness cannot answer.
  *
  * Three things it has to do that a naive harness gets wrong, each of which cost a run:
  *
@@ -28,9 +30,6 @@
  *   THE OWNING IDENTITY, seeded into the sandbox home. A name belongs to the key that claimed it, so a
  *   fresh key is correctly refused with "that name is already taken" — verified below, because that
  *   refusal is the whole ownership model.
- *
- * `gh` reads the macOS keychain and cannot follow a redirected HOME, so the token is captured from the
- * real one and passed as GH_TOKEN — which is what a CI runner would do anyway.
  *
  * KNOWN FLAKE, 2026-08-26, and it is NOT this harness: a board with a saved setup sometimes comes up
  * loopback-only. When it does, `serveSaved()` neither throws nor acts — nothing is printed, and the
@@ -83,8 +82,6 @@ const socket = (headers) =>
 
 try {
   if (!existsSync(CLI)) throw new Error(`no artifact at ${CLI} — run scripts/build-package.mjs first`);
-  const token = execFileSync("gh", ["auth", "token"], { encoding: "utf8" }).trim();
-  if (!token) throw new Error("no GitHub token — run `gh auth login`");
 
   // The key that owns NAME. Defaults to this machine's own identity; FRIZZ_PRODUCT_IDENTITY points at
   // a different key file when the run exercises a name claimed by a throwaway identity instead — an
@@ -110,7 +107,7 @@ try {
     JSON.stringify({ hostname: `${NAME}.frizz.sh`, claim: NAME, serve: "relay" }, null, 2),
   );
 
-  const env = { ...process.env, HOME: home, GH_TOKEN: token, FRIZZ_WAKERS_OFF: "1" };
+  const env = { ...process.env, HOME: home, FRIZZ_WAKERS_OFF: "1" };
   pty = spawnPty(process.execPath, [CLI, "--no-app", "--port", String(PORT)], {
     name: "xterm-color", cols: 100, rows: 30, cwd: project, env,
   });

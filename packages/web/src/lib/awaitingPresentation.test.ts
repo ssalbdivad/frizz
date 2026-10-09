@@ -4,6 +4,7 @@ import { SetThreadSnoozeInput, type AwaitingHint } from "@frizz/shared"
 import {
   AWAITING_FALLBACK_TITLE,
   AWAITING_NO_PROSE,
+  awaitingDefersToQuestions,
   awaitingProseBlock,
   prWatchRefs,
   awaitingWaitClause,
@@ -11,6 +12,7 @@ import {
   awaitingProse,
   hintGloss,
 } from "./awaitingPresentation.ts"
+import { parseFenceBody } from "./fenceBlocks.ts"
 
 const now = Date.parse("2026-07-21T18:00:00.000Z")
 
@@ -249,4 +251,15 @@ test("the wait clause counts steps first, as a wait on the reader", () => {
   // Order is by kind, never by where the worker wrote the key: the reader outranks anything frizz watches.
   assert.equal(awaitingWaitClause([{ kind: "pr", value: "acme/app#391" }, ...steps]), "waiting on 2 steps from you and acme/app#391")
   assert.equal(awaitingWaitClause([{ kind: "step", value: "  " }]), null, "a blank step names nothing")
+})
+
+// QUESTIONS (2026-10-08) — a fence that names open questions draws no card; the question cards are the
+// rest's ending. Read through the real fence parser, so the YAML list form is what is pinned.
+test("awaitingDefersToQuestions: a fence naming questions defers to their cards, unless it also hands over steps", () => {
+  const hintsOf = (frontmatter: string) => parseFenceBody(`${frontmatter}\n---\nCI passes on the latest commit.`, "awaiting").hints
+  assert.equal(awaitingDefersToQuestions(hintsOf("prs: [acme/app#1480]\nquestions: [qst_466f9d6ee188, qst_e4c2e700ddd1]\nstatus: needs_input\nfor: 7d")), true)
+  assert.equal(awaitingDefersToQuestions(hintsOf("questions: qst_466f9d6ee188")), true, "a single bare id")
+  assert.equal(awaitingDefersToQuestions(hintsOf("prs: [acme/app#1480]\nstatus: watching\nfor: 7d")), false, "no question named")
+  assert.equal(awaitingDefersToQuestions(hintsOf("questions: [qst_466f9d6ee188]\nsteps:\n  - Run `npm login`")), false, "the steps card carries the Done verb")
+  assert.equal(awaitingDefersToQuestions(undefined), false)
 })
