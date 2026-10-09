@@ -211,6 +211,33 @@ test("readThread reaches another open project's thread, says whose it is, and pr
   } finally { close() }
 })
 
+// NAMES ARE UNIQUE ACROSS OPEN PROJECTS (thread-names.ts), because the caller's own project wins a handle
+// both carry: a thread here named like another project's open thread hides it from every thread here.
+// Seen 2026-10-09 — a frizz thread named "Issues audit" beside arktype's open `@issues-audit` answered
+// that handle itself, so the arktype thread and its sub-agents could not be reached from frizz.
+test("a thread cannot take another open project's thread name, so the other's handle stays reachable", async () => {
+  const { a, b, close } = twoProjects()
+  try {
+    b.storage.upsertSession(row("begin-a-full-audit-of-open", "Issues audit"))
+    a.storage.upsertSession(row("why-does-issues-audit-have-no-give", "why does issues audit…", { title_auto: 1 }))
+    const refused = await a.router.setOwnThreadTitle.handler({ input: { slug: "why-does-issues-audit-have-no-give", title: "Issues audit" } })
+    assert.equal(refused.accepted, false)
+    assert.match(refused.refusal ?? "", /already named "Issues audit" \(@issues-audit in project beta\)/)
+    await assert.rejects(
+      a.router.renameThread.handler({ input: { slug: "why-does-issues-audit-have-no-give", title: "issues-audit" } }),
+      /“Issues audit” is already another open thread's name in beta/,
+    )
+    const read = await a.router.readThread.handler({ input: { slug: "why-does-issues-audit-have-no-give", handle: "@issues-audit" } })
+    assert.equal(read.slug, "begin-a-full-audit-of-open")
+    assert.equal(read.project, "beta")
+
+    // NEGATIVE CONTROL: a finished thread's name is free again, in any project.
+    b.storage.setState("begin-a-full-audit-of-open", "archived")
+    const taken = await a.router.setOwnThreadTitle.handler({ input: { slug: "why-does-issues-audit-have-no-give", title: "Issues audit" } })
+    assert.equal(taken.accepted, true)
+  } finally { close() }
+})
+
 test("messageThread delivers into another project's thread, and its answer settles the wait", async () => {
   const { a, b, close } = twoProjects()
   try {

@@ -31,7 +31,7 @@ import type { SessionRow } from "./storage.ts"
 import type { HeldStartProfile } from "./held-start.ts"
 import { createPeriodicStatus } from "./periodic-status.ts"
 import { createLiveStatus } from "./live-status.ts"
-import { createThreadNamer, type ThreadNamer } from "./thread-names.ts"
+import { createThreadNamer, openThreadsElsewhere, type ThreadNamer } from "./thread-names.ts"
 import { createClaudeOneShot, type ClaudeOneShot } from "./backend/claude-oneshot.ts"
 import { createEffortChooser } from "./effort-chooser.ts"
 import { readTranscriptYielding } from "./transcript.ts"
@@ -983,6 +983,7 @@ function createContextUnchecked(opts: ContextOptions, resources: PartialContextR
   const namerModel = model(createClaudeOneShot({ claudeBin: opts.claudeBin, cwd: workDirOf(project) }), namerOff)
   const threadNamer: ThreadNamer = createThreadNamer({
     storage,
+    elsewhere: () => openThreadsElsewhere(opts.activeTenants?.() ?? [], project.id),
     get complete() { return namerModel() },
     onNamed: () => board.refresh(),
     log: (message) => frizzLog.warn("server", `thread namer: ${message}`),

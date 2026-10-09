@@ -45,7 +45,7 @@ export const CODEX_FIRST_FINAL_TITLE_TRANSPORT =
 // computed per dispatch, rather than the protocol being a constant.
 export function codexFirstOutputTitleInstructions(taken: readonly string[]): string {
   const avoid = taken.length
-    ? ` It must differ, ignoring case and punctuation, from every name already taken in this project: ${taken.map((name) => JSON.stringify(name)).join(", ")}.`
+    ? ` It must differ, ignoring case and punctuation, from every name already taken: ${taken.map((name) => JSON.stringify(name)).join(", ")}.`
     : ""
   return 'FRIZZ UI metadata protocol (mandatory): the very first assistant message in this new session, before any commentary, acknowledgement, tool call, or other action, MUST begin on its first line with exactly one `<!-- frizz title="..." -->` HTML comment. Replace `...` with the thread\'s name: ONE or TWO words, sentence case, naming the SUBJECT of the user\'s task rather than the action taken (e.g. "Shell budgets", "Focus mode", never "Fix the shell budget default"), short enough that its kebab-case handle ("shell-budgets") is at most ' + THREAD_HANDLE_MAX_CHARS + ' characters.' +
     avoid +

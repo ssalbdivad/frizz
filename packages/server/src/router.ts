@@ -190,7 +190,7 @@ import { type AppContext } from "./context.ts"
 import { listAcpAgentsCached } from "./backend/acp-agents.ts"
 import { secretFilePath, serveSecret } from "./secret-files.ts"
 import { sessionTitleLocked } from "./storage.ts"
-import { createThreadNamer, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
+import { createThreadNamer, openThreadsElsewhere, rowThreadName, threadNameProblem, type NamedThread, type ThreadNamer } from "./thread-names.ts"
 import { handleOf, isReplyWaitFor, knownHandles, replyWaitOf, replyWaitPrompt, resolveSubAgent, resolveThreadHandle, subAgentAddresses, THREAD_MESSAGE_HOURLY_CAP, threadMessageBody } from "./thread-mentions.ts"
 import { enqueueDeadlineNoticeWake, enqueueThreadMessageWake } from "./scheduler.ts"
 import { deadlineNoticeMessage, deadlineSection, deadlineViewOf, rowDeadline } from "./deadline.ts"
@@ -1281,7 +1281,10 @@ export function createRouter(ctx: AppContext) {
   // The name registry every title writer checks (thread-names.ts). A hand-built test context may carry
   // none; uniqueness then reads storage and the tailer directly, which is all it ever needs — only the
   // mint and the AI rename need the model.
-  const fallbackNamer = createThreadNamer({ storage: ctx.storage })
+  const fallbackNamer = createThreadNamer({
+    storage: ctx.storage,
+    elsewhere: () => openThreadsElsewhere(ctx.activeTenants?.() ?? [], ctx.project.id),
+  })
   const threadNamer = (): ThreadNamer => ctx.threadNamer ?? fallbackNamer
   // A THREAD'S SUB-AGENTS BY ADDRESS (shared thread-handle.ts): the tailer's directory — every child the
   // thread ever dispatched, live first — with each row's `thread.subAgent` address filled in from the
@@ -5278,7 +5281,7 @@ export function createRouter(ctx: AppContext) {
         // The NAME leads the message: the editor shows it truncated beside the box, and the name is the
         // part that says what to avoid.
         const holder = threadNamer().holder(input.title, input.slug)
-        if (holder) throw new Error(`“${holder.name}” is already another open thread's name`)
+        if (holder) throw new Error(`“${holder.name}” is already another open thread's name${holder.project ? ` in ${holder.project}` : ""}`)
         ctx.storage.setTitle(input.slug, input.title)
         ctx.board.refresh() // storage-only overlay; publishes an immediate board delta to every client
       },
@@ -5317,7 +5320,7 @@ export function createRouter(ctx: AppContext) {
         }
         const holder = namer.holder(input.title, input.slug)
         if (holder) {
-          return refuse(`another open thread is already named "${holder.name}" (@${handleOf(holder)}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
+          return refuse(`another open thread is already named "${holder.name}" (@${handleOf(holder)}${holder.project ? ` in project ${holder.project}` : ""}). Names are never duplicated; call again with a different one- or two-word subject that sets this thread apart.`)
         }
         const accepted = ctx.storage.setAgentTitle(input.slug, input.title)
         if (accepted) ctx.board.refresh()

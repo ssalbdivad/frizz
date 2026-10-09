@@ -90,7 +90,7 @@ test("a dispatch with no caller title is MINTED a name, and the namer is told th
   const { slug } = await dispatcher.dispatch({ prompt: "fix the shell budget default so it is 30m not 10m" })
   await settle()
   assert.equal(prompts.length, 1)
-  assert.match(prompts[0]!, /Names already taken in this project:\n- Shell budgets\n/)
+  assert.match(prompts[0]!, /Names already taken:\n- Shell budgets\n/)
   assert.match(prompts[0]!, /<request>\nfix the shell budget default so it is 30m not 10m\n<\/request>/)
   const row = storage.getSession(slug)!
   assert.equal(row.title, "Budget defaults")
@@ -118,5 +118,5 @@ test("Codex's first-output title protocol lists the taken names and asks for a o
   await settle()
   assert.equal(developerInstructions.length, 1)
   assert.match(developerInstructions[0]!, /ONE or TWO words, sentence case, naming the SUBJECT/)
-  assert.match(developerInstructions[0]!, /already taken in this project: "Shell budgets"/)
+  assert.match(developerInstructions[0]!, /already taken: "Shell budgets"/)
 })

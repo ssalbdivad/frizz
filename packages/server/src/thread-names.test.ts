@@ -12,6 +12,7 @@ import {
   distinguishingName,
   foldThreadName,
   nameHolder,
+  openThreadsElsewhere,
   namesForPrompt,
   namingRequest,
   projectThreadNames,
@@ -94,7 +95,7 @@ test("THE NAMING PROMPT carries the taken names, the subject rule, and a rejecte
   assert.match(prompt, /kebab-case @handle .* at most 20 characters/)
   assert.match(prompt, /"Shell budgets" → @shell-budgets/)
   assert.match(prompt, /SUBJECT or intent of the request, not the action taken/)
-  assert.match(prompt, /Names already taken in this project:\n- Shell budgets\n- Focus mode\n/)
+  assert.match(prompt, /Names already taken:\n- Shell budgets\n- Focus mode\n/)
   assert.match(prompt, /<request>\nfix the shell budget default\n<\/request>/)
   assert.doesNotMatch(prompt, /previous answer/)
   const retry = namingRequest("x", [], { name: "Shell budgets", reason: "is already the name of another thread (Shell budgets)" })
@@ -178,6 +179,60 @@ test("a done thread's name is free again; an open one's is not", async () => {
   assert.equal(namer.holder("Focus mode"), undefined)
   assert.equal(namer.holder("focus-rail")?.slug, "live")
   assert.equal(namer.holder("Focus rail", "live"), undefined, "a thread never collides with itself")
+  s.close()
+})
+
+// Names are unique across every project the server has open, not only the thread's own (see the header):
+// the caller's project wins a handle both carry, so a duplicate here hides the other project's thread.
+test("another open project's thread names are taken: listed in the prompt, refused, and fallen back from", async () => {
+  const here = store()
+  const there = store()
+  named(there, "begin-a-full-audit-of-open", "Issues audit")
+  named(there, "finished", "Focus mode")
+  there.setState("finished", "archived")
+  // The same slug in the other project must not count as this thread itself.
+  named(there, "newcomer", "Shell budgets")
+  const tenants = [
+    { project: { id: "frizz", name: "frizz" }, ctx: { storage: here } },
+    { project: { id: "arktype", name: "arktype" }, ctx: { storage: there } },
+  ]
+  const asked: string[] = []
+  const answers = ["Issues audit", "issues-audit"]
+  const namer = createThreadNamer({
+    storage: here,
+    elsewhere: () => openThreadsElsewhere(tenants, "frizz"),
+    complete: async ({ prompt }) => { asked.push(prompt); return answers.shift()! },
+  })
+  assert.equal(namer.holder("Issues audit")?.project, "arktype")
+  assert.equal(namer.holder("Shell budgets", "newcomer")?.project, "arktype", "exceptSlug is this project's slug only")
+  assert.equal(namer.holder("Focus mode"), undefined, "a finished thread elsewhere holds nothing")
+  assert.deepEqual(namer.promptNames(), ["Issues audit", "Shell budgets"])
+
+  const name = await namer.name("why does issues audit have no give", "newcomer")
+  assert.match(asked[0]!, /Names already taken:\n- Issues audit\n- Shell budgets\n/)
+  assert.match(asked[1]!, /"Issues audit", is already the name of another thread \(Issues audit in arktype\)/)
+  assert.equal(namer.holder(name, "newcomer"), undefined)
+  assert.notEqual(foldThreadName(name), foldThreadName("Issues audit"))
+
+  // NEGATIVE CONTROL: with no other project wired, the same name is free.
+  const alone = createThreadNamer({ storage: here })
+  assert.equal(alone.holder("Issues audit"), undefined)
+  here.close()
+  there.close()
+})
+
+test("a handle the request @-mentions is taken, even when no open thread carries it", async () => {
+  const s = store()
+  const source = "why does @issues-audit.arkregex-redesign have no give"
+  const { namer, asked } = scripted(s, ["Issues audit", "Issues audit"])
+  const name = await namer.name(source, "newcomer")
+  assert.match(asked[0]!.prompt, /Names already taken:\n- issues-audit\n/)
+  assert.match(asked[1]!.prompt, /"Issues audit", is the handle of another thread the request mentions \(@issues-audit\)/)
+  assert.notEqual(foldThreadName(name), foldThreadName("Issues audit"))
+  assert.notEqual(foldThreadName(namer.distinct("Issues audit", source)), foldThreadName("Issues audit"))
+  // NEGATIVE CONTROL: unmentioned, the same answer is taken as-is.
+  const plain = scripted(s, ["Issues audit"])
+  assert.equal(await plain.namer.name("why does the issues audit have no give", "newcomer"), "Issues audit")
   s.close()
 })
 

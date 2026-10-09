@@ -591,7 +591,7 @@ test("aiRenameThread RPC: a collision is retried once naming it, then falls back
     })
     const result = await h.router.aiRenameThread.handler({ input: { slug: "dupe-src" } })
     assert.equal(prompts.length, 2)
-    assert.match(prompts[0]!, /Names already taken in this project:\n- Shell budgets\n/)
+    assert.match(prompts[0]!, /Names already taken:\n- Shell budgets\n/)
     assert.match(prompts[1]!, /Your previous answer, "Shell budgets", is already the name of another thread/)
     assert.deepEqual(result, { title: "Shell default" })
     assert.equal(h.storage.getSession("dupe-src")?.title, "Shell default")

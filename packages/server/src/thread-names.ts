@@ -1,4 +1,4 @@
-import { THREAD_HANDLE_MAX_CHARS, threadHandle } from "@frizz/shared"
+import { THREAD_HANDLE_MAX_CHARS, addressSegments, threadHandle, threadMentions } from "@frizz/shared"
 import { sessionTitleLocked, type SessionRow, type Storage } from "./storage.ts"
 import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-oneshot.ts"
 
@@ -23,12 +23,21 @@ import type { ClaudeOneShot, ClaudeOneShotRequest } from "./backend/claude-onesh
 // every rest the conversation moved (periodic-status.ts). It used to be the name itself being rewritten, and that is
 // the conflation this module ends.
 //
-// NAMES ARE NEVER DUPLICATED: "that has to be part of the prompt". No two of a project's non-archived
-// threads may share a name once case and punctuation are folded away, and every writer is told the names
-// already taken rather than finding out afterwards. The rule is enforced at each writer — the dispatch
-// mint and the AI rename (here), the worker's own `mcp__frizz__title` and a human rename (router.ts), and
-// the Codex first-output marker (tailer.ts) — because a writer that was merely ASKED to be distinct will
-// eventually not be.
+// NAMES ARE NEVER DUPLICATED: "that has to be part of the prompt". No two non-archived threads may share
+// a name once case and punctuation are folded away, and every writer is told the names already taken
+// rather than finding out afterwards. The rule is enforced at each writer — the dispatch mint and the AI
+// rename (here), the worker's own `mcp__frizz__title` and a human rename (router.ts), and the Codex
+// first-output marker (tailer.ts) — because a writer that was merely ASKED to be distinct will eventually
+// not be.
+//
+// THE SET IS EVERY PROJECT THIS SERVER HAS OPEN, not the thread's own (2026-10-09). A handle is resolved
+// in the caller's project first and only falls through to the others when nothing there answers
+// (router.ts `resolveElsewhere`), so a local name equal to another project's open thread SHADOWS that
+// thread: a frizz-project thread auto-named "Issues audit" beside arktype's open `@issues-audit` made
+// `@issues-audit` answer the caller itself, and `@issues-audit.<sub-agent>` report no sub-agents. The
+// namer had been told only its own project's names, and its prompt @-mentioned the arktype thread — so a
+// name the request MENTIONS is taken too (`mentionedHandles`), open, done or not a thread at all: a thread
+// named after a handle its own request points at has made that pointer ambiguous from birth.
 
 export const THREAD_NAME_MAX_WORDS = 2
 // The status line's target and its hard clamp. The model is asked for ~60; the clamp only exists so a
@@ -66,6 +75,8 @@ export interface NamedThread {
   open: boolean
   /** Recency, for which names ride a prompt first (epoch ms). */
   at: number
+  /** Set only on a thread of ANOTHER open project (`openThreadsElsewhere`): that project's name. */
+  project?: string
 }
 
 /** The row's persisted NAME — a human's, a caller's dispatch title, or a machine name that landed (the
@@ -95,20 +106,62 @@ export function projectThreadNames(rows: readonly SessionRow[]): NamedThread[] {
   return out
 }
 
-/** The OPEN thread (other than `exceptSlug`) already called `name`, if any. */
-export function nameHolder(name: string, threads: readonly NamedThread[], exceptSlug?: string): NamedThread | undefined {
-  const key = foldThreadName(name)
-  if (!key) return undefined
-  return threads.find((t) => t.open && t.slug !== exceptSlug && foldThreadName(t.name) === key)
+/** The OPEN threads of every project this server has open other than `selfId`, each marked with its
+ *  project — the rest of the set a name must be unique within (see the header). Read from each project's
+ *  storage, not its namer, so no namer ever recurses into another. */
+export function openThreadsElsewhere(
+  tenants: ReadonlyArray<{ project: { id: string; name: string }; ctx?: { storage: Pick<Storage, "allSessions"> } }>,
+  selfId: string,
+): NamedThread[] {
+  const out: NamedThread[] = []
+  for (const { project, ctx } of tenants) {
+    if (!ctx || project.id === selfId) continue
+    for (const t of projectThreadNames(ctx.storage.allSessions())) if (t.open) out.push({ ...t, project: project.name })
+  }
+  return out
 }
 
-/** The names a naming prompt lists as taken: the project's open threads, then its recently done ones,
- *  newest first within each, capped, one entry per folded name. */
-export function namesForPrompt(threads: readonly NamedThread[], exceptSlug?: string): string[] {
+/** The OPEN thread already called `name`, if any: one of `threads` other than `exceptSlug`, else one of
+ *  `elsewhere` — another project's, where `exceptSlug` means nothing (slugs are unique only within one). */
+export function nameHolder(
+  name: string,
+  threads: readonly NamedThread[],
+  exceptSlug?: string,
+  elsewhere: readonly NamedThread[] = [],
+): NamedThread | undefined {
+  const key = foldThreadName(name)
+  if (!key) return undefined
+  return threads.find((t) => t.open && t.slug !== exceptSlug && foldThreadName(t.name) === key) ??
+    elsewhere.find((t) => t.open && foldThreadName(t.name) === key)
+}
+
+/** The comparison key of a HANDLE as `@` mentions spell it, and of a name: punctuation squeezed out
+ *  BEFORE folding, as thread-mentions.ts resolves one, so `dev-ops` and "Dev ops" agree. */
+function handleKey(handle: string): string {
+  return foldThreadName(handle.replace(/^@/, "").replace(/[^\p{L}\p{N}]+/gu, ""))
+}
+
+/** The thread handles `source` @-mentions, keyed by `handleKey` — only the thread segment of a sub-agent
+ *  address (`@issues-audit.redesign` mentions `issues-audit`). */
+export function mentionedHandles(source: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const mention of threadMentions(source)) {
+    const handle = addressSegments(mention)[0] ?? ""
+    const key = handleKey(handle)
+    if (key && !out.has(key)) out.set(key, handle)
+  }
+  return out
+}
+
+/** The names a naming prompt lists as taken: the open threads — this project's and every other open
+ *  project's (`elsewhere`) — then this project's recently done ones, newest first within each, capped,
+ *  one entry per folded name. */
+export function namesForPrompt(threads: readonly NamedThread[], exceptSlug?: string, elsewhere: readonly NamedThread[] = []): string[] {
   const seen = new Set<string>()
+  const all = [...threads.filter((t) => t.slug !== exceptSlug), ...elsewhere.filter((t) => t.open)]
   const pick = (open: boolean, cap: number) =>
-    threads
-      .filter((t) => t.open === open && t.slug !== exceptSlug)
+    all
+      .filter((t) => t.open === open)
       .sort((a, b) => b.at - a.at)
       .filter((t) => {
         const key = foldThreadName(t.name)
@@ -143,7 +196,7 @@ export function namingRequest(
     "- Sentence case: capitalize the first word only, plus proper nouns. Spell product names and identifiers exactly as the request spells them.",
     "- The name must differ from every name already taken below, ignoring case and punctuation. If the obvious subject is taken, pick the word that sets THIS thread apart from that one.",
     "",
-    "Names already taken in this project:",
+    "Names already taken:",
     ...(taken.length ? taken.map((name) => `- ${name}`) : ["(none)"]),
     "",
     "The request:",
@@ -307,6 +360,9 @@ function nameFromSource(source: string): string {
 
 export interface ThreadNamerDeps {
   storage: Pick<Storage, "allSessions" | "setMintedTitle">
+  /** The open threads of every OTHER project this server has open (`openThreadsElsewhere`) — names are
+   *  unique across all of them (see the header). Absent ⇒ this project alone. */
+  elsewhere?: () => readonly NamedThread[]
   /** The model. Absent ⇒ uniqueness still holds for every writer, but nothing is minted. */
   complete?: ClaudeOneShot
   /** A persisted name changed; refresh the board. */
@@ -317,15 +373,16 @@ export interface ThreadNamerDeps {
 export interface ThreadNamer {
   /** Whether a model is wired — the mint and the AI rename need one; uniqueness does not. */
   readonly available: boolean
+  /** This project's threads — what a handle resolves against first. */
   threads(): NamedThread[]
-  /** The open thread other than `exceptSlug` already carrying `name`. */
+  /** The open thread, in any open project, other than `exceptSlug` here, already carrying `name`. */
   holder(name: string, exceptSlug?: string): NamedThread | undefined
-  /** The taken names a naming prompt lists (open, then recently done; capped). */
+  /** The taken names a naming prompt lists (open in any project, then recently done here; capped). */
   promptNames(exceptSlug?: string): string[]
-  /** `name` if it is free, else the distinguishing fallback. */
+  /** `name` if it is free and not a handle `source` mentions, else the distinguishing fallback. */
   distinct(name: string, source: string, exceptSlug?: string): string
-  /** Ask the model for a distinct name: once, again naming the collision, then the fallback. Throws when
-   *  no model is wired or it fails outright. */
+  /** Ask the model for a distinct name: once, again naming the collision, then the fallback. A handle
+   *  the request @-mentions counts as taken. Throws when no model is wired or it fails outright. */
   name(source: string, exceptSlug?: string): Promise<string>
   /** Fire-and-forget: mint a fresh dispatch's name and persist it, unless something already named the
    *  thread. Mints are SERIAL, so the second of two near-identical dispatches is asked with the first's
@@ -341,16 +398,27 @@ export interface ThreadNamer {
 
 export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
   const threads = () => projectThreadNames(deps.storage.allSessions())
-  const holder = (name: string, exceptSlug?: string) => nameHolder(name, threads(), exceptSlug)
-  const distinct = (name: string, source: string, exceptSlug?: string) =>
-    distinguishingName(name, source, (candidate) => holder(candidate, exceptSlug) !== undefined)
+  const elsewhere = () => deps.elsewhere?.() ?? []
+  const holder = (name: string, exceptSlug?: string) => nameHolder(name, threads(), exceptSlug, elsewhere())
+  const promptNames = (exceptSlug?: string) => namesForPrompt(threads(), exceptSlug, elsewhere())
+  const distinct = (name: string, source: string, exceptSlug?: string) => {
+    // One snapshot for every candidate the fallback tries.
+    const here = threads()
+    const there = elsewhere()
+    const mentioned = mentionedHandles(source)
+    return distinguishingName(name, source, (candidate) =>
+      mentioned.has(handleKey(candidate)) || nameHolder(candidate, here, exceptSlug, there) !== undefined)
+  }
   let mintChain: Promise<void> = Promise.resolve()
   const pendingMints = new Map<string, Promise<void>>()
 
   async function name(source: string, exceptSlug?: string): Promise<string> {
     const complete = deps.complete
     if (!complete) throw new Error("No model is available to name this thread")
-    const taken = namesForPrompt(threads(), exceptSlug)
+    const mentioned = mentionedHandles(source)
+    const listed = promptNames(exceptSlug)
+    const listedKeys = new Set(listed.map(handleKey))
+    const taken = [...listed, ...[...mentioned].filter(([key]) => !listedKeys.has(key)).map(([, handle]) => handle)]
     let rejected: { name: string; reason: string } | undefined
     let lastCandidate: string | undefined
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -361,9 +429,12 @@ export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
         continue
       }
       const taker = holder(candidate, exceptSlug)
-      if (!taker) return candidate
+      const mention = mentioned.get(handleKey(candidate))
+      if (!taker && !mention) return candidate
       lastCandidate = candidate
-      rejected = { name: candidate, reason: `is already the name of another thread (${taker.name})` }
+      rejected = taker
+        ? { name: candidate, reason: `is already the name of another thread (${taker.name}${taker.project ? ` in ${taker.project}` : ""})` }
+        : { name: candidate, reason: `is the handle of another thread the request mentions (@${mention})` }
     }
     return distinct(lastCandidate ?? nameFromSource(source), source, exceptSlug)
   }
@@ -372,7 +443,7 @@ export function createThreadNamer(deps: ThreadNamerDeps): ThreadNamer {
     get available() { return deps.complete !== undefined },
     threads,
     holder,
-    promptNames: (exceptSlug) => namesForPrompt(threads(), exceptSlug),
+    promptNames,
     distinct,
     name,
     mint(slug, sessionId, source) {
