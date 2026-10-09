@@ -8,7 +8,7 @@ import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
 import { randomUUID, createHash } from "node:crypto"
 import net from "node:net"
-import { test } from "node:test"
+import { afterEach, test } from "node:test"
 import assert from "node:assert/strict"
 import { runClaudeBroker } from "./claude-agent-broker.ts"
 import { frizzIpcPath } from "./ipc-path.ts"
@@ -24,6 +24,14 @@ function shortSocket(): string {
   return frizzIpcPath(`cbt-${createHash("sha256").update(randomUUID()).digest("hex").slice(0, 16)}`)
 }
 
+// Every client a test opens, closed after it whether or not it passed. A connected client reconnects
+// to its socket forever by design (the server owns its lifetime), so a client left open by a failed
+// assertion keeps this file's process alive after its last test: the runner then reports nothing
+// until something kills it, and the one real failure is buried under a hang. The listSkills test did
+// exactly that once 79cb6cb2 grew the fixture's listing and its expectation went stale.
+const openClients = new Set<ClaudeBrokerClient>()
+afterEach(() => { for (const client of openClients) client.close(); openClients.clear() })
+
 interface Captured { events: ClaudeQueryEvent[]; perms: { requestId: string; request: ClaudePermissionRequest }[]; hellos: string[]; diagnostics: ClaudeDiagnostic[] }
 function clientWith(socketPath: string): { client: ClaudeBrokerClient; cap: Captured; waitPerm: (ms?: number) => Promise<{ requestId: string; request: ClaudePermissionRequest }>; waitEvent: (pred: (e: ClaudeQueryEvent) => boolean, ms?: number) => Promise<ClaudeQueryEvent> } {
   const cap: Captured = { events: [], perms: [], hellos: [], diagnostics: [] }
@@ -35,6 +43,7 @@ function clientWith(socketPath: string): { client: ClaudeBrokerClient; cap: Capt
     onPermissionRequest: (requestId, request) => { const p = { requestId, request }; cap.perms.push(p); const w = permWaiters.shift(); if (w) w(p) },
     onDiagnostic: (diagnostic) => cap.diagnostics.push(diagnostic),
   })
+  openClients.add(client)
   return {
     client, cap,
     waitPerm: (ms = 5_000) => new Promise((res, rej) => { const p = cap.perms[0]; if (p) return res(p); const t = setTimeout(() => rej(new Error("waitPerm timeout")), ms); permWaiters.push((v) => { clearTimeout(t); res(v) }) }),
@@ -157,7 +166,8 @@ test("a daemon shut down under an attached client leaves no timer holding the pr
 // The composer typeahead's data path, end to end over the REAL socket: client `list-skills` frame →
 // daemon dispatch → handle (initialize commands ∩ init-frame skills) → `skills-result` frame → client
 // promise. The fake CLI's initialize response carries "review" and "explore", the built-in stand-in
-// "compact" (offered) and three built-ins that are not; all three offered rows must cross back.
+// "compact" (offered) and three built-ins that are not, plus the user command file "commit"; all four
+// offered rows must cross back.
 // Each one's SOURCE has to survive the socket too, including the undefined one — the client re-checks
 // the value against the closed set, and a bug there would silently strip every label.
 test("listSkills round-trips the harness's skill list over the broker socket", { timeout: 15_000 }, async () => {
@@ -169,6 +179,8 @@ test("listSkills round-trips the harness's skill list over the broker socket", {
       { name: "review", description: "Review changes", source: "project" },
       { name: "compact", description: "Compact the conversation", source: "builtin", command: true },
       { name: "explore", description: "Explore the repository (dynamic workflow)", source: undefined },
+      // A command FILE from a user root lists as a skill (79cb6cb2): runnable anywhere in a message.
+      { name: "commit", description: "Commit the work", source: "user" },
     ])
     c.client.close()
   } finally {
