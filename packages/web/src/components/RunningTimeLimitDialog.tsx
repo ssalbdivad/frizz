@@ -76,6 +76,22 @@ function RunningTimeLimitDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  // Calls the wrap-up off: every Running thread's limit is lifted, whoever set it, and its worker is told.
+  const removeAll = async () => {
+    if (busy) return
+    setBusy(true)
+    try {
+      const got = await rpc.setRunningDeadlines({ deadline: null })
+      onClose()
+      showToast(got.threads === 0
+        ? "No running threads have a time limit"
+        : `Time limit removed from ${got.threads} ${got.threads === 1 ? "thread" : "threads"}${got.projects > 1 ? ` in ${got.projects} projects` : ""}`)
+    } catch (caught) {
+      setBusy(false)
+      setError((caught instanceof Error ? caught.message : String(caught)).slice(0, 160))
+    }
+  }
+
   const label = running === undefined ? "Set time limit" : running === 0 ? "No threads running" : `Set on ${running} running ${running === 1 ? "thread" : "threads"}`
   return (
     <Dialog
@@ -89,7 +105,19 @@ function RunningTimeLimitDialog({ onClose }: { onClose: () => void }) {
       }}
       footer={
         <>
-          {error && <span role="alert" className="mr-auto min-w-0 break-words text-[11px] leading-snug text-danger-soft">{error}</span>}
+          {error
+            ? <span role="alert" className="mr-auto min-w-0 break-words text-[11px] leading-snug text-danger-soft">{error}</span>
+            : (
+              <button
+                type="button"
+                data-running-time-limit-remove
+                disabled={busy || running === 0}
+                onClick={() => void removeAll()}
+                className="-ml-2 mr-auto rounded-md px-2 py-1.5 text-[12px] text-muted outline-none transition-colors hover:bg-panel-2 hover:text-fg focus-visible:ring-1 focus-visible:ring-focus-ink-60 disabled:opacity-45"
+              >
+                Remove limits
+              </button>
+            )}
           <button
             type="button"
             disabled={busy}

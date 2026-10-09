@@ -209,12 +209,13 @@ export type SetThreadDeadlineInput = z.infer<typeof SetThreadDeadlineInput>
  *  "restarting the machine in 15m, leave the work easy to resume". A thread already due sooner keeps
  *  its own deadline. Refused to a worker's shim, like `setThreadDeadline`. */
 export const SetRunningDeadlinesInput = z.object({
-  deadline: IsoInstant,
+  /** `null` removes the limit from every Running thread instead; the note is then unused. */
+  deadline: IsoInstant.nullable(),
   note: z.string().trim().max(2_000).optional(),
 }).strict()
 export type SetRunningDeadlinesInput = z.infer<typeof SetRunningDeadlinesInput>
 export const SetRunningDeadlinesResult = z.object({
-  /** Running threads that now carry the deadline (or kept a sooner one) and were told. */
+  /** Running threads that now carry the deadline (or kept a sooner one), or had theirs removed, and were told. */
   threads: z.number().int(),
   /** How many distinct projects those threads are in. */
   projects: z.number().int(),

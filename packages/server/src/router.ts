@@ -4384,9 +4384,10 @@ export function createRouter(ctx: AppContext) {
       handler: async ({ input }) => {
         if (dispatchCaller() === "worker") throw new Error("Only the user can set a time limit on every running thread.")
         const nowMs = Date.now()
-        const atMs = Date.parse(input.deadline)
-        if (atMs - nowMs < DEADLINE_MIN_MS) throw new Error("A time limit must end at least 1m from now.")
-        if (atMs - nowMs > DEADLINE_MAX_MS) throw new Error("A time limit can be at most 7d from now.")
+        // `deadline: null` lifts every Running thread's limit, whoever set it — the wrap-up called off.
+        const atMs = input.deadline === null ? null : Date.parse(input.deadline)
+        if (atMs !== null && atMs - nowMs < DEADLINE_MIN_MS) throw new Error("A time limit must end at least 1m from now.")
+        if (atMs !== null && atMs - nowMs > DEADLINE_MAX_MS) throw new Error("A time limit can be at most 7d from now.")
         const setAt = new Date(nowMs).toISOString()
         const note = input.note || undefined
         let threads = 0
@@ -4406,6 +4407,12 @@ export function createRouter(ctx: AppContext) {
             if (!activeBandThread(thread)) continue
             const row = target.storage.getSession(thread.id)
             if (!row || row.state === "archived" || row.archived === 1 || isHeldRow(row)) continue
+            if (atMs === null) {
+              if (!target.storage.clearDeadline(thread.id)) continue
+              noticeDeadline(thread.id, { kind: "cleared" }, nowMs, target)
+              here++
+              continue
+            }
             const before = rowDeadline(row)
             const due = before && before.atMs < atMs ? before.atMs : atMs
             if (!target.storage.setDeadline(thread.id, { deadlineAt: new Date(due).toISOString(), setAt, setBy: "human" })) continue

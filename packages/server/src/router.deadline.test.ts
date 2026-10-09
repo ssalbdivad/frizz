@@ -187,6 +187,27 @@ test("the machine-wide wrap-up: every Running thread gets the deadline and the n
   }
 })
 
+test("the machine-wide wrap-up called off: every Running thread's limit is removed and its worker told; others keep theirs", async () => {
+  const h = harness()
+  try {
+    for (const slug of ["run", "free", "queued"]) h.storage.upsertSession(row(slug))
+    const view = (id: string, extra: Record<string, unknown>) => ({ id, kind: "session", state: "open", needsYou: false, ...extra }) as never
+    h.snapshot.threads.push(view("run", {}), view("free", {}), view("queued", { needsYou: true }))
+    const at = inMs(15 * 60_000)
+    for (const slug of ["run", "queued"]) await asBrowser(() => h.router.setThreadDeadline.handler({ input: { slug, deadline: at } }))
+    const got = await asBrowser(() => h.router.setRunningDeadlines.handler({ input: { deadline: null } }))
+    assert.deepEqual(got, { threads: 1, projects: 1 }, "only a thread that had a limit counts")
+    assert.equal(h.storage.getSession("run")!.deadline_at ?? null, null)
+    assert.equal(h.storage.getSession("queued")!.deadline_at, new Date(at).toISOString(), "a queued thread keeps its limit")
+    const bySlug = new Map(h.notices().map((n) => [n.slug, n.message]))
+    assert.match(bySlug.get("run")!, /removed your time limit/)
+    assert.equal(bySlug.get("free"), undefined)
+    await assert.rejects(asWorker(() => h.router.setRunningDeadlines.handler({ input: { deadline: null } })), /Only the user/)
+  } finally {
+    h.close()
+  }
+})
+
 test("the machine-wide wrap-up is the user's: a worker's transport is refused", async () => {
   const h = harness()
   try {
