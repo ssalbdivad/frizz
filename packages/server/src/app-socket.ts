@@ -3,7 +3,7 @@ import type { Duplex } from "node:stream"
 import { createHash } from "node:crypto"
 import { WebSocketServer, type WebSocket } from "ws"
 import type { BoardSnapshot, ServerEvent, SocketServerMsg, TranscriptMessage, TranscriptPushPage } from "@frizz/shared"
-import { SocketClientMsg, frizzRoute } from "@frizz/shared"
+import { SocketClientMsg, diffTranscriptWindow, frizzRoute, transcriptPatchOps } from "@frizz/shared"
 import type { Bus } from "./bus.ts"
 import type { Emitter } from "./bus.ts"
 import type { Project } from "./project.ts"
@@ -213,7 +213,7 @@ export interface AppSocketServer {
   close(): Promise<void>
   // Exposed for tests/observability — the live subscription registry.
   registry: SubscriptionRegistry<WebSocket>
-  // Count of cached per-slug transcript signatures — for tests to assert no unbounded growth.
+  // Count of retained per-slug transcript window bases — for tests to assert no unbounded growth.
   readonly lastSigSize: number
   // Bounded process-wide resource gauges — intentionally narrow, read-only observability for tests.
   readonly connectionCount: number
@@ -321,9 +321,30 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   let connectionCount = 0
   let pendingUpgrades = 0
   const socketOrigins = new WeakMap<WebSocket, string>()
-  // Per-slug signature of the last BROADCAST transcript — dedupes an unchanged re-read (a tailer tick that
-  // advanced the file with records the transcript renderer ignores) so we don't push identical frames.
-  const lastSig = new Map<string, string>()
+  // ── transcript deltas ───────────────────────────────────────────────────────────────────────────
+  // Per slug, the window of the latest read: its signature and one content identity per message. The next
+  // read is diffed against it, and a connection that holds exactly that window is sent only the difference
+  // (a `transcript-delta`, see @frizz/shared transcript-delta.ts) instead of the whole window again.
+  // Bounded like the cache: dropped as soon as the slug's last subscriber leaves.
+  const windowBases = new Map<string, { sig: string; ids: string[] }>()
+  // Per connection, the signature of the transcript window it last RECEIVED for each slug. This is what
+  // makes a delta safe (sent only to a connection holding its base) and what dedupes an unchanged re-read
+  // (a tailer tick that advanced the file with records the renderer ignores) per connection rather than
+  // per slug — so a late subscriber's fresh push can never suppress the broadcast an earlier one still needs.
+  const receivedSigs = new WeakMap<WebSocket, Map<string, string>>()
+
+  function receivedSig(ws: WebSocket, slug: string): string | undefined {
+    return receivedSigs.get(ws)?.get(slug)
+  }
+
+  function noteReceived(ws: WebSocket, slug: string, sig: string): void {
+    let held = receivedSigs.get(ws)
+    if (!held) {
+      held = new Map()
+      receivedSigs.set(ws, held)
+    }
+    held.set(slug, sig)
+  }
 
   // ── the FILE topic ─────────────────────────────────────────────────────────────────────────────────
   // Per connection, the local files its readers have open, each holding the release of a live watch.
@@ -429,9 +450,9 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
   //  • "close" — the board channel. Its frames are an ORDERED delta stream: a dropped frame tears the
   //    client's incremental base, so the only sound shed is to drop the connection and let the reconnect
   //    handshake re-send a keyframe.
-  //  • "skip"  — the transcript channel. Its frames are IDEMPOTENT FULL SNAPSHOTS, so a backed-up peer
-  //    loses nothing by not queueing this generation: the slug stays dirty and the NEWER snapshot goes
-  //    out once the peer drains. Closing here is actively harmful — the client's recovery is to reconnect
+  //  • "skip"  — the transcript channel. A backed-up peer loses nothing by not queueing this generation:
+  //    the slug stays dirty, its received signature is not advanced, and once it drains it gets the NEWER
+  //    window — as a delta if it still holds that delta's base, else as a full snapshot. Closing here is actively harmful — the client's recovery is to reconnect
   //    and replay every subscription at once, i.e. a strictly LARGER burst than the one that shed it, so
   //    the cap trips again on the next generation and the connection flaps forever (connecting/connected)
   //    without ever reaching a state the user can read as broken.
@@ -516,8 +537,16 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     sendEncoded(ws, frame, false)
   }
 
-  function frameSignature(frame: EncodedMessage): string {
-    return createHash("sha256").update(frame.text).digest("base64url")
+  // One identity per message: a hash of its serialized content, so equal identities mean the client's
+  // copy of that message is still exactly right and the delta can say "keep" instead of re-sending it.
+  function messageIdentity(message: TranscriptMessage): string {
+    return createHash("sha1").update(JSON.stringify(message)).digest("base64url")
+  }
+
+  // The window's signature covers every message identity, in order, and the page envelope — the same
+  // things the full frame carries, so two reads with equal signatures would encode equal frames.
+  function windowSignature(ids: readonly string[], page: TranscriptPushPage | undefined): string {
+    return createHash("sha256").update(ids.join(",")).update("|").update(JSON.stringify(page ?? null)).digest("base64url")
   }
 
   // ── aggregate transcript read budget ─────────────────────────────────────────────────────────────
@@ -591,6 +620,9 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     frame: EncodedMessage
     sig: string
     weight: number
+    // The same window as a delta against the slug's previous read, when that is smaller than `frame`.
+    // Valid only for a connection whose received signature is `base`.
+    delta?: { base: string; frame: EncodedMessage }
   }
   const transcriptCache = new Map<string, TranscriptSnapshot>()
   let transcriptCacheBytes = 0
@@ -661,27 +693,50 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     if (reservation.kind === "limited") return reservation
     const read = readTranscript(slug)
     if (!read) return { kind: "unavailable" }
-    const frame = encodeMsg(read.page ? { t: "transcript", slug, messages: read.messages, page: read.page } : { t: "transcript", slug, messages: read.messages })
+    let ids: string[]
+    try {
+      ids = read.messages.map(messageIdentity)
+    } catch {
+      return { kind: "unavailable" }
+    }
+    const sig = windowSignature(ids, read.page)
+    const frame = encodeMsg(read.page ? { t: "transcript", slug, messages: read.messages, page: read.page, sig } : { t: "transcript", slug, messages: read.messages, sig })
     if (!frame) return { kind: "unavailable" }
     if (frame.bytes > maxLogicalFrameBytes) return { kind: "oversized", actualBytes: frame.bytes }
-    const snapshot = { frame, sig: frameSignature(frame), weight: snapshotWeight(frame) }
+    const prior = windowBases.get(slug)
+    let delta: TranscriptSnapshot["delta"]
+    if (prior && prior.sig !== sig) {
+      const ops = transcriptPatchOps(diffTranscriptWindow(prior.ids, ids), read.messages)
+      const encoded = encodeMsg(read.page
+        ? { t: "transcript-delta", slug, base: prior.sig, sig, ops, page: read.page }
+        : { t: "transcript-delta", slug, base: prior.sig, sig, ops })
+      // A delta that is not smaller than the window (a fold or a session swap rewrote nearly every message)
+      // buys nothing over the snapshot, so the snapshot is what goes out.
+      if (encoded && encoded.bytes < frame.bytes) delta = { base: prior.sig, frame: encoded }
+    }
+    windowBases.set(slug, { sig, ids })
+    const snapshot: TranscriptSnapshot = {
+      frame,
+      sig,
+      weight: snapshotWeight(frame) + (delta ? snapshotWeight(delta.frame) : 0),
+      ...(delta ? { delta } : {}),
+    }
     cacheTranscriptSnapshot(slug, snapshot)
     return { kind: "ready", snapshot }
   }
 
   function dropSubscription(ws: WebSocket, slug: string): void {
     registry.unsubscribe(ws, slug)
+    receivedSigs.get(ws)?.delete(slug) // a later resubscribe starts from a full snapshot, never a delta
     if (!registry.hasSubscribers(slug)) {
-      lastSig.delete(slug)
+      windowBases.delete(slug)
       deleteTranscriptSnapshot(slug)
     }
   }
 
   // Read + push one slug's current transcript to a SINGLE connection (the immediate on-subscribe push).
-  // Seeds lastSig so a subsequent identical broadcast is deduped — but ONLY when this connection is the
-  // SOLE subscriber. With multiple subscribers, seeding here would suppress the producer's pending
-  // broadcast of this SAME change to the OTHER (already-subscribed) connections, leaving them stale until
-  // the next change. Called right after registry.subscribe, so subscribers(slug) includes this conn.
+  // Always the FULL window: a new subscription holds nothing a delta could apply to. Records what this
+  // connection now holds, so a subsequent identical broadcast is deduped for it alone.
   function pushSnapshotResult(ws: WebSocket, slug: string, result: SnapshotResult): void {
     if (result.kind === "unavailable") {
       closeSocket(ws, 1011, "transcript unavailable")
@@ -712,14 +767,12 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     const sent = sendEncoded(ws, result.snapshot.frame, true, "skip")
     if (sent.kind === "backpressure") {
       // Keep the subscription: this peer is merely behind, not broken. Leave the slug dirty so the next
-      // flush delivers the CURRENT snapshot, and never seed lastSig — that would dedupe away the very
-      // frame this connection has not received yet.
+      // flush delivers the CURRENT snapshot, and record nothing as received — that would dedupe away the
+      // very frame this connection has not received yet.
       requeueTranscript(slug)
       return
     }
-    if (sent.kind === "sent" && registry.subscribers(slug).length <= 1) {
-      lastSig.set(slug, result.snapshot.sig)
-    }
+    if (sent.kind === "sent") noteReceived(ws, slug, result.snapshot.sig)
   }
 
   // Mark a slug for redelivery after a backpressure skip, on a fixed short cadence.
@@ -828,7 +881,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     let retryMs: number | undefined
     for (const slug of slugs) {
       if (!registry.hasSubscribers(slug)) {
-        lastSig.delete(slug)
+        windowBases.delete(slug)
         deleteTranscriptSnapshot(slug)
         continue
       }
@@ -854,7 +907,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       }
       if (result.kind === "unavailable") {
         for (const ws of registry.subscribers(slug)) closeSocket(ws, 1011, "transcript unavailable")
-        lastSig.delete(slug)
+        windowBases.delete(slug)
         deleteTranscriptSnapshot(slug)
         continue
       }
@@ -870,26 +923,28 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
             maxBytes: maxLogicalFrameBytes,
           })
         }
-        lastSig.delete(slug)
+        windowBases.delete(slug)
         deleteTranscriptSnapshot(slug)
         continue
       }
-      if (result.snapshot.sig === lastSig.get(slug)) continue
-      let sent = false
+      const { snapshot } = result
       let skipped = false
       for (const ws of registry.subscribers(slug)) {
-        const outcome = sendEncoded(ws, result.snapshot.frame, true, "skip")
-        if (outcome.kind === "sent") sent = true
+        const held = receivedSig(ws, slug)
+        if (held === snapshot.sig) continue // this connection already shows exactly this window
+        // The delta only to a connection holding its base; anyone else (a late subscriber whose fresh
+        // read moved the base, a peer that skipped a generation under backpressure) takes the snapshot.
+        const frame = snapshot.delta && held === snapshot.delta.base ? snapshot.delta.frame : snapshot.frame
+        const outcome = sendEncoded(ws, frame, true, "skip")
+        if (outcome.kind === "sent") noteReceived(ws, slug, snapshot.sig)
         else if (outcome.kind === "backpressure") skipped = true
       }
-      // A skipped peer must not be stranded: hold the slug dirty (and withhold lastSig, which would
-      // otherwise dedupe the redelivery away) until every subscriber has actually taken a generation.
+      // A skipped peer must not be stranded: hold the slug dirty until every subscriber has actually
+      // taken a generation. Its received signature was not advanced, so the retry is not deduped away.
       if (skipped) {
         pendingTranscriptRefreshes.add(slug)
         retryMs = retryMs === undefined ? BACKPRESSURE_RETRY_MS : Math.min(retryMs, BACKPRESSURE_RETRY_MS)
-        continue
       }
-      if (sent) lastSig.set(slug, result.snapshot.sig)
     }
     if (pendingTranscriptRefreshes.size) scheduleTranscriptFlush(retryMs ?? 0)
   }
@@ -1043,10 +1098,11 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
       registry.removeConn(ws) // leak-guard: drop this connection from every slug it held
       for (const slug of held) {
         if (!registry.hasSubscribers(slug)) {
-          lastSig.delete(slug)
+          windowBases.delete(slug)
           deleteTranscriptSnapshot(slug)
         }
       }
+      receivedSigs.delete(ws)
       socketOrigins.delete(ws)
     })
     ws.on("error", () => {
@@ -1150,7 +1206,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
           resolve() // One broken client must not keep the rest of the server alive.
         }
       }))
-      lastSig.clear()
+      windowBases.clear()
       closePromise = (async () => {
         // A keyframe may already be awaiting a board rebuild. Drain it before its dependencies close;
         // the `closing` check above prevents it from reading currentSeq or sending after the await.
@@ -1165,7 +1221,7 @@ export function createAppSocketServer(deps: AppSocketDeps): AppSocketServer {
     },
     registry,
     get lastSigSize() {
-      return lastSig.size
+      return windowBases.size
     },
     get connectionCount() {
       return connectionCount

@@ -1,5 +1,6 @@
 import type { QueryClient } from "@tanstack/react-query"
-import type { SocketClientMsg, SocketServerMsg } from "@frizz/shared"
+import type { SocketClientMsg, SocketServerMsg, TranscriptMessage, TranscriptPushPage } from "@frizz/shared"
+import { applyTranscriptPatch } from "@frizz/shared"
 import { store } from "../store.ts"
 import { BoardStream } from "./board-stream.ts"
 import { connectSSE, onForeignSSEFrame, rebindSSEProject } from "./sse.ts"
@@ -44,6 +45,15 @@ const subs = new Map<string, number>()
 // every (re)connect. The server answers a change with `file-changed`, and the handler below
 // invalidates the reader's query so it re-reads through its own gated RPC.
 const fileSubs = new Map<string, number>()
+
+// slug → the transcript window the CURRENT socket last delivered, exactly as the server sent it (before
+// any reconcile with loaded history or optimistic bubbles). A `transcript-delta` is a recipe over this
+// copy, never over the query cache, which holds more than the window. Reset with every socket: the server
+// keeps the matching record per connection, so a new connection's first frame per slug is a full one.
+let windows = new Map<string, { sig: string; messages: TranscriptMessage[] }>()
+// Slugs whose delta did not match the window held here and that have asked for a fresh snapshot. Further
+// deltas for them are ignored until it lands, so one mismatch costs one resubscribe, not one per frame.
+const resyncing = new Set<string>()
 // How many times this session has reached a live protocol (a keyframe on /ws). The first is the
 // initial connect; every later one is a reconnect, across which a change to an open file may have
 // gone unheard — so those re-read every open file once, and the first does not (the reader's own
@@ -112,6 +122,8 @@ function connect(): void {
   // at any more. Frozen rather than re-derived, because re-deriving is how a stale frame passes.
   const socketProject = projectSlug()
   ws = sock
+  windows = new Map()
+  resyncing.clear()
   protocolReady = false
   lastMsg = Date.now()
 
@@ -266,6 +278,44 @@ function fallBackToSSE(boardFallback?: { actualBytes: number; maxBytes: number }
   connectSSE(qc ?? undefined)
 }
 
+// Write one pushed window — a full frame's, or a delta's once applied — into the SAME cache useTranscript
+// reads, so components are unchanged and both frame kinds take exactly one path.
+function writeTranscript(slug: string, messages: TranscriptMessage[], page: TranscriptPushPage | undefined): void {
+  // PRESERVE any optimistic `queued` bubble the incoming truth doesn't yet carry (mergeOptimistic), so a
+  // just-sent follow-up never vanishes in the window before the server's own copy lands (the S1 sync-audit fix).
+  qc?.setQueryData<PaginatedTranscriptData | { messages: QueuedMessage[] }>(["transcript", slug], (prev) => {
+    const previous = prev as PaginatedTranscriptData | undefined
+    // A push that carries its page envelope is the SAME bounded latest window the HTTP page read
+    // returns, so it reconciles through the same function the queryFn uses — the envelope (cursor,
+    // hasEarlier, transcriptKey) stays as fresh as the messages, and a long thread whose window slid
+    // under a push cannot page "earlier" from a cursor that no longer names its head. `editedFiles`
+    // never rides a push (see TranscriptPushPage); the rail keeps its last HTTP copy. A server that
+    // predates the envelope pushes messages only, and those take the messages-only reconcile.
+    const reconciled = page
+      ? reconcileLatestPage(previous, { ...page, messages, editedFiles: previous?.editedFiles })
+      : reconcileLiveMessages(previous, messages)
+    return {
+      ...reconciled,
+      // preserveMessageIdentity: unchanged messages keep the previous render's object so the
+      // memoized rows bail out — a push re-renders only what actually changed.
+      messages: preserveMessageIdentity(
+        prev?.messages,
+        mergeOptimistic(prev?.messages, reconciled.messages as QueuedMessage[]),
+      ),
+    }
+  })
+}
+
+// Ask the server for a full window of a slug this tab still shows. An unsub/sub pair is the existing
+// protocol for it: the server forgets what this connection holds, and a new subscription always starts
+// with the whole window.
+function requestTranscriptSnapshot(slug: string): void {
+  if (!subs.has(slug) || resyncing.has(slug) || store.socketTranscriptFallbacks[slug]) return
+  resyncing.add(slug)
+  send({ t: "unsub", topic: "transcript", slug })
+  send({ t: "sub", topic: "transcript", slug })
+}
+
 function handle(msg: SocketServerMsg): boolean {
   switch (msg.t) {
     case "event":
@@ -273,32 +323,27 @@ function handle(msg: SocketServerMsg): boolean {
       if (msg.event.type === "board") store.socketBoardFallback = null
       return true
     case "transcript":
-      // Write server truth into the SAME cache useTranscript reads — components are unchanged. PRESERVE any
-      // optimistic `queued` bubble the incoming truth doesn't yet carry (mergeOptimistic), so a just-sent
-      // follow-up never vanishes in the window before the server's own copy lands (the S1 sync-audit fix).
-      qc?.setQueryData<PaginatedTranscriptData | { messages: QueuedMessage[] }>(["transcript", msg.slug], (prev) => {
-        const previous = prev as PaginatedTranscriptData | undefined
-        // A push that carries its page envelope is the SAME bounded latest window the HTTP page read
-        // returns, so it reconciles through the same function the queryFn uses — the envelope (cursor,
-        // hasEarlier, transcriptKey) stays as fresh as the messages, and a long thread whose window slid
-        // under a push cannot page "earlier" from a cursor that no longer names its head. `editedFiles`
-        // never rides a push (see TranscriptPushPage); the rail keeps its last HTTP copy. A server that
-        // predates the envelope pushes messages only, and those take the messages-only reconcile.
-        const reconciled = msg.page
-          ? reconcileLatestPage(previous, { ...msg.page, messages: msg.messages, editedFiles: previous?.editedFiles })
-          : reconcileLiveMessages(previous, msg.messages)
-        return {
-          ...reconciled,
-          // preserveMessageIdentity: unchanged messages keep the previous render's object so the
-          // memoized rows bail out — a push re-renders only what actually changed.
-          messages: preserveMessageIdentity(
-            prev?.messages,
-            mergeOptimistic(prev?.messages, reconciled.messages as QueuedMessage[]),
-          ),
-        }
-      })
+      if (msg.sig && subs.has(msg.slug)) windows.set(msg.slug, { sig: msg.sig, messages: msg.messages })
+      else windows.delete(msg.slug)
+      resyncing.delete(msg.slug)
+      writeTranscript(msg.slug, msg.messages, msg.page)
       delete store.socketTranscriptFallbacks[msg.slug]
       return true
+    case "transcript-delta": {
+      const held = windows.get(msg.slug)
+      const messages = held?.sig === msg.base ? applyTranscriptPatch(held.messages, msg.ops) : undefined
+      if (!messages) {
+        // Cut against a window this tab does not hold: never render it. A fresh subscription answers with
+        // the full window, which re-establishes the base.
+        windows.delete(msg.slug)
+        requestTranscriptSnapshot(msg.slug)
+        return true
+      }
+      windows.set(msg.slug, { sig: msg.sig, messages })
+      writeTranscript(msg.slug, messages, msg.page)
+      delete store.socketTranscriptFallbacks[msg.slug]
+      return true
+    }
     case "file-changed":
       // A notice, not the bytes: the reader's query goes stale and refetches through the same gated
       // read it mounted with, so nothing reaches the page that the read gate would not have admitted.
@@ -409,6 +454,8 @@ export function unsubscribeTranscript(slug: string): void {
   const n = (subs.get(slug) ?? 0) - 1
   if (n <= 0) {
     subs.delete(slug)
+    windows.delete(slug)
+    resyncing.delete(slug)
     send({ t: "unsub", topic: "transcript", slug })
   } else {
     subs.set(slug, n)

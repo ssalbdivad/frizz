@@ -6,6 +6,7 @@ import { insideCodeFence } from "./code-fences.ts"
 import { ProjectSchedules, ThreadScheduleRef } from "./schedules.ts"
 import { formatDeadlineLeft, ThreadDeadlineView } from "./deadline.ts"
 import { EDITOR_COMPOSE_MAX_TEXT, EDITOR_MAX_FOLDERS, EDITOR_MAX_PATH, EDITOR_PROTOCOL_VERSION, EDITOR_REVIEW_MAX_CHECKOUTS, EDITOR_REVIEW_MAX_FILES, EDITOR_STATE_MAX_DIAGNOSTICS, EDITOR_STATE_MAX_MESSAGE, EDITOR_STATE_MAX_OPEN, EDITOR_STATE_MAX_SELECTION_TEXT, EDITOR_STATE_MAX_TAG, type EditorClientMessage, type EditorComposeInput, type EditorReviewTarget, type EditorSnapshot, type EditorWindowSummary } from "./editor-protocol.ts"
+import type { TranscriptPatchOp } from "./transcript-delta.ts"
 
 // ---- Attachment intake (drag/drop, paste, file picker) ----
 // What a worker can actually GET AT. A format qualifies two ways: an agent's Read/file tool consumes
@@ -6981,6 +6982,7 @@ export * from "./claude-editions.ts"
 export * from "./code-fences.ts"
 export * from "./deadline.ts"
 export * from "./delta.ts"
+export * from "./transcript-delta.ts"
 export * from "./drainable-worker.ts"
 export * from "./editor-protocol.ts"
 export * from "./file-position.ts"
@@ -7459,7 +7461,12 @@ export type TranscriptPushPage = Omit<TranscriptPage, "messages" | "editedFiles"
 
 export type SocketServerMsg =
   | { t: "event"; event: ServerEvent }
-  | { t: "transcript"; slug: ThreadSlug; messages: TranscriptMessage[]; page?: TranscriptPushPage }
+  // `sig` names the window this frame carries, so a later `transcript-delta` can say which window it was
+  // cut against. A frame without one (a pre-delta server) is never a delta base.
+  | { t: "transcript"; slug: ThreadSlug; messages: TranscriptMessage[]; page?: TranscriptPushPage; sig?: string }
+  // Only what changed since the window `base` this connection last received (transcript-delta.ts). A
+  // client holding any other window resubscribes for a fresh snapshot rather than apply it.
+  | { t: "transcript-delta"; slug: ThreadSlug; base: string; sig: string; ops: TranscriptPatchOp[]; page?: TranscriptPushPage }
   | { t: "file-changed"; path: string }
   | { t: "payload-too-large"; channel: "board"; actualBytes: number; maxBytes: number }
   | { t: "payload-too-large"; channel: "transcript"; slug: ThreadSlug; actualBytes: number; maxBytes: number }
