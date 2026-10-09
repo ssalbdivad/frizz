@@ -200,7 +200,7 @@ test("estimates come from measured peaks, and a heap cap never undercuts what a 
   for (let i = 0; i < 6; i++) h = pushHistory(h, "s", { peakMB: 500, at: 10 + i, exit: 0 })
   assert.equal(h.s.length, 5, "five deep")
   assert.equal(heapCapMB(undefined, 2048), null, "never cap what was never measured")
-  assert.equal(heapCapMB([{ peakMB: 900, at: 1, exit: 0 }], 2048), 2048, "the floor")
+  assert.equal(heapCapMB([{ peakMB: 900, at: 1, exit: 0 }], 1536), 1536, "the floor")
   assert.equal(heapCapMB([{ peakMB: 2900, at: 1, exit: 0 }], 2048), 2944, "the measured peak, rounded up")
   assert.equal(heapCapMB([{ peakMB: 1800, at: 1, exit: 0, capMB: 3000 }], 2048), 3008, "a cap that held does not ratchet down")
   assert.equal(heapCapMB([{ peakMB: 1800, at: 1, exit: 134, capMB: 2048, oom: true }], 2048), 3072, "a cap it died under grows by half")

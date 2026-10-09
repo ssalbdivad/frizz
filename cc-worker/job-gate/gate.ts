@@ -94,10 +94,24 @@ export interface Settings {
   heavyMB: number
 }
 
-// The floor under any heap cap. Measured 2026-10-08 on an arktype mocha suite (ark/schema, see the
-// commit that introduced this gate for the table): the lowest --max-old-space-size that neither OOMs
-// nor costs more than 10% wall time.
-export const HEAP_FLOOR_MB = 2048
+// The floor under any heap cap: the lowest --max-old-space-size measured to neither OOM nor slow an
+// arktype suite (2026-10-08, ark/type's package suite, 890 tests, one run per arm unless noted; peak is
+// the whole process tree from /proc, wall from /usr/bin/time):
+//
+//   NODE_OPTIONS / GOMEMLIMIT     tree peak    wall            result
+//   uncapped (2 runs)             2545, 2472   2m 11s, 2m 55s  pass
+//   --max-old-space-size=2048     2462, 2530   5m 03s, 1m 43s  2 failing (not OOM), then pass
+//   --max-old-space-size=1536     2519         1m 36s          pass
+//   GOMEMLIMIT=1536MiB            2474         2m 04s          pass
+//   GOMEMLIMIT=1024MiB            2299         2m 19s          pass
+//
+// The heap cap changes nothing measurable: mocha's own node process peaks at ~0.35GB, and the bulk of
+// the 2.5GB is attest's native tsc (tsgo, Go) and its workers. Wall time swung 1m 36s–5m 03s with the
+// box's load, so no arm's cost is resolvable under that noise; the one failing run passed when re-run
+// and a lower cap passed too, so it is not the cap. GOMEMLIMIT=1024MiB read ~8% lower — one run,
+// suggestive at most. Since a heap cap is never set below what history says a job needed (heapCapMB),
+// the floor only governs small jobs.
+export const HEAP_FLOOR_MB = 1536
 
 const num = (v: string | undefined, fallback: number) => {
   const n = Number(v)
