@@ -35,6 +35,10 @@ export interface Prefs {
   // 2026-10-01, always-visible status lines are too dense for a list of names, taken from the project
   // board (2489fc34) to every row. Per browser, beside Density: it is how this screen likes to read.
   alwaysShowStatusLines: boolean
+  // The threads this tab opened in the last half hour shown under the FOLDED Snoozed and Done headers, so one
+  // sent back there is a click away without opening the band (lib/recentThreads.ts). Off by default
+  // (David 2026-10-09): Colin's density call keeps a folded band to its header unless asked.
+  showRecentThreads: boolean
   // (No `sendEditorContext` here any more. The context bar's eye was a pref of the sidebar's frame from
   // 2026-10-01 to 2026-10-02; it is now the extension's `frizz.shareEditorState` (lib/editorContext.ts
   // setShareEditor), the one switch that also keeps the agents' tool out of the editor. A stored value is
@@ -63,6 +67,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
     railFilesCollapsed: false,
     keybindings: {},
     alwaysShowStatusLines: false,
+    showRecentThreads: false,
     diffsRedefaulted: true,
     snoozeRedefaulted: true,
   }
@@ -99,6 +104,7 @@ export function parseStoredPrefs(raw: string | null): Prefs {
       railFilesCollapsed: typeof stored.railFilesCollapsed === "boolean" ? stored.railFilesCollapsed : fallback.railFilesCollapsed,
       keybindings: sanitizeOverrides(stored.keybindings),
       alwaysShowStatusLines: stored.alwaysShowStatusLines === true,
+      showRecentThreads: stored.showRecentThreads === true,
     }
   } catch {
     return fallback

@@ -202,6 +202,12 @@ export function SettingsDrawer({ offerUpdate = false }: {
               {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
             </SettingsField>
 
+            {/* Client-only VIEW preference (prefs `showRecentThreads`). */}
+            <SettingsField label="Show recent threads" help={SETTINGS_HELP.showRecentThreads}>
+              <ShowRecentThreadsToggle />
+              {inEditor ? <EditorHint>Your browser keeps its own.</EditorHint> : null}
+            </SettingsField>
+
             {/* Its own files, not a Settings value: saved by its own button (SlashCommandsField.tsx). */}
             <SlashCommandsField />
 
@@ -623,6 +629,12 @@ function DensityToggle() {
 function AlwaysShowStatusLinesToggle() {
   const { alwaysShowStatusLines } = useSnapshot(prefs)
   return <OnOffToggle value={alwaysShowStatusLines} onChange={(on) => (prefs.alwaysShowStatusLines = on)} />
+}
+
+// Recently opened threads under the folded Snoozed and Done headers (ProjectBoard.tsx): client-only.
+function ShowRecentThreadsToggle() {
+  const { showRecentThreads } = useSnapshot(prefs)
+  return <OnOffToggle value={showRecentThreads} onChange={(on) => (prefs.showRecentThreads = on)} />
 }
 
 // Queue/rested-band direction: client-only (localStorage prefs proxy), applies live to the Needs-you

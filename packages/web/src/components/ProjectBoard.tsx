@@ -37,7 +37,7 @@
 //
 // A THREAD'S SUB-AGENTS ARE ROWS under it here (Sidebar.tsx SubAgentRows), as upstream drew them; All
 // projects keeps the count on the row.
-import { Fragment, useCallback, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
+import { Fragment, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react"
 import { Ellipsis } from "lucide-react"
 import { useNavigate } from "react-router"
 import { useVirtualizer, useWindowVirtualizer } from "@tanstack/react-virtual"
@@ -50,6 +50,8 @@ import { bandKey, rememberCrossProjectFocus, setBoardBandOpen, useBoardOpenBands
 import { holdLayout, type HeldSection, type HeldSlot } from "../lib/heldLayout.ts"
 import { actedOnHere } from "../lib/humanActs.ts"
 import { useListHold } from "../lib/listHold.ts"
+import { prefs } from "../lib/prefs.ts"
+import { RECENT_MS, recentOf, touchThread } from "../lib/recentThreads.ts"
 import { boardBands } from "../lib/boardBands.ts"
 import { listOverlay } from "../lib/listBands.ts"
 import { useArchivingAt } from "../lib/optimisticArchive.ts"
@@ -141,6 +143,24 @@ export function ProjectBoard({
   drawn.current = bands
   // The band each thread is in NOW: a held row is drawn in its old place but as what it is — a rest time if
   // it is queued, a spinner if it is working — since only the layout is held, never what a row says.
+  // THE THREADS OPENED LATELY, kept under a folded Snoozed or Done header (prefs `showRecentThreads`). An open
+  // thread is touched on arrival and again on leaving, so the half hour runs from when the human last had it.
+  const { showRecentThreads } = useSnapshot(prefs)
+  const openKey = openSlug ? threadKey(project.id, openSlug) : null
+  useEffect(() => {
+    if (!openKey) return
+    touchThread(openKey)
+    return () => touchThread(openKey)
+  }, [openKey])
+  const [, tick] = useState(0)
+  useEffect(() => {
+    if (!showRecentThreads) return
+    const timer = setInterval(() => tick((n) => n + 1), RECENT_MS / 30)
+    return () => clearInterval(timer)
+  }, [showRecentThreads])
+  const recentSlots = (band: "snoozed" | "done") =>
+    showRecentThreads ? recentOf(slots(band), (slot) => threadKey(project.id, slot.item.id)) : []
+
   const bandNow = new Map(target.flatMap((band) => band.items.map((t) => [t.id, band.id] as const)))
   const slots = (band: BoardBand) => bands.find((section) => section.id === band)?.slots ?? []
 
@@ -232,6 +252,7 @@ export function ProjectBoard({
                   {opened && band === "schedules" && <ScheduleRows project={project} count={schedules} attention={schedulesAttention} />}
                   {opened && band === "done" && (bandsNow.done ? <DoneBand slots={slots("done")} row={row} /> : <Loading />)}
                   {opened && (band === "snoozed" || band === "external") && slots(band).map(row)}
+                  {!opened && (band === "snoozed" || band === "done") && recentSlots(band).map(row)}
                 </section>
               )
             })}
